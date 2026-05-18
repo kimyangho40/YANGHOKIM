@@ -438,6 +438,37 @@ function CRMApp({ profile, session }) {
   const [quickMemoText, setQuickMemoText] = useState("");
   const [menuExpanded, setMenuExpanded] = useState(false);
   const [agencyRefreshKey, setAgencyRefreshKey] = useState(0);
+  const [notifications, setNotifications] = useState([]);
+  const [showNotifPanel, setShowNotifPanel] = useState(false);
+  const notifRef = React.useRef(null);
+
+  // 알림 폴링 - 내 담당 새 노트 확인 (30초마다)
+  useEffect(function() {
+    if (!profile) return;
+    var lastChecked = localStorage.getItem("notif_last_checked_" + profile.name) || new Date(0).toISOString();
+    var checkNotifs = async function() {
+      var r = await supabase.from("work_notes")
+        .select("*").eq("assignee", profile.name)
+        .gt("created_at", lastChecked).is("deleted_at", null)
+        .order("created_at", { ascending: false });
+      if (!r.error && r.data && r.data.length > 0) {
+        setNotifications(function(prev) {
+          var ids = new Set(prev.map(function(n) { return n.id; }));
+          var newOnes = r.data.filter(function(n) { return !ids.has(n.id); });
+          return newOnes.concat(prev).slice(0, 20);
+        });
+      }
+    };
+    checkNotifs();
+    var interval = setInterval(checkNotifs, 30000);
+    return function() { clearInterval(interval); };
+  }, [profile]);
+
+  var markAllRead = function() {
+    if (profile) localStorage.setItem("notif_last_checked_" + profile.name, new Date().toISOString());
+    setNotifications([]);
+    setShowNotifPanel(false);
+  };
 
   const showToast = (msg, type = "success") => {
     setToast({ msg, type });
@@ -858,6 +889,13 @@ function CRMApp({ profile, session }) {
                 <span style={{ position: "absolute", top: -3, right: -3, width: 8, height: 8, background: "#DC2626", borderRadius: "50%" }} />
               )}
             </button>
+            <button onClick={function() { setShowNotifPanel(function(p) { return !p; }); }}
+              style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", padding: "7px 10px", background: "#2E2C29", border: "none", borderRadius: 6, color: "#888", fontSize: 14, cursor: "pointer" }}>
+              🔔
+              {notifications.length > 0 && (
+                <span style={{ position: "absolute", top: -3, right: -3, minWidth: 16, height: 16, background: "#DC2626", borderRadius: 99, fontSize: 9, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }}>{notifications.length}</span>
+              )}
+            </button>
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             <button onClick={fetchAll} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "6px", background: "#2E2C29", border: "none", borderRadius: 6, color: "#888", fontSize: 11, cursor: "pointer" }}>
@@ -869,6 +907,48 @@ function CRMApp({ profile, session }) {
           </div>
         </div>
       </div>
+
+      {/* 알림 패널 */}
+      {showNotifPanel && (
+        <div style={{ position: "fixed", top: 0, left: 220, right: 0, bottom: 0, zIndex: 900 }} onClick={function() { setShowNotifPanel(false); }}>
+          <div style={{ position: "absolute", top: 0, left: 0, width: 360, maxHeight: "100vh", background: "#fff", boxShadow: "4px 0 24px rgba(0,0,0,0.15)", overflowY: "auto" }}
+            onClick={function(e) { e.stopPropagation(); }}>
+            <div style={{ padding: "20px 20px 14px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>🔔 알림</div>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{profile?.name}님에게 온 업무 알림</div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {notifications.length > 0 && (
+                  <button onClick={markAllRead} style={{ fontSize: 11, color: "#4338CA", background: "none", border: "1px solid #C7D2FE", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>모두 읽음</button>
+                )}
+                <button onClick={function() { setShowNotifPanel(false); }} style={{ background: "none", border: "none", fontSize: 18, color: "#888", cursor: "pointer" }}>✕</button>
+              </div>
+            </div>
+            <div style={{ padding: "12px 16px" }}>
+              {notifications.length === 0 ? (
+                <div style={{ padding: "40px 0", textAlign: "center", color: "#CCC", fontSize: 13 }}>
+                  <div style={{ fontSize: 32, marginBottom: 8 }}>🔔</div>
+                  새로운 알림이 없어요
+                </div>
+              ) : (
+                notifications.map(function(note) {
+                  return (
+                    <div key={note.id} style={{ background: "#F8F9FF", border: "1px solid #E0E7FF", borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}
+                      onClick={function() { setView("worknotes"); setShowNotifPanel(false); }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#1A1917", marginBottom: 4 }}>{note.title || "제목 없음"}</div>
+                      {note.content && <div style={{ fontSize: 12, color: "#555", lineHeight: 1.6, whiteSpace: "pre-wrap", maxHeight: 60, overflow: "hidden" }}>{note.content}</div>}
+                      <div style={{ fontSize: 11, color: "#AAA", marginTop: 6 }}>
+                        작성자: {note.created_by || note.assignee} · {new Date(note.created_at).toLocaleDateString("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 메인 */}
       <div className="crm-main" style={{ marginLeft: 220, padding: "28px 32px", minHeight: "100vh" }}>
@@ -2564,9 +2644,38 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
 }
 
 // ── 업무노트 카드 (독립 컴포넌트 - 입력버그 방지) ──────────────────────────────
-function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditingId, toggleDone, togglePin, deleteNote, fmtDate, currentUserName }) {
+function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditingId, toggleDone, togglePin, deleteNote, fmtDate, currentUserName, onChecklistChange }) {
   var isEditing = editingId === note.id;
-  var isMyNote = true; // 팀 공유: 모든 노트 수정/삭제 가능
+  var isMyNote = true;
+
+  // 체크리스트 파싱: "- [ ] 항목" 또는 "- [x] 항목" 형식
+  var parseChecklist = function(content) {
+    if (!content) return null;
+    var lines = content.split("\n");
+    var hasChecklist = lines.some(function(l) { return /^- \[[ x]\]/.test(l.trim()); });
+    if (!hasChecklist) return null;
+    return lines.map(function(line, idx) {
+      var m = line.trim().match(/^- \[([ x])\] (.+)/);
+      if (m) return { idx: idx, checked: m[1] === "x", text: m[2], isCheck: true };
+      return { idx: idx, text: line, isCheck: false };
+    });
+  };
+
+  var checklist = parseChecklist(note.content);
+  var checkedCount = checklist ? checklist.filter(function(i) { return i.isCheck && i.checked; }).length : 0;
+  var totalCount = checklist ? checklist.filter(function(i) { return i.isCheck; }).length : 0;
+
+  var toggleCheckItem = function(lineIdx) {
+    var lines = (note.content || "").split("\n");
+    var line = lines[lineIdx];
+    if (/^- \[ \]/.test(line.trim())) {
+      lines[lineIdx] = line.replace("- [ ]", "- [x]");
+    } else if (/^- \[x\]/.test(line.trim())) {
+      lines[lineIdx] = line.replace("- [x]", "- [ ]");
+    }
+    var newContent = lines.join("\n");
+    if (onChecklistChange) onChecklistChange(note.id, newContent);
+  };
 
   if (isEditing) {
     return (
@@ -2583,7 +2692,7 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
   return (
     <div style={{ background: note.pinned ? "#FFFBEB" : "#fff", border: note.pinned ? "1px solid #FDE68A" : "1px solid #E8E5E0", borderRadius: 12, padding: "16px 18px", opacity: note.is_done ? 0.6 : 1, transition: "opacity 0.2s" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {note.is_todo && (
             <input type="checkbox" checked={note.is_done || false} onChange={function() { toggleDone(note); }}
               style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#1A1917" }} />
@@ -2595,6 +2704,11 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
           {note.is_todo && (
             <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 99, background: note.is_done ? "#ECFDF5" : "#EEF2FF", color: note.is_done ? "#047857" : "#4338CA", fontWeight: 600 }}>
               {note.is_done ? "완료" : "할일"}
+            </span>
+          )}
+          {totalCount > 0 && (
+            <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 99, background: checkedCount === totalCount ? "#ECFDF5" : "#F3F4F6", color: checkedCount === totalCount ? "#047857" : "#555", fontWeight: 600 }}>
+              ✓ {checkedCount}/{totalCount}
             </span>
           )}
         </div>
@@ -2609,11 +2723,33 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
           </div>
         )}
       </div>
+
+      {/* 체크리스트 or 일반 내용 */}
       {note.content && (
-        <div style={{ fontSize: 13, color: "#555", lineHeight: 1.75, whiteSpace: "pre-wrap", marginBottom: 10, textDecoration: note.is_done ? "line-through" : "none" }}>
-          {note.content}
-        </div>
+        checklist ? (
+          <div style={{ marginBottom: 10 }}>
+            {checklist.map(function(item) {
+              if (!item.isCheck) {
+                return item.text ? (
+                  <div key={item.idx} style={{ fontSize: 13, color: "#888", lineHeight: 1.75, paddingLeft: 4 }}>{item.text}</div>
+                ) : null;
+              }
+              return (
+                <label key={item.idx} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "4px 0", cursor: "pointer" }}>
+                  <input type="checkbox" checked={item.checked} onChange={function() { toggleCheckItem(item.idx); }}
+                    style={{ width: 15, height: 15, marginTop: 2, cursor: "pointer", accentColor: "#1A1917", flexShrink: 0 }} />
+                  <span style={{ fontSize: 13, color: item.checked ? "#AAA" : "#333", textDecoration: item.checked ? "line-through" : "none", lineHeight: 1.6 }}>{item.text}</span>
+                </label>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{ fontSize: 13, color: "#555", lineHeight: 1.75, whiteSpace: "pre-wrap", marginBottom: 10, textDecoration: note.is_done ? "line-through" : "none" }}>
+            {note.content}
+          </div>
+        )
       )}
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <div style={{ width: 20, height: 20, borderRadius: "50%", background: "#1A1917", color: "#F7F6F3", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700 }}>{(note.assignee || "?")[0]}</div>
@@ -2715,6 +2851,13 @@ function WorkNotesView({ profile }) {
     setNotes(function(prev) { return prev.map(function(n) { return n.id === noteId ? Object.assign({}, n, { replies: JSON.stringify(replies) }) : n; }); });
     setReplyId(null);
     setReplyText("");
+  };
+
+  var onChecklistChange = async function(noteId, newContent) {
+    var r = await supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", noteId);
+    if (!r.error) {
+      setNotes(function(prev) { return prev.map(function(n) { return n.id === noteId ? Object.assign({}, n, { content: newContent }) : n; }); });
+    }
   };
 
   var saveEdit = async function() {
@@ -2869,7 +3012,7 @@ function WorkNotesView({ profile }) {
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#B45309", letterSpacing: "0.05em", marginBottom: 10 }}>📌 고정된 노트</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} />; })}
+                {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} />; })}
               </div>
             </div>
           )}
@@ -2878,7 +3021,7 @@ function WorkNotesView({ profile }) {
             <div>
               {pinned.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: "#888", letterSpacing: "0.05em", marginBottom: 10 }}>전체 노트</div>}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} />; })}
+                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} />; })}
               </div>
             </div>
           )}
