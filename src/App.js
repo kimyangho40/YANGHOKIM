@@ -1241,8 +1241,8 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
 
 // ── 기업 목록 ─────────────────────────────────────────────────────────────────
 function ListView({ filtered, search, setSearch, filterStage, setFilterStage, filterAssignee, setFilterAssignee, filterType, setFilterType, assignees, onSelect, onAdd, setCompanies, showToast }) {
-  const [showCompanyTrash, setShowCompanyTrash] = React.useState(false);
-  const [trashedCompanies, setTrashedCompanies] = React.useState([]);
+  const [showCompanyTrash, setShowCompanyTrash] = useState(false);
+  const [trashedCompanies, setTrashedCompanies] = useState([]);
 
   var fetchTrashedCompanies = async function() {
     var r = await supabase.from("companies").select("*").not("deleted_at", "is", null).order("deleted_at", { ascending: false });
@@ -4454,9 +4454,9 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     { category: "사회적 경제기업", items: ["사회적기업","예비사회적기업","마을기업","자활기업","협동조합(협동조합기본법에 근거한 협동조합만 해당)","소셜벤처기업"] },
   ];
 
-  const [showPriorityModal, setShowPriorityModal] = React.useState(false);
-  const [priorityTarget, setPriorityTarget] = React.useState(null);
-  const [priorityChecks, setPriorityChecks] = React.useState({});
+  const [showPriorityModal, setShowPriorityModal] = useState(false);
+  const [priorityTarget, setPriorityTarget] = useState(null);
+  const [priorityChecks, setPriorityChecks] = useState({});
 
   var openPriority = function(row) {
     setPriorityTarget(row);
