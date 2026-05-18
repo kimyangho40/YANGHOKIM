@@ -440,7 +440,7 @@ function CRMApp({ profile, session }) {
   const [agencyRefreshKey, setAgencyRefreshKey] = useState(0);
   const [notifications, setNotifications] = useState([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
-  const notifRef = useRef(null)
+  const notifRef = useRef(null);
 
   // 알림 폴링 - 내 담당 새 노트 확인 (30초마다)
   useEffect(function() {
@@ -4440,6 +4440,31 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     if (!result.error) setCompaniesList(result.data || []);
   };
 
+  // 기관별현황에 있지만 기업목록에 없는 사업장 자동 등록
+  var registerMissingCompanies = async function(missingNames) {
+    if (!missingNames || missingNames.length === 0) return;
+    var toAdd = missingNames;
+    // 기관별현황에서 해당 업체 정보 가져오기
+    var added = 0;
+    for (var i = 0; i < toAdd.length; i++) {
+      var name = toAdd[i];
+      var caseInfo = cases.find(function(c) { return c.business_name === name && !c.deleted_at; });
+      var ins = await supabase.from("companies").insert({
+        name: name,
+        representative: caseInfo ? (caseInfo.representative || "") : "",
+        assignee: caseInfo ? (caseInfo.assignee || "") : "",
+        region: caseInfo ? (caseInfo.region || "") : "",
+        stage: "상담/진단완료",
+        type: "법인",
+      });
+      if (!ins.error) added++;
+    }
+    if (added > 0) {
+      alert(added + "개 사업장이 기업목록에 추가됐어요!");
+      fetchCompanies();
+    }
+  };
+
   useEffect(function() { fetchCases(); fetchCompanies(); }, []);
 
   useEffect(function() {
@@ -4554,6 +4579,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       request_amount: editData.request_amount, region: editData.region,
       agency_sub: editData.agency_sub, notes: editData.notes,
       fund_product: editData.fund_product || null,
+      approved_amount: editData.approved_amount || null,
       updated_at: new Date().toISOString()
     };
     var result = await supabase.from("agency_cases").update(updates).eq("id", editData.id);
@@ -4713,6 +4739,30 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         </div>
       )}
 
+      {/* 기업목록 누락 업체 안내 */}
+      {(function() {
+        var allCaseNames = cases.filter(function(c) { return !c.deleted_at; }).map(function(c) { return c.business_name; }).filter(Boolean);
+        var companyNames = new Set(companiesList.map(function(c) { return c.name; }));
+        var missing = allCaseNames.filter(function(n) { return !companyNames.has(n); });
+        var uniqueMissing = missing.filter(function(n, i) { return missing.indexOf(n) === i; });
+        if (uniqueMissing.length === 0) return null;
+        return (
+          <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "12px 18px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 16 }}>⚠️</span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#92400E" }}>기업목록에 없는 사업장 {uniqueMissing.length}개 발견</div>
+                <div style={{ fontSize: 11, color: "#B45309", marginTop: 2 }}>{uniqueMissing.slice(0, 5).join(", ")}{uniqueMissing.length > 5 ? " 외 " + (uniqueMissing.length - 5) + "개" : ""}</div>
+              </div>
+            </div>
+            <button onClick={function() { if (window.confirm(uniqueMissing.join("\n") + "\n\n위 " + uniqueMissing.length + "개 사업장을 기업목록에 추가하시겠습니까?")) registerMissingCompanies(uniqueMissing); }}
+              style={{ background: "#D97706", color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+              + 기업목록에 일괄 추가
+            </button>
+          </div>
+        );
+      })()}
+
       {/* 테이블 */}
       {filtered.length === 0 ? (
         <div style={{ background: "#fff", borderRadius: 10, padding: "60px 20px", textAlign: "center", color: "#AAA", fontSize: 14, border: "1px solid #E8E5E0" }}>
@@ -4735,6 +4785,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                 )}
                 <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>지역</th>
                 <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>상태</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#047857", fontSize: 11 }}>승인금액</th>
                 <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>비고</th>
                 <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 600, color: "#888", fontSize: 11, width: 80 }}>작업</th>
               </tr>
@@ -4820,6 +4871,12 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                             {STATUS_OPTIONS.map(function(s) { return <option key={s} value={s}>{s}</option>; })}
                           </select>
                         : <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, fontWeight: 600 }}>{row.status || "-"}</span>}
+                    </td>
+                    <td style={{ padding: "10px 12px" }}>
+                      {isEditing
+                        ? <input value={editData.approved_amount || ""} onChange={function(e) { var v = e.target.value; setEditData(function(p) { return Object.assign({}, p, { approved_amount: v }); }); }}
+                            placeholder="예: 5,000만원" style={{ padding: "4px 8px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, width: 90, boxSizing: "border-box" }} />
+                        : <span style={{ fontSize: 12, color: row.approved_amount ? "#047857" : "#CCC", fontWeight: row.approved_amount ? 700 : 400 }}>{row.approved_amount || "-"}</span>}
                     </td>
                     <td style={{ padding: "10px 12px" }}>
                       {isEditing
