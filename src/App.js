@@ -43,6 +43,40 @@ const ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일
 const DB_ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일"];
 const DB_MANAGERS = ["양호","동일","관호"];
 
+// ── 업무노트 템플릿 ──────────────────────────────────────────────────────────
+const NOTE_TEMPLATES = [
+  {
+    id: "daily",
+    label: "📅 일일 업무",
+    title: function(name) { return new Date().toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "short" }) + " 업무 - " + name; },
+    content: "- [ ] 오늘의 주요 업무\n- [ ] 기관 방문/연락 예정\n- [ ] 서류 처리\n- [ ] 기타",
+  },
+  {
+    id: "sojingong",
+    label: "🏢 소진공 신청",
+    title: function() { return "소진공 신청 체크리스트"; },
+    content: "- [ ] 사업자등록증 확인\n- [ ] 재무제표 3년치 확인\n- [ ] 부가세증명원 확인\n- [ ] 대표자 신분증\n- [ ] 임대차계약서\n- [ ] 금융거래확인서\n- [ ] 4대보험 명부\n- [ ] 신청서 작성\n- [ ] 최종 제출",
+  },
+  {
+    id: "jungingong",
+    label: "🏛️ 중진공 방문",
+    title: function() { return "중진공 방문 준비 체크리스트"; },
+    content: "- [ ] 사업자등록증\n- [ ] 재무제표 확인\n- [ ] 우선도 체크리스트 완료\n- [ ] 지역본부 확인\n- [ ] 신청상품 선택\n- [ ] 방문 예약\n- [ ] 대표자 동행 여부 확인\n- [ ] 방문 완료",
+  },
+  {
+    id: "followup",
+    label: "📞 사후 관리",
+    title: function() { return "사후관리 체크리스트"; },
+    content: "- [ ] 자금집행 확인\n- [ ] 수수료 입금 요청\n- [ ] 세금계산서 발행\n- [ ] 입금 완료 확인\n- [ ] 추가 진행 상담",
+  },
+  {
+    id: "gibо",
+    label: "🔬 기보 신청",
+    title: function() { return "기술보증기금 신청 체크리스트"; },
+    content: "- [ ] 기술력 평가 서류 준비\n- [ ] 사업계획서\n- [ ] 특허/인증서 확인\n- [ ] 재무제표\n- [ ] 기술보증 신청서 작성\n- [ ] 기술평가 일정 확인\n- [ ] 실태조사 준비",
+  },
+];
+
 // 중소벤처기업진흥공단 / 구조혁신&사업전환 지역본부·지부 관할 매핑
 // 값은 배열 — 복수 관할지역의 경우 2개 들어감
 const JUNGINGONG_REGION_MAP = {
@@ -2750,6 +2784,11 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
         )
       )}
 
+      {note.tagged_company && (
+        <div style={{ marginBottom: 8 }}>
+          <span style={{ fontSize: 11, padding: "2px 8px", background: "#ECFDF5", color: "#047857", borderRadius: 99, fontWeight: 600, border: "1px solid #A7F3D0" }}>🏢 {note.tagged_company}</span>
+        </div>
+      )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <div style={{ width: 20, height: 20, borderRadius: "50%", background: "#1A1917", color: "#F7F6F3", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700 }}>{(note.assignee || "?")[0]}</div>
@@ -2775,8 +2814,13 @@ function WorkNotesView({ profile }) {
   const [replyText, setReplyText] = useState("");
   const [showTrash, setShowTrash] = useState(false);
   const [trashedNotes, setTrashedNotes] = useState([]);
+  const [companiesList, setCompaniesList] = useState([]);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [showStats, setShowStats] = useState(false);
+  const [companySearch, setCompanySearch] = useState("");
+  const [companySuggestions, setCompanySuggestions] = useState([]);
 
-  useEffect(function() { fetchNotes(); }, []);
+  useEffect(function() { fetchNotes(); fetchCompanyList(); }, []);
 
   var fetchNotes = async function() {
     setLoading(true);
@@ -2784,6 +2828,38 @@ function WorkNotesView({ profile }) {
     if (!r.error) setNotes(r.data || []);
     setLoading(false);
   };
+
+  var fetchCompanyList = async function() {
+    var r = await supabase.from("companies").select("id, name, assignee").is("deleted_at", null).order("name");
+    if (!r.error) setCompaniesList(r.data || []);
+  };
+
+  // 기업명 자동완성
+  var onCompanySearchChange = function(val) {
+    setCompanySearch(val);
+    if (!val.trim()) { setCompanySuggestions([]); return; }
+    var matches = companiesList.filter(function(c) { return c.name.includes(val); }).slice(0, 6);
+    setCompanySuggestions(matches);
+  };
+
+  // 완료율 통계 계산
+  var calcStats = useMemo(function() {
+    var result = {};
+    ASSIGNEES.forEach(function(name) {
+      var myNotes = notes.filter(function(n) { return n.assignee === name && n.content; });
+      var total = 0; var done = 0;
+      myNotes.forEach(function(n) {
+        var lines = (n.content || "").split("
+");
+        lines.forEach(function(l) {
+          if (/^- \[ \]/.test(l.trim())) total++;
+          if (/^- \[x\]/.test(l.trim())) { total++; done++; }
+        });
+      });
+      result[name] = { total: total, done: done, rate: total > 0 ? Math.round(done / total * 100) : 0 };
+    });
+    return result;
+  }, [notes]);
 
   var fetchTrashedNotes = async function() {
     var r = await supabase.from("work_notes").select("*").not("deleted_at", "is", null).order("deleted_at", { ascending: false });
@@ -2824,6 +2900,7 @@ function WorkNotesView({ profile }) {
   var saveNew = async function() {
     if (!newNote.title.trim() && !newNote.content.trim()) { alert("제목 또는 내용을 입력해주세요."); return; }
     var assigneeName = newNote.target_assignee || profile?.name || "전체";
+    var taggedCompany = newNote.tagged_company || null;
     var r = await supabase.from("work_notes").insert({
       assignee: assigneeName,
       title: newNote.title.trim(),
@@ -2831,11 +2908,27 @@ function WorkNotesView({ profile }) {
       is_todo: newNote.is_todo,
       pinned: newNote.pinned,
       created_by: profile?.name || assigneeName,
+      tagged_company: taggedCompany,
     }).select().single();
     if (!r.error && r.data) {
       setNotes(function(prev) { return [r.data].concat(prev); });
       setShowAdd(false);
-      setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "" });
+      setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", tagged_company: "" });
+      setCompanySearch(""); setCompanySuggestions([]);
+      // 기업 태그가 있으면 활동로그에 자동 기록
+      if (taggedCompany) {
+        var co = companiesList.find(function(c) { return c.name === taggedCompany; });
+        if (co) {
+          await supabase.from("activity_logs").insert({
+            company_id: co.id,
+            business_name: co.name,
+            assignee: assigneeName,
+            log_type: "manual_memo",
+            memo: "[업무노트] " + (newNote.title.trim() || newNote.content.trim().slice(0, 50)),
+            logged_by: profile?.name || assigneeName,
+          });
+        }
+      }
     } else if (r.error) {
       alert("저장 실패: " + r.error.message);
     }
@@ -2921,10 +3014,18 @@ function WorkNotesView({ profile }) {
           <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>업무 노트</h1>
           <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>메모 · 할 일 · 업무일지</p>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={function() { setShowAdd(true); setNewNote({ title: "", content: "", is_todo: false, pinned: false }); }}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             <Icon name="plus" size={15} color="#F7F6F3" /> 새 노트
+          </button>
+          <button onClick={function() { setShowTemplates(function(p) { return !p; }); }}
+            style={{ display: "flex", alignItems: "center", gap: 6, background: showTemplates ? "#4338CA" : "#fff", color: showTemplates ? "#fff" : "#4338CA", border: "1px solid #C7D2FE", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            📋 템플릿
+          </button>
+          <button onClick={function() { setShowStats(function(p) { return !p; }); }}
+            style={{ display: "flex", alignItems: "center", gap: 6, background: showStats ? "#047857" : "#fff", color: showStats ? "#fff" : "#047857", border: "1px solid #A7F3D0", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            📊 완료율
           </button>
           <button onClick={openTrash}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
@@ -2935,6 +3036,48 @@ function WorkNotesView({ profile }) {
           </button>
         </div>
       </div>
+
+      {/* 템플릿 패널 */}
+      {showTemplates && (
+        <div style={{ background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 12, padding: "16px 20px", marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#4338CA", marginBottom: 12 }}>📋 템플릿으로 빠르게 시작하기</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {NOTE_TEMPLATES.map(function(tmpl) {
+              return (
+                <button key={tmpl.id} onClick={function() {
+                  setShowAdd(true);
+                  setNewNote({ title: tmpl.title(profile?.name || ""), content: tmpl.content, is_todo: true, pinned: false, target_assignee: profile?.name || "" });
+                  setShowTemplates(false);
+                }}
+                  style={{ padding: "8px 14px", background: "#fff", border: "1px solid #C7D2FE", borderRadius: 8, fontSize: 12, fontWeight: 600, color: "#4338CA", cursor: "pointer" }}>
+                  {tmpl.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* 완료율 통계 패널 */}
+      {showStats && (
+        <div style={{ background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: 12, padding: "16px 20px", marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#047857", marginBottom: 12 }}>📊 담당자별 체크리스트 완료율</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 10 }}>
+            {ASSIGNEES.map(function(name) {
+              var s = calcStats[name] || { total: 0, done: 0, rate: 0 };
+              return (
+                <div key={name} style={{ background: "#fff", borderRadius: 8, padding: "10px 14px", border: "1px solid #D1FAE5" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#1A1917", marginBottom: 6 }}>{name}</div>
+                  <div style={{ height: 6, background: "#D1FAE5", borderRadius: 99, marginBottom: 6, overflow: "hidden" }}>
+                    <div style={{ width: s.rate + "%", background: s.rate >= 80 ? "#059669" : s.rate >= 50 ? "#F59E0B" : "#DC2626", height: "100%", borderRadius: 99, transition: "width 0.4s" }} />
+                  </div>
+                  <div style={{ fontSize: 11, color: "#555" }}>{s.done}/{s.total}개 완료 <span style={{ fontWeight: 700, color: s.rate >= 80 ? "#059669" : s.rate >= 50 ? "#F59E0B" : "#DC2626" }}>{s.rate}%</span></div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* 필터 */}
       <div style={{ display: "flex", gap: 16, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
@@ -2989,6 +3132,30 @@ function WorkNotesView({ profile }) {
           </div>
           <input value={newNote.title} placeholder="제목 (선택사항)" onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
             style={{ width: "100%", padding: "10px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 14, fontWeight: 600, boxSizing: "border-box", outline: "none", marginBottom: 10, background: "#fff" }} />
+          {/* 기업 태그 자동완성 */}
+          <div style={{ position: "relative", marginBottom: 10 }}>
+            <input value={newNote.tagged_company || companySearch} placeholder="🏢 기업 태그 (선택사항) — 기업명 입력" onChange={function(e) { var v = e.target.value; onCompanySearchChange(v); setNewNote(function(p) { return Object.assign({}, p, { tagged_company: "" }); }); }}
+              style={{ width: "100%", padding: "8px 13px", border: newNote.tagged_company ? "1px solid #86EFAC" : "1px solid #D1FAE5", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none", background: newNote.tagged_company ? "#F0FDF4" : "#fff", color: newNote.tagged_company ? "#047857" : "#333", fontWeight: newNote.tagged_company ? 700 : 400 }} />
+            {newNote.tagged_company && (
+              <button onClick={function() { setNewNote(function(p) { return Object.assign({}, p, { tagged_company: "" }); }); setCompanySearch(""); }}
+                style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#888" }}>✕</button>
+            )}
+            {companySuggestions.length > 0 && !newNote.tagged_company && (
+              <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #86EFAC", borderRadius: 8, zIndex: 50, boxShadow: "0 4px 12px rgba(0,0,0,0.1)", marginTop: 2 }}>
+                {companySuggestions.map(function(co) {
+                  return (
+                    <div key={co.id} onClick={function() { setNewNote(function(p) { return Object.assign({}, p, { tagged_company: co.name }); }); setCompanySearch(co.name); setCompanySuggestions([]); }}
+                      style={{ padding: "9px 14px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid #F0EDE8", display: "flex", justifyContent: "space-between" }}
+                      onMouseEnter={function(e) { e.currentTarget.style.background = "#F0FDF4"; }}
+                      onMouseLeave={function(e) { e.currentTarget.style.background = "#fff"; }}>
+                      <span style={{ fontWeight: 600 }}>{co.name}</span>
+                      <span style={{ fontSize: 11, color: "#AAA" }}>{co.assignee}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
           <textarea value={newNote.content} placeholder="내용을 자유롭게 입력하세요. 업무 메모, 오늘 할 일, 주의사항 등..." onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { content: v }); }); }} rows={6}
             style={{ width: "100%", padding: "12px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, lineHeight: 1.75, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff" }} />
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
@@ -4440,31 +4607,6 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     if (!result.error) setCompaniesList(result.data || []);
   };
 
-  // 기관별현황에 있지만 기업목록에 없는 사업장 자동 등록
-  var registerMissingCompanies = async function(missingNames) {
-    if (!missingNames || missingNames.length === 0) return;
-    var toAdd = missingNames;
-    // 기관별현황에서 해당 업체 정보 가져오기
-    var added = 0;
-    for (var i = 0; i < toAdd.length; i++) {
-      var name = toAdd[i];
-      var caseInfo = cases.find(function(c) { return c.business_name === name && !c.deleted_at; });
-      var ins = await supabase.from("companies").insert({
-        name: name,
-        representative: caseInfo ? (caseInfo.representative || "") : "",
-        assignee: caseInfo ? (caseInfo.assignee || "") : "",
-        region: caseInfo ? (caseInfo.region || "") : "",
-        stage: "상담/진단완료",
-        type: "법인",
-      });
-      if (!ins.error) added++;
-    }
-    if (added > 0) {
-      alert(added + "개 사업장이 기업목록에 추가됐어요!");
-      fetchCompanies();
-    }
-  };
-
   useEffect(function() { fetchCases(); fetchCompanies(); }, []);
 
   useEffect(function() {
@@ -4579,7 +4721,6 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       request_amount: editData.request_amount, region: editData.region,
       agency_sub: editData.agency_sub, notes: editData.notes,
       fund_product: editData.fund_product || null,
-      approved_amount: editData.approved_amount || null,
       updated_at: new Date().toISOString()
     };
     var result = await supabase.from("agency_cases").update(updates).eq("id", editData.id);
@@ -4739,30 +4880,6 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         </div>
       )}
 
-      {/* 기업목록 누락 업체 안내 */}
-      {(function() {
-        var allCaseNames = cases.filter(function(c) { return !c.deleted_at; }).map(function(c) { return c.business_name; }).filter(Boolean);
-        var companyNames = new Set(companiesList.map(function(c) { return c.name; }));
-        var missing = allCaseNames.filter(function(n) { return !companyNames.has(n); });
-        var uniqueMissing = missing.filter(function(n, i) { return missing.indexOf(n) === i; });
-        if (uniqueMissing.length === 0) return null;
-        return (
-          <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "12px 18px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 16 }}>⚠️</span>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#92400E" }}>기업목록에 없는 사업장 {uniqueMissing.length}개 발견</div>
-                <div style={{ fontSize: 11, color: "#B45309", marginTop: 2 }}>{uniqueMissing.slice(0, 5).join(", ")}{uniqueMissing.length > 5 ? " 외 " + (uniqueMissing.length - 5) + "개" : ""}</div>
-              </div>
-            </div>
-            <button onClick={function() { if (window.confirm(uniqueMissing.join("\n") + "\n\n위 " + uniqueMissing.length + "개 사업장을 기업목록에 추가하시겠습니까?")) registerMissingCompanies(uniqueMissing); }}
-              style={{ background: "#D97706", color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
-              + 기업목록에 일괄 추가
-            </button>
-          </div>
-        );
-      })()}
-
       {/* 테이블 */}
       {filtered.length === 0 ? (
         <div style={{ background: "#fff", borderRadius: 10, padding: "60px 20px", textAlign: "center", color: "#AAA", fontSize: 14, border: "1px solid #E8E5E0" }}>
@@ -4785,7 +4902,6 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                 )}
                 <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>지역</th>
                 <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>상태</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#047857", fontSize: 11 }}>승인금액</th>
                 <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>비고</th>
                 <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 600, color: "#888", fontSize: 11, width: 80 }}>작업</th>
               </tr>
@@ -4871,12 +4987,6 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                             {STATUS_OPTIONS.map(function(s) { return <option key={s} value={s}>{s}</option>; })}
                           </select>
                         : <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, fontWeight: 600 }}>{row.status || "-"}</span>}
-                    </td>
-                    <td style={{ padding: "10px 12px" }}>
-                      {isEditing
-                        ? <input value={editData.approved_amount || ""} onChange={function(e) { var v = e.target.value; setEditData(function(p) { return Object.assign({}, p, { approved_amount: v }); }); }}
-                            placeholder="예: 5,000만원" style={{ padding: "4px 8px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, width: 90, boxSizing: "border-box" }} />
-                        : <span style={{ fontSize: 12, color: row.approved_amount ? "#047857" : "#CCC", fontWeight: row.approved_amount ? 700 : 400 }}>{row.approved_amount || "-"}</span>}
                     </td>
                     <td style={{ padding: "10px 12px" }}>
                       {isEditing
