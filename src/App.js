@@ -440,7 +440,7 @@ function CRMApp({ profile, session }) {
   const [agencyRefreshKey, setAgencyRefreshKey] = useState(0);
   const [notifications, setNotifications] = useState([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
-  const notifRef = React.useRef(null);
+  const notifRef = useRef(null)
 
   // 알림 폴링 - 내 담당 새 노트 확인 (30초마다)
   useEffect(function() {
