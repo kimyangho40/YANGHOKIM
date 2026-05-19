@@ -43,40 +43,6 @@ const ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일
 const DB_ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일"];
 const DB_MANAGERS = ["양호","동일","관호"];
 
-// ── 업무노트 템플릿 ──────────────────────────────────────────────────────────
-const NOTE_TEMPLATES = [
-  {
-    id: "daily",
-    label: "📅 일일 업무",
-    title: function(name) { return new Date().toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "short" }) + " 업무 - " + name; },
-    content: "- [ ] 오늘의 주요 업무\n- [ ] 기관 방문/연락 예정\n- [ ] 서류 처리\n- [ ] 기타",
-  },
-  {
-    id: "sojingong",
-    label: "🏢 소진공 신청",
-    title: function() { return "소진공 신청 체크리스트"; },
-    content: "- [ ] 사업자등록증 확인\n- [ ] 재무제표 3년치 확인\n- [ ] 부가세증명원 확인\n- [ ] 대표자 신분증\n- [ ] 임대차계약서\n- [ ] 금융거래확인서\n- [ ] 4대보험 명부\n- [ ] 신청서 작성\n- [ ] 최종 제출",
-  },
-  {
-    id: "jungingong",
-    label: "🏛️ 중진공 방문",
-    title: function() { return "중진공 방문 준비 체크리스트"; },
-    content: "- [ ] 사업자등록증\n- [ ] 재무제표 확인\n- [ ] 우선도 체크리스트 완료\n- [ ] 지역본부 확인\n- [ ] 신청상품 선택\n- [ ] 방문 예약\n- [ ] 대표자 동행 여부 확인\n- [ ] 방문 완료",
-  },
-  {
-    id: "followup",
-    label: "📞 사후 관리",
-    title: function() { return "사후관리 체크리스트"; },
-    content: "- [ ] 자금집행 확인\n- [ ] 수수료 입금 요청\n- [ ] 세금계산서 발행\n- [ ] 입금 완료 확인\n- [ ] 추가 진행 상담",
-  },
-  {
-    id: "gibо",
-    label: "🔬 기보 신청",
-    title: function() { return "기술보증기금 신청 체크리스트"; },
-    content: "- [ ] 기술력 평가 서류 준비\n- [ ] 사업계획서\n- [ ] 특허/인증서 확인\n- [ ] 재무제표\n- [ ] 기술보증 신청서 작성\n- [ ] 기술평가 일정 확인\n- [ ] 실태조사 준비",
-  },
-];
-
 // 중소벤처기업진흥공단 / 구조혁신&사업전환 지역본부·지부 관할 매핑
 // 값은 배열 — 복수 관할지역의 경우 2개 들어감
 const JUNGINGONG_REGION_MAP = {
@@ -2653,24 +2619,69 @@ function ActivityLogView() {
 
 // ── 업무노트 수정 카드 (독립 컴포넌트 - 입력버그 방지) ─────────────────────────
 function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
+  var parseItems = function() {
+    var c = editNote.content || note.content || "";
+    var lines = c.split("\n").filter(function(l) { return l.trim(); });
+    if (lines.length === 0) return [{ text: "", checked: false }];
+    return lines.map(function(l) {
+      var m = l.trim().match(/^- \[([ x])\] (.+)/);
+      if (m) return { text: m[2], checked: m[1] === "x" };
+      return { text: l.replace(/^- /, "").trim(), checked: false };
+    });
+  };
+  var [items, setItems] = useState(parseItems);
+
+  var addItem = function(afterIdx) {
+    var next = items.slice(); next.splice(afterIdx + 1, 0, { text: "", checked: false }); setItems(next);
+    setTimeout(function() { var ins = document.querySelectorAll(".edit-cl-input"); if (ins[afterIdx + 1]) ins[afterIdx + 1].focus(); }, 30);
+  };
+  var removeItem = function(idx) {
+    if (items.length === 1) return;
+    var next = items.filter(function(_, i) { return i !== idx; }); setItems(next);
+    setTimeout(function() { var ins = document.querySelectorAll(".edit-cl-input"); if (ins[Math.max(0, idx - 1)]) ins[Math.max(0, idx - 1)].focus(); }, 30);
+  };
+  var handleSave = function() {
+    var body = items.filter(function(it) { return it.text.trim(); }).map(function(it) { return (it.checked ? "- [x] " : "- [ ] ") + it.text.trim(); }).join("\n");
+    setEditNote(function(p) { return Object.assign({}, p, { content: body, is_todo: true }); });
+    setTimeout(saveEdit, 0);
+  };
+
   return (
     <div style={{ background: "#FEFCE8", border: "2px solid #FDE68A", borderRadius: 12, padding: "16px 18px" }}>
-      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
-          <input type="checkbox" checked={editNote.is_todo || false} onChange={function(e) { setEditNote(function(p) { return Object.assign({}, p, { is_todo: e.target.checked }); }); }} />
-          할 일
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
-          <input type="checkbox" checked={editNote.pinned || false} onChange={function(e) { setEditNote(function(p) { return Object.assign({}, p, { pinned: e.target.checked }); }); }} />
-          📌 고정
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "#B45309" }}>✏️ 노트 수정</span>
+        <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, cursor: "pointer" }}>
+          <input type="checkbox" checked={editNote.pinned || false} onChange={function(e) { setEditNote(function(p) { return Object.assign({}, p, { pinned: e.target.checked }); }); }} />📌 고정
         </label>
       </div>
       <input value={editNote.title || ""} placeholder="제목" onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
-        style={{ width: "100%", padding: "8px 10px", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 14, fontWeight: 600, boxSizing: "border-box", outline: "none", marginBottom: 8, background: "#fff" }} />
-      <textarea value={editNote.content || ""} placeholder="내용을 입력하세요..." onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { content: v }); }); }} rows={5}
-        style={{ width: "100%", padding: "10px 12px", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 13, lineHeight: 1.7, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff" }} />
-      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <button onClick={saveEdit} style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 7, padding: "8px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
+        style={{ width: "100%", padding: "6px 4px", border: "none", borderBottom: "1px solid #FDE68A", fontSize: 14, fontWeight: 700, boxSizing: "border-box", outline: "none", marginBottom: 12, background: "transparent" }} />
+      <div style={{ marginBottom: 10 }}>
+        {items.map(function(item, idx) {
+          return (
+            <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", borderRadius: 6 }}
+              onMouseEnter={function(e) { e.currentTarget.style.background = "#FFFBEB"; }}
+              onMouseLeave={function(e) { e.currentTarget.style.background = "transparent"; }}>
+              <input type="checkbox" checked={item.checked} onChange={function() { setItems(items.map(function(it, i) { return i === idx ? Object.assign({}, it, { checked: !it.checked }) : it; })); }}
+                style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#1A1917", flexShrink: 0 }} />
+              <input className="edit-cl-input" value={item.text} placeholder={"항목 " + (idx + 1)}
+                onChange={function(e) { var v = e.target.value; setItems(items.map(function(it, i) { return i === idx ? Object.assign({}, it, { text: v }) : it; })); }}
+                onKeyDown={function(e) {
+                  if (e.key === "Enter") { e.preventDefault(); addItem(idx); }
+                  if (e.key === "Backspace" && item.text === "") { e.preventDefault(); removeItem(idx); }
+                }}
+                style={{ flex: 1, border: "none", outline: "none", fontSize: 13, background: "transparent", textDecoration: item.checked ? "line-through" : "none", color: item.checked ? "#AAA" : "#1A1917", lineHeight: 1.7 }} />
+              {items.length > 1 && <button onClick={function() { removeItem(idx); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#CCC", padding: "0 2px" }}>✕</button>}
+            </div>
+          );
+        })}
+        <button onClick={function() { addItem(items.length - 1); }}
+          style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#AAA", padding: "4px 0" }}>
+          <span style={{ fontSize: 16, fontWeight: 300 }}>+</span> 항목 추가
+        </button>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+        <button onClick={handleSave} style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 7, padding: "8px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
         <button onClick={onCancel} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 7, padding: "8px 14px", fontSize: 13, cursor: "pointer" }}>취소</button>
       </div>
     </div>
@@ -2784,11 +2795,6 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
         )
       )}
 
-      {note.tagged_company && (
-        <div style={{ marginBottom: 8 }}>
-          <span style={{ fontSize: 11, padding: "2px 8px", background: "#ECFDF5", color: "#047857", borderRadius: 99, fontWeight: 600, border: "1px solid #A7F3D0" }}>🏢 {note.tagged_company}</span>
-        </div>
-      )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <div style={{ width: 20, height: 20, borderRadius: "50%", background: "#1A1917", color: "#F7F6F3", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700 }}>{(note.assignee || "?")[0]}</div>
@@ -2814,13 +2820,8 @@ function WorkNotesView({ profile }) {
   const [replyText, setReplyText] = useState("");
   const [showTrash, setShowTrash] = useState(false);
   const [trashedNotes, setTrashedNotes] = useState([]);
-  const [companiesList, setCompaniesList] = useState([]);
-  const [showTemplates, setShowTemplates] = useState(false);
-  const [showStats, setShowStats] = useState(false);
-  const [companySearch, setCompanySearch] = useState("");
-  const [companySuggestions, setCompanySuggestions] = useState([]);
 
-  useEffect(function() { fetchNotes(); fetchCompanyList(); }, []);
+  useEffect(function() { fetchNotes(); }, []);
 
   var fetchNotes = async function() {
     setLoading(true);
@@ -2828,38 +2829,6 @@ function WorkNotesView({ profile }) {
     if (!r.error) setNotes(r.data || []);
     setLoading(false);
   };
-
-  var fetchCompanyList = async function() {
-    var r = await supabase.from("companies").select("id, name, assignee").is("deleted_at", null).order("name");
-    if (!r.error) setCompaniesList(r.data || []);
-  };
-
-  // 기업명 자동완성
-  var onCompanySearchChange = function(val) {
-    setCompanySearch(val);
-    if (!val.trim()) { setCompanySuggestions([]); return; }
-    var matches = companiesList.filter(function(c) { return c.name.includes(val); }).slice(0, 6);
-    setCompanySuggestions(matches);
-  };
-
-  // 완료율 통계 계산
-  var calcStats = useMemo(function() {
-    var result = {};
-    ASSIGNEES.forEach(function(name) {
-      var myNotes = notes.filter(function(n) { return n.assignee === name && n.content; });
-      var total = 0; var done = 0;
-      myNotes.forEach(function(n) {
-        var lines = (n.content || "").split("
-");
-        lines.forEach(function(l) {
-          if (/^- \[ \]/.test(l.trim())) total++;
-          if (/^- \[x\]/.test(l.trim())) { total++; done++; }
-        });
-      });
-      result[name] = { total: total, done: done, rate: total > 0 ? Math.round(done / total * 100) : 0 };
-    });
-    return result;
-  }, [notes]);
 
   var fetchTrashedNotes = async function() {
     var r = await supabase.from("work_notes").select("*").not("deleted_at", "is", null).order("deleted_at", { ascending: false });
@@ -2900,7 +2869,6 @@ function WorkNotesView({ profile }) {
   var saveNew = async function() {
     if (!newNote.title.trim() && !newNote.content.trim()) { alert("제목 또는 내용을 입력해주세요."); return; }
     var assigneeName = newNote.target_assignee || profile?.name || "전체";
-    var taggedCompany = newNote.tagged_company || null;
     var r = await supabase.from("work_notes").insert({
       assignee: assigneeName,
       title: newNote.title.trim(),
@@ -2908,27 +2876,11 @@ function WorkNotesView({ profile }) {
       is_todo: newNote.is_todo,
       pinned: newNote.pinned,
       created_by: profile?.name || assigneeName,
-      tagged_company: taggedCompany,
     }).select().single();
     if (!r.error && r.data) {
       setNotes(function(prev) { return [r.data].concat(prev); });
       setShowAdd(false);
-      setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", tagged_company: "" });
-      setCompanySearch(""); setCompanySuggestions([]);
-      // 기업 태그가 있으면 활동로그에 자동 기록
-      if (taggedCompany) {
-        var co = companiesList.find(function(c) { return c.name === taggedCompany; });
-        if (co) {
-          await supabase.from("activity_logs").insert({
-            company_id: co.id,
-            business_name: co.name,
-            assignee: assigneeName,
-            log_type: "manual_memo",
-            memo: "[업무노트] " + (newNote.title.trim() || newNote.content.trim().slice(0, 50)),
-            logged_by: profile?.name || assigneeName,
-          });
-        }
-      }
+      setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "" });
     } else if (r.error) {
       alert("저장 실패: " + r.error.message);
     }
@@ -3014,18 +2966,10 @@ function WorkNotesView({ profile }) {
           <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>업무 노트</h1>
           <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>메모 · 할 일 · 업무일지</p>
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8 }}>
           <button onClick={function() { setShowAdd(true); setNewNote({ title: "", content: "", is_todo: false, pinned: false }); }}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             <Icon name="plus" size={15} color="#F7F6F3" /> 새 노트
-          </button>
-          <button onClick={function() { setShowTemplates(function(p) { return !p; }); }}
-            style={{ display: "flex", alignItems: "center", gap: 6, background: showTemplates ? "#4338CA" : "#fff", color: showTemplates ? "#fff" : "#4338CA", border: "1px solid #C7D2FE", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-            📋 템플릿
-          </button>
-          <button onClick={function() { setShowStats(function(p) { return !p; }); }}
-            style={{ display: "flex", alignItems: "center", gap: 6, background: showStats ? "#047857" : "#fff", color: showStats ? "#fff" : "#047857", border: "1px solid #A7F3D0", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-            📊 완료율
           </button>
           <button onClick={openTrash}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
@@ -3036,48 +2980,6 @@ function WorkNotesView({ profile }) {
           </button>
         </div>
       </div>
-
-      {/* 템플릿 패널 */}
-      {showTemplates && (
-        <div style={{ background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 12, padding: "16px 20px", marginBottom: 16 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#4338CA", marginBottom: 12 }}>📋 템플릿으로 빠르게 시작하기</div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {NOTE_TEMPLATES.map(function(tmpl) {
-              return (
-                <button key={tmpl.id} onClick={function() {
-                  setShowAdd(true);
-                  setNewNote({ title: tmpl.title(profile?.name || ""), content: tmpl.content, is_todo: true, pinned: false, target_assignee: profile?.name || "" });
-                  setShowTemplates(false);
-                }}
-                  style={{ padding: "8px 14px", background: "#fff", border: "1px solid #C7D2FE", borderRadius: 8, fontSize: 12, fontWeight: 600, color: "#4338CA", cursor: "pointer" }}>
-                  {tmpl.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* 완료율 통계 패널 */}
-      {showStats && (
-        <div style={{ background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: 12, padding: "16px 20px", marginBottom: 16 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#047857", marginBottom: 12 }}>📊 담당자별 체크리스트 완료율</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 10 }}>
-            {ASSIGNEES.map(function(name) {
-              var s = calcStats[name] || { total: 0, done: 0, rate: 0 };
-              return (
-                <div key={name} style={{ background: "#fff", borderRadius: 8, padding: "10px 14px", border: "1px solid #D1FAE5" }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#1A1917", marginBottom: 6 }}>{name}</div>
-                  <div style={{ height: 6, background: "#D1FAE5", borderRadius: 99, marginBottom: 6, overflow: "hidden" }}>
-                    <div style={{ width: s.rate + "%", background: s.rate >= 80 ? "#059669" : s.rate >= 50 ? "#F59E0B" : "#DC2626", height: "100%", borderRadius: 99, transition: "width 0.4s" }} />
-                  </div>
-                  <div style={{ fontSize: 11, color: "#555" }}>{s.done}/{s.total}개 완료 <span style={{ fontWeight: 700, color: s.rate >= 80 ? "#059669" : s.rate >= 50 ? "#F59E0B" : "#DC2626" }}>{s.rate}%</span></div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       {/* 필터 */}
       <div style={{ display: "flex", gap: 16, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
@@ -3109,61 +3011,75 @@ function WorkNotesView({ profile }) {
         </div>
       </div>
 
-      {/* 새 노트 작성 폼 */}
-      {showAdd && (
-        <div style={{ background: "#F0FDF4", border: "2px solid #86EFAC", borderRadius: 12, padding: "18px 20px", marginBottom: 20 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D", marginBottom: 12 }}>✏️ 새 노트 작성</div>
-          <div style={{ display: "flex", gap: 16, marginBottom: 10 }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
-              <input type="checkbox" checked={newNote.is_todo} onChange={function(e) { setNewNote(function(p) { return Object.assign({}, p, { is_todo: e.target.checked }); }); }} />
-              📋 할 일로 등록
-            </label>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
-              <input type="checkbox" checked={newNote.pinned} onChange={function(e) { setNewNote(function(p) { return Object.assign({}, p, { pinned: e.target.checked }); }); }} />
-              📌 상단 고정
-            </label>
-          </div>
-          <div style={{ marginBottom: 10 }}>
-            <select value={newNote.target_assignee || profile?.name || ""} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { target_assignee: v }); }); }}
-              style={{ padding: "8px 12px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, background: "#fff", width: "auto" }}>
-              <option value="">담당자 선택</option>
-              {ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
-            </select>
-          </div>
-          <input value={newNote.title} placeholder="제목 (선택사항)" onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
-            style={{ width: "100%", padding: "10px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 14, fontWeight: 600, boxSizing: "border-box", outline: "none", marginBottom: 10, background: "#fff" }} />
-          {/* 기업 태그 자동완성 */}
-          <div style={{ position: "relative", marginBottom: 10 }}>
-            <input value={newNote.tagged_company || companySearch} placeholder="🏢 기업 태그 (선택사항) — 기업명 입력" onChange={function(e) { var v = e.target.value; onCompanySearchChange(v); setNewNote(function(p) { return Object.assign({}, p, { tagged_company: "" }); }); }}
-              style={{ width: "100%", padding: "8px 13px", border: newNote.tagged_company ? "1px solid #86EFAC" : "1px solid #D1FAE5", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none", background: newNote.tagged_company ? "#F0FDF4" : "#fff", color: newNote.tagged_company ? "#047857" : "#333", fontWeight: newNote.tagged_company ? 700 : 400 }} />
-            {newNote.tagged_company && (
-              <button onClick={function() { setNewNote(function(p) { return Object.assign({}, p, { tagged_company: "" }); }); setCompanySearch(""); }}
-                style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#888" }}>✕</button>
-            )}
-            {companySuggestions.length > 0 && !newNote.tagged_company && (
-              <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #86EFAC", borderRadius: 8, zIndex: 50, boxShadow: "0 4px 12px rgba(0,0,0,0.1)", marginTop: 2 }}>
-                {companySuggestions.map(function(co) {
-                  return (
-                    <div key={co.id} onClick={function() { setNewNote(function(p) { return Object.assign({}, p, { tagged_company: co.name }); }); setCompanySearch(co.name); setCompanySuggestions([]); }}
-                      style={{ padding: "9px 14px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid #F0EDE8", display: "flex", justifyContent: "space-between" }}
-                      onMouseEnter={function(e) { e.currentTarget.style.background = "#F0FDF4"; }}
-                      onMouseLeave={function(e) { e.currentTarget.style.background = "#fff"; }}>
-                      <span style={{ fontWeight: 600 }}>{co.name}</span>
-                      <span style={{ fontSize: 11, color: "#AAA" }}>{co.assignee}</span>
-                    </div>
-                  );
-                })}
+      {/* 새 노트 작성 폼 - 노션 스타일 */}
+      {showAdd && (function() {
+        var items = newNote.checkItems || [{ text: "", checked: false }];
+        var updateItems = function(next) { setNewNote(function(p) { return Object.assign({}, p, { checkItems: next }); }); };
+        var addItem = function(afterIdx) {
+          var next = items.slice(); next.splice(afterIdx + 1, 0, { text: "", checked: false }); updateItems(next);
+          setTimeout(function() { var ins = document.querySelectorAll(".new-cl-input"); if (ins[afterIdx + 1]) ins[afterIdx + 1].focus(); }, 30);
+        };
+        var removeItem = function(idx) {
+          if (items.length === 1) return;
+          updateItems(items.filter(function(_, i) { return i !== idx; }));
+          setTimeout(function() { var ins = document.querySelectorAll(".new-cl-input"); if (ins[Math.max(0, idx - 1)]) ins[Math.max(0, idx - 1)].focus(); }, 30);
+        };
+        var handleSave = function() {
+          var body = items.filter(function(it) { return it.text.trim(); }).map(function(it) { return (it.checked ? "- [x] " : "- [ ] ") + it.text.trim(); }).join("\n");
+          var r = Object.assign({}, newNote, { content: body, is_todo: true, checkItems: null });
+          setNewNote(r);
+          setTimeout(saveNew, 0);
+        };
+        return (
+          <div style={{ background: "#fff", border: "2px solid #86EFAC", borderRadius: 14, padding: "20px 22px", marginBottom: 20, boxShadow: "0 4px 20px rgba(0,0,0,0.06)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D" }}>✏️ 새 업무 노트</div>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <select value={newNote.target_assignee || profile?.name || ""} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { target_assignee: v }); }); }}
+                  style={{ padding: "5px 10px", border: "1px solid #86EFAC", borderRadius: 7, fontSize: 12, background: "#fff" }}>
+                  <option value="">담당자 선택</option>
+                  {ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
+                </select>
+                <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, cursor: "pointer" }}>
+                  <input type="checkbox" checked={newNote.pinned || false} onChange={function(e) { setNewNote(function(p) { return Object.assign({}, p, { pinned: e.target.checked }); }); }} />
+                  📌 고정
+                </label>
               </div>
-            )}
+            </div>
+            <input value={newNote.title || ""} placeholder="제목 (선택사항)" onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
+              style={{ width: "100%", padding: "6px 4px", border: "none", borderBottom: "1px solid #E8E5E0", fontSize: 15, fontWeight: 700, boxSizing: "border-box", outline: "none", marginBottom: 16, background: "transparent" }} />
+            <div style={{ marginBottom: 12 }}>
+              {items.map(function(item, idx) {
+                return (
+                  <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", borderRadius: 7, transition: "background 0.1s" }}
+                    onMouseEnter={function(e) { e.currentTarget.style.background = "#F0FDF4"; }}
+                    onMouseLeave={function(e) { e.currentTarget.style.background = "transparent"; }}>
+                    <input type="checkbox" checked={item.checked} onChange={function() { updateItems(items.map(function(it, i) { return i === idx ? Object.assign({}, it, { checked: !it.checked }) : it; })); }}
+                      style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#15803D", flexShrink: 0 }} />
+                    <input className="new-cl-input" value={item.text} placeholder="항목을 입력하세요"
+                      onChange={function(e) { var v = e.target.value; updateItems(items.map(function(it, i) { return i === idx ? Object.assign({}, it, { text: v }) : it; })); }}
+                      onKeyDown={function(e) {
+                        if (e.key === "Enter") { e.preventDefault(); addItem(idx); }
+                        if (e.key === "Backspace" && item.text === "") { e.preventDefault(); removeItem(idx); }
+                      }}
+                      style={{ flex: 1, border: "none", outline: "none", fontSize: 13, background: "transparent", textDecoration: item.checked ? "line-through" : "none", color: item.checked ? "#AAA" : "#1A1917", lineHeight: 1.7 }} />
+                    {items.length > 1 && <button onClick={function() { removeItem(idx); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#CCC", padding: "0 2px" }}>✕</button>}
+                  </div>
+                );
+              })}
+              <button onClick={function() { addItem(items.length - 1); }}
+                style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#AAA", padding: "4px 6px" }}>
+                <span style={{ fontSize: 18, lineHeight: 1, fontWeight: 300 }}>+</span> 항목 추가
+              </button>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={handleSave} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "10px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
+              <button onClick={function() { setShowAdd(false); setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: null }); }}
+                style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 16px", fontSize: 13, cursor: "pointer" }}>취소</button>
+            </div>
           </div>
-          <textarea value={newNote.content} placeholder="내용을 자유롭게 입력하세요. 업무 메모, 오늘 할 일, 주의사항 등..." onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { content: v }); }); }} rows={6}
-            style={{ width: "100%", padding: "12px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, lineHeight: 1.75, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff" }} />
-          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-            <button onClick={saveNew} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "10px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
-            <button onClick={function() { setShowAdd(false); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 16px", fontSize: 13, cursor: "pointer" }}>취소</button>
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* 노트 목록 */}
       {filtered.length === 0 ? (
