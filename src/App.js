@@ -968,9 +968,7 @@ function CRMApp({ profile, session }) {
           {[
             { id: "dashboard",  label: "대시보드",   icon: "dashboard" },
             { id: "agency",     label: "기관별 현황", icon: "building" },
-            { id: "dbleads",    label: "DB리스트",   icon: "phone" },
             { id: "settlement", label: "정산관리",    icon: "money" },
-            { id: "calendar",   label: "캘린더",      icon: "calendar" },
           ].map(({ id, label, icon }) => (
             <div key={id} onClick={() => setView(id)}
               style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 8, cursor: "pointer", marginBottom: 2, background: view === id ? "#2E2C29" : "transparent", color: view === id ? "#F7F6F3" : "#666", fontSize: 13, fontWeight: view === id ? 600 : 400 }}>
@@ -993,17 +991,19 @@ function CRMApp({ profile, session }) {
             <>
               <div style={{ fontSize: 10, color: "#444", letterSpacing: "0.08em", padding: "4px 12px 6px", fontWeight: 600 }}>추가 메뉴</div>
               {[
-                { id: "pipeline",    label: "파이프라인",  icon: "pipeline" },
-                { id: "list",        label: "기업 목록",   icon: "list" },
-                { id: "stagnant",    label: "정체 알림",   icon: "alert", badge: stagnant.length },
-                { id: "activitylog", label: "활동 로그",   icon: "activity" },
                 { id: "worknotes",   label: "업무 노트",   icon: "edit",
                   badge: (function() {
                     var today = new Date().toISOString().slice(0, 10);
                     return workNotesBadge;
                   })()
                 },
+                { id: "list",        label: "기업 목록",   icon: "list" },
+                { id: "stagnant",    label: "정체 알림",   icon: "alert", badge: stagnant.length },
+                { id: "pipeline",    label: "파이프라인",  icon: "pipeline" },
+                { id: "activitylog", label: "활동 로그",   icon: "activity" },
                 { id: "manual",      label: "자료실",      icon: "folder" },
+                { id: "dbleads",     label: "DB리스트",    icon: "phone" },
+                { id: "calendar",    label: "캘린더",      icon: "calendar" },
                 ...(profile.role === "admin" ? [{ id: "members", label: "팀원 관리", icon: "users" }] : []),
               ].map(({ id, label, icon, badge }) => (
                 <div key={id} onClick={() => setView(id)}
