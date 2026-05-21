@@ -968,12 +968,20 @@ function CRMApp({ profile, session }) {
           {[
             { id: "dashboard",  label: "대시보드",   icon: "dashboard" },
             { id: "agency",     label: "기관별 현황", icon: "building" },
-            { id: "settlement", label: "정산관리",    icon: "money" },
+            { id: "worknotes",  label: "업무 노트",   icon: "edit" },
+            { id: "list",       label: "기업 목록",   icon: "list" },
+            { id: "pipeline",   label: "파이프라인",  icon: "pipeline" },
           ].map(({ id, label, icon }) => (
             <div key={id} onClick={() => setView(id)}
               style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 8, cursor: "pointer", marginBottom: 2, background: view === id ? "#2E2C29" : "transparent", color: view === id ? "#F7F6F3" : "#666", fontSize: 13, fontWeight: view === id ? 600 : 400 }}>
               <Icon name={icon} size={15} color={view === id ? "#F7F6F3" : "#666"} />
               {label}
+              {id === "worknotes" && workNotesBadge > 0 && (
+                <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{workNotesBadge}</span>
+              )}
+              {id === "list" && stagnant.filter(function(c) { return c.stagnant_days >= 14; }).length > 0 && (
+                <span style={{ marginLeft: "auto", background: "#B45309", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>⚠</span>
+              )}
             </div>
           ))}
 
@@ -990,20 +998,24 @@ function CRMApp({ profile, session }) {
           {menuExpanded && (
             <>
               <div style={{ fontSize: 10, color: "#444", letterSpacing: "0.08em", padding: "4px 12px 6px", fontWeight: 600 }}>추가 메뉴</div>
+              {/* DB리스트 + 캘린더 위아래 */}
               {[
-                { id: "worknotes",   label: "업무 노트",   icon: "edit",
-                  badge: (function() {
-                    var today = new Date().toISOString().slice(0, 10);
-                    return workNotesBadge;
-                  })()
-                },
-                { id: "list",        label: "기업 목록",   icon: "list" },
+                { id: "dbleads", label: "DB리스트", icon: "phone" },
+                { id: "calendar", label: "캘린더", icon: "calendar" },
+              ].map(function({ id, label, icon }) {
+                return (
+                  <div key={id} onClick={function() { setView(id); }}
+                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 8, cursor: "pointer", marginBottom: 2, background: view === id ? "#2E2C29" : "transparent", color: view === id ? "#F7F6F3" : "#666", fontSize: 13, fontWeight: view === id ? 600 : 400 }}>
+                    <Icon name={icon} size={15} color={view === id ? "#F7F6F3" : "#666"} />
+                    {label}
+                  </div>
+                );
+              })}
+              {[
                 { id: "stagnant",    label: "정체 알림",   icon: "alert", badge: stagnant.length },
-                { id: "pipeline",    label: "파이프라인",  icon: "pipeline" },
                 { id: "activitylog", label: "활동 로그",   icon: "activity" },
                 { id: "manual",      label: "자료실",      icon: "folder" },
-                { id: "dbleads",     label: "DB리스트",    icon: "phone" },
-                { id: "calendar",    label: "캘린더",      icon: "calendar" },
+                { id: "settlement",  label: "정산관리",    icon: "money" },
                 ...(profile.role === "admin" ? [{ id: "members", label: "팀원 관리", icon: "users" }] : []),
               ].map(({ id, label, icon, badge }) => (
                 <div key={id} onClick={() => setView(id)}
