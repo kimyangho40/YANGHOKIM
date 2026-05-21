@@ -43,6 +43,33 @@ const ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일
 const DB_ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일"];
 const DB_MANAGERS = ["양호","동일","관호"];
 
+// 전화번호 자동 하이픈 포맷 (01012345678 → 010-1234-5678)
+function formatPhone(v) {
+  if (!v) return "";
+  var d = String(v).replace(/[^0-9]/g, "");
+  if (d.length === 0) return "";
+  if (d.startsWith("02")) {
+    if (d.length <= 2) return d;
+    if (d.length <= 5) return d.slice(0,2) + "-" + d.slice(2);
+    if (d.length <= 9) return d.slice(0,2) + "-" + d.slice(2,5) + "-" + d.slice(5);
+    return d.slice(0,2) + "-" + d.slice(2,6) + "-" + d.slice(6,10);
+  }
+  if (d.length <= 3) return d;
+  if (d.length <= 7) return d.slice(0,3) + "-" + d.slice(3);
+  if (d.length <= 10) return d.slice(0,3) + "-" + d.slice(3,6) + "-" + d.slice(6);
+  return d.slice(0,3) + "-" + d.slice(3,7) + "-" + d.slice(7,11);
+}
+
+// 사업자등록번호 자동 하이픈 (1234567890 → 123-45-67890)
+function formatBizNumber(v) {
+  if (!v) return "";
+  var d = String(v).replace(/[^0-9]/g, "");
+  if (d.length === 0) return "";
+  if (d.length <= 3) return d;
+  if (d.length <= 5) return d.slice(0,3) + "-" + d.slice(3);
+  return d.slice(0,3) + "-" + d.slice(3,5) + "-" + d.slice(5,10);
+}
+
 // 중소벤처기업진흥공단 / 구조혁신&사업전환 지역본부·지부 관할 매핑
 // 값은 배열 — 복수 관할지역의 경우 2개 들어감
 const JUNGINGONG_REGION_MAP = {
@@ -191,12 +218,43 @@ const formatRevenue = (val) => {
   if (!val && val !== 0) return '-';
   const n = typeof val === 'string' ? parseInt(val.replace(/[^0-9]/g, '')) : val;
   if (isNaN(n) || n === 0) return '-';
-  if (n >= 1000000000000) return (n/1000000000000).toFixed(1) + '조';
-  if (n >= 100000000) return (n/100000000).toFixed(1) + '억';
-  if (n >= 10000000) return (n/10000000).toFixed(0) + '천만';
-  if (n >= 1000000) return (n/1000000).toFixed(0) + '백만';
-  if (n >= 10000) return (n/10000).toFixed(0) + '만';
-  return n.toLocaleString();
+  // 한글 단위 분해: 조 / 억 / 만
+  var parts = [];
+  var jo = Math.floor(n / 1000000000000);
+  var eok = Math.floor((n % 1000000000000) / 100000000);
+  var man = Math.floor((n % 100000000) / 10000);
+  var won = n % 10000;
+  if (jo > 0) parts.push(jo + '조');
+  // 억 단위 - 1000 이상이면 천억 표시
+  if (eok > 0) {
+    if (eok >= 1000) {
+      var cheonEok = Math.floor(eok / 1000);
+      var nam = eok % 1000;
+      var eokStr = cheonEok + '천';
+      if (nam > 0) eokStr += nam;
+      parts.push(eokStr + '억');
+    } else {
+      parts.push(eok + '억');
+    }
+  }
+  // 만 단위 - 1000 이상이면 천만 표시
+  if (man > 0) {
+    if (man >= 1000) {
+      var cheonMan = Math.floor(man / 1000);
+      var namMan = man % 1000;
+      var manStr = cheonMan + '천';
+      if (namMan > 0) {
+        var baekMan = Math.floor(namMan / 100);
+        var restMan = namMan % 100;
+        if (baekMan > 0) manStr += baekMan + '백';
+        if (restMan > 0) manStr += restMan;
+      }
+      parts.push(manStr + '만');
+    } else {
+      parts.push(man + '만');
+    }
+  }
+  return parts.length > 0 ? parts.join(' ') : n.toLocaleString();
 };
 
 // ── 아이콘 ────────────────────────────────────────────────────────────────────
@@ -481,7 +539,7 @@ function CRMApp({ profile, session }) {
     const [{ data: cos }, { data: profs }, { data: agencyCases }] = await Promise.all([
       supabase.from("companies").select("*, documents(*)").is("deleted_at", null).order("created_at", { ascending: false }),
       supabase.from("profiles").select("*"),
-      supabase.from("agency_cases").select("business_name, region").not("region", "is", null),
+      supabase.from("agency_cases").select("business_name, region").not("region", "is", null).limit(10000),
     ]);
     // 기관별 현황 지역 → 기업 목록 자동 동기화
     var companiesList = cos || [];
@@ -573,7 +631,10 @@ function CRMApp({ profile, session }) {
       revenue_2023: rest.revenue_2023, revenue_2024: rest.revenue_2024, revenue_2025: rest.revenue_2025,
       issue: rest.issue, next_action: rest.next_action,
       employee_count: rest.employee_count || null, credit_score: rest.credit_score || null,
-      founded_year: rest.founded_year || null, application_month: rest.application_month || null,
+      credit_score_kcb: rest.credit_score_kcb ? parseInt(rest.credit_score_kcb) || null : null,
+      credit_score_nice: rest.credit_score_nice ? parseInt(rest.credit_score_nice) || null : null,
+      founded_year: rest.founded_year || null, founded_month: rest.founded_month ? parseInt(rest.founded_month) || null : null,
+      application_month: rest.application_month || null,
       business_number: rest.business_number || null,
       business_type: rest.business_type || null,
       region: rest.region || null,
@@ -610,7 +671,13 @@ function CRMApp({ profile, session }) {
             var ins = await supabase.from("agency_cases").insert({
               business_name: rest.name, agency_group: agencyGroup,
               month: monthNum, year: yearNum,
-              assignee: rest.assignee, status: "시작 전",
+              assignee: Array.isArray(rest.assignee) ? rest.assignee.join(", ") : (rest.assignee || ""),
+              representative: rest.representative || null,
+              business_number: rest.business_number || null,
+              region: rest.region || null,
+              notes: rest.issue || null,
+              contract_date: rest.contract_date || null,
+              status: "시작 전",
             });
             if (!ins.error) addedCount++;
             else showToast("기관별현황 등록 실패: " + ins.error.message, "error");
@@ -629,6 +696,27 @@ function CRMApp({ profile, session }) {
       if (logEntries.length > 0) {
         await supabase.from("activity_logs").insert(logEntries);
       }
+      // 기관별 현황 자동 동기화: 회사명이 같은 모든 agency_cases의 정보를 최신화
+      if (rest.name && prevData) {
+        var syncUpdates = {};
+        if (rest.representative !== prevData.representative) syncUpdates.representative = rest.representative || null;
+        if (rest.business_number !== prevData.business_number) syncUpdates.business_number = rest.business_number || null;
+        if (rest.region !== prevData.region) syncUpdates.region = rest.region || null;
+        if (rest.contract_date !== prevData.contract_date) syncUpdates.contract_date = rest.contract_date || null;
+        var prevAssignee = Array.isArray(prevData.assignee) ? prevData.assignee.join(", ") : (prevData.assignee || "");
+        var newAssignee = Array.isArray(rest.assignee) ? rest.assignee.join(", ") : (rest.assignee || "");
+        if (newAssignee !== prevAssignee) syncUpdates.assignee = newAssignee;
+        // 회사명 변경 시
+        var nameChanged = prevData.name && rest.name !== prevData.name;
+        if (nameChanged) syncUpdates.business_name = rest.name;
+        if (Object.keys(syncUpdates).length > 0) {
+          var oldName = nameChanged ? prevData.name : rest.name;
+          var syncResult = await supabase.from("agency_cases").update(syncUpdates).eq("business_name", oldName).is("deleted_at", null);
+          if (!syncResult.error && syncResult.count !== 0) {
+            // 동기화 성공 (조용히 처리)
+          }
+        }
+      }
       showToast("저장됐어요!"); fetchAll();
     }
     else showToast("저장 실패: " + error.message, "error");
@@ -642,21 +730,59 @@ function CRMApp({ profile, session }) {
 
   // 신규 회사 추가
   const addCompany = async (form) => {
-    const { data: co, error } = await supabase.from("companies").insert({
-      name: form.name, type: form.type, representative: form.representative,
-      phone: form.phone, stage: form.stage, assignee: form.assignee,
-      agency: form.agency, next_contact: form.next_contact,
+    if (!form.name || !form.name.trim()) { showToast("업체명을 입력해주세요.", "error"); return; }
+    if (!form.representative || !form.representative.trim()) { showToast("대표자명을 입력해주세요.", "error"); return; }
+    var insertData = {
+      name: form.name.trim(),
+      type: form.type || "법인",
+      representative: form.representative.trim(),
+      phone: form.phone || "",
+      stage: form.stage || "상담/진단완료",
+      assignee: form.assignee || "",
+      agency: form.agency || "",
       last_contact: new Date().toISOString().slice(0,10),
-      issue: form.issue, next_action: form.next_action,
-      fee: form.fee, fee_status: "미수령", stagnant_days: 0,
+      issue: form.issue || "",
+      next_action: form.next_action || "",
+      fee: form.fee || 5,
+      fee_status: "미수령",
+      stagnant_days: 0,
       stage_updated_at: new Date().toISOString().slice(0,10),
-    }).select().single();
+    };
+    if (form.next_contact) insertData.next_contact = form.next_contact;
+    if (form.contract_date) insertData.contract_date = form.contract_date;
+    if (form.employee_count) insertData.employee_count = parseInt(form.employee_count) || null;
+    if (form.credit_score_kcb) insertData.credit_score_kcb = parseInt(form.credit_score_kcb) || null;
+    if (form.credit_score_nice) insertData.credit_score_nice = parseInt(form.credit_score_nice) || null;
+    if (form.founded_year) insertData.founded_year = parseInt(form.founded_year) || null;
+    if (form.founded_month) insertData.founded_month = parseInt(form.founded_month) || null;
+    if (form.business_number) insertData.business_number = form.business_number;
+    if (form.business_type) insertData.business_type = form.business_type;
+    if (form.region) insertData.region = form.region;
+    if (form.revenue_2023) insertData.revenue_2023 = parseInt(form.revenue_2023) || null;
+    if (form.revenue_2024) insertData.revenue_2024 = parseInt(form.revenue_2024) || null;
+    if (form.revenue_2025) insertData.revenue_2025 = parseInt(form.revenue_2025) || null;
+    // 빠른 등록에서 agency_list(배열)와 agency 처리
+    if (Array.isArray(form.agency_list) && form.agency_list.length > 0) {
+      insertData.agency = form.agency_list.join(", ");
+      insertData.agency_list = form.agency_list.join(", ");
+    } else if (form.agency_list_str) {
+      insertData.agency_list = form.agency_list_str;
+    }
+
+    const { data: co, error } = await supabase.from("companies").insert(insertData).select().single();
     if (!error && co) {
-      await supabase.from("documents").insert(DOC_LIST.map(d => ({ company_id: co.id, doc_name: d, received: false })));
-      showToast("신규 업체가 등록됐어요!");
+      // 서류 체크리스트 자동 생성
+      var docsInsert = await supabase.from("documents").insert(DOC_LIST.map(d => ({ company_id: co.id, doc_name: d, received: false }))).select();
+      var newCompany = Object.assign({}, co, { documents: docsInsert.data || [] });
+      showToast("신규 업체가 등록됐어요! 상세 정보를 입력하세요.");
       setShowAdd(false);
+      // 등록 후 곧바로 기업 상세 화면 자동 오픈 (두 번 일 안 하도록)
+      setSelectedCompany(newCompany);
       fetchAll();
-    } else showToast("등록 실패", "error");
+    } else {
+      console.error("등록 실패:", error);
+      showToast("등록 실패: " + (error?.message || "알 수 없는 오류"), "error");
+    }
   };
 
   return (
@@ -1023,7 +1149,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
   const thisYear = 2026;
 
   useEffect(function() {
-    supabase.from("agency_cases").select("*").is("deleted_at", null).then(function(r) {
+    supabase.from("agency_cases").select("*").is("deleted_at", null).limit(10000).then(function(r) {
       if (!r.error) setAgencyCases(r.data || []);
     });
     supabase.from("kpi_goals").select("*").eq("year", thisYear).eq("month", thisMonth).then(function(r) {
@@ -1043,7 +1169,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
     const approved = cases.filter(c => ["승인","약정","완료"].includes(c.status)).length;
     const total = cases.length;
     const rate = total > 0 ? Math.round(approved / total * 100) : 0;
-    return { id: g.id, label: g.label, color: g.color, total, approved, rate };
+    return { id: g.id, label: g.label, color: g.color, ids: g.ids, total, approved, rate };
   });
 
   // 담당자별 KPI
@@ -1133,8 +1259,20 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
             <div style={{ fontSize: 14, fontWeight: 600 }}>기관별 이번 달 현황 <span style={{ fontSize: 12, color: "#888", fontWeight: 400 }}>{thisMonth}월</span></div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
             {agencyStats.map(function(g) {
+              var allCases = agencyCases.filter(function(c) { return g.ids.includes(c.agency_group); });
+              var doneCases = allCases.filter(function(c) { return ["승인","약정","완료"].includes(c.status) && c.contract_date; });
+              var avgDays = 0;
+              if (doneCases.length > 0) {
+                var totalDays = doneCases.reduce(function(s, c) {
+                  var contractDate = new Date(c.contract_date);
+                  var createdDate = new Date(c.created_at || c.contract_date);
+                  var diff = Math.max(0, Math.floor((contractDate - createdDate) / 86400000));
+                  return s + diff;
+                }, 0);
+                avgDays = Math.round(totalDays / doneCases.length);
+              }
               return (
                 <div key={g.id} style={{ background: "#F7F6F3", borderRadius: 10, padding: "14px 16px", borderLeft: "3px solid " + g.color }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: g.color, marginBottom: 8 }}>{g.label}</div>
@@ -1143,13 +1281,115 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
                   <div style={{ height: 4, background: "#E8E5E0", borderRadius: 99 }}>
                     <div style={{ height: 4, background: g.color, borderRadius: 99, width: g.rate + "%" }} />
                   </div>
-                  <div style={{ fontSize: 10, color: g.color, marginTop: 3, fontWeight: 600 }}>승인율 {g.rate}%</div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5 }}>
+                    <span style={{ fontSize: 10, color: g.color, fontWeight: 600 }}>승인율 {g.rate}%</span>
+                    {avgDays > 0 && <span style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>평균 {avgDays}일</span>}
+                  </div>
                 </div>
               );
             })}
           </div>
         </div>
       )}
+
+      {/* 🆕 오늘의 할 일 위젯 */}
+      {(function() {
+        var today = new Date().toISOString().slice(0, 10);
+        var tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+        var weekLater = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+        var todayItems = companies.filter(function(c) { return c.next_contact === today || c.contract_date === today; });
+        var tomorrowItems = companies.filter(function(c) { return c.next_contact === tomorrow || c.contract_date === tomorrow; });
+        var overdue = companies.filter(function(c) { return c.next_contact && c.next_contact < today; });
+        var stagnant14 = companies.filter(function(c) { return c.stagnant_days >= 14; });
+        var stagnant7 = companies.filter(function(c) { return c.stagnant_days >= 7 && c.stagnant_days < 14; });
+        var weekContracts = companies.filter(function(c) { return c.contract_date && c.contract_date > today && c.contract_date <= weekLater; });
+        var totalCount = todayItems.length + tomorrowItems.length + overdue.length + stagnant14.length + stagnant7.length + weekContracts.length;
+        if (totalCount === 0) return null;
+        return (
+          <div style={{ background: "linear-gradient(135deg, #FFF7ED 0%, #FEF3C7 100%)", borderRadius: 12, padding: "20px 24px", border: "1px solid #FCD34D", marginBottom: 18 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+              <span style={{ fontSize: 16 }}>📋</span>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#92400E" }}>오늘의 할 일</div>
+              <span style={{ fontSize: 11, color: "#92400E", background: "#FEF3C7", padding: "2px 8px", borderRadius: 99, fontWeight: 600, border: "1px solid #FCD34D" }}>{totalCount}건</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+              {overdue.length > 0 && (
+                <div onClick={function() { setView("list"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
+                  <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 700, marginBottom: 4 }}>⏰ 기한 지남</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "#DC2626" }}>{overdue.length}건</div>
+                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>연락 일정 지난 건</div>
+                </div>
+              )}
+              {todayItems.length > 0 && (
+                <div onClick={function() { setView("list"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #4338CA" }}>
+                  <div style={{ fontSize: 10, color: "#4338CA", fontWeight: 700, marginBottom: 4 }}>📅 오늘</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "#4338CA" }}>{todayItems.length}건</div>
+                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>오늘 연락/계약</div>
+                </div>
+              )}
+              {tomorrowItems.length > 0 && (
+                <div onClick={function() { setView("list"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #7C3AED" }}>
+                  <div style={{ fontSize: 10, color: "#7C3AED", fontWeight: 700, marginBottom: 4 }}>📆 내일</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "#7C3AED" }}>{tomorrowItems.length}건</div>
+                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>내일 연락/계약</div>
+                </div>
+              )}
+              {stagnant14.length > 0 && (
+                <div onClick={function() { setView("stagnant"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
+                  <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 700, marginBottom: 4 }}>🔴 심각 정체</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "#DC2626" }}>{stagnant14.length}건</div>
+                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>14일 이상 정체</div>
+                </div>
+              )}
+              {stagnant7.length > 0 && (
+                <div onClick={function() { setView("stagnant"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #B45309" }}>
+                  <div style={{ fontSize: 10, color: "#B45309", fontWeight: 700, marginBottom: 4 }}>🟡 정체 주의</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "#B45309" }}>{stagnant7.length}건</div>
+                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>7-13일 정체</div>
+                </div>
+              )}
+              {weekContracts.length > 0 && (
+                <div onClick={function() { setView("list"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #15803D" }}>
+                  <div style={{ fontSize: 10, color: "#15803D", fontWeight: 700, marginBottom: 4 }}>📋 이번 주 계약</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "#15803D" }}>{weekContracts.length}건</div>
+                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>7일 내 계약 예정</div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* 🆕 미수금 / 입금 예정 위젯 */}
+      {(function() {
+        var unpaidList = companies.filter(function(c) { return c.fee_status === "계약금수령" || c.fee_status === "미수령"; });
+        var unpaidTotal = unpaidList.reduce(function(sum, c) { var amt = parseInt((c.received_amount || c.request_amount || "0").toString().replace(/[^0-9]/g, "")) || 0; return sum + amt; }, 0);
+        var paidList = companies.filter(function(c) { return c.fee_status === "수수료수령완료"; });
+        var paidTotal = paidList.reduce(function(sum, c) { var amt = parseInt((c.received_amount || "0").toString().replace(/[^0-9]/g, "")) || 0; return sum + amt; }, 0);
+        var formatAmt = function(n) { if (n >= 100000000) return (n / 100000000).toFixed(1) + "억"; if (n >= 10000) return Math.round(n / 10000) + "만"; return n + "원"; };
+        return (
+          <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>💰 수수료 현황</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
+              <div onClick={function() { setView("settlement"); }} style={{ background: "#FEF2F2", borderRadius: 10, padding: "14px 16px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
+                <div style={{ fontSize: 11, color: "#DC2626", fontWeight: 700, marginBottom: 5 }}>미수금</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: "#DC2626" }}>{formatAmt(unpaidTotal)}</div>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>{unpaidList.length}건 미입금</div>
+              </div>
+              <div onClick={function() { setView("settlement"); }} style={{ background: "#F0FDF4", borderRadius: 10, padding: "14px 16px", cursor: "pointer", borderLeft: "3px solid #15803D" }}>
+                <div style={{ fontSize: 11, color: "#15803D", fontWeight: 700, marginBottom: 5 }}>입금 완료</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: "#15803D" }}>{formatAmt(paidTotal)}</div>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>{paidList.length}건 완료</div>
+              </div>
+              <div style={{ background: "#F7F6F3", borderRadius: 10, padding: "14px 16px", borderLeft: "3px solid #4338CA" }}>
+                <div style={{ fontSize: 11, color: "#4338CA", fontWeight: 700, marginBottom: 5 }}>총 수수료</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: "#4338CA" }}>{formatAmt(unpaidTotal + paidTotal)}</div>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>전체 합계</div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* KPI 목표 달성률 */}
       <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
@@ -1275,6 +1515,16 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
         {STAGES.map((stage, si) => {
           const c = STAGE_COLORS[stage];
           const items = filtered.filter(co => co.stage === stage);
+          // 평균 체류 일수 계산
+          var avgStay = 0;
+          if (items.length > 0) {
+            var totalStay = items.reduce(function(s, co) { return s + (co.stagnant_days || 0); }, 0);
+            avgStay = Math.round(totalStay / items.length);
+          }
+          // 다음 단계로의 전환율 (단순화: 현재 단계 + 이후 단계 / 전체)
+          var nextStages = STAGES.slice(si + 1);
+          var afterCount = filtered.filter(function(co) { return nextStages.includes(co.stage); }).length;
+          var conversionPct = items.length + afterCount > 0 ? Math.round(afterCount / (items.length + afterCount) * 100) : 0;
           return (
             <div key={stage} style={{ background: "#fff", borderRadius: 14, border: "1px solid #E8E5E0", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
               <div style={{ background: c.bg, borderBottom: `2px solid ${c.border}`, padding: "12px 14px" }}>
@@ -1282,7 +1532,11 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
                   <span style={{ fontSize: 10, fontWeight: 700, color: c.text, letterSpacing: "0.06em" }}>STEP {si+1}</span>
                   <span style={{ fontSize: 12, fontWeight: 800, background: c.text, color: "#fff", borderRadius: 99, padding: "1px 8px" }}>{items.length}</span>
                 </div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: c.text, lineHeight: 1.3 }}>{stage}</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: c.text, lineHeight: 1.3, marginBottom: 6 }}>{stage}</div>
+                <div style={{ display: "flex", gap: 6, fontSize: 9, fontWeight: 600 }}>
+                  {avgStay > 0 && <span style={{ color: c.text, opacity: 0.8 }}>평균 {avgStay}일</span>}
+                  {si < STAGES.length - 1 && conversionPct > 0 && <span style={{ color: c.text, opacity: 0.8 }}>↗ {conversionPct}%</span>}
+                </div>
               </div>
               <div style={{ padding: "8px", display: "flex", flexDirection: "column", gap: 6, maxHeight: "calc(100vh - 220px)", overflowY: "auto" }}>
                 {items.map(co => {
@@ -1348,13 +1602,27 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
 
   const saveNameEdit = async function(id) {
     if (!editNameVal.trim()) { setEditNameId(null); return; }
-    await supabase.from("companies").update({ name: editNameVal.trim() }).eq("id", id);
-    setEditNameId(null);
+    var newName = editNameVal.trim();
+    var r = await supabase.from("companies").update({ name: newName }).eq("id", id);
+    if (!r.error) {
+      setCompanies(function(prev) { return prev.map(function(c) { return c.id === id ? Object.assign({}, c, { name: newName }) : c; }); });
+      setEditNameId(null);
+      if (showToast) showToast("업체명이 변경됐어요!");
+    } else {
+      alert("저장 실패: " + r.error.message);
+    }
   };
 
   const saveRegionEdit = async function(id) {
-    await supabase.from("companies").update({ region: editRegionVal.trim() || null }).eq("id", id);
-    setEditRegionId(null);
+    var newRegion = editRegionVal.trim() || null;
+    var r = await supabase.from("companies").update({ region: newRegion }).eq("id", id);
+    if (!r.error) {
+      setCompanies(function(prev) { return prev.map(function(c) { return c.id === id ? Object.assign({}, c, { region: newRegion }) : c; }); });
+      setEditRegionId(null);
+      if (showToast) showToast("지역이 저장됐어요!");
+    } else {
+      alert("저장 실패: " + r.error.message);
+    }
   };
   return (
     <>
@@ -1395,7 +1663,7 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1200 }}>
           <thead>
             <tr style={{ background: "#F7F6F3", borderBottom: "1px solid #E8E5E0", position: "sticky", top: 0, zIndex: 2 }}>
-              {["업체명","유형","지역","대표자","담당","진행단계","신청예정/자금","계약일","진행기관","23-25매출","기타","작업"].map(h => (
+              {["업체명","유형","지역","대표자","담당","진행단계","정체일수","신청예정/자금","계약일","진행기관","23년~25년 매출","신용점수","기타","작업"].map(h => (
                 <th key={h} style={{ padding: "10px 13px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left", letterSpacing: "0.03em", whiteSpace: "nowrap", background: "#F7F6F3" }}>{h}</th>
               ))}
             </tr>
@@ -1454,10 +1722,12 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
                   <td style={{ padding: "11px 13px", fontSize: 12, color: "#555", whiteSpace: "nowrap" }}>{co.representative || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 12, whiteSpace: "nowrap" }}>{co.assignee || "-"}</td>
                   <td style={{ padding: "11px 13px", whiteSpace: "nowrap" }}><span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, fontWeight: 600 }}>{co.stage}</span></td>
+                  <td style={{ padding: "11px 13px", whiteSpace: "nowrap", textAlign: "center" }}>{(function() { var d = co.stagnant_days || 0; if (d >= 14) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", fontWeight: 700 }}>⚠ {d}일</span>; if (d >= 7) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEF3C7", color: "#B45309", fontWeight: 700 }}>{d}일</span>; return <span style={{ fontSize: 11, color: "#AAA" }}>{d}일</span>; })()}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.fund_plan || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 12, color: "#555", whiteSpace: "nowrap" }}>{co.contract_date || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.agency || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap" }}>{[formatRevenue(co.revenue_2023), formatRevenue(co.revenue_2024), formatRevenue(co.revenue_2025)].filter(r=>r&&r!=="-").join(" / ") || "-"}</td>
+                  <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap" }}>{(co.credit_score_kcb || co.credit_score_nice) ? ((co.credit_score_kcb || "-") + " / " + (co.credit_score_nice || "-")) : "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.next_action || "-"}</td>
                   <td style={{ padding: "11px 8px", whiteSpace: "nowrap" }} onClick={function(e) { e.stopPropagation(); }}>
                     <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
@@ -1668,7 +1938,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "flex-end" }}
       onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={{ width: 540, height: "100vh", background: "#fff", overflowY: "auto", boxShadow: "-8px 0 40px rgba(0,0,0,0.15)", display: "flex", flexDirection: "column" }}>
+      <div style={{ width: 460, height: "100vh", background: "#fff", overflowY: "auto", boxShadow: "-8px 0 40px rgba(0,0,0,0.15)", display: "flex", flexDirection: "column" }}>
         {/* 헤더 */}
         <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid #E8E5E0", background: sc.bg || "#F7F6F3" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -1763,27 +2033,29 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 {data.agency && <div style={{ fontSize: 11, color: "#4338CA", marginTop: 8, fontWeight: 600 }}>선택: {data.agency}</div>}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
-                {[
-                  { label: "연락처", key: "phone", type: "text" },
-                  { label: "종업원 수", key: "employee_count", type: "number", placeholder: "명" },
-                  { label: "신용점수", key: "credit_score", type: "number", placeholder: "점" },
-                ].map(function(f) { return (
-                  <div key={f.key} style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-                    <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>{f.label}</div>
-                    <input type={f.type} value={data[f.key] || ""} placeholder={f.placeholder || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { [f.key]: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
-                  </div>
-                ); })}
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>업력 (설립연도)</div>
-                  <input type="number" value={data.founded_year || ""} placeholder="예: 2018" onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { founded_year: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>연락처</div>
+                  <input type="text" value={data.phone || ""} placeholder="01012345678" onChange={function(e) { var v = formatPhone(e.target.value); setData(function(p) { return Object.assign({}, p, { phone: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+                </div>
+                <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>종업원 수</div>
+                  <input type="number" value={data.employee_count || ""} placeholder="명" onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { employee_count: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+                </div>
+                <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>KCB / NICE</div>
+                  <input type="text" inputMode="numeric" value={(data.credit_score_kcb || "") + (data.credit_score_nice ? " / " + data.credit_score_nice : "")} placeholder="KCB / NICE" onChange={function(e) { var raw = e.target.value.replace(/[^0-9]/g, ""); var kcb = raw.slice(0, 3); var nice = raw.slice(3, 6); setData(function(p) { return Object.assign({}, p, { credit_score_kcb: kcb, credit_score_nice: nice }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none", minWidth: 0, boxSizing: "border-box" }} />
+                </div>
+                <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>설립연월</div>
+                  <input type="text" inputMode="numeric" value={(function() { if (!data.founded_year && !data.founded_month) return ""; var y = data.founded_year || ""; var m = data.founded_month; if (!m && m !== 0) return y; return y + "-" + String(m); })()} placeholder="YYYY-MM (예: 2018-08)" onChange={function(e) { var raw = e.target.value.replace(/[^0-9]/g, ""); var year = raw.slice(0, 4); var monthRaw = raw.slice(4, 6); var monthNum; if (monthRaw.length === 0) { monthNum = ""; } else { monthNum = parseInt(monthRaw); if (monthNum > 12) monthNum = 12; } setData(function(p) { return Object.assign({}, p, { founded_year: year, founded_month: monthNum }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none", minWidth: 0, boxSizing: "border-box" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>계약일</div>
-                  <input type="date" value={data.contract_date || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { contract_date: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+                  <input type="date" value={data.contract_date || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { contract_date: v }); }); }} style={{ width: "auto", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>사업자등록번호</div>
-                  <input type="text" value={data.business_number || ""} placeholder="예: 123-45-67890" onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { business_number: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+                  <input type="text" value={data.business_number || ""} placeholder="1234567890" onChange={function(e) { var v = formatBizNumber(e.target.value); setData(function(p) { return Object.assign({}, p, { business_number: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
                 </div>
               </div>
               {/* 사업자 유형 + 지역 */}
@@ -2086,7 +2358,6 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           </button>
           <button onClick={async function() {
             if (!data.agency) { alert("담당기관을 선택해주세요!"); return; }
-            if (!data.application_month) { alert("신청 예정 월을 선택해주세요! (기관별 현황 등록을 위해 필요합니다)"); return; }
             var AGENCY_MAP = {
               "소상공인시장진흥공단": "소상공인시장진흥공단",
               "중소벤처기업진흥공단": "중소벤처기업진흥공단",
@@ -2097,8 +2368,6 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               "구조혁신&사업전환": "구조혁신&사업전환",
               "기타": "기타",
             };
-            var monthNum = parseInt(data.application_month.split("-")[1], 10);
-            var yearNum = parseInt(data.application_month.split("-")[0], 10);
             var companyName = nameInput || data.name;
             var rawAgencies = data.agency.split(",").map(function(a) { return a.trim(); }).filter(Boolean);
             var mappedGroups = [];
@@ -2108,12 +2377,44 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
             });
             if (mappedGroups.length === 0) { alert("매핑된 기관이 없어요!"); return; }
 
-            // 기업의 모든 정보를 함께 저장
+            // 기관별로 등록 월 입력받기
+            var nowDate = new Date();
+            var defaultYM = nowDate.getFullYear() + "-" + String(nowDate.getMonth() + 1).padStart(2, "0");
+            // 기본값: data.application_month가 있으면 그걸, 없으면 이번 달
+            var baseDefault = data.application_month || defaultYM;
+            var agencyMonths = {}; // { 기관명: "2026-05" }
+            for (var ai = 0; ai < mappedGroups.length; ai++) {
+              var agName = mappedGroups[ai];
+              var promptMsg = "[" + agName + "]\n어느 월에 등록할까요?\n형식: YYYY-MM (예: 2026-05)";
+              if (mappedGroups.length > 1) {
+                promptMsg = "(" + (ai + 1) + "/" + mappedGroups.length + ") " + promptMsg;
+              }
+              var inputYM = prompt(promptMsg, baseDefault);
+              if (inputYM === null) return; // 취소 → 전체 등록 취소
+              inputYM = inputYM.trim() || baseDefault;
+              if (!/^\d{4}-\d{2}$/.test(inputYM)) {
+                alert("형식이 올바르지 않습니다. 예: 2026-05\n등록을 취소합니다.");
+                return;
+              }
+              var mNum = parseInt(inputYM.split("-")[1], 10);
+              if (mNum < 1 || mNum > 12) {
+                alert("월은 1~12 사이여야 합니다.\n등록을 취소합니다.");
+                return;
+              }
+              agencyMonths[agName] = inputYM;
+              baseDefault = inputYM; // 다음 기관 기본값을 직전에 입력한 값으로
+            }
+
+            // 기관별로 각각 등록
             var addedCount = 0;
             var skippedCount = 0;
             var errorMessages = [];
+            var registeredGroups = []; // 첫 번째 등록된 기관/월 (이동용)
             for (var gi = 0; gi < mappedGroups.length; gi++) {
               var agencyGroup = mappedGroups[gi];
+              var ym = agencyMonths[agencyGroup];
+              var monthNum = parseInt(ym.split("-")[1], 10);
+              var yearNum = parseInt(ym.split("-")[0], 10);
               // 중복 체크
               var existing = await supabase.from("agency_cases")
                 .select("id")
@@ -2136,11 +2437,15 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 business_number: data.business_number || null,
                 region: data.region || null,
                 notes: data.issue || null,
+                contract_date: data.contract_date || null,
                 status: "시작 전",
               };
               var ins = await supabase.from("agency_cases").insert(insertData);
               if (!ins.error) {
                 addedCount++;
+                if (registeredGroups.length === 0) {
+                  registeredGroups.push({ group: agencyGroup, month: monthNum });
+                }
               } else {
                 errorMessages.push(agencyGroup + ": " + ins.error.message);
               }
@@ -2149,15 +2454,19 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               alert("❌ 등록 실패!\n" + errorMessages.join("\n"));
               return;
             }
+            // 등록 결과 메시지 (기관별 월 표시)
+            var detailMsg = mappedGroups.map(function(g) { return g + " → " + agencyMonths[g]; }).join("\n");
             var msg = "";
-            if (addedCount > 0) msg += yearNum + "년 " + monthNum + "월 기관별현황에 " + addedCount + "건 등록됐어요!\n";
-            if (skippedCount > 0) msg += "(이미 등록된 " + skippedCount + "건은 건너뛰었어요)\n";
-            if (!msg) { alert("등록된 건이 없어요"); return; }
+            if (addedCount > 0) msg += "기관별현황에 " + addedCount + "건 등록됐어요!\n\n" + detailMsg + "\n";
+            if (skippedCount > 0) msg += "\n(이미 등록된 " + skippedCount + "건은 건너뛰었어요)\n";
+            if (!msg) { alert("등록된 건이 없어요 (모두 중복)"); return; }
             msg += "\n확인을 누르면 기관별 현황으로 이동합니다.";
             alert(msg);
             // 약간 기다린 후 페이지 이동 (DB 반영 대기)
             await new Promise(function(r) { setTimeout(r, 300); });
-            window.location.href = window.location.origin + "?view=agency&month=" + monthNum + "&group=" + encodeURIComponent(mappedGroups[0]);
+            if (registeredGroups.length > 0) {
+              window.location.href = window.location.origin + "?view=agency&month=" + registeredGroups[0].month + "&group=" + encodeURIComponent(registeredGroups[0].group);
+            }
           }}
             style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, background: "#4338CA", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
             <Icon name="building" size={15} color="#fff" /> 기관별현황에 등록
@@ -2174,59 +2483,131 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
 
 // ── 신규 등록 모달 ─────────────────────────────────────────────────────────────
 function AddModal({ onClose, onAdd, assignees }) {
-  const [form, setForm] = useState({ name: "", type: "법인", representative: "", phone: "", stage: "상담/진단완료", assignee: assignees[0] || "", agency: AGENCIES[0], next_contact: "", fee: 5, issue: "", next_action: "" });
-  const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
+  // 빠른 등록 모달 - 필수 정보만 받고, 나머지는 상세 화면에서 입력
+  const [form, setForm] = useState({
+    name: "", type: "법인", representative: "", phone: "",
+    stage: "상담/진단완료", assignee: "", agency_list: [],
+    business_type: "법인사업자",
+  });
+  const set = function(k, v) { setForm(function(p) { return Object.assign({}, p, { [k]: v }); }); };
+  const toggleAgency = function(a) {
+    setForm(function(p) {
+      var cur = p.agency_list || [];
+      var next = cur.includes(a) ? cur.filter(function(x) { return x !== a; }) : cur.concat([a]);
+      return Object.assign({}, p, { agency_list: next });
+    });
+  };
+  const toggleAssignee = function(a) {
+    setForm(function(p) {
+      var cur = (p.assignee || "").split(", ").filter(Boolean);
+      var next = cur.includes(a) ? cur.filter(function(x) { return x !== a; }) : cur.concat([a]);
+      return Object.assign({}, p, { assignee: next.join(", ") });
+    });
+  };
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-      onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={{ background: "#fff", borderRadius: 14, width: 480, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
-        <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
-          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>신규 업체 등록</h2>
+      onClick={function(e) { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ background: "#fff", borderRadius: 14, width: 460, maxHeight: "92vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+        <div style={{ padding: "20px 24px 14px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>빠른 신규 등록</h2>
+            <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>필수 정보만 입력하면 상세 화면이 열려요</div>
+          </div>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><Icon name="x" size={18} color="#888" /></button>
         </div>
-        <div style={{ padding: "20px 24px" }}>
-          {[
-            { label: "업체명 *", key: "name", type: "text" },
-            { label: "대표자명 *", key: "representative", type: "text" },
-            { label: "연락처", key: "phone", type: "text" },
-            { label: "다음 연락 예정일", key: "next_contact", type: "date" },
-          ].map(({ label, key, type }) => (
-            <div key={key} style={{ marginBottom: 13 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>{label}</label>
-              <input value={form[key]} onChange={e => set(key, e.target.value)} type={type}
-                style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
-            </div>
-          ))}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 13 }}>
-            {[
-              { label: "사업자 유형", key: "type", opts: ["법인", "개인"] },
-              { label: "진행 단계", key: "stage", opts: STAGES },
-              { label: "담당자", key: "assignee", opts: assignees },
-              { label: "담당 기관", key: "agency", opts: AGENCIES },
-            ].map(({ label, key, opts }) => (
-              <div key={key}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>{label}</label>
-                <select value={form[key]} onChange={e => set(key, e.target.value)}
-                  style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff", cursor: "pointer" }}>
-                  {opts.map(o => <option key={o}>{o}</option>)}
-                </select>
-              </div>
-            ))}
+        <div style={{ padding: "18px 24px" }}>
+          {/* 업체명 */}
+          <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>업체명 *</div>
+            <input value={form.name} onChange={function(e) { set("name", e.target.value); }} autoFocus
+              style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
           </div>
-          {[
-            { label: "현재 이슈 / 현황", key: "issue" },
-            { label: "차기 업무 / 다음 액션", key: "next_action" },
-          ].map(({ label, key }) => (
-            <div key={key} style={{ marginBottom: 13 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>{label}</label>
-              <textarea value={form[key]} onChange={e => set(key, e.target.value)} rows={3}
-                style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, resize: "vertical", boxSizing: "border-box", outline: "none" }} />
+
+          {/* 대표자 + 연락처 */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+            <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>대표자명 *</div>
+              <input value={form.representative} onChange={function(e) { set("representative", e.target.value); }}
+                style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
             </div>
-          ))}
-          <button onClick={() => { if (!form.name || !form.representative) { alert("업체명과 대표자명은 필수예요."); return; } onAdd(form); }}
-            style={{ width: "100%", padding: "13px", background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer", marginTop: 6 }}>
-            Supabase에 등록하기
+            <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>연락처</div>
+              <input value={form.phone} placeholder="01012345678" onChange={function(e) { set("phone", formatPhone(e.target.value)); }}
+                style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+            </div>
+          </div>
+
+          {/* 사업자 유형 */}
+          <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>사업자 유형</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              {["개인사업자","법인사업자"].map(function(t) {
+                var sel = form.business_type === t;
+                return (
+                  <button key={t} onClick={function() { set("business_type", t); set("type", t === "법인사업자" ? "법인" : "개인"); }}
+                    style={{ flex: 1, padding: "6px 8px", borderRadius: 6, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer",
+                      background: sel ? (t === "법인사업자" ? "#4338CA" : "#0F6E56") : "#fff", color: sel ? "#fff" : "#888" }}>
+                    {t}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 진행 단계 */}
+          <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>진행 단계</div>
+            <select value={form.stage} onChange={function(e) { set("stage", e.target.value); }}
+              style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none", cursor: "pointer" }}>
+              {STAGES.map(function(s) { return <option key={s}>{s}</option>; })}
+            </select>
+          </div>
+
+          {/* 담당 기관 (복수 선택) */}
+          <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>담당 기관 (복수 선택 가능)</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {AGENCIES.map(function(a) {
+                var sel = (form.agency_list || []).includes(a);
+                return (
+                  <button key={a} onClick={function() { toggleAgency(a); }}
+                    style={{ padding: "5px 10px", borderRadius: 99, fontSize: 11, fontWeight: 600, border: "none", cursor: "pointer",
+                      background: sel ? "#4338CA" : "#fff", color: sel ? "#fff" : "#888" }}>{a}</button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 담당자 (복수 선택) */}
+          <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 14 }}>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>담당자 (복수 선택 가능)</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {assignees.map(function(a) {
+                var sel = (form.assignee || "").split(", ").filter(Boolean).includes(a);
+                return (
+                  <button key={a} onClick={function() { toggleAssignee(a); }}
+                    style={{ padding: "5px 12px", borderRadius: 99, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer",
+                      background: sel ? "#1A1917" : "#fff", color: sel ? "#fff" : "#888" }}>{a}</button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div style={{ background: "#FEF3C7", borderRadius: 8, padding: "10px 13px", marginBottom: 12, fontSize: 11, color: "#B45309", lineHeight: 1.5 }}>
+            💡 등록 후 곧바로 상세 화면이 열려요.<br />매출, 신용점수, 지역 등 나머지 정보는 거기서 입력하세요.
+          </div>
+
+          <button onClick={function() {
+            if (!form.name || !form.name.trim()) { alert("업체명을 입력해주세요."); return; }
+            if (!form.representative || !form.representative.trim()) { alert("대표자명을 입력해주세요."); return; }
+            var formToSend = Object.assign({}, form, {
+              agency: (form.agency_list && form.agency_list[0]) || "",
+              agency_list_str: (form.agency_list || []).join(", "),
+            });
+            onAdd(formToSend);
+          }} style={{ width: "100%", padding: "13px", background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+            등록하고 상세 정보 입력하기 →
           </button>
         </div>
       </div>
@@ -2256,7 +2637,7 @@ function ActivityLogView() {
   var fetchAll = async function() {
     setLoading(true);
     var r1 = await supabase.from("activity_logs").select("*").order("created_at", { ascending: false }).limit(200);
-    var r2 = await supabase.from("agency_cases").select("id,business_name,agency_group,assignee").is("deleted_at", null);
+    var r2 = await supabase.from("agency_cases").select("id,business_name,agency_group,assignee").is("deleted_at", null).limit(10000);
     if (!r1.error) setLogs(r1.data || []);
     if (!r2.error) setCases(r2.data || []);
     setLoading(false);
@@ -2619,69 +3000,37 @@ function ActivityLogView() {
 
 // ── 업무노트 수정 카드 (독립 컴포넌트 - 입력버그 방지) ─────────────────────────
 function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
-  var parseItems = function() {
-    var c = editNote.content || note.content || "";
-    var lines = c.split("\n").filter(function(l) { return l.trim(); });
-    if (lines.length === 0) return [{ text: "", checked: false }];
-    return lines.map(function(l) {
-      var m = l.trim().match(/^- \[([ x])\] (.+)/);
-      if (m) return { text: m[2], checked: m[1] === "x" };
-      return { text: l.replace(/^- /, "").trim(), checked: false };
-    });
-  };
-  var [items, setItems] = useState(parseItems);
-
-  var addItem = function(afterIdx) {
-    var next = items.slice(); next.splice(afterIdx + 1, 0, { text: "", checked: false }); setItems(next);
-    setTimeout(function() { var ins = document.querySelectorAll(".edit-cl-input"); if (ins[afterIdx + 1]) ins[afterIdx + 1].focus(); }, 30);
-  };
-  var removeItem = function(idx) {
-    if (items.length === 1) return;
-    var next = items.filter(function(_, i) { return i !== idx; }); setItems(next);
-    setTimeout(function() { var ins = document.querySelectorAll(".edit-cl-input"); if (ins[Math.max(0, idx - 1)]) ins[Math.max(0, idx - 1)].focus(); }, 30);
-  };
-  var handleSave = function() {
-    var body = items.filter(function(it) { return it.text.trim(); }).map(function(it) { return (it.checked ? "- [x] " : "- [ ] ") + it.text.trim(); }).join("\n");
-    setEditNote(function(p) { return Object.assign({}, p, { content: body, is_todo: true }); });
-    setTimeout(saveEdit, 0);
-  };
-
   return (
     <div style={{ background: "#FEFCE8", border: "2px solid #FDE68A", borderRadius: 12, padding: "16px 18px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: "#B45309" }}>✏️ 노트 수정</span>
-        <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, cursor: "pointer" }}>
-          <input type="checkbox" checked={editNote.pinned || false} onChange={function(e) { setEditNote(function(p) { return Object.assign({}, p, { pinned: e.target.checked }); }); }} />📌 고정
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+          <input type="checkbox" checked={editNote.is_todo || false} onChange={function(e) { setEditNote(function(p) { return Object.assign({}, p, { is_todo: e.target.checked }); }); }} />
+          할 일
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+          <input type="checkbox" checked={editNote.pinned || false} onChange={function(e) { setEditNote(function(p) { return Object.assign({}, p, { pinned: e.target.checked }); }); }} />
+          📌 고정
         </label>
       </div>
       <input value={editNote.title || ""} placeholder="제목" onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
-        style={{ width: "100%", padding: "6px 4px", border: "none", borderBottom: "1px solid #FDE68A", fontSize: 14, fontWeight: 700, boxSizing: "border-box", outline: "none", marginBottom: 12, background: "transparent" }} />
-      <div style={{ marginBottom: 10 }}>
-        {items.map(function(item, idx) {
-          return (
-            <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", borderRadius: 6 }}
-              onMouseEnter={function(e) { e.currentTarget.style.background = "#FFFBEB"; }}
-              onMouseLeave={function(e) { e.currentTarget.style.background = "transparent"; }}>
-              <input type="checkbox" checked={item.checked} onChange={function() { setItems(items.map(function(it, i) { return i === idx ? Object.assign({}, it, { checked: !it.checked }) : it; })); }}
-                style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#1A1917", flexShrink: 0 }} />
-              <input className="edit-cl-input" value={item.text} placeholder={"항목 " + (idx + 1)}
-                onChange={function(e) { var v = e.target.value; setItems(items.map(function(it, i) { return i === idx ? Object.assign({}, it, { text: v }) : it; })); }}
-                onKeyDown={function(e) {
-                  if (e.key === "Enter") { e.preventDefault(); addItem(idx); }
-                  if (e.key === "Backspace" && item.text === "") { e.preventDefault(); removeItem(idx); }
-                }}
-                style={{ flex: 1, border: "none", outline: "none", fontSize: 13, background: "transparent", textDecoration: item.checked ? "line-through" : "none", color: item.checked ? "#AAA" : "#1A1917", lineHeight: 1.7 }} />
-              {items.length > 1 && <button onClick={function() { removeItem(idx); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#CCC", padding: "0 2px" }}>✕</button>}
-            </div>
-          );
-        })}
-        <button onClick={function() { addItem(items.length - 1); }}
-          style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#AAA", padding: "4px 0" }}>
-          <span style={{ fontSize: 16, fontWeight: 300 }}>+</span> 항목 추가
+        style={{ width: "100%", padding: "8px 10px", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 14, fontWeight: 600, boxSizing: "border-box", outline: "none", marginBottom: 8, background: "#fff" }} />
+      {/* 체크리스트 버튼 (편집 모드) */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+        <button onClick={function() {
+          setEditNote(function(p) {
+            var prev = p.content || "";
+            var newItem = "- [ ] ";
+            var sep = (prev === "" || prev.slice(-1) === "\n") ? "" : "\n";
+            return Object.assign({}, p, { content: prev + sep + newItem });
+          });
+        }} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", background: "#fff", border: "1px solid #FDE68A", borderRadius: 6, fontSize: 12, color: "#92400E", fontWeight: 600, cursor: "pointer" }}>
+          ☑️ 체크리스트 항목 추가
         </button>
       </div>
-      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-        <button onClick={handleSave} style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 7, padding: "8px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
+      <textarea value={editNote.content || ""} placeholder="내용을 입력하세요..." onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { content: v }); }); }} rows={5}
+        style={{ width: "100%", padding: "10px 12px", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 13, lineHeight: 1.7, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff" }} />
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <button onClick={saveEdit} style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 7, padding: "8px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
         <button onClick={onCancel} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 7, padding: "8px 14px", fontSize: 13, cursor: "pointer" }}>취소</button>
       </div>
     </div>
@@ -2813,7 +3162,7 @@ function WorkNotesView({ profile }) {
   const [filterAssignee, setFilterAssignee] = useState("전체");
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [newNote, setNewNote] = useState({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "" });
+  const [newNote, setNewNote] = useState({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [] });
   const [editNote, setEditNote] = useState({});
   const [filterType, setFilterType] = useState("전체"); // 전체 / 메모 / 할일
   const [replyId, setReplyId] = useState(null);
@@ -2821,7 +3170,44 @@ function WorkNotesView({ profile }) {
   const [showTrash, setShowTrash] = useState(false);
   const [trashedNotes, setTrashedNotes] = useState([]);
 
-  useEffect(function() { fetchNotes(); }, []);
+  const [companiesList, setCompaniesList] = useState([]);
+
+  useEffect(function() {
+    fetchNotes();
+    fetchCompaniesList();
+  }, []);
+
+  // 기업 목록 가져오기 (자동 감지용)
+  var fetchCompaniesList = async function() {
+    var r = await supabase.from("companies").select("id, name").is("deleted_at", null);
+    if (!r.error) setCompaniesList(r.data || []);
+  };
+
+  // 텍스트에서 기업명 자동 감지
+  var detectCompaniesInText = function(text) {
+    if (!text || !companiesList || companiesList.length === 0) return [];
+    var found = [];
+    companiesList.forEach(function(co) {
+      if (co.name && text.indexOf(co.name) >= 0) {
+        if (!found.find(function(f) { return f.id === co.id; })) found.push(co);
+      }
+    });
+    return found;
+  };
+
+  // 활동로그에 자동 기록
+  var logToActivity = async function(company, memo) {
+    if (!company || !memo) return;
+    await supabase.from("activity_logs").insert({
+      case_id: company.id,
+      case_type: "company",
+      business_name: company.name,
+      assignee: profile?.name || "",
+      log_type: "note_auto",
+      memo: memo.slice(0, 200),
+      logged_by: profile?.name || "",
+    });
+  };
 
   var fetchNotes = async function() {
     setLoading(true);
@@ -2867,12 +3253,18 @@ function WorkNotesView({ profile }) {
   var unpinned = filtered.filter(function(n) { return !n.pinned; });
 
   var saveNew = async function() {
-    if (!newNote.title.trim() && !newNote.content.trim()) { alert("제목 또는 내용을 입력해주세요."); return; }
+    // checkItems가 있으면 content로 변환해서 합치기
+    var checkContent = (newNote.checkItems && newNote.checkItems.length > 0)
+      ? newNote.checkItems.filter(function(i) { return i.text.trim(); }).map(function(i) { return "- [ ] " + i.text.trim(); }).join("\n")
+      : "";
+    var finalContent = newNote.content.trim();
+    if (checkContent) finalContent = finalContent ? finalContent + "\n" + checkContent : checkContent;
+    if (!newNote.title.trim() && !finalContent.trim()) { alert("제목 또는 내용을 입력해주세요."); return; }
     var assigneeName = newNote.target_assignee || profile?.name || "전체";
     var r = await supabase.from("work_notes").insert({
       assignee: assigneeName,
       title: newNote.title.trim(),
-      content: newNote.content.trim(),
+      content: finalContent,
       is_todo: newNote.is_todo,
       pinned: newNote.pinned,
       created_by: profile?.name || assigneeName,
@@ -2880,7 +3272,13 @@ function WorkNotesView({ profile }) {
     if (!r.error && r.data) {
       setNotes(function(prev) { return [r.data].concat(prev); });
       setShowAdd(false);
-      setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "" });
+      // 기업명 자동 감지 → 활동로그 자동 기록
+      var fullText = (newNote.title || "") + " " + finalContent;
+      var detected = detectCompaniesInText(fullText);
+      for (var i = 0; i < detected.length; i++) {
+        await logToActivity(detected[i], "📝 업무노트: " + (newNote.title || newNote.content.split("\n")[0]));
+      }
+      setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [] });
     } else if (r.error) {
       alert("저장 실패: " + r.error.message);
     }
@@ -2902,6 +3300,24 @@ function WorkNotesView({ profile }) {
     var r = await supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", noteId);
     if (!r.error) {
       setNotes(function(prev) { return prev.map(function(n) { return n.id === noteId ? Object.assign({}, n, { content: newContent }) : n; }); });
+      // 방금 체크 완료된 항목에 기업명이 있으면 활동로그 기록
+      var prevNote = notes.find(function(n) { return n.id === noteId; });
+      if (prevNote) {
+        var prevLines = (prevNote.content || "").split("\n");
+        var newLines = newContent.split("\n");
+        for (var i = 0; i < newLines.length; i++) {
+          var prevLine = prevLines[i] || "";
+          var newLine = newLines[i];
+          // 새로 체크된 항목 (- [ ] → - [x])
+          if (/^- \[x\]/.test(newLine.trim()) && /^- \[ \]/.test(prevLine.trim())) {
+            var itemText = newLine.trim().replace(/^- \[x\]\s*/, "");
+            var detected = detectCompaniesInText(itemText);
+            for (var j = 0; j < detected.length; j++) {
+              await logToActivity(detected[j], "✅ 완료: " + itemText);
+            }
+          }
+        }
+      }
     }
   };
 
@@ -2967,7 +3383,7 @@ function WorkNotesView({ profile }) {
           <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>메모 · 할 일 · 업무일지</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={function() { setShowAdd(true); setNewNote({ title: "", content: "", is_todo: false, pinned: false }); }}
+          <button onClick={function() { setShowAdd(true); setNewNote({ title: "", content: "", is_todo: false, pinned: false, checkItems: [] }); }}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             <Icon name="plus" size={15} color="#F7F6F3" /> 새 노트
           </button>
@@ -3011,75 +3427,65 @@ function WorkNotesView({ profile }) {
         </div>
       </div>
 
-      {/* 새 노트 작성 폼 - 노션 스타일 */}
-      {showAdd && (function() {
-        var items = newNote.checkItems || [{ text: "", checked: false }];
-        var updateItems = function(next) { setNewNote(function(p) { return Object.assign({}, p, { checkItems: next }); }); };
-        var addItem = function(afterIdx) {
-          var next = items.slice(); next.splice(afterIdx + 1, 0, { text: "", checked: false }); updateItems(next);
-          setTimeout(function() { var ins = document.querySelectorAll(".new-cl-input"); if (ins[afterIdx + 1]) ins[afterIdx + 1].focus(); }, 30);
-        };
-        var removeItem = function(idx) {
-          if (items.length === 1) return;
-          updateItems(items.filter(function(_, i) { return i !== idx; }));
-          setTimeout(function() { var ins = document.querySelectorAll(".new-cl-input"); if (ins[Math.max(0, idx - 1)]) ins[Math.max(0, idx - 1)].focus(); }, 30);
-        };
-        var handleSave = function() {
-          var body = items.filter(function(it) { return it.text.trim(); }).map(function(it) { return (it.checked ? "- [x] " : "- [ ] ") + it.text.trim(); }).join("\n");
-          var r = Object.assign({}, newNote, { content: body, is_todo: true, checkItems: null });
-          setNewNote(r);
-          setTimeout(saveNew, 0);
-        };
-        return (
-          <div style={{ background: "#fff", border: "2px solid #86EFAC", borderRadius: 14, padding: "20px 22px", marginBottom: 20, boxShadow: "0 4px 20px rgba(0,0,0,0.06)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D" }}>✏️ 새 업무 노트</div>
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <select value={newNote.target_assignee || profile?.name || ""} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { target_assignee: v }); }); }}
-                  style={{ padding: "5px 10px", border: "1px solid #86EFAC", borderRadius: 7, fontSize: 12, background: "#fff" }}>
-                  <option value="">담당자 선택</option>
-                  {ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
-                </select>
-                <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, cursor: "pointer" }}>
-                  <input type="checkbox" checked={newNote.pinned || false} onChange={function(e) { setNewNote(function(p) { return Object.assign({}, p, { pinned: e.target.checked }); }); }} />
-                  📌 고정
-                </label>
-              </div>
-            </div>
-            <input value={newNote.title || ""} placeholder="제목 (선택사항)" onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
-              style={{ width: "100%", padding: "6px 4px", border: "none", borderBottom: "1px solid #E8E5E0", fontSize: 15, fontWeight: 700, boxSizing: "border-box", outline: "none", marginBottom: 16, background: "transparent" }} />
-            <div style={{ marginBottom: 12 }}>
-              {items.map(function(item, idx) {
+      {/* 새 노트 작성 폼 */}
+      {showAdd && (
+        <div style={{ background: "#F0FDF4", border: "2px solid #86EFAC", borderRadius: 12, padding: "18px 20px", marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D", marginBottom: 12 }}>✏️ 새 노트 작성</div>
+          <div style={{ display: "flex", gap: 16, marginBottom: 10 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+              <input type="checkbox" checked={newNote.is_todo} onChange={function(e) { setNewNote(function(p) { return Object.assign({}, p, { is_todo: e.target.checked }); }); }} />
+              📋 할 일로 등록
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+              <input type="checkbox" checked={newNote.pinned} onChange={function(e) { setNewNote(function(p) { return Object.assign({}, p, { pinned: e.target.checked }); }); }} />
+              📌 상단 고정
+            </label>
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <select value={newNote.target_assignee || profile?.name || ""} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { target_assignee: v }); }); }}
+              style={{ padding: "8px 12px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, background: "#fff", width: "auto" }}>
+              <option value="">담당자 선택</option>
+              {ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
+            </select>
+          </div>
+          <input value={newNote.title} placeholder="제목 (선택사항)" onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
+            style={{ width: "100%", padding: "10px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 14, fontWeight: 600, boxSizing: "border-box", outline: "none", marginBottom: 10, background: "#fff" }} />
+          {/* 체크리스트 항목들 */}
+          {newNote.checkItems && newNote.checkItems.length > 0 && (
+            <div style={{ border: "1px solid #86EFAC", borderRadius: 8, padding: "10px 12px", marginBottom: 8, background: "#fff" }}>
+              {newNote.checkItems.map(function(item, idx) {
                 return (
-                  <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", borderRadius: 7, transition: "background 0.1s" }}
-                    onMouseEnter={function(e) { e.currentTarget.style.background = "#F0FDF4"; }}
-                    onMouseLeave={function(e) { e.currentTarget.style.background = "transparent"; }}>
-                    <input type="checkbox" checked={item.checked} onChange={function() { updateItems(items.map(function(it, i) { return i === idx ? Object.assign({}, it, { checked: !it.checked }) : it; })); }}
-                      style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#15803D", flexShrink: 0 }} />
-                    <input className="new-cl-input" value={item.text} placeholder="항목을 입력하세요"
-                      onChange={function(e) { var v = e.target.value; updateItems(items.map(function(it, i) { return i === idx ? Object.assign({}, it, { text: v }) : it; })); }}
-                      onKeyDown={function(e) {
-                        if (e.key === "Enter") { e.preventDefault(); addItem(idx); }
-                        if (e.key === "Backspace" && item.text === "") { e.preventDefault(); removeItem(idx); }
-                      }}
-                      style={{ flex: 1, border: "none", outline: "none", fontSize: 13, background: "transparent", textDecoration: item.checked ? "line-through" : "none", color: item.checked ? "#AAA" : "#1A1917", lineHeight: 1.7 }} />
-                    {items.length > 1 && <button onClick={function() { removeItem(idx); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#CCC", padding: "0 2px" }}>✕</button>}
+                  <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                    <input type="checkbox" disabled style={{ width: 15, height: 15, flexShrink: 0 }} />
+                    <input type="text" value={item.text || ""} placeholder={"항목 " + (idx + 1)}
+                      onChange={function(e) { var v = e.target.value; setNewNote(function(p) { var items = p.checkItems.slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); }}
+                      style={{ flex: 1, border: "none", outline: "none", fontSize: 13, background: "transparent" }} autoFocus={idx === newNote.checkItems.length - 1} />
+                    <button onClick={function() { setNewNote(function(p) { var items = p.checkItems.filter(function(_, i) { return i !== idx; }); return Object.assign({}, p, { checkItems: items }); }); }}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "#CCC", fontSize: 16, padding: "0 4px", lineHeight: 1 }}>×</button>
                   </div>
                 );
               })}
-              <button onClick={function() { addItem(items.length - 1); }}
-                style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#AAA", padding: "4px 6px" }}>
-                <span style={{ fontSize: 18, lineHeight: 1, fontWeight: 300 }}>+</span> 항목 추가
-              </button>
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={handleSave} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "10px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
-              <button onClick={function() { setShowAdd(false); setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: null }); }}
-                style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 16px", fontSize: 13, cursor: "pointer" }}>취소</button>
-            </div>
+          )}
+          {/* 체크리스트 버튼 + textarea */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+            <button onClick={function() {
+              setNewNote(function(p) {
+                var items = (p.checkItems || []).concat([{ text: "" }]);
+                return Object.assign({}, p, { checkItems: items, is_todo: true });
+              });
+            }} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", background: "#fff", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, color: "#15803D", fontWeight: 600, cursor: "pointer" }}>
+              ☑️ 체크리스트 항목 추가
+            </button>
           </div>
-        );
-      })()}
+          <textarea value={newNote.content} placeholder={newNote.checkItems && newNote.checkItems.length > 0 ? "추가 메모 (선택사항)..." : "내용을 자유롭게 입력하세요. 업무 메모, 오늘 할 일, 주의사항 등..."} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { content: v }); }); }} rows={newNote.checkItems && newNote.checkItems.length > 0 ? 2 : 6}
+            style={{ width: "100%", padding: "12px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, lineHeight: 1.75, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff" }} />
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <button onClick={saveNew} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "10px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
+            <button onClick={function() { setShowAdd(false); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 16px", fontSize: 13, cursor: "pointer" }}>취소</button>
+          </div>
+        </div>
+      )}
 
       {/* 노트 목록 */}
       {filtered.length === 0 ? (
@@ -4510,11 +4916,30 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   const [newCase, setNewCase] = useState({});
   const [companySuggestions, setCompanySuggestions] = useState([]);
   const [companiesList, setCompaniesList] = useState([]);
+  const [selectedCase, setSelectedCase] = useState(null);
 
   var fetchCases = async function() {
     setLoading(true);
-    var result = await supabase.from("agency_cases").select("*").order("created_at", { ascending: true });
-    if (!result.error) setCases(result.data || []);
+    // Supabase 1000건 기본 limit 우회: range로 페이징
+    var allData = [];
+    var pageSize = 1000;
+    var offset = 0;
+    while (true) {
+      var result = await supabase.from("agency_cases")
+        .select("*")
+        .order("created_at", { ascending: true })
+        .range(offset, offset + pageSize - 1);
+      if (result.error) {
+        console.error("fetchCases error:", result.error);
+        break;
+      }
+      if (!result.data || result.data.length === 0) break;
+      allData = allData.concat(result.data);
+      if (result.data.length < pageSize) break;
+      offset += pageSize;
+      if (offset > 50000) break; // 안전장치
+    }
+    setCases(allData);
     setLoading(false);
   };
 
@@ -4528,7 +4953,6 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   useEffect(function() {
     if (jumpToMonth) setActiveMonth(Number(jumpToMonth));
     if (jumpToGroup) setActiveGroup(jumpToGroup);
-    fetchCases();
   }, [jumpToMonth, jumpToGroup]);
 
   var filtered = useMemo(function() {
@@ -4539,7 +4963,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         && !c.deleted_at
         && (filterAssignee === "전체" || c.assignee === filterAssignee);
     });
-  }, [cases, activeGroup, activeMonth, filterAssignee]);
+  }, [cases, activeGroup, activeMonth, filterAssignee, currentYear]);
 
   var trashedCases = useMemo(function() {
     return cases.filter(function(c) { return !!c.deleted_at; });
@@ -4818,6 +5242,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                 )}
                 <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>지역</th>
                 <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>상태</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>신용점수</th>
                 <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>비고</th>
                 <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 600, color: "#888", fontSize: 11, width: 80 }}>작업</th>
               </tr>
@@ -4827,7 +5252,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                 var isEditing = editingId === row.id;
                 var sc = STATUS_COLORS_MAP[row.status] || { bg: "#F7F6F3", text: "#888" };
                 return (
-                  <tr key={row.id} style={{ borderBottom: "1px solid #F0EDE8", background: isEditing ? "#FAFFF7" : "transparent" }}>
+                  <tr key={row.id} style={{ borderBottom: "1px solid #F0EDE8", background: selectedCase && selectedCase.id === row.id ? "#F0FDF4" : isEditing ? "#FAFFF7" : "transparent", cursor: "pointer" }} onClick={function() { if (!isEditing) setSelectedCase(row); }}>
                     <td style={{ padding: "10px 12px", color: "#AAA", fontSize: 12 }}>{idx + 1}</td>
                     <td style={{ padding: "10px 12px" }}>
                       {isEditing
@@ -4903,6 +5328,13 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                             {STATUS_OPTIONS.map(function(s) { return <option key={s} value={s}>{s}</option>; })}
                           </select>
                         : <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, fontWeight: 600 }}>{row.status || "-"}</span>}
+                    </td>
+                    <td style={{ padding: "10px 12px" }}>
+                      {(function() {
+                        var matchedCo = companiesList.find(function(c) { return c.name === row.business_name; });
+                        if (!matchedCo || (!matchedCo.credit_score_kcb && !matchedCo.credit_score_nice)) return <span style={{ fontSize: 12, color: "#CCC" }}>-</span>;
+                        return <span style={{ fontSize: 12, color: "#555", fontWeight: 600 }}>{(matchedCo.credit_score_kcb || "-") + " / " + (matchedCo.credit_score_nice || "-")}</span>;
+                      })()}
                     </td>
                     <td style={{ padding: "10px 12px" }}>
                       {isEditing
@@ -5116,6 +5548,213 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
           </div>
         </div>
       )}
+
+      {/* 기관별현황 사이드패널 */}
+      {selectedCase && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 900 }} onClick={function() { setSelectedCase(null); }}>
+          <div style={{ position: "absolute", top: 0, right: 0, width: 460, height: "100%", background: "#fff", boxShadow: "-4px 0 30px rgba(0,0,0,0.15)", overflowY: "auto" }}
+            onClick={function(e) { e.stopPropagation(); }}>
+            <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 800 }}>{selectedCase.business_name}</div>
+                <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{activeGroup} · {selectedCase.assignee || "-"}</div>
+              </div>
+              <button onClick={function() { setSelectedCase(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: "#888" }}>✕</button>
+            </div>
+            <div style={{ padding: "20px 24px" }}>
+              {/* 상태 변경 */}
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>상태</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {["시작 전","진행 중","보류","부결","승인","완료"].map(function(s) {
+                    var sc = STATUS_COLORS_MAP[s] || { bg: "#F7F6F3", text: "#888" };
+                    var isActive = selectedCase.status === s;
+                    return (
+                      <button key={s} onClick={async function() {
+                        var r = await supabase.from("agency_cases").update({ status: s, updated_at: new Date().toISOString() }).eq("id", selectedCase.id);
+                        if (!r.error) {
+                          setCases(function(prev) { return prev.map(function(c) { return c.id === selectedCase.id ? Object.assign({}, c, { status: s }) : c; }); });
+                          setSelectedCase(function(p) { return Object.assign({}, p, { status: s }); });
+                        }
+                      }} style={{ padding: "5px 12px", borderRadius: 99, border: isActive ? "2px solid " + sc.text : "1px solid #E8E5E0", background: isActive ? sc.bg : "#fff", color: isActive ? sc.text : "#888", fontSize: 12, fontWeight: isActive ? 700 : 400, cursor: "pointer" }}>{s}</button>
+                    );
+                  })}
+                </div>
+              </div>
+              {/* 기본 정보 */}
+              <div style={{ marginBottom: 20, background: "#F7F6F3", borderRadius: 8, padding: "14px 16px" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 10 }}>기본 정보</div>
+                {[
+                  { label: "대표자", value: selectedCase.representative },
+                  { label: "사업자등록번호", value: selectedCase.business_number },
+                  { label: "신청금액", value: selectedCase.request_amount },
+                  { label: "승인금액", value: selectedCase.approved_amount },
+                  { label: "지역", value: selectedCase.region },
+                  { label: "신청상품", value: selectedCase.fund_product },
+                ].map(function(item) {
+                  return item.value ? (
+                    <div key={item.label} style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 13 }}>
+                      <span style={{ color: "#888" }}>{item.label}</span>
+                      <span style={{ fontWeight: 600 }}>{item.value}</span>
+                    </div>
+                  ) : null;
+                })}
+                {!selectedCase.representative && !selectedCase.business_number && !selectedCase.request_amount && (
+                  <div style={{ fontSize: 12, color: "#AAA" }}>기본 정보가 입력되지 않았습니다.</div>
+                )}
+              </div>
+              {/* 이슈 메모 */}
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>📝 이슈 메모</div>
+                <textarea value={selectedCase.notes || ""}
+                  onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { notes: e.target.value }); }); }}
+                  onBlur={async function() {
+                    var r = await supabase.from("agency_cases").update({ notes: selectedCase.notes, updated_at: new Date().toISOString() }).eq("id", selectedCase.id);
+                    if (!r.error) {
+                      setCases(function(prev) { return prev.map(function(c) { return c.id === selectedCase.id ? Object.assign({}, c, { notes: selectedCase.notes }) : c; }); });
+                    }
+                  }}
+                  placeholder="이슈 내용을 입력하세요..."
+                  rows={4} style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.6, resize: "vertical", boxSizing: "border-box", outline: "none", fontFamily: "inherit" }} />
+                <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>입력 후 칸 밖 클릭 시 자동 저장</div>
+              </div>
+
+              {/* 🆕 추가 정보 (아이핀, 공단계정, 인증서 등) */}
+              <div style={{ marginBottom: 20, padding: "14px", background: "#F7F6F3", borderRadius: 10, border: "1px solid #E8E5E0" }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#1A1917", marginBottom: 12 }}>🔐 추가 정보</div>
+                {(function() {
+                  // 사업자번호 자동 가져오기 (기업 목록에서 매칭)
+                  var matchedCo = companiesList.find(function(c) { return c.name === selectedCase.business_name; });
+                  var autoBizNum = matchedCo ? matchedCo.business_number : null;
+
+                  // 공통 input 스타일
+                  var inputStyle = { width: "100%", padding: "8px 10px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 12, background: "#fff", outline: "none", boxSizing: "border-box", fontFamily: "inherit" };
+                  var labelStyle = { fontSize: 10, fontWeight: 700, color: "#888", marginBottom: 4, display: "block" };
+                  var rowStyle = { marginBottom: 10 };
+
+                  // 필드 자동 저장 헬퍼
+                  var saveField = async function(fieldName, value) {
+                    var updateObj = {};
+                    updateObj[fieldName] = value;
+                    updateObj.updated_at = new Date().toISOString();
+                    var r = await supabase.from("agency_cases").update(updateObj).eq("id", selectedCase.id);
+                    if (!r.error) {
+                      setCases(function(prev) { return prev.map(function(c) { if (c.id === selectedCase.id) { var n = Object.assign({}, c); n[fieldName] = value; return n; } return c; }); });
+                    }
+                  };
+
+                  return (
+                    <>
+                      {/* 사업자번호 (자동) */}
+                      <div style={rowStyle}>
+                        <label style={labelStyle}>사업자번호 (기업 목록에서 자동)</label>
+                        <input type="text" value={autoBizNum || "기업 목록에 등록되지 않음"} readOnly
+                          style={Object.assign({}, inputStyle, { background: "#F0EDE8", color: autoBizNum ? "#1A1917" : "#AAA", cursor: "not-allowed" })} />
+                      </div>
+
+                      {/* 아이핀 계정 + 비번 */}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                        <div>
+                          <label style={labelStyle}>아이핀 계정</label>
+                          <input type="text" value={selectedCase.ipin_account || ""}
+                            onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { ipin_account: e.target.value }); }); }}
+                            onBlur={function() { saveField("ipin_account", selectedCase.ipin_account || ""); }}
+                            placeholder="ID" style={inputStyle} />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>아이핀 비밀번호</label>
+                          <input type="text" value={selectedCase.ipin_password || ""}
+                            onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { ipin_password: e.target.value }); }); }}
+                            onBlur={function() { saveField("ipin_password", selectedCase.ipin_password || ""); }}
+                            placeholder="PW" style={inputStyle} />
+                        </div>
+                      </div>
+
+                      {/* 주민등록번호 */}
+                      <div style={rowStyle}>
+                        <label style={labelStyle}>주민등록번호</label>
+                        <input type="text" value={selectedCase.resident_number || ""}
+                          onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { resident_number: e.target.value }); }); }}
+                          onBlur={function() { saveField("resident_number", selectedCase.resident_number || ""); }}
+                          placeholder="000000-0000000" style={inputStyle} />
+                      </div>
+
+                      {/* 공단 아이디 + 비번 */}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                        <div>
+                          <label style={labelStyle}>공단 아이디</label>
+                          <input type="text" value={selectedCase.agency_login_id || ""}
+                            onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { agency_login_id: e.target.value }); }); }}
+                            onBlur={function() { saveField("agency_login_id", selectedCase.agency_login_id || ""); }}
+                            placeholder="ID" style={inputStyle} />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>공단 비밀번호</label>
+                          <input type="text" value={selectedCase.agency_login_password || ""}
+                            onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { agency_login_password: e.target.value }); }); }}
+                            onBlur={function() { saveField("agency_login_password", selectedCase.agency_login_password || ""); }}
+                            placeholder="PW" style={inputStyle} />
+                        </div>
+                      </div>
+
+                      {/* 개인 인증서 + 사업자 인증서 비밀번호 */}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                        <div>
+                          <label style={labelStyle}>개인 인증서 비번</label>
+                          <input type="text" value={selectedCase.personal_cert_password || ""}
+                            onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { personal_cert_password: e.target.value }); }); }}
+                            onBlur={function() { saveField("personal_cert_password", selectedCase.personal_cert_password || ""); }}
+                            placeholder="개인 인증서 PW" style={inputStyle} />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>사업자 인증서 비번</label>
+                          <input type="text" value={selectedCase.business_cert_password || ""}
+                            onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { business_cert_password: e.target.value }); }); }}
+                            onBlur={function() { saveField("business_cert_password", selectedCase.business_cert_password || ""); }}
+                            placeholder="사업자 인증서 PW" style={inputStyle} />
+                        </div>
+                      </div>
+
+                      {/* 최종 컨펌 */}
+                      <div style={rowStyle}>
+                        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: "8px 10px", background: selectedCase.final_confirm ? "#ECFDF5" : "#fff", border: "1px solid " + (selectedCase.final_confirm ? "#10B981" : "#E8E5E0"), borderRadius: 6 }}>
+                          <input type="checkbox" checked={!!selectedCase.final_confirm}
+                            onChange={function(e) { var v = e.target.checked; setSelectedCase(function(p) { return Object.assign({}, p, { final_confirm: v }); }); saveField("final_confirm", v); }}
+                            style={{ width: 16, height: 16, cursor: "pointer" }} />
+                          <span style={{ fontSize: 12, fontWeight: 700, color: selectedCase.final_confirm ? "#047857" : "#888" }}>
+                            {selectedCase.final_confirm ? "✅ 최종 컨펌 완료" : "최종 컨펌"}
+                          </span>
+                        </label>
+                      </div>
+
+                      {/* 추가 메모 */}
+                      <div style={{ marginBottom: 4 }}>
+                        <label style={labelStyle}>추가 메모</label>
+                        <textarea value={selectedCase.extra_notes || ""}
+                          onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { extra_notes: e.target.value }); }); }}
+                          onBlur={function() { saveField("extra_notes", selectedCase.extra_notes || ""); }}
+                          placeholder="추가로 기록할 내용..."
+                          rows={3} style={Object.assign({}, inputStyle, { resize: "vertical", lineHeight: 1.5 })} />
+                      </div>
+
+                      <div style={{ fontSize: 10, color: "#AAA", marginTop: 6 }}>각 입력 후 칸 밖 클릭 시 자동 저장</div>
+                    </>
+                  );
+                })()}
+              </div>
+
+              {/* 전체 정보 수정 버튼 */}
+              <button onClick={function() {
+                setEditingId(selectedCase.id);
+                setEditData(Object.assign({}, selectedCase));
+                setSelectedCase(null);
+              }} style={{ width: "100%", padding: "11px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                ✏️ 전체 정보 수정
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -5145,6 +5784,8 @@ function DBLeadsView() {
   const [expandedId, setExpandedId] = useState(null);
   const [showLeadTrash, setShowLeadTrash] = useState(false);
   const [trashedLeads, setTrashedLeads] = useState([]);
+  const [dbSearch, setDbSearch] = useState("");
+  const [selectedLead, setSelectedLead] = useState(null);
 
   useEffect(function() { fetchLeads(); }, []);
 
@@ -5196,9 +5837,15 @@ function DBLeadsView() {
         var w = getWeek(l);
         if (w !== parseInt(filterWeek)) return false;
       }
+      if (dbSearch.trim()) {
+        var s = dbSearch.trim().toLowerCase();
+        return (l.business_name || "").toLowerCase().includes(s) ||
+               (l.contact || "").includes(s) ||
+               (l.assignee || "").toLowerCase().includes(s);
+      }
       return true;
     });
-  }, [leads, activeMonth, filterStatus, filterWeek]);
+  }, [leads, activeMonth, filterStatus, filterWeek, dbSearch]);
 
   var monthsWithData = useMemo(function() {
     var s = new Set();
@@ -5230,7 +5877,7 @@ function DBLeadsView() {
   var startEdit = function(row) { setEditingId(row.id); setEditData(Object.assign({}, row)); };
   var cancelEdit = function() { setEditingId(null); setEditData({}); };
   var saveEdit = async function() {
-    var updates = { business_name: editData.business_name, contact: editData.contact, assignee: editData.assignee, assigned_by: editData.assigned_by, status: editData.status, call_1: editData.call_1, call_2: editData.call_2, call_3: editData.call_3, call_4: editData.call_4, call_5: editData.call_5, etc: editData.etc, call_1_date: editData.call_1_date || null, call_1_status: editData.call_1_status || null, call_1_memo: editData.call_1_memo || null, call_2_date: editData.call_2_date || null, call_2_status: editData.call_2_status || null, call_2_memo: editData.call_2_memo || null, call_3_date: editData.call_3_date || null, call_3_status: editData.call_3_status || null, call_3_memo: editData.call_3_memo || null, call_4_date: editData.call_4_date || null, call_4_status: editData.call_4_status || null, call_4_memo: editData.call_4_memo || null, call_5_date: editData.call_5_date || null, call_5_status: editData.call_5_status || null, call_5_memo: editData.call_5_memo || null, updated_at: new Date().toISOString() };
+    var updates = { business_name: editData.business_name, contact: formatPhone(editData.contact || ""), assignee: editData.assignee, assigned_by: editData.assigned_by, status: editData.status, call_1: editData.call_1, call_2: editData.call_2, call_3: editData.call_3, call_4: editData.call_4, call_5: editData.call_5, etc: editData.etc, call_1_date: editData.call_1_date || null, call_1_status: editData.call_1_status || null, call_1_memo: editData.call_1_memo || null, call_2_date: editData.call_2_date || null, call_2_status: editData.call_2_status || null, call_2_memo: editData.call_2_memo || null, call_3_date: editData.call_3_date || null, call_3_status: editData.call_3_status || null, call_3_memo: editData.call_3_memo || null, call_4_date: editData.call_4_date || null, call_4_status: editData.call_4_status || null, call_4_memo: editData.call_4_memo || null, call_5_date: editData.call_5_date || null, call_5_status: editData.call_5_status || null, call_5_memo: editData.call_5_memo || null, updated_at: new Date().toISOString() };
     var result = await supabase.from("db_leads").update(updates).eq("id", editData.id);
     if (!result.error) {
       setLeads(function(prev) { return prev.map(function(l) { return l.id === editData.id ? Object.assign({}, l, updates) : l; }); });
@@ -5267,7 +5914,8 @@ function DBLeadsView() {
   };
   var saveNewLead = async function() {
     if (!newLead.business_name) { alert("사업자명은 필수입니다."); return; }
-    var result = await supabase.from("db_leads").insert(newLead).select().single();
+    var leadData = Object.assign({}, newLead, { contact: formatPhone(newLead.contact || "") });
+    var result = await supabase.from("db_leads").insert(leadData).select().single();
     if (!result.error && result.data) { setLeads(function(prev) { return prev.concat([result.data]); }); setShowAddLead(false); }
   };
 
@@ -5282,6 +5930,14 @@ function DBLeadsView() {
           <button onClick={function() { fetchTrashedLeads(); setShowLeadTrash(true); }} style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>🗑️ 휴지통{trashedLeads.length > 0 ? " (" + trashedLeads.length + ")" : ""}</button>
           <button onClick={fetchLeads} style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#555", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}><Icon name="refresh" size={13} color="#555" /> 새로고침</button>
         </div>
+      </div>
+
+      {/* 검색창 */}
+      <div style={{ marginBottom: 16, position: "relative" }}>
+        <input value={dbSearch} onChange={function(e) { setDbSearch(e.target.value); }}
+          placeholder="🔍 업체명, 연락처, 담당자 검색..."
+          style={{ width: "100%", padding: "10px 40px 10px 14px", border: "1px solid #E8E5E0", borderRadius: 10, fontSize: 13, boxSizing: "border-box", outline: "none", background: "#fff" }} />
+        {dbSearch && <button onClick={function() { setDbSearch(""); }} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#888" }}>✕</button>}
       </div>
 
       <div style={{ display: "flex", gap: 4, marginBottom: 18, flexWrap: "wrap" }}>
@@ -5333,7 +5989,7 @@ function DBLeadsView() {
                   var sc = LEAD_STATUS_COLORS[row.status] || { bg: "#F7F6F3", text: "#888" };
                   var CALL_STATUSES = ["통화완료","부재","거절","문자발송","카톡발송","콜백요청","미팅예약","상담완료","수신거부"];
                   return [
-                    <tr key={row.id} style={{ borderBottom: isExpanded ? "none" : "1px solid #F0EDE8", background: isEditing ? "#FEFCE8" : idx % 2 === 0 ? "#fff" : "#FAFAF8", cursor: "pointer" }} onClick={function() { setExpandedId(isExpanded ? null : row.id); }}>
+                    <tr key={row.id} style={{ borderBottom: isExpanded ? "none" : "1px solid #F0EDE8", background: selectedLead && selectedLead.id === row.id ? "#F0FDF4" : isEditing ? "#FEFCE8" : idx % 2 === 0 ? "#fff" : "#FAFAF8", cursor: "pointer" }} onClick={function() { setSelectedLead(row); }}>
                       <td style={{ textAlign: "center", padding: "9px 8px", color: "#AAA", fontSize: 11 }}>{idx + 1}</td>
                       <td style={{ padding: "9px 8px" }} onClick={function(e) { e.stopPropagation(); }}>
                         {isEditing
@@ -5460,6 +6116,163 @@ function DBLeadsView() {
           </div>
         </div>
       </div>)}
+
+      {/* DB리스트 사이드패널 */}
+      {selectedLead && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 900 }} onClick={function() { setSelectedLead(null); }}>
+          <div style={{ position: "absolute", top: 0, right: 0, width: 480, height: "100%", background: "#fff", boxShadow: "-4px 0 30px rgba(0,0,0,0.15)", overflowY: "auto" }}
+            onClick={function(e) { e.stopPropagation(); }}>
+            <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: "#1A1917" }}>{selectedLead.business_name || "(미입력)"}</div>
+                <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{selectedLead.contact || "-"} · {selectedLead.assignee || "-"}</div>
+              </div>
+              <button onClick={function() { setSelectedLead(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: "#888" }}>✕</button>
+            </div>
+            <div style={{ padding: "20px 24px" }}>
+              {/* 기본 정보 수정 */}
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 10, letterSpacing: "0.05em" }}>기본 정보</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+                <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>사업자명</div>
+                  <input value={selectedLead.business_name || ""}
+                    onChange={function(e) { setSelectedLead(function(p) { return Object.assign({}, p, { business_name: e.target.value }); }); }}
+                    onBlur={async function() {
+                      var r = await supabase.from("db_leads").update({ business_name: selectedLead.business_name, updated_at: new Date().toISOString() }).eq("id", selectedLead.id);
+                      if (!r.error) setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, { business_name: selectedLead.business_name }) : l; }); });
+                    }}
+                    style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+                </div>
+                <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>연락처</div>
+                  <input value={selectedLead.contact || ""}
+                    onChange={function(e) { setSelectedLead(function(p) { return Object.assign({}, p, { contact: formatPhone(e.target.value) }); }); }}
+                    onBlur={async function() {
+                      var v = formatPhone(selectedLead.contact || "");
+                      var r = await supabase.from("db_leads").update({ contact: v, updated_at: new Date().toISOString() }).eq("id", selectedLead.id);
+                      if (!r.error) setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, { contact: v }) : l; }); });
+                    }}
+                    style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+                </div>
+                <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>담당자</div>
+                  <select value={selectedLead.assignee || ""}
+                    onChange={async function(e) {
+                      var v = e.target.value;
+                      var r = await supabase.from("db_leads").update({ assignee: v, updated_at: new Date().toISOString() }).eq("id", selectedLead.id);
+                      if (!r.error) {
+                        setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, { assignee: v }) : l; }); });
+                        setSelectedLead(function(p) { return Object.assign({}, p, { assignee: v }); });
+                      }
+                    }}
+                    style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none", cursor: "pointer" }}>
+                    <option value="">선택</option>
+                    {DB_ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
+                  </select>
+                </div>
+                <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>배정자</div>
+                  <select value={selectedLead.assigned_by || ""}
+                    onChange={async function(e) {
+                      var v = e.target.value;
+                      var r = await supabase.from("db_leads").update({ assigned_by: v, updated_at: new Date().toISOString() }).eq("id", selectedLead.id);
+                      if (!r.error) {
+                        setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, { assigned_by: v }) : l; }); });
+                        setSelectedLead(function(p) { return Object.assign({}, p, { assigned_by: v }); });
+                      }
+                    }}
+                    style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none", cursor: "pointer" }}>
+                    <option value="">선택</option>
+                    {DB_MANAGERS.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
+                  </select>
+                </div>
+              </div>
+
+              {/* 상태 */}
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8, letterSpacing: "0.05em" }}>상태</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {LEAD_STATUSES.map(function(s) {
+                    var sc = LEAD_STATUS_COLORS[s] || { bg: "#F7F6F3", text: "#888" };
+                    var isActive = selectedLead.status === s;
+                    return (
+                      <button key={s} onClick={async function() {
+                        var r = await supabase.from("db_leads").update({ status: s, updated_at: new Date().toISOString() }).eq("id", selectedLead.id);
+                        if (!r.error) {
+                          setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, { status: s }) : l; }); });
+                          setSelectedLead(function(p) { return Object.assign({}, p, { status: s }); });
+                        }
+                      }} style={{ padding: "5px 12px", borderRadius: 99, border: isActive ? "2px solid " + sc.text : "1px solid #E8E5E0", background: isActive ? sc.bg : "#fff", color: isActive ? sc.text : "#888", fontSize: 12, fontWeight: isActive ? 700 : 400, cursor: "pointer" }}>{s}</button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 1~5차콜 */}
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 10, letterSpacing: "0.05em" }}>콜 기록</div>
+                {[1,2,3,4,5].map(function(ci) {
+                  var dateKey = "call_" + ci + "_date";
+                  var statusKey = "call_" + ci + "_status";
+                  var memoKey = "call_" + ci + "_memo";
+                  return (
+                    <div key={ci} style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 14px", marginBottom: 8, borderLeft: (selectedLead[dateKey] || selectedLead[statusKey] || selectedLead[memoKey]) ? "3px solid #4338CA" : "3px solid #E8E5E0" }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#4338CA", marginBottom: 6 }}>{ci}차콜</div>
+                      <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                        <input type="date" value={selectedLead[dateKey] || ""}
+                          onChange={function(e) { setSelectedLead(function(p) { return Object.assign({}, p, { [dateKey]: e.target.value }); }); }}
+                          onBlur={async function() {
+                            var u = {}; u[dateKey] = selectedLead[dateKey] || null; u.updated_at = new Date().toISOString();
+                            var r = await supabase.from("db_leads").update(u).eq("id", selectedLead.id);
+                            if (!r.error) setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, u) : l; }); });
+                          }}
+                          style={{ flex: 1, padding: "6px 8px", border: "1px solid #fff", borderRadius: 6, fontSize: 12, background: "#fff" }} />
+                        <select value={selectedLead[statusKey] || ""}
+                          onChange={async function(e) {
+                            var v = e.target.value;
+                            var u = {}; u[statusKey] = v || null; u.updated_at = new Date().toISOString();
+                            var r = await supabase.from("db_leads").update(u).eq("id", selectedLead.id);
+                            if (!r.error) {
+                              setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, u) : l; }); });
+                              setSelectedLead(function(p) { return Object.assign({}, p, { [statusKey]: v }); });
+                            }
+                          }}
+                          style={{ flex: 1, padding: "6px 8px", border: "1px solid #fff", borderRadius: 6, fontSize: 12, background: "#fff" }}>
+                          <option value="">상태 선택</option>
+                          <option value="통화완료">통화완료</option><option value="부재">부재</option><option value="거절">거절</option>
+                          <option value="문자발송">문자발송</option><option value="카톡발송">카톡발송</option><option value="콜백요청">콜백요청</option>
+                          <option value="미팅예약">미팅예약</option><option value="상담완료">상담완료</option><option value="수신거부">수신거부</option>
+                        </select>
+                      </div>
+                      <input value={selectedLead[memoKey] || ""} placeholder={ci + "차콜 메모 (선택)"}
+                        onChange={function(e) { setSelectedLead(function(p) { return Object.assign({}, p, { [memoKey]: e.target.value }); }); }}
+                        onBlur={async function() {
+                          var u = {}; u[memoKey] = selectedLead[memoKey] || null; u.updated_at = new Date().toISOString();
+                          var r = await supabase.from("db_leads").update(u).eq("id", selectedLead.id);
+                          if (!r.error) setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, u) : l; }); });
+                        }}
+                        style={{ width: "100%", padding: "6px 8px", border: "1px solid #fff", borderRadius: 6, fontSize: 12, boxSizing: "border-box", outline: "none", background: "#fff" }} />
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* 이슈 메모 */}
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>📝 이슈 메모</div>
+                <textarea value={selectedLead.etc || ""} placeholder="이슈 내용을 입력하세요..."
+                  onChange={function(e) { setSelectedLead(function(p) { return Object.assign({}, p, { etc: e.target.value }); }); }}
+                  onBlur={async function() {
+                    var r = await supabase.from("db_leads").update({ etc: selectedLead.etc, updated_at: new Date().toISOString() }).eq("id", selectedLead.id);
+                    if (!r.error) setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, { etc: selectedLead.etc }) : l; }); });
+                  }}
+                  rows={4} style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.6, resize: "vertical", boxSizing: "border-box", outline: "none", fontFamily: "inherit" }} />
+                <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>입력 후 칸 밖 클릭 시 자동 저장</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* DB리스트 휴지통 모달 */}
       {showLeadTrash && (
