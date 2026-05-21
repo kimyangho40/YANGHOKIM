@@ -538,14 +538,28 @@ function CRMApp({ profile, session }) {
   const fetchWorkNotesBadge = async (profileName) => {
     if (!profileName) return;
     try {
+      // 본인 담당 + 할 일 + 미완료(is_done=false) + 삭제되지 않은 것만
       var r = await supabase.from("work_notes")
-        .select("id")
+        .select("id, content, is_done")
         .eq("assignee", profileName)
         .eq("is_todo", true)
         .is("deleted_at", null);
       if (!r.error && r.data) {
-        // is_completed가 없거나 false인 것만
-        var incomplete = r.data.length;
+        // is_done이 false인 노트만 카운트
+        // 그리고 체크리스트가 있는 경우, 모든 항목이 체크되지 않은 노트만 카운트
+        var incomplete = r.data.filter(function(n) {
+          if (n.is_done) return false; // 이미 완료된 노트는 제외
+          // 체크리스트가 있는 경우 모든 항목 체크 여부 확인
+          if (n.content && n.content.indexOf("- [") !== -1) {
+            var lines = n.content.split("\n");
+            var checkLines = lines.filter(function(l) { return /^- \[[ x]\]/.test(l.trim()); });
+            if (checkLines.length > 0) {
+              var uncheckedExists = checkLines.some(function(l) { return l.trim().indexOf("- [ ]") === 0; });
+              return uncheckedExists; // 미체크 항목이 있으면 미완료
+            }
+          }
+          return true; // 일반 할 일은 is_done=false이면 미완료
+        }).length;
         setWorkNotesBadge(incomplete);
       }
     } catch(e) {}
@@ -1128,7 +1142,7 @@ function CRMApp({ profile, session }) {
             {view === "dbleads" && <DBLeadsView />}
             {view === "settlement" && <SettlementView />}
             {view === "activitylog" && <ActivityLogView />}
-            {view === "worknotes" && <WorkNotesView profile={profile} />}
+            {view === "worknotes" && <WorkNotesView profile={profile} onBadgeUpdate={function() { fetchWorkNotesBadge(profile?.name); }} />}
             {view === "calendar" && <CalendarView companies={companies} onSelectCompany={setSelectedCompany} profile={profile} />}
             {view === "manual" && <ManualView />}
             {view === "pipeline" && <PipelineView filtered={filtered} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} />}
@@ -3244,7 +3258,7 @@ async function sendPushToUser(userName, payload) {
   }
 }
 
-function WorkNotesView({ profile }) {
+function WorkNotesView({ profile, onBadgeUpdate }) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterAssignee, setFilterAssignee] = useState("전체");
@@ -3404,6 +3418,8 @@ function WorkNotesView({ profile }) {
         await logToActivity(detected[i], "📝 업무노트: " + (newNote.title || newNote.content.split("\n")[0]));
       }
       setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "" });
+      // 사이드바 뱃지 업데이트
+      if (onBadgeUpdate) onBadgeUpdate();
     } else if (r.error) {
       alert("저장 실패: " + r.error.message);
     }
@@ -3443,6 +3459,8 @@ function WorkNotesView({ profile }) {
           }
         }
       }
+      // 사이드바 뱃지 업데이트
+      if (onBadgeUpdate) onBadgeUpdate();
     }
   };
 
@@ -3462,7 +3480,11 @@ function WorkNotesView({ profile }) {
 
   var toggleDone = async function(note) {
     var r = await supabase.from("work_notes").update({ is_done: !note.is_done, updated_at: new Date().toISOString() }).eq("id", note.id);
-    if (!r.error) setNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { is_done: !note.is_done }) : n; }); });
+    if (!r.error) {
+      setNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { is_done: !note.is_done }) : n; }); });
+      // 사이드바 뱃지 업데이트
+      if (onBadgeUpdate) onBadgeUpdate();
+    }
   };
 
   var togglePin = async function(note) {
@@ -3473,7 +3495,10 @@ function WorkNotesView({ profile }) {
   var deleteNote = async function(id) {
     if (!window.confirm("휴지통으로 이동하시겠습니까? (휴지통에서 복구 가능)")) return;
     var r = await supabase.from("work_notes").update({ deleted_at: new Date().toISOString() }).eq("id", id);
-    if (!r.error) setNotes(function(prev) { return prev.filter(function(n) { return n.id !== id; }); });
+    if (!r.error) {
+      setNotes(function(prev) { return prev.filter(function(n) { return n.id !== id; }); });
+      if (onBadgeUpdate) onBadgeUpdate();
+    }
   };
 
   var fmtDate = function(iso) {
