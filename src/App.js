@@ -3566,7 +3566,7 @@ function WorkNotesView({ profile }) {
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <label style={{ fontSize: 12, color: "#15803D", fontWeight: 600, whiteSpace: "nowrap" }}>📅 마감일</label>
             <input type="date" value={newNote.due_date || ""} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { due_date: v }); }); }}
-              style={{ flex: 1, padding: "7px 10px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, background: "#fff", outline: "none" }} />
+              style={{ width: "auto", padding: "7px 10px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, background: "#fff", outline: "none" }} />
             {newNote.due_date && <button onClick={function() { setNewNote(function(p) { return Object.assign({}, p, { due_date: "" }); }); }}
               style={{ background: "none", border: "none", cursor: "pointer", color: "#AAA", fontSize: 14 }}>✕</button>}
           </div>
