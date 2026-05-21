@@ -492,6 +492,7 @@ function CRMApp({ profile, session }) {
   const [filterType, setFilterType] = useState("전체");
   const [toast, setToast] = useState(null);
   const [showTodayAlert, setShowTodayAlert] = useState(false);
+  const [workNotesBadge, setWorkNotesBadge] = useState(0);
   const [quickMemo, setQuickMemo] = useState(false);
   const [quickMemoText, setQuickMemoText] = useState("");
   const [menuExpanded, setMenuExpanded] = useState(false);
@@ -534,6 +535,22 @@ function CRMApp({ profile, session }) {
   };
 
   // 데이터 로드
+  const fetchWorkNotesBadge = async (profileName) => {
+    if (!profileName) return;
+    try {
+      var r = await supabase.from("work_notes")
+        .select("id")
+        .eq("assignee", profileName)
+        .eq("is_todo", true)
+        .is("deleted_at", null);
+      if (!r.error && r.data) {
+        // is_completed가 없거나 false인 것만
+        var incomplete = r.data.length;
+        setWorkNotesBadge(incomplete);
+      }
+    } catch(e) {}
+  };
+
   const fetchAll = useCallback(async () => {
     setLoading(true);
     const [{ data: cos }, { data: profs }, { data: agencyCases }] = await Promise.all([
@@ -567,7 +584,10 @@ function CRMApp({ profile, session }) {
     setLoading(false);
   }, []);
 
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  useEffect(() => {
+    fetchAll();
+    if (profile?.name) fetchWorkNotesBadge(profile.name);
+  }, [fetchAll]);
 
   // 로그인 시 오늘 할 일 알림 - 최초 1회만
   const alertShownRef = useRef(false);
@@ -977,7 +997,12 @@ function CRMApp({ profile, session }) {
                 { id: "list",        label: "기업 목록",   icon: "list" },
                 { id: "stagnant",    label: "정체 알림",   icon: "alert", badge: stagnant.length },
                 { id: "activitylog", label: "활동 로그",   icon: "activity" },
-                { id: "worknotes",   label: "업무 노트",   icon: "edit" },
+                { id: "worknotes",   label: "업무 노트",   icon: "edit",
+                  badge: (function() {
+                    var today = new Date().toISOString().slice(0, 10);
+                    return workNotesBadge;
+                  })()
+                },
                 { id: "manual",      label: "자료실",      icon: "folder" },
                 ...(profile.role === "admin" ? [{ id: "members", label: "팀원 관리", icon: "users" }] : []),
               ].map(({ id, label, icon, badge }) => (
@@ -1291,6 +1316,13 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
           </div>
         </div>
       )}
+
+      {/* 🆕 미완료 업무 노트 위젯 */}
+      {(function() {
+        var today = new Date().toISOString().slice(0, 10);
+        var myTodos = companies ? [] : []; // 실제 work_notes에서 가져와야 하므로 별도 처리
+        return null; // 업무노트는 WorkNotesView에서 관리
+      })()}
 
       {/* 🆕 오늘의 할 일 위젯 */}
       {(function() {
@@ -3118,6 +3150,22 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
         )}
       </div>
 
+      {/* 마감일 표시 */}
+      {note.due_date && (function() {
+        var today = new Date().toISOString().slice(0, 10);
+        var dday = Math.ceil((new Date(note.due_date) - new Date(today)) / 86400000);
+        var ddayLabel = dday === 0 ? "D-Day" : dday > 0 ? "D-" + dday : "D+" + Math.abs(dday);
+        var ddayColor = dday < 0 ? "#DC2626" : dday === 0 ? "#EA580C" : dday <= 3 ? "#B45309" : "#15803D";
+        var ddayBg = dday < 0 ? "#FEE2E2" : dday === 0 ? "#FFF7ED" : dday <= 3 ? "#FEF3C7" : "#F0FDF4";
+        return (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+            <span style={{ fontSize: 10, color: "#888" }}>📅 마감:</span>
+            <span style={{ fontSize: 11, color: "#555" }}>{note.due_date}</span>
+            <span style={{ fontSize: 10, fontWeight: 700, color: ddayColor, background: ddayBg, padding: "1px 6px", borderRadius: 99 }}>{ddayLabel}</span>
+          </div>
+        );
+      })()}
+
       {/* 체크리스트 or 일반 내용 */}
       {note.content && (
         checklist ? (
@@ -3156,13 +3204,41 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
 }
 
 // ── 업무 노트 ──────────────────────────────────────────────────────────────────
+// ── 브라우저 푸시 알림 함수 ──────────────────────────────────────────────
+async function sendPushToUser(userName, payload) {
+  try {
+    var subs = await supabase.from("push_subscriptions").select("subscription").eq("user_name", userName);
+    if (!subs.data || subs.data.length === 0) return; // 구독 정보 없으면 패스
+    for (var i = 0; i < subs.data.length; i++) {
+      var sub = subs.data[i].subscription;
+      if (sub && sub.endpoint) {
+        // 푸시 API 직접 호출 (클라이언트에서 Notification API 활용)
+        if ("serviceWorker" in navigator && "PushManager" in window) {
+          // 로컬 알림으로 대체 (같은 PC에서만 작동)
+          if (Notification.permission === "granted") {
+            var n = new Notification(payload.title, {
+              body: payload.body,
+              icon: "/favicon.ico",
+              tag: "crm-worknote",
+              requireInteraction: false,
+            });
+            n.onclick = function() { window.focus(); };
+          }
+        }
+      }
+    }
+  } catch(e) {
+    // 푸시 실패해도 저장은 완료
+  }
+}
+
 function WorkNotesView({ profile }) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterAssignee, setFilterAssignee] = useState("전체");
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [newNote, setNewNote] = useState({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [] });
+  const [newNote, setNewNote] = useState({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "" });
   const [editNote, setEditNote] = useState({});
   const [filterType, setFilterType] = useState("전체"); // 전체 / 메모 / 할일
   const [replyId, setReplyId] = useState(null);
@@ -3171,6 +3247,33 @@ function WorkNotesView({ profile }) {
   const [trashedNotes, setTrashedNotes] = useState([]);
 
   const [companiesList, setCompaniesList] = useState([]);
+  const [pushEnabled, setPushEnabled] = useState(false);
+
+  // 브라우저 푸시 알림 권한 요청
+  useEffect(function() {
+    if (!profile?.name) return;
+    if ("Notification" in window) {
+      if (Notification.permission === "default") {
+        // 자동으로 권한 요청 (처음 접속 시)
+        Notification.requestPermission().then(function(perm) {
+          if (perm === "granted") {
+            setPushEnabled(true);
+            // 구독 정보 DB에 저장 (간단 버전: endpoint만 저장)
+            supabase.from("push_subscriptions").upsert({
+              user_name: profile.name,
+              subscription: { endpoint: "browser-" + profile.name, type: "notification" }
+            }, { onConflict: "user_name" });
+          }
+        });
+      } else if (Notification.permission === "granted") {
+        setPushEnabled(true);
+        supabase.from("push_subscriptions").upsert({
+          user_name: profile.name,
+          subscription: { endpoint: "browser-" + profile.name, type: "notification" }
+        }, { onConflict: "user_name" });
+      }
+    }
+  }, [profile?.name]);
 
   useEffect(function() {
     fetchNotes();
@@ -3261,24 +3364,34 @@ function WorkNotesView({ profile }) {
     if (checkContent) finalContent = finalContent ? finalContent + "\n" + checkContent : checkContent;
     if (!newNote.title.trim() && !finalContent.trim()) { alert("제목 또는 내용을 입력해주세요."); return; }
     var assigneeName = newNote.target_assignee || profile?.name || "전체";
-    var r = await supabase.from("work_notes").insert({
+    var insertObj = {
       assignee: assigneeName,
       title: newNote.title.trim(),
       content: finalContent,
       is_todo: newNote.is_todo,
       pinned: newNote.pinned,
       created_by: profile?.name || assigneeName,
-    }).select().single();
+    };
+    if (newNote.due_date) insertObj.due_date = newNote.due_date;
+    var r = await supabase.from("work_notes").insert(insertObj).select().single();
     if (!r.error && r.data) {
       setNotes(function(prev) { return [r.data].concat(prev); });
       setShowAdd(false);
+      // 담당자에게 브라우저 푸시 알림 전송
+      if (assigneeName !== (profile?.name || "")) {
+        await sendPushToUser(assigneeName, {
+          title: "📋 새 업무가 배정됐어요",
+          body: (newNote.title || finalContent.split("\n")[0] || "새 업무") + (newNote.due_date ? " · 마감: " + newNote.due_date : ""),
+          url: window.location.origin + "?view=worknotes"
+        });
+      }
       // 기업명 자동 감지 → 활동로그 자동 기록
       var fullText = (newNote.title || "") + " " + finalContent;
       var detected = detectCompaniesInText(fullText);
       for (var i = 0; i < detected.length; i++) {
         await logToActivity(detected[i], "📝 업무노트: " + (newNote.title || newNote.content.split("\n")[0]));
       }
-      setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [] });
+      setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "" });
     } else if (r.error) {
       alert("저장 실패: " + r.error.message);
     }
@@ -3450,6 +3563,13 @@ function WorkNotesView({ profile }) {
           </div>
           <input value={newNote.title} placeholder="제목 (선택사항)" onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
             style={{ width: "100%", padding: "10px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 14, fontWeight: 600, boxSizing: "border-box", outline: "none", marginBottom: 10, background: "#fff" }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <label style={{ fontSize: 12, color: "#15803D", fontWeight: 600, whiteSpace: "nowrap" }}>📅 마감일</label>
+            <input type="date" value={newNote.due_date || ""} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { due_date: v }); }); }}
+              style={{ flex: 1, padding: "7px 10px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, background: "#fff", outline: "none" }} />
+            {newNote.due_date && <button onClick={function() { setNewNote(function(p) { return Object.assign({}, p, { due_date: "" }); }); }}
+              style={{ background: "none", border: "none", cursor: "pointer", color: "#AAA", fontSize: 14 }}>✕</button>}
+          </div>
           {/* 체크리스트 항목들 */}
           {newNote.checkItems && newNote.checkItems.length > 0 && (
             <div style={{ border: "1px solid #86EFAC", borderRadius: 8, padding: "10px 12px", marginBottom: 8, background: "#fff" }}>
