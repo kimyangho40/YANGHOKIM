@@ -468,6 +468,7 @@ function SetupProfile({ userId, email, onDone }) {
 
 // ── CRM 메인 앱 ───────────────────────────────────────────────────────────────
 function CRMApp({ profile, session }) {
+  const [dashboardFilter, setDashboardFilter] = useState(null);
   const [view, setView] = useState(() => {
     var params = new URLSearchParams(window.location.search);
     return params.get("view") || "dashboard";
@@ -1137,7 +1138,7 @@ function CRMApp({ profile, session }) {
           </div>
         ) : (
           <>
-            {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} onAdd={() => setShowAdd(true)} />}
+            {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} />}
             {view === "agency" && <AgencyView jumpToMonth={agencyJumpMonth} jumpToGroup={agencyJumpGroup} />}
             {view === "dbleads" && <DBLeadsView />}
             {view === "settlement" && <SettlementView />}
@@ -1146,7 +1147,7 @@ function CRMApp({ profile, session }) {
             {view === "calendar" && <CalendarView companies={companies} onSelectCompany={setSelectedCompany} profile={profile} />}
             {view === "manual" && <ManualView />}
             {view === "pipeline" && <PipelineView filtered={filtered} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} />}
-            {view === "list" && <ListView filtered={filtered} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} />}
+            {view === "list" && <ListView filtered={filtered} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} />}
             {view === "stagnant" && <StagnantView stagnant={stagnant} onSelect={setSelectedCompany} />}
             {view === "members" && profile.role === "admin" && <MembersView profiles={profiles} onRefresh={fetchAll} showToast={showToast} />}
           </>
@@ -1186,7 +1187,7 @@ function CRMApp({ profile, session }) {
 }
 
 // ── 대시보드 ──────────────────────────────────────────────────────────────────
-function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, onAdd }) {
+function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, setDashboardFilter, onAdd }) {
   const contractDone = companies.filter(c => c.fee_status === "수수료수령완료").length;
   const contracted = companies.filter(c => c.fee_status !== "미수령").length;
   // const thisWeek = companies.filter(c => c.next_contact && c.next_contact <= "2026-05-15").length;
@@ -1372,24 +1373,24 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
               {overdue.length > 0 && (
-                <div onClick={function() { setView("list"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
+                <div onClick={function() { setView("list"); setDashboardFilter({ type: "overdue", items: overdue }); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
                   <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 700, marginBottom: 4 }}>⏰ 기한 지남</div>
                   <div style={{ fontSize: 20, fontWeight: 700, color: "#DC2626" }}>{overdue.length}건</div>
-                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>연락 일정 지난 건</div>
+                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>{overdue.slice(0,2).map(function(c){return c.name;}).join(", ")}{overdue.length > 2 ? " 외 " + (overdue.length-2) + "건" : ""}</div>
                 </div>
               )}
               {todayItems.length > 0 && (
-                <div onClick={function() { setView("list"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #4338CA" }}>
-                  <div style={{ fontSize: 10, color: "#4338CA", fontWeight: 700, marginBottom: 4 }}>📅 오늘</div>
+                <div onClick={function() { setView("list"); setDashboardFilter({ type: "today", items: todayItems }); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #4338CA" }}>
+                  <div style={{ fontSize: 10, color: "#4338CA", fontWeight: 700, marginBottom: 4 }}>📅 오늘 연락/계약</div>
                   <div style={{ fontSize: 20, fontWeight: 700, color: "#4338CA" }}>{todayItems.length}건</div>
-                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>오늘 연락/계약</div>
+                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>{todayItems.slice(0,2).map(function(c){return c.name;}).join(", ")}{todayItems.length > 2 ? " 외 " + (todayItems.length-2) + "건" : ""}</div>
                 </div>
               )}
               {tomorrowItems.length > 0 && (
-                <div onClick={function() { setView("list"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #7C3AED" }}>
-                  <div style={{ fontSize: 10, color: "#7C3AED", fontWeight: 700, marginBottom: 4 }}>📆 내일</div>
+                <div onClick={function() { setView("list"); setDashboardFilter({ type: "tomorrow", items: tomorrowItems }); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #7C3AED" }}>
+                  <div style={{ fontSize: 10, color: "#7C3AED", fontWeight: 700, marginBottom: 4 }}>📆 내일 연락/계약</div>
                   <div style={{ fontSize: 20, fontWeight: 700, color: "#7C3AED" }}>{tomorrowItems.length}건</div>
-                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>내일 연락/계약</div>
+                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>{tomorrowItems.slice(0,2).map(function(c){return c.name;}).join(", ")}{tomorrowItems.length > 2 ? " 외 " + (tomorrowItems.length-2) + "건" : ""}</div>
                 </div>
               )}
               {stagnant14.length > 0 && (
@@ -1632,7 +1633,7 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
 }
 
 // ── 기업 목록 ─────────────────────────────────────────────────────────────────
-function ListView({ filtered, search, setSearch, filterStage, setFilterStage, filterAssignee, setFilterAssignee, filterType, setFilterType, assignees, onSelect, onAdd, setCompanies, showToast }) {
+function ListView({ filtered, search, setSearch, filterStage, setFilterStage, filterAssignee, setFilterAssignee, filterType, setFilterType, assignees, onSelect, onAdd, setCompanies, showToast, dashboardFilter, setDashboardFilter }) {
   const [showCompanyTrash, setShowCompanyTrash] = useState(false);
   const [trashedCompanies, setTrashedCompanies] = useState([]);
 
@@ -1684,6 +1685,22 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
   };
   return (
     <>
+      {dashboardFilter && (
+        <div style={{ background: dashboardFilter.type === "overdue" ? "#FEF2F2" : dashboardFilter.type === "today" ? "#EEF2FF" : "#F5F3FF", border: "1px solid " + (dashboardFilter.type === "overdue" ? "#FECACA" : dashboardFilter.type === "today" ? "#C7D2FE" : "#DDD6FE"), borderRadius: 10, padding: "12px 16px", marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>{dashboardFilter.type === "overdue" ? "⏰" : dashboardFilter.type === "today" ? "📅" : "📆"}</span>
+            <div>
+              <span style={{ fontSize: 13, fontWeight: 700, color: dashboardFilter.type === "overdue" ? "#DC2626" : dashboardFilter.type === "today" ? "#4338CA" : "#7C3AED" }}>
+                {dashboardFilter.type === "overdue" ? "기한 지난 기업" : dashboardFilter.type === "today" ? "오늘 연락/계약 기업" : "내일 연락/계약 기업"} {dashboardFilter.items.length}건
+              </span>
+              <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
+                {dashboardFilter.items.map(function(c) { return c.name; }).join(", ")}
+              </div>
+            </div>
+          </div>
+          <button onClick={function() { setDashboardFilter && setDashboardFilter(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#888" }}>✕</button>
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>기업 목록 <span style={{ fontSize: 15, color: "#888", fontWeight: 400 }}>{filtered.length}개</span></h1>
         <div style={{ display: "flex", gap: 8 }}>
@@ -5218,6 +5235,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       request_amount: editData.request_amount, region: editData.region,
       agency_sub: editData.agency_sub, notes: editData.notes,
       fund_product: editData.fund_product || null,
+      delivered_docs: editData.delivered_docs || [],
       updated_at: new Date().toISOString()
     };
     var result = await supabase.from("agency_cases").update(updates).eq("id", editData.id);
@@ -5245,7 +5263,29 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     if (!result.error) setCases(function(prev) { return prev.filter(function(c) { return c.id !== id; }); });
   };
 
-  var STATUS_OPTIONS = ["시작 전","진행 중","심사중","심사대기","최종제출","우선도 평가","기관 방문 전","기관 방문 후 대기","온라인 신청 후 대기","실태 조사 예정","실태 조사 완료","승인","약정","완료","부결","반려","진행불가","신청취소","보류"];
+  var GUJOHYEOK_STATUS_OPTIONS = [
+    "시작전","서류 제출 완료","자가진단 완료","전문 위원 배정","전문 위원 실사 완료",
+    "컨설턴트 신청 완료","컨설팅 진행중","컨설팅 최종 완료","승인 신청서 제출 완료",
+    "예산 소진으로 컨설턴트 보류","예산 소진으로 자금 신청 보류","사업전환 승인"
+  ];
+  var GUJOHYEOK_STATUS_COLORS = {
+    "시작전":                       { bg: "#F7F6F3", text: "#888" },
+    "서류 제출 완료":               { bg: "#E6F1FB", text: "#185FA5" },
+    "자가진단 완료":                { bg: "#E6F1FB", text: "#0C447C" },
+    "전문 위원 배정":               { bg: "#FAEEDA", text: "#633806" },
+    "전문 위원 실사 완료":          { bg: "#FAEEDA", text: "#412402" },
+    "컨설턴트 신청 완료":           { bg: "#FAEEDA", text: "#412402" },
+    "컨설팅 진행중":                { bg: "#FAEEDA", text: "#412402" },
+    "컨설팅 최종 완료":             { bg: "#EAF3DE", text: "#27500A" },
+    "승인 신청서 제출 완료":        { bg: "#EAF3DE", text: "#173404" },
+    "예산 소진으로 컨설턴트 보류":  { bg: "#FAC775", text: "#412402" },
+    "예산 소진으로 자금 신청 보류": { bg: "#FAC775", text: "#412402" },
+    "사업전환 승인":                { bg: "#1D9E75", text: "#fff" },
+  };
+  var DELIVERED_DOCS_OPTIONS = ["부의 기업","승인신청서","전문위원 스크립트","컨설팅 스크립트","최종 스크립트"];
+  var STATUS_OPTIONS = activeGroup === "구조혁신&사업전환"
+    ? GUJOHYEOK_STATUS_OPTIONS
+    : ["시작 전","진행 중","심사중","심사대기","최종제출","우선도 평가","기관 방문 전","기관 방문 후 대기","온라인 신청 후 대기","실태 조사 예정","실태 조사 완료","승인","약정","완료","부결","반려","진행불가","신청취소","보류"];
 
   var PRIORITY_CHECKLIST = [
     { category: "고용지표", items: ["고용창출 실적 보유기업","내일채용공제 가입 등 일자리 유지 기업","인재육성형 중소기업","가족친화인증기업 지정","채용계획기업(6개월 이내)"] },
@@ -5398,7 +5438,10 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                   <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>신청상품</th>
                 )}
                 <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>지역</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>상태</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: activeGroup === "구조혁신&사업전환" ? "#BE123C" : "#888", fontSize: 11 }}>상태</th>
+                {activeGroup === "구조혁신&사업전환" && (
+                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#0F6E56", fontSize: 11, background: "#E1F5EE" }}>전달 및 완료 서류</th>
+                )}
                 <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>신용점수</th>
                 <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>비고</th>
                 <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 600, color: "#888", fontSize: 11, width: 80 }}>작업</th>
@@ -5484,8 +5527,48 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                             style={{ padding: "4px 6px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12 }}>
                             {STATUS_OPTIONS.map(function(s) { return <option key={s} value={s}>{s}</option>; })}
                           </select>
-                        : <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, fontWeight: 600 }}>{row.status || "-"}</span>}
+                        : (function() {
+                            var gsc = activeGroup === "구조혁신&사업전환"
+                              ? (GUJOHYEOK_STATUS_COLORS[row.status] || { bg: "#F7F6F3", text: "#888" })
+                              : sc;
+                            var isApproved = row.status === "사업전환 승인";
+                            return (
+                              <span style={{ fontSize: 11, padding: isApproved ? "4px 10px" : "3px 8px", borderRadius: 99, background: gsc.bg, color: gsc.text, fontWeight: 600, border: isApproved ? "1.5px solid #0F6E56" : "none", display: "inline-flex", alignItems: "center", gap: 3 }}>
+                                {isApproved && "✓ "}{row.status || "-"}
+                              </span>
+                            );
+                          })()}
                     </td>
+                    {activeGroup === "구조혁신&사업전환" && (
+                      <td style={{ padding: "10px 12px" }}>
+                        {isEditing ? (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                            {DELIVERED_DOCS_OPTIONS.map(function(doc) {
+                              var checked = Array.isArray(editData.delivered_docs) && editData.delivered_docs.indexOf(doc) >= 0;
+                              return (
+                                <label key={doc} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, cursor: "pointer" }}>
+                                  <input type="checkbox" checked={checked} onChange={function() {
+                                    var cur = Array.isArray(editData.delivered_docs) ? editData.delivered_docs.slice() : [];
+                                    if (checked) { cur = cur.filter(function(d) { return d !== doc; }); }
+                                    else { cur.push(doc); }
+                                    setEditData(function(p) { return Object.assign({}, p, { delivered_docs: cur }); });
+                                  }} style={{ margin: 0 }} />
+                                  {doc}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+                            {Array.isArray(row.delivered_docs) && row.delivered_docs.length > 0
+                              ? row.delivered_docs.map(function(doc) {
+                                  return <span key={doc} style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "#EAF3DE", color: "#173404" }}>{doc}</span>;
+                                })
+                              : <span style={{ fontSize: 11, color: "#CCC" }}>-</span>}
+                          </div>
+                        )}
+                      </td>
+                    )}
                     <td style={{ padding: "10px 12px" }}>
                       {(function() {
                         var matchedCo = companiesList.find(function(c) { return c.name === row.business_name; });
@@ -5723,9 +5806,12 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
               <div style={{ marginBottom: 20 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>상태</div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {["시작 전","진행 중","보류","부결","승인","완료"].map(function(s) {
-                    var sc = STATUS_COLORS_MAP[s] || { bg: "#F7F6F3", text: "#888" };
+                  {(activeGroup === "구조혁신&사업전환" ? GUJOHYEOK_STATUS_OPTIONS : ["시작 전","진행 중","보류","부결","승인","완료"]).map(function(s) {
+                    var sc = activeGroup === "구조혁신&사업전환"
+                      ? (GUJOHYEOK_STATUS_COLORS[s] || { bg: "#F7F6F3", text: "#888" })
+                      : (STATUS_COLORS_MAP[s] || { bg: "#F7F6F3", text: "#888" });
                     var isActive = selectedCase.status === s;
+                    var isApproved = s === "사업전환 승인";
                     return (
                       <button key={s} onClick={async function() {
                         var r = await supabase.from("agency_cases").update({ status: s, updated_at: new Date().toISOString() }).eq("id", selectedCase.id);
@@ -5733,10 +5819,35 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                           setCases(function(prev) { return prev.map(function(c) { return c.id === selectedCase.id ? Object.assign({}, c, { status: s }) : c; }); });
                           setSelectedCase(function(p) { return Object.assign({}, p, { status: s }); });
                         }
-                      }} style={{ padding: "5px 12px", borderRadius: 99, border: isActive ? "2px solid " + sc.text : "1px solid #E8E5E0", background: isActive ? sc.bg : "#fff", color: isActive ? sc.text : "#888", fontSize: 12, fontWeight: isActive ? 700 : 400, cursor: "pointer" }}>{s}</button>
+                      }} style={{ padding: "5px 12px", borderRadius: 99, border: isActive ? (isApproved ? "2px solid #0F6E56" : "2px solid " + sc.text) : "1px solid #E8E5E0", background: isActive ? sc.bg : "#fff", color: isActive ? sc.text : "#888", fontSize: 12, fontWeight: isActive ? 700 : 400, cursor: "pointer" }}>{isApproved ? "✓ " + s : s}</button>
                     );
                   })}
                 </div>
+                {activeGroup === "구조혁신&사업전환" && (
+                  <div style={{ marginTop: 16 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#0F6E56", marginBottom: 8 }}>전달 및 완료 서류</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {DELIVERED_DOCS_OPTIONS.map(function(doc) {
+                        var docs = Array.isArray(selectedCase.delivered_docs) ? selectedCase.delivered_docs : [];
+                        var checked = docs.indexOf(doc) >= 0;
+                        return (
+                          <label key={doc} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+                            <input type="checkbox" checked={checked} onChange={async function() {
+                              var newDocs = checked ? docs.filter(function(d) { return d !== doc; }) : docs.concat([doc]);
+                              var r = await supabase.from("agency_cases").update({ delivered_docs: newDocs, updated_at: new Date().toISOString() }).eq("id", selectedCase.id);
+                              if (!r.error) {
+                                setCases(function(prev) { return prev.map(function(c) { return c.id === selectedCase.id ? Object.assign({}, c, { delivered_docs: newDocs }) : c; }); });
+                                setSelectedCase(function(p) { return Object.assign({}, p, { delivered_docs: newDocs }); });
+                              }
+                            }} style={{ margin: 0, width: 15, height: 15, cursor: "pointer" }} />
+                            <span style={{ color: checked ? "#0F6E56" : "#555", fontWeight: checked ? 600 : 400 }}>{doc}</span>
+                            {checked && <span style={{ fontSize: 10, color: "#0F6E56" }}>✓</span>}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
               {/* 기본 정보 */}
               <div style={{ marginBottom: 20, background: "#F7F6F3", borderRadius: 8, padding: "14px 16px" }}>
