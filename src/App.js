@@ -40,6 +40,7 @@ const AGENCY_GROUPS = [
 const DOC_LIST = ["사업자등록증","최근 3년치 재무제표 (23년~25년)","최근 3년치 부가세 증명원 (23년~25년)","법인 기업 금융거래 확인서","대표자 신용점수","4대보험 명부","월별 고용보험 가입자 명부","그 외 사업전환 필수 서류","최근 1년 수출실적 증명서","사업자 대출 금융거래 확인서","대표자 신분증","임대차 계약서","회사 소개서 또는 사업계획서"];
 const TEAMS = ["법인전담","개인전담","관리자"];
 const ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일","양호"];
+const INDUSTRY_OPTIONS = ["제조업","농업·어업","숙박업","음식점업","전자상거래업","정보통신업","도소매업","서비스업","창고업","자동차임대업"];
 const DB_ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일"];
 const DB_MANAGERS = ["양호","동일","관호"];
 
@@ -672,6 +673,7 @@ function CRMApp({ profile, session }) {
       application_month: rest.application_month || null,
       business_number: rest.business_number || null,
       business_type: rest.business_type || null,
+      industry: rest.industry || null,
       region: rest.region || null,
       contract_date: rest.contract_date || null,
     }).eq("id", rest.id);
@@ -792,6 +794,7 @@ function CRMApp({ profile, session }) {
     if (form.founded_month) insertData.founded_month = parseInt(form.founded_month) || null;
     if (form.business_number) insertData.business_number = form.business_number;
     if (form.business_type) insertData.business_type = form.business_type;
+    if (form.industry) insertData.industry = form.industry;
     if (form.region) insertData.region = form.region;
     if (form.revenue_2023) insertData.revenue_2023 = parseInt(form.revenue_2023) || null;
     if (form.revenue_2024) insertData.revenue_2024 = parseInt(form.revenue_2024) || null;
@@ -1633,6 +1636,82 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
 }
 
 // ── 기업 목록 ─────────────────────────────────────────────────────────────────
+// ── 업종 셀 컴포넌트 (인라인 편집 + 자동완성 드롭다운) ──────────────────────
+function IndustryCell({ co, setCompanies }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(co.industry || "");
+  const [showDrop, setShowDrop] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(function() {
+    if (!editing) return;
+    function handleClick(e) { if (ref.current && !ref.current.contains(e.target)) { setEditing(false); setShowDrop(false); } }
+    document.addEventListener("mousedown", handleClick);
+    return function() { document.removeEventListener("mousedown", handleClick); };
+  }, [editing]);
+
+  var save = async function(v) {
+    var industry = (v !== undefined ? v : val) || null;
+    var r = await supabase.from("companies").update({ industry: industry, updated_at: new Date().toISOString() }).eq("id", co.id);
+    if (!r.error) {
+      setCompanies && setCompanies(function(prev) { return prev.map(function(c) { return c.id === co.id ? Object.assign({}, c, { industry: industry }) : c; }); });
+    }
+    setEditing(false); setShowDrop(false);
+  };
+
+  var filtered = INDUSTRY_OPTIONS.filter(function(o) { return !val || o.indexOf(val) >= 0; });
+
+  if (!editing) return (
+    <span onClick={function() { setEditing(true); setVal(co.industry || ""); setShowDrop(true); }}
+      style={{ cursor: "pointer", padding: "2px 6px", borderRadius: 4, fontSize: 11, display: "inline-flex", alignItems: "center", gap: 3, color: co.industry ? "#4338CA" : "#CCC",
+        background: co.industry ? "#EEF2FF" : "transparent" }}
+      onMouseEnter={function(e) { e.currentTarget.style.background = "#EEF2FF"; }}
+      onMouseLeave={function(e) { e.currentTarget.style.background = co.industry ? "#EEF2FF" : "transparent"; }}>
+      {co.industry || "+ 업종"}
+    </span>
+  );
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <input value={val} autoFocus
+        onChange={function(e) { setVal(e.target.value); setShowDrop(true); }}
+        onKeyDown={function(e) { if (e.key === "Enter") save(); if (e.key === "Escape") { setEditing(false); setShowDrop(false); } }}
+        placeholder="업종 입력/선택"
+        style={{ width: 110, padding: "3px 7px", border: "1px solid #4338CA", borderRadius: 5, fontSize: 11, outline: "none" }} />
+      {showDrop && (
+        <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 999, background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.12)", minWidth: 140, overflow: "hidden" }}>
+          {(val ? filtered : INDUSTRY_OPTIONS).map(function(opt) {
+            return (
+              <div key={opt} onClick={function() { setVal(opt); save(opt); }}
+                style={{ padding: "7px 12px", fontSize: 12, cursor: "pointer", color: "#333" }}
+                onMouseEnter={function(e) { e.currentTarget.style.background = "#EEF2FF"; }}
+                onMouseLeave={function(e) { e.currentTarget.style.background = "#fff"; }}>
+                {opt}
+              </div>
+            );
+          })}
+          {val && filtered.length === 0 && (
+            <div onClick={function() { save(val); }}
+              style={{ padding: "7px 12px", fontSize: 12, cursor: "pointer", color: "#4338CA", fontWeight: 600, borderTop: "1px solid #E8E5E0" }}
+              onMouseEnter={function(e) { e.currentTarget.style.background = "#EEF2FF"; }}
+              onMouseLeave={function(e) { e.currentTarget.style.background = "#fff"; }}>
+              ✎ "{val}" 직접 입력
+            </div>
+          )}
+          {val && filtered.length > 0 && (
+            <div onClick={function() { save(val); }}
+              style={{ padding: "7px 12px", fontSize: 11, cursor: "pointer", color: "#888", borderTop: "1px solid #F0EDE8" }}
+              onMouseEnter={function(e) { e.currentTarget.style.background = "#F7F6F3"; }}
+              onMouseLeave={function(e) { e.currentTarget.style.background = "#fff"; }}>
+              ✎ "{val}" 직접 입력
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ListView({ filtered, search, setSearch, filterStage, setFilterStage, filterAssignee, setFilterAssignee, filterType, setFilterType, assignees, onSelect, onAdd, setCompanies, showToast, dashboardFilter, setDashboardFilter }) {
   const [showCompanyTrash, setShowCompanyTrash] = useState(false);
   const [trashedCompanies, setTrashedCompanies] = useState([]);
@@ -1738,8 +1817,8 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1200 }}>
           <thead>
             <tr style={{ background: "#F7F6F3", borderBottom: "1px solid #E8E5E0", position: "sticky", top: 0, zIndex: 2 }}>
-              {["업체명","유형","지역","대표자","담당","진행단계","정체일수","신청예정/자금","계약일","진행기관","23년~25년 매출","신용점수","기타","작업"].map(h => (
-                <th key={h} style={{ padding: "10px 13px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left", letterSpacing: "0.03em", whiteSpace: "nowrap", background: "#F7F6F3" }}>{h}</th>
+              {["업체명","유형","지역","업종","대표자","담당","진행단계","정체일수","신청예정/자금","계약일","진행기관","23년~25년 매출","신용점수","기타","작업"].map(h => (
+                <th key={h} style={{ padding: "10px 8px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left", letterSpacing: "0.03em", whiteSpace: "nowrap", background: "#F7F6F3", maxWidth: h === "지역" ? 90 : h === "대표자" ? 70 : undefined }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -1774,7 +1853,7 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
                     )}
                   </td>
                   <td style={{ padding: "11px 13px", whiteSpace: "nowrap" }}><span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 99, background: co.type === "법인" ? "#EEF2FF" : "#F0FDF4", color: co.type === "법인" ? "#4338CA" : "#15803D", fontWeight: 600 }}>{co.type === "법인" ? "법인사업자" : "개인사업자"}</span></td>
-                  <td style={{ padding: "11px 13px", fontSize: 12, color: "#555", whiteSpace: "nowrap" }} onClick={e => e.stopPropagation()}>
+                  <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 90, overflow: "hidden", textOverflow: "ellipsis" }} onClick={e => e.stopPropagation()}>
                     {editRegionId === co.id ? (
                       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                         <input value={editRegionVal} onChange={function(e) { var v = e.target.value; setEditRegionVal(v); }} autoFocus
@@ -1794,7 +1873,10 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
                       </span>
                     )}
                   </td>
-                  <td style={{ padding: "11px 13px", fontSize: 12, color: "#555", whiteSpace: "nowrap" }}>{co.representative || "-"}</td>
+                  <td style={{ padding: "6px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 80 }} onClick={function(e) { e.stopPropagation(); }}>
+                    <IndustryCell co={co} setCompanies={setCompanies} />
+                  </td>
+                  <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis" }}>{co.representative || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 12, whiteSpace: "nowrap" }}>{co.assignee || "-"}</td>
                   <td style={{ padding: "11px 13px", whiteSpace: "nowrap" }}><span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, fontWeight: 600 }}>{co.stage}</span></td>
                   <td style={{ padding: "11px 13px", whiteSpace: "nowrap", textAlign: "center" }}>{(function() { var d = co.stagnant_days || 0; if (d >= 14) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", fontWeight: 700 }}>⚠ {d}일</span>; if (d >= 7) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEF3C7", color: "#B45309", fontWeight: 700 }}>{d}일</span>; return <span style={{ fontSize: 11, color: "#AAA" }}>{d}일</span>; })()}</td>
@@ -2137,7 +2219,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>사업자 유형</div>
-                  <div style={{ display: "flex", gap: 6 }}>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
                     {["개인사업자","법인사업자"].map(function(t) {
                       var sel = data.business_type === t;
                       return (
@@ -2151,6 +2233,23 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                       );
                     })}
                   </div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>업종</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+                    {INDUSTRY_OPTIONS.map(function(ind) {
+                      var sel = data.industry === ind;
+                      return (
+                        <button key={ind} onClick={function() { setData(function(p) { return Object.assign({}, p, { industry: ind }); }); }}
+                          style={{ padding: "4px 9px", borderRadius: 99, fontSize: 11, fontWeight: sel ? 700 : 400,
+                            background: sel ? "#4338CA" : "#fff", color: sel ? "#fff" : "#666",
+                            border: sel ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
+                          {ind}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <input type="text" value={data.industry && INDUSTRY_OPTIONS.indexOf(data.industry) < 0 ? data.industry : ""} placeholder="직접 입력 (위 목록에 없는 업종)"
+                    onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { industry: v }); }); }}
+                    style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, outline: "none", boxSizing: "border-box" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>지역</div>
@@ -2562,7 +2661,7 @@ function AddModal({ onClose, onAdd, assignees }) {
   const [form, setForm] = useState({
     name: "", type: "법인", representative: "", phone: "",
     stage: "상담/진단완료", assignee: "", agency_list: [],
-    business_type: "법인사업자",
+    business_type: "법인사업자", industry: "",
   });
   const set = function(k, v) { setForm(function(p) { return Object.assign({}, p, { [k]: v }); }); };
   const toggleAgency = function(a) {
@@ -2628,6 +2727,26 @@ function AddModal({ onClose, onAdd, assignees }) {
                 );
               })}
             </div>
+          </div>
+
+          {/* 업종 */}
+          <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>업종</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+              {INDUSTRY_OPTIONS.map(function(ind) {
+                var sel = form.industry === ind;
+                return (
+                  <button key={ind} onClick={function() { set("industry", ind); }}
+                    style={{ padding: "4px 9px", borderRadius: 99, fontSize: 11, fontWeight: sel ? 700 : 400, border: sel ? "none" : "1px solid #E8E5E0", cursor: "pointer",
+                      background: sel ? "#4338CA" : "#fff", color: sel ? "#fff" : "#666" }}>
+                    {ind}
+                  </button>
+                );
+              })}
+            </div>
+            <input type="text" value={form.industry && INDUSTRY_OPTIONS.indexOf(form.industry) < 0 ? form.industry : ""} placeholder="직접 입력 (위 목록에 없는 업종)"
+              onChange={function(e) { set("industry", e.target.value); }}
+              style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, outline: "none", boxSizing: "border-box" }} />
           </div>
 
           {/* 진행 단계 */}
@@ -5437,6 +5556,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                 {(activeGroup === "중소벤처기업진흥공단" || activeGroup === "소상공인시장진흥공단") && (
                   <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>신청상품</th>
                 )}
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>업종</th>
                 <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>지역</th>
                 <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: activeGroup === "구조혁신&사업전환" ? "#BE123C" : "#888", fontSize: 11 }}>상태</th>
                 {activeGroup === "구조혁신&사업전환" && (
@@ -5508,6 +5628,13 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                         )}
                       </td>
                     )}
+                    <td style={{ padding: "10px 12px" }}>
+                      {(function() {
+                        var matchedCo = companiesList.find(function(c) { return c.name === row.business_name; });
+                        var ind = matchedCo ? matchedCo.industry : null;
+                        return <span style={{ fontSize: 11, padding: ind ? "2px 7px" : 0, borderRadius: 99, background: ind ? "#EEF2FF" : "transparent", color: ind ? "#4338CA" : "#CCC", fontWeight: ind ? 600 : 400 }}>{ind || "-"}</span>;
+                      })()}
+                    </td>
                     <td style={{ padding: "10px 12px" }}>
                       {isEditing
                         ? <input value={editData.region || ""} onChange={function(e) { var v = e.target.value; setEditData(function(p) { return Object.assign({}, p, { region: v }); }); }}
@@ -5852,14 +5979,20 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
               {/* 기본 정보 */}
               <div style={{ marginBottom: 20, background: "#F7F6F3", borderRadius: 8, padding: "14px 16px" }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 10 }}>기본 정보</div>
-                {[
-                  { label: "대표자", value: selectedCase.representative },
-                  { label: "사업자등록번호", value: selectedCase.business_number },
-                  { label: "신청금액", value: selectedCase.request_amount },
-                  { label: "승인금액", value: selectedCase.approved_amount },
-                  { label: "지역", value: selectedCase.region },
-                  { label: "신청상품", value: selectedCase.fund_product },
-                ].map(function(item) {
+                {(function() {
+                  var matchedCo = companiesList.find(function(c) { return c.name === selectedCase.business_name; });
+                  var indVal = matchedCo ? matchedCo.industry : null;
+                  var items = [
+                    { label: "대표자", value: selectedCase.representative },
+                    { label: "사업자등록번호", value: selectedCase.business_number },
+                    { label: "업종", value: indVal },
+                    { label: "신청금액", value: selectedCase.request_amount },
+                    { label: "승인금액", value: selectedCase.approved_amount },
+                    { label: "지역", value: selectedCase.region },
+                    { label: "신청상품", value: selectedCase.fund_product },
+                  ];
+                  return items;
+                })().map(function(item) {
                   return item.value ? (
                     <div key={item.label} style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 13 }}>
                       <span style={{ color: "#888" }}>{item.label}</span>
