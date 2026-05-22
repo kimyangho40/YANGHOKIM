@@ -1639,75 +1639,95 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
 // ── 업종 셀 컴포넌트 (인라인 편집 + 자동완성 드롭다운) ──────────────────────
 function IndustryCell({ co, setCompanies }) {
   const [editing, setEditing] = useState(false);
-  const [val, setVal] = useState(co.industry || "");
-  const [showDrop, setShowDrop] = useState(false);
+  const [val, setVal] = useState("");
   const ref = useRef(null);
+
+  // industry는 "제조업, 도소매업" 같은 쉼표 구분 문자열
+  var selectedList = (co.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
 
   useEffect(function() {
     if (!editing) return;
-    function handleClick(e) { if (ref.current && !ref.current.contains(e.target)) { setEditing(false); setShowDrop(false); } }
+    function handleClick(e) { if (ref.current && !ref.current.contains(e.target)) { setEditing(false); setVal(""); } }
     document.addEventListener("mousedown", handleClick);
     return function() { document.removeEventListener("mousedown", handleClick); };
   }, [editing]);
 
-  var save = async function(v) {
-    var industry = (v !== undefined ? v : val) || null;
+  var saveList = async function(newList) {
+    var industry = newList.length > 0 ? newList.join(", ") : null;
     var r = await supabase.from("companies").update({ industry: industry, updated_at: new Date().toISOString() }).eq("id", co.id);
     if (!r.error) {
       setCompanies && setCompanies(function(prev) { return prev.map(function(c) { return c.id === co.id ? Object.assign({}, c, { industry: industry }) : c; }); });
     }
-    setEditing(false); setShowDrop(false);
   };
 
-  var filtered = INDUSTRY_OPTIONS.filter(function(o) { return !val || o.indexOf(val) >= 0; });
+  var toggleItem = function(item) {
+    var cur = selectedList.slice();
+    var idx = cur.indexOf(item);
+    if (idx >= 0) cur.splice(idx, 1);
+    else cur.push(item);
+    saveList(cur);
+  };
+
+  var addCustom = function() {
+    var v = (val || "").trim();
+    if (!v) return;
+    if (selectedList.indexOf(v) >= 0) { setVal(""); return; }
+    var cur = selectedList.slice();
+    cur.push(v);
+    saveList(cur);
+    setVal("");
+  };
 
   if (!editing) return (
-    <span onClick={function() { setEditing(true); setVal(co.industry || ""); setShowDrop(true); }}
-      style={{ cursor: "pointer", padding: "2px 6px", borderRadius: 4, fontSize: 11, display: "inline-flex", alignItems: "center", gap: 3, color: co.industry ? "#4338CA" : "#CCC",
-        background: co.industry ? "#EEF2FF" : "transparent" }}
+    <span onClick={function() { setEditing(true); }}
+      style={{ cursor: "pointer", padding: "2px 6px", borderRadius: 4, fontSize: 11, display: "inline-flex", alignItems: "center", gap: 3, color: selectedList.length > 0 ? "#4338CA" : "#CCC",
+        background: selectedList.length > 0 ? "#EEF2FF" : "transparent", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
       onMouseEnter={function(e) { e.currentTarget.style.background = "#EEF2FF"; }}
-      onMouseLeave={function(e) { e.currentTarget.style.background = co.industry ? "#EEF2FF" : "transparent"; }}>
-      {co.industry || "+ 업종"}
+      onMouseLeave={function(e) { e.currentTarget.style.background = selectedList.length > 0 ? "#EEF2FF" : "transparent"; }}
+      title={selectedList.join(", ")}>
+      {selectedList.length > 0 ? selectedList.join(", ") : "+ 업종"}
     </span>
   );
 
   return (
     <div ref={ref} style={{ position: "relative" }}>
-      <input value={val} autoFocus
-        onChange={function(e) { setVal(e.target.value); setShowDrop(true); }}
-        onKeyDown={function(e) { if (e.key === "Enter") save(); if (e.key === "Escape") { setEditing(false); setShowDrop(false); } }}
-        placeholder="업종 입력/선택"
-        style={{ width: 110, padding: "3px 7px", border: "1px solid #4338CA", borderRadius: 5, fontSize: 11, outline: "none" }} />
-      {showDrop && (
-        <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 999, background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.12)", minWidth: 140, overflow: "hidden" }}>
-          {(val ? filtered : INDUSTRY_OPTIONS).map(function(opt) {
+      <div style={{ position: "absolute", top: 0, left: 0, zIndex: 999, background: "#fff", border: "1px solid #4338CA", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.12)", minWidth: 260, padding: 10 }}>
+        <div style={{ fontSize: 10, color: "#888", marginBottom: 6, fontWeight: 700 }}>업종 선택 (복수 가능)</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+          {INDUSTRY_OPTIONS.map(function(opt) {
+            var sel = selectedList.indexOf(opt) >= 0;
             return (
-              <div key={opt} onClick={function() { setVal(opt); save(opt); }}
-                style={{ padding: "7px 12px", fontSize: 12, cursor: "pointer", color: "#333" }}
-                onMouseEnter={function(e) { e.currentTarget.style.background = "#EEF2FF"; }}
-                onMouseLeave={function(e) { e.currentTarget.style.background = "#fff"; }}>
-                {opt}
-              </div>
+              <button key={opt} onClick={function() { toggleItem(opt); }}
+                style={{ padding: "3px 9px", borderRadius: 99, fontSize: 10, fontWeight: sel ? 700 : 400,
+                  background: sel ? "#4338CA" : "#fff", color: sel ? "#fff" : "#666",
+                  border: sel ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
+                {sel ? "✓ " : ""}{opt}
+              </button>
             );
           })}
-          {val && filtered.length === 0 && (
-            <div onClick={function() { save(val); }}
-              style={{ padding: "7px 12px", fontSize: 12, cursor: "pointer", color: "#4338CA", fontWeight: 600, borderTop: "1px solid #E8E5E0" }}
-              onMouseEnter={function(e) { e.currentTarget.style.background = "#EEF2FF"; }}
-              onMouseLeave={function(e) { e.currentTarget.style.background = "#fff"; }}>
-              ✎ "{val}" 직접 입력
-            </div>
-          )}
-          {val && filtered.length > 0 && (
-            <div onClick={function() { save(val); }}
-              style={{ padding: "7px 12px", fontSize: 11, cursor: "pointer", color: "#888", borderTop: "1px solid #F0EDE8" }}
-              onMouseEnter={function(e) { e.currentTarget.style.background = "#F7F6F3"; }}
-              onMouseLeave={function(e) { e.currentTarget.style.background = "#fff"; }}>
-              ✎ "{val}" 직접 입력
-            </div>
-          )}
         </div>
-      )}
+        {/* 직접 입력한 커스텀 업종 표시 */}
+        {selectedList.filter(function(s) { return INDUSTRY_OPTIONS.indexOf(s) < 0; }).length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+            {selectedList.filter(function(s) { return INDUSTRY_OPTIONS.indexOf(s) < 0; }).map(function(s) {
+              return (
+                <span key={s} style={{ background: "#0F6E56", color: "#fff", padding: "3px 9px", borderRadius: 99, fontSize: 10, fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  ✓ {s}
+                  <span onClick={function() { toggleItem(s); }} style={{ cursor: "pointer", fontSize: 11, opacity: 0.8 }}>✕</span>
+                </span>
+              );
+            })}
+          </div>
+        )}
+        <input value={val} placeholder="직접 입력 후 Enter (예: 부동산임대업)"
+          onChange={function(e) { setVal(e.target.value); }}
+          onKeyDown={function(e) { if (e.key === "Enter") { e.preventDefault(); addCustom(); } if (e.key === "Escape") { setEditing(false); setVal(""); } }}
+          style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 10, outline: "none", boxSizing: "border-box" }} />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, paddingTop: 6, borderTop: "1px solid #F0EDE8" }}>
+          <span style={{ fontSize: 10, color: "#888" }}>{selectedList.length}개 선택됨</span>
+          <button onClick={function() { setEditing(false); setVal(""); }} style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 5, padding: "4px 12px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>완료</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -2233,22 +2253,62 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                       );
                     })}
                   </div>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>업종</div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>업종 (복수 선택 가능)</div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
                     {INDUSTRY_OPTIONS.map(function(ind) {
-                      var sel = data.industry === ind;
+                      var cur = (data.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+                      var sel = cur.indexOf(ind) >= 0;
                       return (
-                        <button key={ind} onClick={function() { setData(function(p) { return Object.assign({}, p, { industry: ind }); }); }}
+                        <button key={ind} onClick={function() {
+                          var arr = (data.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+                          var idx = arr.indexOf(ind);
+                          if (idx >= 0) arr.splice(idx, 1);
+                          else arr.push(ind);
+                          var newVal = arr.length > 0 ? arr.join(", ") : "";
+                          setData(function(p) { return Object.assign({}, p, { industry: newVal }); });
+                        }}
                           style={{ padding: "4px 9px", borderRadius: 99, fontSize: 11, fontWeight: sel ? 700 : 400,
                             background: sel ? "#4338CA" : "#fff", color: sel ? "#fff" : "#666",
                             border: sel ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
-                          {ind}
+                          {sel ? "✓ " : ""}{ind}
                         </button>
                       );
                     })}
                   </div>
-                  <input type="text" value={data.industry && INDUSTRY_OPTIONS.indexOf(data.industry) < 0 ? data.industry : ""} placeholder="직접 입력 (위 목록에 없는 업종)"
-                    onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { industry: v }); }); }}
+                  {/* 직접 입력한 커스텀 업종 표시 */}
+                  {(function() {
+                    var cur = (data.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+                    var custom = cur.filter(function(s) { return INDUSTRY_OPTIONS.indexOf(s) < 0; });
+                    if (custom.length === 0) return null;
+                    return (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+                        {custom.map(function(s) {
+                          return (
+                            <span key={s} style={{ background: "#0F6E56", color: "#fff", padding: "3px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                              ✓ {s}
+                              <span onClick={function() {
+                                var arr = (data.industry || "").split(",").map(function(x) { return x.trim(); }).filter(Boolean);
+                                arr = arr.filter(function(x) { return x !== s; });
+                                setData(function(p) { return Object.assign({}, p, { industry: arr.length > 0 ? arr.join(", ") : "" }); });
+                              }} style={{ cursor: "pointer", fontSize: 12, opacity: 0.85 }}>✕</span>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                  <input type="text" placeholder="직접 입력 후 Enter로 추가 (예: 부동산임대업)"
+                    onKeyDown={function(e) {
+                      if (e.key !== "Enter") return;
+                      e.preventDefault();
+                      var v = (e.target.value || "").trim();
+                      if (!v) return;
+                      var arr = (data.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+                      if (arr.indexOf(v) >= 0) { e.target.value = ""; return; }
+                      arr.push(v);
+                      setData(function(p) { return Object.assign({}, p, { industry: arr.join(", ") }); });
+                      e.target.value = "";
+                    }}
                     style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, outline: "none", boxSizing: "border-box" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
@@ -2729,23 +2789,61 @@ function AddModal({ onClose, onAdd, assignees }) {
             </div>
           </div>
 
-          {/* 업종 */}
+          {/* 업종 (복수 선택 가능) */}
           <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
-            <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>업종</div>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>업종 (복수 선택 가능)</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
               {INDUSTRY_OPTIONS.map(function(ind) {
-                var sel = form.industry === ind;
+                var cur = (form.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+                var sel = cur.indexOf(ind) >= 0;
                 return (
-                  <button key={ind} onClick={function() { set("industry", ind); }}
+                  <button key={ind} onClick={function() {
+                    var arr = (form.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+                    var idx = arr.indexOf(ind);
+                    if (idx >= 0) arr.splice(idx, 1);
+                    else arr.push(ind);
+                    set("industry", arr.length > 0 ? arr.join(", ") : "");
+                  }}
                     style={{ padding: "4px 9px", borderRadius: 99, fontSize: 11, fontWeight: sel ? 700 : 400, border: sel ? "none" : "1px solid #E8E5E0", cursor: "pointer",
                       background: sel ? "#4338CA" : "#fff", color: sel ? "#fff" : "#666" }}>
-                    {ind}
+                    {sel ? "✓ " : ""}{ind}
                   </button>
                 );
               })}
             </div>
-            <input type="text" value={form.industry && INDUSTRY_OPTIONS.indexOf(form.industry) < 0 ? form.industry : ""} placeholder="직접 입력 (위 목록에 없는 업종)"
-              onChange={function(e) { set("industry", e.target.value); }}
+            {(function() {
+              var cur = (form.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+              var custom = cur.filter(function(s) { return INDUSTRY_OPTIONS.indexOf(s) < 0; });
+              if (custom.length === 0) return null;
+              return (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+                  {custom.map(function(s) {
+                    return (
+                      <span key={s} style={{ background: "#0F6E56", color: "#fff", padding: "3px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                        ✓ {s}
+                        <span onClick={function() {
+                          var arr = (form.industry || "").split(",").map(function(x) { return x.trim(); }).filter(Boolean);
+                          arr = arr.filter(function(x) { return x !== s; });
+                          set("industry", arr.length > 0 ? arr.join(", ") : "");
+                        }} style={{ cursor: "pointer", fontSize: 12, opacity: 0.85 }}>✕</span>
+                      </span>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+            <input type="text" placeholder="직접 입력 후 Enter로 추가 (예: 부동산임대업)"
+              onKeyDown={function(e) {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                var v = (e.target.value || "").trim();
+                if (!v) return;
+                var arr = (form.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+                if (arr.indexOf(v) >= 0) { e.target.value = ""; return; }
+                arr.push(v);
+                set("industry", arr.join(", "));
+                e.target.value = "";
+              }}
               style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, outline: "none", boxSizing: "border-box" }} />
           </div>
 
