@@ -3773,15 +3773,8 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
   };
 
   if (isEditing) {
-    return (
-      <NoteEditCard
-        note={note}
-        editNote={editNote}
-        setEditNote={setEditNote}
-        saveEdit={saveEdit}
-        onCancel={function() { setEditingId(null); setEditNote({}); }}
-      />
-    );
+    // 편집 중에는 그리드에서 빠짐 (상단 전체 폭으로 별도 렌더링)
+    return null;
   }
 
   return (
@@ -3811,7 +3804,7 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
           <div style={{ display: "flex", gap: 4 }}>
             <button onClick={function() { togglePin(note); }} title={note.pinned ? "고정 해제" : "고정"}
               style={{ background: "none", border: "none", cursor: "pointer", padding: 4, fontSize: 14, opacity: note.pinned ? 1 : 0.4 }}>📌</button>
-            <button onClick={function() { setEditingId(note.id); setEditNote(Object.assign({}, note)); }}
+            <button onClick={function() { setEditingId(note.id); setEditNote(Object.assign({}, note)); window.scrollTo({ top: 0, behavior: "smooth" }); }}
               style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Icon name="edit" size={14} color="#888" /></button>
             <button onClick={function() { deleteNote(note.id); }}
               style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Icon name="x" size={14} color="#CCC" /></button>
@@ -4240,6 +4233,19 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
           })}
         </div>
       </div>
+
+      {/* 노트 수정 폼 (편집 중일 때 상단 전체 폭으로 표시) */}
+      {editingId && (
+        <div style={{ marginBottom: 20 }}>
+          <NoteEditCard
+            note={notes.find(function(n) { return n.id === editingId; })}
+            editNote={editNote}
+            setEditNote={setEditNote}
+            saveEdit={saveEdit}
+            onCancel={function() { setEditingId(null); setEditNote({}); }}
+          />
+        </div>
+      )}
 
       {/* 새 노트 작성 폼 */}
       {showAdd && (
