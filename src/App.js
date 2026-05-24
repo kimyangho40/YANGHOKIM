@@ -1380,27 +1380,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
               {/* 📋 내 할일 위젯 - work_notes 체크박스 기반 */}
               <MyTodoWidget setView={setView} />
               
-              {overdue.length > 0 && (
-                <div onClick={function() { setView("list"); setDashboardFilter({ type: "overdue", items: overdue }); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
-                  <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 700, marginBottom: 4 }}>⏰ 기한 지남</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: "#DC2626" }}>{overdue.length}건</div>
-                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>{overdue.slice(0,2).map(function(c){return c.name;}).join(", ")}{overdue.length > 2 ? " 외 " + (overdue.length-2) + "건" : ""}</div>
-                </div>
-              )}
-              {todayItems.length > 0 && (
-                <div onClick={function() { setView("list"); setDashboardFilter({ type: "today", items: todayItems }); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #4338CA" }}>
-                  <div style={{ fontSize: 10, color: "#4338CA", fontWeight: 700, marginBottom: 4 }}>📅 오늘 연락/계약</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: "#4338CA" }}>{todayItems.length}건</div>
-                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>{todayItems.slice(0,2).map(function(c){return c.name;}).join(", ")}{todayItems.length > 2 ? " 외 " + (todayItems.length-2) + "건" : ""}</div>
-                </div>
-              )}
-              {tomorrowItems.length > 0 && (
-                <div onClick={function() { setView("list"); setDashboardFilter({ type: "tomorrow", items: tomorrowItems }); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #7C3AED" }}>
-                  <div style={{ fontSize: 10, color: "#7C3AED", fontWeight: 700, marginBottom: 4 }}>📆 내일 연락/계약</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: "#7C3AED" }}>{tomorrowItems.length}건</div>
-                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>{tomorrowItems.slice(0,2).map(function(c){return c.name;}).join(", ")}{tomorrowItems.length > 2 ? " 외 " + (tomorrowItems.length-2) + "건" : ""}</div>
-                </div>
-              )}
+              {/* companies 기반 위젯 제거됨 - work_notes 기반 "내 할일" 위젯이 메인 */}
               {stagnant14.length > 0 && (
                 <div onClick={function() { setView("stagnant"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
                   <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 700, marginBottom: 4 }}>🔴 심각 정체</div>
@@ -1670,7 +1650,7 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
     setLoading(false);
   }
 
-  // 노트 content에서 체크박스 항목들 파싱
+  // 노트 content에서 체크박스 항목들 파싱 (각 항목별 마감일도 추출)
   function parseCheckboxes(noteContent) {
     if (!noteContent) return [];
     var lines = noteContent.split("\n");
@@ -1679,10 +1659,40 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
       // - [ ] 또는 - [x] 패턴 매칭
       var match = line.match(/^(\s*)- \[([ x])\]\s*(.*)$/i);
       if (match) {
+        var textFull = match[3].trim();
+        var itemDueDate = null;
+        var displayText = textFull;
+        
+        // 마감일 추출: [MM/DD] 또는 [YYYY-MM-DD] 또는 → MM/DD
+        // 우선순위: 대괄호 > 화살표
+        var bracketMatch = textFull.match(/\[(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2})\]/);
+        var arrowMatch = !bracketMatch && textFull.match(/→\s*(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2})\s*$/);
+        var dateStr = bracketMatch ? bracketMatch[1] : (arrowMatch ? arrowMatch[1] : null);
+        
+        if (dateStr) {
+          // YYYY-MM-DD 또는 MM/DD를 YYYY-MM-DD로 변환
+          if (dateStr.indexOf("-") >= 0) {
+            itemDueDate = dateStr;
+          } else {
+            var parts = dateStr.split("/");
+            var year = new Date().getFullYear();
+            var mm = parts[0].padStart(2, "0");
+            var dd = parts[1].padStart(2, "0");
+            itemDueDate = year + "-" + mm + "-" + dd;
+            // 과거 날짜면 내년으로 (예: 12월에 1/5 = 다음해 1/5)
+            if (itemDueDate < new Date(Date.now() - 180 * 86400000).toISOString().slice(0, 10)) {
+              itemDueDate = (year + 1) + "-" + mm + "-" + dd;
+            }
+          }
+          // 표시 텍스트에서 날짜 부분 제거
+          displayText = textFull.replace(/\[\d{4}-\d{2}-\d{2}\]|\[\d{1,2}\/\d{1,2}\]/, "").replace(/→\s*\d{4}-\d{2}-\d{2}\s*$|→\s*\d{1,2}\/\d{1,2}\s*$/, "").trim();
+        }
+        
         items.push({
           lineIdx: idx,
           checked: match[2].toLowerCase() === "x",
-          text: match[3].trim(),
+          text: displayText,
+          itemDueDate: itemDueDate,
           rawLine: line
         });
       }
@@ -1734,6 +1744,7 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
   }
 
   // 모든 노트에서 체크박스 항목들 추출 + 메타데이터 결합
+  // 항목별 마감일이 있으면 그걸 우선, 없으면 노트의 due_date 사용
   var allItems = [];
   notes.forEach(function(note) {
     var items = parseCheckboxes(note.content);
@@ -1744,7 +1755,8 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
           noteTitle: note.title || "(제목 없음)",
           assignee: note.assignee,
           taggedCompany: note.tagged_company,
-          dueDate: note.due_date,
+          dueDate: item.itemDueDate || note.due_date,  // 항목별 우선
+          itemDueDate: item.itemDueDate,                // 항목별 마감일 표시용
           checked: item.checked,
           text: item.text,
           lineIdx: item.lineIdx
@@ -1804,8 +1816,8 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
                   </span>
                 )}
                 {item.dueDate && daysOverdue <= 0 && (
-                  <span style={{ color: "#888", fontSize: 10, flexShrink: 0 }}>
-                    {item.dueDate.slice(5)}
+                  <span style={{ color: item.itemDueDate ? "#4338CA" : "#888", fontSize: 10, flexShrink: 0, fontWeight: item.itemDueDate ? 600 : 400 }} title={item.itemDueDate ? "이 항목의 개별 마감일" : "노트 마감일"}>
+                    {item.itemDueDate ? "📅 " : ""}{item.dueDate.slice(5)}
                   </span>
                 )}
                 <button onClick={function() { setView && setView("worknotes"); }}
@@ -3931,9 +3943,13 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   var unpinned = filtered.filter(function(n) { return !n.pinned; });
 
   var saveNew = async function() {
-    // checkItems가 있으면 content로 변환해서 합치기
+    // checkItems가 있으면 content로 변환해서 합치기 (마감일 [YYYY-MM-DD] 포함)
     var checkContent = (newNote.checkItems && newNote.checkItems.length > 0)
-      ? newNote.checkItems.filter(function(i) { return i.text.trim(); }).map(function(i) { return "- [ ] " + i.text.trim(); }).join("\n")
+      ? newNote.checkItems.filter(function(i) { return i.text.trim(); }).map(function(i) {
+          var line = "- [ ] " + i.text.trim();
+          if (i.dueDate) line += " [" + i.dueDate + "]";
+          return line;
+        }).join("\n")
       : "";
     var finalContent = newNote.content.trim();
     if (checkContent) finalContent = finalContent ? finalContent + "\n" + checkContent : checkContent;
@@ -4161,11 +4177,14 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div style={{ border: "1px solid #86EFAC", borderRadius: 8, padding: "10px 12px", marginBottom: 8, background: "#fff" }}>
               {newNote.checkItems.map(function(item, idx) {
                 return (
-                  <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <div key={idx} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
                     <input type="checkbox" disabled style={{ width: 15, height: 15, flexShrink: 0 }} />
-                    <input type="text" value={item.text || ""} placeholder={"항목 " + (idx + 1)}
+                    <input type="text" value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성)"}
                       onChange={function(e) { var v = e.target.value; setNewNote(function(p) { var items = p.checkItems.slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); }}
                       style={{ flex: 1, border: "none", outline: "none", fontSize: 13, background: "transparent" }} autoFocus={idx === newNote.checkItems.length - 1} />
+                    <input type="date" value={item.dueDate || ""} title="이 항목의 마감일 (선택)"
+                      onChange={function(e) { var v = e.target.value; setNewNote(function(p) { var items = p.checkItems.slice(); items[idx] = Object.assign({}, items[idx], { dueDate: v }); return Object.assign({}, p, { checkItems: items }); }); }}
+                      style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, color: "#4338CA", outline: "none", width: 130 }} />
                     <button onClick={function() { setNewNote(function(p) { var items = p.checkItems.filter(function(_, i) { return i !== idx; }); return Object.assign({}, p, { checkItems: items }); }); }}
                       style={{ background: "none", border: "none", cursor: "pointer", color: "#CCC", fontSize: 16, padding: "0 4px", lineHeight: 1 }}>×</button>
                   </div>
@@ -4183,6 +4202,9 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             }} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", background: "#fff", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, color: "#15803D", fontWeight: 600, cursor: "pointer" }}>
               ☑️ 체크리스트 항목 추가
             </button>
+            <span style={{ fontSize: 10, color: "#888", alignSelf: "center", lineHeight: 1.4 }}>
+              💡 직접 입력 시: <code style={{ background: "#F0EDE8", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>- [ ] 할일 [5/30]</code> 또는 <code style={{ background: "#F0EDE8", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>- [ ] 할일 → 5/30</code>
+            </span>
           </div>
           <textarea value={newNote.content} placeholder={newNote.checkItems && newNote.checkItems.length > 0 ? "추가 메모 (선택사항)..." : "내용을 자유롭게 입력하세요. 업무 메모, 오늘 할 일, 주의사항 등..."} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { content: v }); }); }} rows={newNote.checkItems && newNote.checkItems.length > 0 ? 2 : 6}
             style={{ width: "100%", padding: "12px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, lineHeight: 1.75, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff" }} />
