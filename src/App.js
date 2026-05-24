@@ -985,6 +985,7 @@ function CRMApp({ profile, session }) {
           <div style={{ fontSize: 10, color: "#444", letterSpacing: "0.08em", padding: "4px 12px 6px", fontWeight: 600 }}>주요 메뉴</div>
           {[
             { id: "dashboard",  label: "대시보드",   icon: "dashboard" },
+            { id: "mytodo",     label: "내 할일",     icon: "check" },
             { id: "agency",     label: "기관별 현황", icon: "building" },
             { id: "worknotes",  label: "업무 노트",   icon: "edit" },
             { id: "list",       label: "기업 목록",   icon: "list" },
@@ -1150,6 +1151,7 @@ function CRMApp({ profile, session }) {
             {view === "calendar" && <CalendarView companies={companies} onSelectCompany={setSelectedCompany} profile={profile} />}
             {view === "manual" && <ManualView />}
             {view === "pipeline" && <PipelineView filtered={filtered} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} />}
+            {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={profile?.role === "admin" || profile?.name === "양호"} onSelectCompany={setSelectedCompany} setView={setView} />}
             {view === "list" && <ListView filtered={filtered} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} />}
             {view === "stagnant" && <StagnantView stagnant={stagnant} onSelect={setSelectedCompany} />}
             {view === "members" && profile.role === "admin" && <MembersView profiles={profiles} onRefresh={fetchAll} showToast={showToast} />}
@@ -1375,6 +1377,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
               <span style={{ fontSize: 11, color: "#92400E", background: "#FEF3C7", padding: "2px 8px", borderRadius: 99, fontWeight: 600, border: "1px solid #FCD34D" }}>{totalCount}건</span>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+              {/* 📋 내 할일 위젯 - work_notes 체크박스 기반 */}
+              <MyTodoWidget setView={setView} />
+              
               {overdue.length > 0 && (
                 <div onClick={function() { setView("list"); setDashboardFilter({ type: "overdue", items: overdue }); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
                   <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 700, marginBottom: 4 }}>⏰ 기한 지남</div>
@@ -1636,6 +1641,316 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
 }
 
 // ── 기업 목록 ─────────────────────────────────────────────────────────────────
+
+// ============================================================
+// 📋 내 할일 화면 - work_notes content에서 체크박스 파싱
+// ============================================================
+function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
+  const [notes, setNotes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState(isAdmin ? "all" : "mine"); // "mine" | "all"
+  const [filterAssignee, setFilterAssignee] = useState("");
+
+  useEffect(function() {
+    fetchNotes();
+  }, [viewMode, filterAssignee, currentUser]);
+
+  async function fetchNotes() {
+    setLoading(true);
+    var query = supabase.from("work_notes").select("*").is("deleted_at", null);
+    
+    if (viewMode === "mine" && currentUser) {
+      query = query.eq("assignee", currentUser);
+    } else if (viewMode === "all" && filterAssignee) {
+      query = query.eq("assignee", filterAssignee);
+    }
+    
+    var res = await query.order("due_date", { ascending: true, nullsFirst: false });
+    if (!res.error) setNotes(res.data || []);
+    setLoading(false);
+  }
+
+  // 노트 content에서 체크박스 항목들 파싱
+  function parseCheckboxes(noteContent) {
+    if (!noteContent) return [];
+    var lines = noteContent.split("\n");
+    var items = [];
+    lines.forEach(function(line, idx) {
+      // - [ ] 또는 - [x] 패턴 매칭
+      var match = line.match(/^(\s*)- \[([ x])\]\s*(.*)$/i);
+      if (match) {
+        items.push({
+          lineIdx: idx,
+          checked: match[2].toLowerCase() === "x",
+          text: match[3].trim(),
+          rawLine: line
+        });
+      }
+    });
+    return items;
+  }
+
+  // 체크박스 토글 - content 텍스트 직접 수정
+  async function toggleCheckbox(noteId, lineIdx, currentChecked) {
+    var note = notes.find(function(n) { return n.id === noteId; });
+    if (!note || !note.content) return;
+    
+    var lines = note.content.split("\n");
+    var oldLine = lines[lineIdx];
+    var newLine;
+    
+    if (currentChecked) {
+      // [x] -> [ ]
+      newLine = oldLine.replace(/- \[x\]/i, "- [ ]");
+    } else {
+      // [ ] -> [x]
+      newLine = oldLine.replace(/- \[ \]/i, "- [x]");
+    }
+    
+    lines[lineIdx] = newLine;
+    var newContent = lines.join("\n");
+    
+    // 낙관적 업데이트
+    setNotes(function(prev) {
+      return prev.map(function(n) {
+        return n.id === noteId ? Object.assign({}, n, { content: newContent }) : n;
+      });
+    });
+    
+    // DB 저장
+    var r = await supabase.from("work_notes")
+      .update({ content: newContent, updated_at: new Date().toISOString() })
+      .eq("id", noteId);
+    
+    if (r.error) {
+      // 실패 시 원복
+      setNotes(function(prev) {
+        return prev.map(function(n) {
+          return n.id === noteId ? Object.assign({}, n, { content: note.content }) : n;
+        });
+      });
+      alert("저장 실패: " + r.error.message);
+    }
+  }
+
+  // 모든 노트에서 체크박스 항목들 추출 + 메타데이터 결합
+  var allItems = [];
+  notes.forEach(function(note) {
+    var items = parseCheckboxes(note.content);
+    items.forEach(function(item) {
+      if (item.text) { // 빈 항목 제외
+        allItems.push({
+          noteId: note.id,
+          noteTitle: note.title || "(제목 없음)",
+          assignee: note.assignee,
+          taggedCompany: note.tagged_company,
+          dueDate: note.due_date,
+          checked: item.checked,
+          text: item.text,
+          lineIdx: item.lineIdx
+        });
+      }
+    });
+  });
+
+  // 카테고리별 분류
+  var today = new Date().toISOString().slice(0, 10);
+  var tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  var weekEnd = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+
+  var unchecked = allItems.filter(function(i) { return !i.checked; });
+  var checked = allItems.filter(function(i) { return i.checked; });
+  
+  var overdue = unchecked.filter(function(i) { return i.dueDate && i.dueDate < today; });
+  var todayItems = unchecked.filter(function(i) { return i.dueDate === today; });
+  var tomorrowItems = unchecked.filter(function(i) { return i.dueDate === tomorrow; });
+  var thisWeek = unchecked.filter(function(i) { return i.dueDate && i.dueDate > tomorrow && i.dueDate <= weekEnd; });
+  var noDue = unchecked.filter(function(i) { return !i.dueDate; });
+  var later = unchecked.filter(function(i) { return i.dueDate && i.dueDate > weekEnd; });
+
+  // 카테고리 렌더 헬퍼
+  function renderSection(title, items, color, bgColor, icon) {
+    if (items.length === 0) return null;
+    return (
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, padding: "6px 12px", background: bgColor, borderRadius: 8, borderLeft: "3px solid " + color }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: color }}>{icon} {title}</span>
+          <span style={{ fontSize: 11, color: color, opacity: 0.8 }}>({items.length}건)</span>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {items.map(function(item, idx) {
+            var daysOverdue = item.dueDate ? Math.floor((new Date(today) - new Date(item.dueDate)) / 86400000) : 0;
+            return (
+              <div key={item.noteId + "_" + item.lineIdx + "_" + idx}
+                style={{ display: "flex", alignItems: "center", gap: 10, background: "#fff", padding: "8px 12px", borderRadius: 6, border: "1px solid #F0EDE8" }}>
+                <input type="checkbox" checked={item.checked}
+                  onChange={function() { toggleCheckbox(item.noteId, item.lineIdx, item.checked); }}
+                  style={{ margin: 0, width: 16, height: 16, cursor: "pointer", flexShrink: 0 }} />
+                {item.taggedCompany && (
+                  <span style={{ background: "#EEF2FF", color: "#4338CA", padding: "2px 7px", borderRadius: 4, fontSize: 10, fontWeight: 600, flexShrink: 0, cursor: "pointer" }}
+                    onClick={function() { onSelectCompany && onSelectCompany({ name: item.taggedCompany }); }}>
+                    {item.taggedCompany}
+                  </span>
+                )}
+                <span style={{ fontSize: 12, color: "#333", flex: 1, lineHeight: 1.5 }}>{item.text}</span>
+                {isAdmin && viewMode === "all" && item.assignee && (
+                  <span style={{ background: "#F5F3FF", color: "#6D28D9", padding: "1px 6px", borderRadius: 4, fontSize: 10, flexShrink: 0 }}>
+                    {item.assignee}
+                  </span>
+                )}
+                {daysOverdue > 0 && (
+                  <span style={{ color: "#DC2626", fontSize: 10, fontWeight: 600, flexShrink: 0 }}>
+                    {daysOverdue}일 지남
+                  </span>
+                )}
+                {item.dueDate && daysOverdue <= 0 && (
+                  <span style={{ color: "#888", fontSize: 10, flexShrink: 0 }}>
+                    {item.dueDate.slice(5)}
+                  </span>
+                )}
+                <button onClick={function() { setView && setView("worknotes"); }}
+                  style={{ background: "none", border: "none", color: "#888", fontSize: 11, cursor: "pointer", padding: "2px 4px", flexShrink: 0 }}
+                  title="원본 노트로 이동">
+                  📝
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return <div style={{ padding: 40, textAlign: "center", color: "#888" }}>불러오는 중...</div>;
+  }
+
+  return (
+    <div style={{ padding: "24px 32px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>
+            내 할일 {currentUser && <span style={{ fontSize: 14, color: "#888", fontWeight: 400 }}>· {currentUser}</span>}
+          </h1>
+          <div style={{ fontSize: 12, color: "#888", marginTop: 4 }}>
+            완료 {checked.length}건 / 미완료 {unchecked.length}건
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {isAdmin && (
+            <>
+              <button onClick={function() { setViewMode("mine"); setFilterAssignee(""); }}
+                style={{ padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                  background: viewMode === "mine" ? "#1A1917" : "#fff",
+                  color: viewMode === "mine" ? "#fff" : "#666",
+                  border: viewMode === "mine" ? "none" : "1px solid #E8E5E0" }}>
+                내 것만
+              </button>
+              <button onClick={function() { setViewMode("all"); }}
+                style={{ padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                  background: viewMode === "all" ? "#1A1917" : "#fff",
+                  color: viewMode === "all" ? "#fff" : "#666",
+                  border: viewMode === "all" ? "none" : "1px solid #E8E5E0" }}>
+                전체 보기
+              </button>
+              {viewMode === "all" && (
+                <select value={filterAssignee} onChange={function(e) { setFilterAssignee(e.target.value); }}
+                  style={{ padding: "6px 10px", borderRadius: 6, fontSize: 12, border: "1px solid #E8E5E0", outline: "none" }}>
+                  <option value="">모든 담당자</option>
+                  {["미현","유진","관호","지혜","현애","인선","동일","양호","정원"].map(function(a) {
+                    return <option key={a} value={a}>{a}</option>;
+                  })}
+                </select>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      {allItems.length === 0 && (
+        <div style={{ background: "#F7F6F3", borderRadius: 12, padding: 40, textAlign: "center", color: "#888" }}>
+          <div style={{ fontSize: 30, marginBottom: 12 }}>📝</div>
+          <div style={{ fontSize: 14, marginBottom: 6 }}>할일이 없어요!</div>
+          <div style={{ fontSize: 11 }}>업무 노트에 체크박스 형태로 할일을 적어주세요.</div>
+          <button onClick={function() { setView && setView("worknotes"); }}
+            style={{ marginTop: 16, padding: "8px 16px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, cursor: "pointer" }}>
+            업무 노트로 이동
+          </button>
+        </div>
+      )}
+
+      {renderSection("기한 지남", overdue, "#DC2626", "#FEF2F2", "⏰")}
+      {renderSection("오늘", todayItems, "#4338CA", "#EEF2FF", "📅")}
+      {renderSection("내일", tomorrowItems, "#7C3AED", "#F5F3FF", "📆")}
+      {renderSection("이번 주", thisWeek, "#0F6E56", "#E1F5EE", "🗓️")}
+      {renderSection("기한 없음", noDue, "#888", "#F7F6F3", "📥")}
+      {renderSection("나중에", later, "#999", "#F7F6F3", "🔮")}
+      
+      {checked.length > 0 && (
+        <details style={{ marginTop: 24 }}>
+          <summary style={{ cursor: "pointer", fontSize: 12, color: "#888", padding: "8px 12px", background: "#F7F6F3", borderRadius: 8 }}>
+            ✓ 완료한 일 {checked.length}건 보기
+          </summary>
+          <div style={{ marginTop: 8 }}>
+            {renderSection("", checked.slice(0, 50), "#9CA3AF", "#F7F6F3", "✓")}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+
+// 📋 대시보드용 내 할일 미니 위젯
+function MyTodoWidget({ setView }) {
+  const [count, setCount] = useState({ total: 0, overdue: 0, today: 0 });
+  
+  useEffect(function() {
+    async function load() {
+      var res = await supabase.from("work_notes")
+        .select("content, due_date")
+        .is("deleted_at", null);
+      if (res.error || !res.data) return;
+      
+      var today = new Date().toISOString().slice(0, 10);
+      var total = 0, overdue = 0, todayCount = 0;
+      
+      res.data.forEach(function(note) {
+        if (!note.content) return;
+        var lines = note.content.split("\n");
+        lines.forEach(function(line) {
+          var match = line.match(/^\s*- \[ \]\s*(.+)/);
+          if (match && match[1].trim()) {
+            total++;
+            if (note.due_date) {
+              if (note.due_date < today) overdue++;
+              else if (note.due_date === today) todayCount++;
+            }
+          }
+        });
+      });
+      
+      setCount({ total: total, overdue: overdue, today: todayCount });
+    }
+    load();
+  }, []);
+  
+  if (count.total === 0) return null;
+  
+  return (
+    <div onClick={function() { setView("mytodo"); }}
+      style={{ background: "linear-gradient(135deg, #4338CA 0%, #6366F1 100%)", borderRadius: 10, padding: "14px 16px", cursor: "pointer", color: "#fff", boxShadow: "0 2px 8px rgba(67, 56, 202, 0.2)" }}>
+      <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 4, opacity: 0.9 }}>📋 내 할일</div>
+      <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{count.total}건</div>
+      <div style={{ fontSize: 10, opacity: 0.9 }}>
+        {count.overdue > 0 && <span style={{ marginRight: 6 }}>⏰ 지남 {count.overdue}</span>}
+        {count.today > 0 && <span>📅 오늘 {count.today}</span>}
+        {count.overdue === 0 && count.today === 0 && <span>모두 진행 중</span>}
+      </div>
+    </div>
+  );
+}
+
 // ── 업종 셀 컴포넌트 (인라인 편집 + 자동완성 드롭다운) ──────────────────────
 function IndustryCell({ co, setCompanies }) {
   const [editing, setEditing] = useState(false);
