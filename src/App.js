@@ -3619,38 +3619,120 @@ function ActivityLogView() {
 
 // ── 업무노트 수정 카드 (독립 컴포넌트 - 입력버그 방지) ─────────────────────────
 function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
+  // content가 변경되면 checkItems와 freeText로 분리
+  // editNote.checkItems가 이미 있으면 그걸 우선 사용 (사용자가 편집 중인 상태)
+  
+  function parseContent(text) {
+    if (!text) return { items: [], freeText: "" };
+    var lines = text.split("\n");
+    var items = [];
+    var freeLines = [];
+    lines.forEach(function(line) {
+      var m = line.match(/^(\s*)- \[([ x])\]\s*(.*)$/i);
+      if (m) {
+        var textFull = m[3].trim();
+        var dateStr = null;
+        var displayText = textFull;
+        var bracketMatch = textFull.match(/\[(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2})\]/);
+        var arrowMatch = !bracketMatch && textFull.match(/→\s*(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2})\s*$/);
+        if (bracketMatch || arrowMatch) {
+          var raw = (bracketMatch ? bracketMatch[1] : arrowMatch[1]);
+          if (raw.indexOf("-") >= 0) {
+            dateStr = raw;
+          } else {
+            var parts = raw.split("/");
+            var year = new Date().getFullYear();
+            dateStr = year + "-" + parts[0].padStart(2,"0") + "-" + parts[1].padStart(2,"0");
+          }
+          displayText = textFull.replace(/\[\d{4}-\d{2}-\d{2}\]|\[\d{1,2}\/\d{1,2}\]/, "").replace(/→\s*\d{4}-\d{2}-\d{2}\s*$|→\s*\d{1,2}\/\d{1,2}\s*$/, "").trim();
+        }
+        items.push({ checked: m[2].toLowerCase() === "x", text: displayText, dueDate: dateStr || "" });
+      } else {
+        freeLines.push(line);
+      }
+    });
+    return { items: items, freeText: freeLines.join("\n").trim() };
+  }
+
+  // 처음 한 번만 파싱 - editNote.checkItems가 없으면 content에서 추출
+  useEffect(function() {
+    if (editNote && editNote.id && (editNote.checkItems === undefined || editNote.checkItems === null)) {
+      var parsed = parseContent(editNote.content || "");
+      setEditNote(function(p) {
+        return Object.assign({}, p, { 
+          checkItems: parsed.items,
+          freeContent: parsed.freeText
+        });
+      });
+    }
+  }, [editNote.id]);
+
+  var checkItems = editNote.checkItems || [];
+  var freeContent = editNote.freeContent !== undefined ? editNote.freeContent : (editNote.content || "");
+
   return (
-    <div style={{ background: "#FEFCE8", border: "2px solid #FDE68A", borderRadius: 12, padding: "16px 18px" }}>
-      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+    <div style={{ background: "#F0FDF4", border: "2px solid #86EFAC", borderRadius: 12, padding: "18px 20px" }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D", marginBottom: 12 }}>✏️ 노트 수정</div>
+      <div style={{ display: "flex", gap: 16, marginBottom: 10 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
           <input type="checkbox" checked={editNote.is_todo || false} onChange={function(e) { setEditNote(function(p) { return Object.assign({}, p, { is_todo: e.target.checked }); }); }} />
-          할 일
+          📋 할 일로 등록
         </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
           <input type="checkbox" checked={editNote.pinned || false} onChange={function(e) { setEditNote(function(p) { return Object.assign({}, p, { pinned: e.target.checked }); }); }} />
-          📌 고정
+          📌 상단 고정
         </label>
       </div>
-      <input value={editNote.title || ""} placeholder="제목" onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
-        style={{ width: "100%", padding: "8px 10px", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 14, fontWeight: 600, boxSizing: "border-box", outline: "none", marginBottom: 8, background: "#fff" }} />
-      {/* 체크리스트 버튼 (편집 모드) */}
+      <input value={editNote.title || ""} placeholder="제목 (선택사항)" onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
+        style={{ width: "100%", padding: "10px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 14, fontWeight: 600, boxSizing: "border-box", outline: "none", marginBottom: 10, background: "#fff" }} />
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <label style={{ fontSize: 12, color: "#15803D", fontWeight: 600, whiteSpace: "nowrap" }}>📅 마감일</label>
+        <input type="date" value={editNote.due_date || ""} onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { due_date: v }); }); }}
+          style={{ width: "auto", padding: "7px 10px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, background: "#fff", outline: "none" }} />
+        {editNote.due_date && <button onClick={function() { setEditNote(function(p) { return Object.assign({}, p, { due_date: "" }); }); }}
+          style={{ background: "none", border: "none", cursor: "pointer", color: "#AAA", fontSize: 14 }}>✕</button>}
+      </div>
+      {/* 체크리스트 항목들 */}
+      {checkItems.length > 0 && (
+        <div style={{ border: "1px solid #86EFAC", borderRadius: 8, padding: "10px 12px", marginBottom: 8, background: "#fff" }}>
+          {checkItems.map(function(item, idx) {
+            return (
+              <div key={idx} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                <input type="checkbox" checked={item.checked || false} onChange={function(e) { var ck = e.target.checked; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { checked: ck }); return Object.assign({}, p, { checkItems: items }); }); }} style={{ width: 15, height: 15, flexShrink: 0, cursor: "pointer" }} />
+                <input type="text" value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성)"}
+                  onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); }}
+                  style={{ flex: 1, border: "none", outline: "none", fontSize: 13, background: "transparent", textDecoration: item.checked ? "line-through" : "none", color: item.checked ? "#AAA" : "#333" }} />
+                <input type="date" value={item.dueDate || ""} title="이 항목의 마감일 (선택)"
+                  onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { dueDate: v }); return Object.assign({}, p, { checkItems: items }); }); }}
+                  style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, color: "#4338CA", outline: "none", width: 130 }} />
+                <button onClick={function() { setEditNote(function(p) { var items = (p.checkItems || []).filter(function(_, i) { return i !== idx; }); return Object.assign({}, p, { checkItems: items }); }); }}
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "#CCC", fontSize: 16, padding: "0 4px", lineHeight: 1 }}>×</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {/* 체크리스트 버튼 + textarea */}
       <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
         <button onClick={function() {
           setEditNote(function(p) {
-            var prev = p.content || "";
-            var newItem = "- [ ] ";
-            var sep = (prev === "" || prev.slice(-1) === "\n") ? "" : "\n";
-            return Object.assign({}, p, { content: prev + sep + newItem });
+            var items = (p.checkItems || []).concat([{ text: "", checked: false, dueDate: "" }]);
+            return Object.assign({}, p, { checkItems: items, is_todo: true });
           });
-        }} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", background: "#fff", border: "1px solid #FDE68A", borderRadius: 6, fontSize: 12, color: "#92400E", fontWeight: 600, cursor: "pointer" }}>
+        }} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", background: "#fff", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, color: "#15803D", fontWeight: 600, cursor: "pointer" }}>
           ☑️ 체크리스트 항목 추가
         </button>
+        <span style={{ fontSize: 10, color: "#888", alignSelf: "center", lineHeight: 1.4 }}>
+          💡 직접 입력 시: <code style={{ background: "#F0EDE8", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>- [ ] 할일 [5/30]</code> 또는 <code style={{ background: "#F0EDE8", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>- [ ] 할일 → 5/30</code>
+        </span>
       </div>
-      <textarea value={editNote.content || ""} placeholder="내용을 입력하세요..." onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { content: v }); }); }} rows={5}
-        style={{ width: "100%", padding: "10px 12px", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 13, lineHeight: 1.7, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff" }} />
-      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <button onClick={saveEdit} style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 7, padding: "8px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
-        <button onClick={onCancel} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 7, padding: "8px 14px", fontSize: 13, cursor: "pointer" }}>취소</button>
+      <textarea value={freeContent} placeholder={checkItems.length > 0 ? "추가 메모 (선택사항)..." : "내용을 자유롭게 입력하세요..."} 
+        onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { freeContent: v }); }); }} 
+        rows={checkItems.length > 0 ? 4 : 8}
+        style={{ width: "100%", padding: "12px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, lineHeight: 1.75, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff", minHeight: 120 }} />
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <button onClick={saveEdit} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "10px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
+        <button onClick={onCancel} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 16px", fontSize: 13, cursor: "pointer" }}>취소</button>
       </div>
     </div>
   );
@@ -4030,16 +4112,33 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   };
 
   var saveEdit = async function() {
+    // checkItems + freeContent를 다시 content로 합치기
+    var finalContent = editNote.content || "";
+    if (editNote.checkItems !== undefined) {
+      var checkLines = (editNote.checkItems || []).filter(function(i) { return (i.text || "").trim(); }).map(function(i) {
+        var line = "- [" + (i.checked ? "x" : " ") + "] " + i.text.trim();
+        if (i.dueDate) line += " [" + i.dueDate + "]";
+        return line;
+      });
+      var freeText = (editNote.freeContent || "").trim();
+      var parts = [];
+      if (checkLines.length > 0) parts.push(checkLines.join("\n"));
+      if (freeText) parts.push(freeText);
+      finalContent = parts.join("\n");
+    }
+    
     var r = await supabase.from("work_notes").update({
       title: editNote.title,
-      content: editNote.content,
+      content: finalContent,
       is_todo: editNote.is_todo,
       pinned: editNote.pinned,
+      due_date: editNote.due_date || null,
       updated_at: new Date().toISOString(),
     }).eq("id", editNote.id);
     if (!r.error) {
-      setNotes(function(prev) { return prev.map(function(n) { return n.id === editNote.id ? Object.assign({}, n, editNote) : n; }); });
+      setNotes(function(prev) { return prev.map(function(n) { return n.id === editNote.id ? Object.assign({}, n, editNote, { content: finalContent }) : n; }); });
       setEditingId(null); setEditNote({});
+      if (onBadgeUpdate) onBadgeUpdate();
     }
   };
 
