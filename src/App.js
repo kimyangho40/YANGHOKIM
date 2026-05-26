@@ -25,7 +25,7 @@ const STAGE_COLORS = {
   "기타":                    { bg: "#F7F6F3", text: "#666",    border: "#D1D5DB" },
 };
 const AGENCIES = ["소상공인시장진흥공단","중소벤처기업진흥공단","신용보증기금","신용보증재단","기술보증기금","서민금융진흥원","구조혁신&사업전환","기타"];
-const JUNGINGONG_PRODUCTS = ["창업기반지원","청년창업자금","혁신성장지원","개발기술사업화","재창업","내수기업수출기업화(10만불 미만)","수출기업글로벌화(10만불 이상)","사업전환","구조개선","기타"];
+const JUNGINGONG_PRODUCTS = ["창업기반지원","청년창업자금","혁신성장지원","개발기술사업화","재창업","내수기업수출기업화(10만불 미만)","수출기업글로벌화(10만불 이상)","사업전환","구조개선","긴급경영 안정자금","기타"];
 const SOJINGONG_PRODUCTS = ["신용취약자금","재도전특별자금","혁신성장 촉진자금(스마트 기술)","혁신성장 촉진자금(2년 연속 매출 10% 신장)","혁신성장 촉진자금(수출 자금)","혁신성장 촉진자금(그 외 기타)","상생성장지원자금","그 외 기타","대리대출"];
 
 // 신청상품별 색상 (배경/글자)
@@ -50,11 +50,22 @@ const PRODUCT_COLORS = {
   "상생성장지원자금":          { bg: "#D1FAE5", text: "#065F46" },
   "그 외 기타":                { bg: "#F0FDF4", text: "#166534" },
   "대리대출":                  { bg: "#FEF3C7", text: "#92400E" },
+  "긴급경영 안정자금":          { bg: "#FFE4E6", text: "#9F1239" },
   "기타":                      { bg: "#F3F4F6", text: "#374151" },
 };
 function getProductColor(name) {
   if (!name) return null;
   return PRODUCT_COLORS[name] || { bg: "#F3F4F6", text: "#374151" };
+}
+
+// 지역별 색상 구분
+// 경기/인천 = 노란색, 서울 = 파란색, 그 외 지방 = 녹색
+function getRegionColor(region) {
+  if (!region) return null;
+  var r = String(region).trim();
+  if (r.indexOf("경기") === 0 || r.indexOf("인천") === 0) return { bg: "#FEF3C7", text: "#92400E", border: "#FDE68A" };
+  if (r.indexOf("서울") === 0) return { bg: "#DBEAFE", text: "#1E40AF", border: "#BFDBFE" };
+  return { bg: "#D1FAE5", text: "#065F46", border: "#A7F3D0" }; // 지방
 }
 
 const AGENCY_GROUPS = [
@@ -1124,7 +1135,7 @@ function CRMApp({ profile, session }) {
       {showNotifPanel && (
         <div style={{ position: "fixed", top: 0, left: 220, right: 0, bottom: 0, zIndex: 900 }} onClick={function() { setShowNotifPanel(false); }}>
           <div style={{ position: "absolute", top: 0, left: 0, width: 360, maxHeight: "100vh", background: "#fff", boxShadow: "4px 0 24px rgba(0,0,0,0.15)", overflowY: "auto" }}
-            onClick={function(e) { e.stopPropagation(); }}>
+            onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
             <div style={{ padding: "20px 20px 14px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 700 }}>🔔 알림</div>
@@ -2246,12 +2257,15 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
                         style={{ cursor: "pointer", padding: "2px 6px", borderRadius: 4, display: "inline-flex", alignItems: "center", gap: 3 }}
                         onMouseEnter={function(e) { e.currentTarget.style.background = "#EEF2FF"; }}
                         onMouseLeave={function(e) { e.currentTarget.style.background = "transparent"; }}>
-                        {co.region || <span style={{ color: "#CCC" }}>+ 입력</span>}
+                        {co.region ? (function() {
+                          var rc = getRegionColor(co.region);
+                          return <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, fontWeight: 600, background: rc.bg, color: rc.text, whiteSpace: "nowrap" }}>{co.region}</span>;
+                        })() : <span style={{ color: "#CCC" }}>+ 입력</span>}
                         <Icon name="edit" size={10} color="#AAA" />
                       </span>
                     )}
                   </td>
-                  <td style={{ padding: "6px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 80 }} onClick={function(e) { e.stopPropagation(); }}>
+                  <td style={{ padding: "6px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 80 }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
                     <IndustryCell co={co} setCompanies={setCompanies} />
                   </td>
                   <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis" }}>{co.representative || "-"}</td>
@@ -2264,7 +2278,7 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap" }}>{[formatRevenue(co.revenue_2023), formatRevenue(co.revenue_2024), formatRevenue(co.revenue_2025)].filter(r=>r&&r!=="-").join(" / ") || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap" }}>{(co.credit_score_kcb || co.credit_score_nice) ? ((co.credit_score_kcb || "-") + " / " + (co.credit_score_nice || "-")) : "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.next_action || "-"}</td>
-                  <td style={{ padding: "11px 8px", whiteSpace: "nowrap" }} onClick={function(e) { e.stopPropagation(); }}>
+                  <td style={{ padding: "11px 8px", whiteSpace: "nowrap" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
                     <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
                       <button onClick={function() { onSelect(co); }} title="소통/상세보기"
                         style={{ background: "#EEF2FF", border: "none", borderRadius: 4, padding: "3px 7px", fontSize: 11, cursor: "pointer", color: "#4338CA", fontWeight: 600 }}>💬</button>
@@ -6327,7 +6341,10 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                             style={{ padding: "4px 8px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, width: 80, boxSizing: "border-box" }} />
                         : (
                           <div>
-                            <div style={{ fontSize: 12, color: "#555" }}>{row.region || "-"}</div>
+                            {row.region ? (function() {
+                              var rc = getRegionColor(row.region);
+                              return <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, fontWeight: 600, background: rc.bg, color: rc.text, whiteSpace: "nowrap", display: "inline-block" }}>{row.region}</span>;
+                            })() : <span style={{ fontSize: 12, color: "#CCC" }}>-</span>}
                             {(activeGroup === "중소벤처기업진흥공단" || activeGroup === "구조혁신&사업전환") && row.region && findJungingongBranch(row.region) && (
                               <div style={{ fontSize: 10, color: "#7C3AED", marginTop: 2, fontWeight: 600 }}>{findJungingongBranch(row.region)}</div>
                             )}
@@ -6606,7 +6623,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       {selectedCase && (
         <div style={{ position: "fixed", inset: 0, zIndex: 900 }} onClick={function() { setSelectedCase(null); }}>
           <div style={{ position: "absolute", top: 0, right: 0, width: 460, height: "100%", background: "#fff", boxShadow: "-4px 0 30px rgba(0,0,0,0.15)", overflowY: "auto" }}
-            onClick={function(e) { e.stopPropagation(); }}>
+            onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 800 }}>{selectedCase.business_name}</div>
@@ -7082,33 +7099,33 @@ function DBLeadsView() {
                   return [
                     <tr key={row.id} style={{ borderBottom: isExpanded ? "none" : "1px solid #F0EDE8", background: selectedLead && selectedLead.id === row.id ? "#F0FDF4" : isEditing ? "#FEFCE8" : idx % 2 === 0 ? "#fff" : "#FAFAF8", cursor: "pointer" }} onClick={function() { setSelectedLead(row); }}>
                       <td style={{ textAlign: "center", padding: "9px 8px", color: "#AAA", fontSize: 11 }}>{idx + 1}</td>
-                      <td style={{ padding: "9px 8px" }} onClick={function(e) { e.stopPropagation(); }}>
+                      <td style={{ padding: "9px 8px" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
                         {isEditing
                           ? <input value={editData.business_name || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { business_name: e.target.value }); }); }} style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12, width: "100%", boxSizing: "border-box" }} />
                           : <span style={{ fontWeight: 600 }}>{row.business_name || "-"}</span>}
                       </td>
-                      <td style={{ padding: "9px 8px" }} onClick={function(e) { e.stopPropagation(); }}>
+                      <td style={{ padding: "9px 8px" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
                         {isEditing
                           ? <input value={editData.contact || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { contact: e.target.value }); }); }} style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12, width: "100%", boxSizing: "border-box" }} />
                           : <span style={{ fontSize: 12, color: "#555" }}>{row.contact || "-"}</span>}
                       </td>
-                      <td style={{ padding: "9px 8px" }} onClick={function(e) { e.stopPropagation(); }}>
+                      <td style={{ padding: "9px 8px" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
                         {isEditing
                           ? <select value={editData.assignee || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { assignee: e.target.value }); }); }} style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12, width: "100%" }}><option value="">-</option>{DB_ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}</select>
                           : <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#EEF2FF", color: "#4338CA", fontWeight: 600 }}>{row.assignee || "-"}</span>}
                       </td>
-                      <td style={{ padding: "9px 8px" }} onClick={function(e) { e.stopPropagation(); }}>
+                      <td style={{ padding: "9px 8px" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
                         {isEditing
                           ? <select value={editData.assigned_by || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { assigned_by: e.target.value }); }); }} style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12, width: "100%" }}><option value="">-</option>{DB_MANAGERS.map(function(a) { return <option key={a} value={a}>{a}</option>; })}</select>
                           : <span style={{ fontSize: 12, color: "#888" }}>{row.assigned_by || "-"}</span>}
                       </td>
-                      <td style={{ padding: "9px 8px" }} onClick={function(e) { e.stopPropagation(); }}>
+                      <td style={{ padding: "9px 8px" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
                         {isEditing
                           ? <select value={editData.status || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { status: e.target.value }); }); }} style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12, width: "100%" }}>{LEAD_STATUSES.map(function(s) { return <option key={s} value={s}>{s}</option>; })}</select>
                           : <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, fontWeight: 600 }}>{row.status || "-"}</span>}
                       </td>
                       <td style={{ padding: "9px 8px", fontSize: 11, color: "#555", maxWidth: 250, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{lastCall}</td>
-                      <td style={{ textAlign: "center", padding: "9px 8px" }} onClick={function(e) { e.stopPropagation(); }}>
+                      <td style={{ textAlign: "center", padding: "9px 8px" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
                         <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
                           {isEditing ? <>
                             <button onClick={function(e) { e.stopPropagation(); saveEdit(); }} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 4, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>저장</button>
@@ -7120,7 +7137,7 @@ function DBLeadsView() {
                         </div>
                       </td>
                     </tr>,
-                    isExpanded && (<tr key={row.id + "-detail"} style={{ borderBottom: "1px solid #F0EDE8", background: "#FAFAF8" }} onClick={function(e) { e.stopPropagation(); }}><td colSpan={8} style={{ padding: "12px 16px 16px 50px" }}>
+                    isExpanded && (<tr key={row.id + "-detail"} style={{ borderBottom: "1px solid #F0EDE8", background: "#FAFAF8" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}><td colSpan={8} style={{ padding: "12px 16px 16px 50px" }}>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, fontSize: 12 }}>
                         {[1,2,3,4,5].map(function(n) {
                           var dateKey = "call_" + n + "_date";
@@ -7135,11 +7152,11 @@ function DBLeadsView() {
                             <div style={{ fontSize: 10, color: "#888", fontWeight: 600, marginBottom: 6 }}>{n}차콜</div>
                             <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
                               <input type="date" value={dateVal}
-                                onClick={function(e) { e.stopPropagation(); }}
+                                onClick={function(e) { if (isEditing) e.stopPropagation(); }}
                                 onChange={function(e) { e.stopPropagation(); var k = dateKey; var v = e.target.value; if (!isEditing) { startEdit(row); } setEditData(function(p) { var o = Object.assign({}, p); o[k] = v; return o; }); }}
                                 style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, flex: 1 }} />
                               <select value={statusVal}
-                                onClick={function(e) { e.stopPropagation(); }}
+                                onClick={function(e) { if (isEditing) e.stopPropagation(); }}
                                 onChange={function(e) { e.stopPropagation(); var k = statusKey; var v = e.target.value; if (!isEditing) { startEdit(row); } setEditData(function(p) { var o = Object.assign({}, p); o[k] = v; return o; }); }}
                                 style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, flex: 1 }}>
                                 <option value="">상태 선택</option>
@@ -7147,7 +7164,7 @@ function DBLeadsView() {
                               </select>
                             </div>
                             <input value={memoVal} placeholder="메모 입력"
-                              onClick={function(e) { e.stopPropagation(); }}
+                              onClick={function(e) { if (isEditing) e.stopPropagation(); }}
                               onChange={function(e) { e.stopPropagation(); var k = memoKey; var v = e.target.value; if (!isEditing) { startEdit(row); } setEditData(function(p) { var o = Object.assign({}, p); o[k] = v; return o; }); }}
                               style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, width: "100%", boxSizing: "border-box" }} />
                             {oldVal && !dateVal && !memoVal && (<div style={{ marginTop: 3, fontSize: 10, color: "#AAA" }}>기존: {oldVal}</div>)}
@@ -7157,7 +7174,7 @@ function DBLeadsView() {
                           <div style={{ fontSize: 10, color: "#888", fontWeight: 600, marginBottom: 3 }}>기타</div>
                           <input value={isEditing ? (editData.etc || "") : (row.etc || "")} placeholder="기타 메모"
                             onChange={function(e) { var v = e.target.value; if (!isEditing) { startEdit(row); } setEditData(function(p) { return Object.assign({}, p, { etc: v }); }); }}
-                            onClick={function(e) { e.stopPropagation(); }}
+                            onClick={function(e) { if (isEditing) e.stopPropagation(); }}
                             style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, width: "100%", boxSizing: "border-box" }} />
                         </div>
                         {isEditing && (
@@ -7212,7 +7229,7 @@ function DBLeadsView() {
       {selectedLead && (
         <div style={{ position: "fixed", inset: 0, zIndex: 900 }} onClick={function() { setSelectedLead(null); }}>
           <div style={{ position: "absolute", top: 0, right: 0, width: 480, height: "100%", background: "#fff", boxShadow: "-4px 0 30px rgba(0,0,0,0.15)", overflowY: "auto" }}
-            onClick={function(e) { e.stopPropagation(); }}>
+            onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 800, color: "#1A1917" }}>{selectedLead.business_name || "(미입력)"}</div>
