@@ -27,6 +27,36 @@ const STAGE_COLORS = {
 const AGENCIES = ["소상공인시장진흥공단","중소벤처기업진흥공단","신용보증기금","신용보증재단","기술보증기금","서민금융진흥원","구조혁신&사업전환","기타"];
 const JUNGINGONG_PRODUCTS = ["창업기반지원","청년창업자금","혁신성장지원","개발기술사업화","재창업","내수기업수출기업화(10만불 미만)","수출기업글로벌화(10만불 이상)","사업전환","구조개선","기타"];
 const SOJINGONG_PRODUCTS = ["신용취약자금","재도전특별자금","혁신성장 촉진자금(스마트 기술)","혁신성장 촉진자금(2년 연속 매출 10% 신장)","혁신성장 촉진자금(수출 자금)","혁신성장 촉진자금(그 외 기타)","상생성장지원자금","그 외 기타","대리대출"];
+
+// 신청상품별 색상 (배경/글자)
+const PRODUCT_COLORS = {
+  // 중진공 (보라 계열)
+  "창업기반지원":              { bg: "#EDE9FE", text: "#5B21B6" },
+  "청년창업자금":              { bg: "#DDD6FE", text: "#4C1D95" },
+  "혁신성장지원":              { bg: "#E0E7FF", text: "#3730A3" },
+  "개발기술사업화":            { bg: "#C7D2FE", text: "#312E81" },
+  "재창업":                    { bg: "#FAE8FF", text: "#86198F" },
+  "내수기업수출기업화(10만불 미만)": { bg: "#FCE7F3", text: "#9D174D" },
+  "수출기업글로벌화(10만불 이상)":   { bg: "#FBCFE8", text: "#831843" },
+  "사업전환":                  { bg: "#E9D5FF", text: "#6B21A8" },
+  "구조개선":                  { bg: "#F3E8FF", text: "#7E22CE" },
+  // 소진공 (파랑/녹색 계열)
+  "신용취약자금":              { bg: "#FEE2E2", text: "#991B1B" },
+  "재도전특별자금":            { bg: "#FED7AA", text: "#9A3412" },
+  "혁신성장 촉진자금(스마트 기술)":      { bg: "#DBEAFE", text: "#1E40AF" },
+  "혁신성장 촉진자금(2년 연속 매출 10% 신장)": { bg: "#BFDBFE", text: "#1E3A8A" },
+  "혁신성장 촉진자금(수출 자금)":         { bg: "#A5F3FC", text: "#155E75" },
+  "혁신성장 촉진자금(그 외 기타)":        { bg: "#CFFAFE", text: "#0E7490" },
+  "상생성장지원자금":          { bg: "#D1FAE5", text: "#065F46" },
+  "그 외 기타":                { bg: "#F0FDF4", text: "#166534" },
+  "대리대출":                  { bg: "#FEF3C7", text: "#92400E" },
+  "기타":                      { bg: "#F3F4F6", text: "#374151" },
+};
+function getProductColor(name) {
+  if (!name) return null;
+  return PRODUCT_COLORS[name] || { bg: "#F3F4F6", text: "#374151" };
+}
+
 const AGENCY_GROUPS = [
   { id: "소상공인시장진흥공단", label: "소상공인시장진흥공단", color: "#4338CA" },
   { id: "신용보증기금", label: "신용보증기금", color: "#0F6E56" },
@@ -1368,16 +1398,16 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         var stagnant7 = companies.filter(function(c) { return c.stagnant_days >= 7 && c.stagnant_days < 14; });
         var weekContracts = companies.filter(function(c) { return c.contract_date && c.contract_date > today && c.contract_date <= weekLater; });
         var totalCount = todayItems.length + tomorrowItems.length + overdue.length + stagnant14.length + stagnant7.length + weekContracts.length;
-        if (totalCount === 0) return null;
+        // 내 할일 위젯은 별도로 항상 표시 (work_notes 기반)
+        var showCompaniesWidget = totalCount > 0;
         return (
           <div style={{ background: "linear-gradient(135deg, #FFF7ED 0%, #FEF3C7 100%)", borderRadius: 12, padding: "20px 24px", border: "1px solid #FCD34D", marginBottom: 18 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
               <span style={{ fontSize: 16 }}>📋</span>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#92400E" }}>오늘의 할 일</div>
-              <span style={{ fontSize: 11, color: "#92400E", background: "#FEF3C7", padding: "2px 8px", borderRadius: 99, fontWeight: 600, border: "1px solid #FCD34D" }}>{totalCount}건</span>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
-              {/* 📋 내 할일 위젯 - work_notes 체크박스 기반 */}
+              {/* 📋 내 할일 위젯 - work_notes 체크박스 기반 (항상 표시) */}
               <MyTodoWidget setView={setView} />
               
               {/* companies 기반 위젯 제거됨 - work_notes 기반 "내 할일" 위젯이 메인 */}
@@ -1947,17 +1977,18 @@ function MyTodoWidget({ setView }) {
     load();
   }, []);
   
-  if (count.total === 0) return null;
+  // 항상 표시 (할일 없어도 안내 표시)
   
   return (
     <div onClick={function() { setView("mytodo"); }}
       style={{ background: "linear-gradient(135deg, #4338CA 0%, #6366F1 100%)", borderRadius: 10, padding: "14px 16px", cursor: "pointer", color: "#fff", boxShadow: "0 2px 8px rgba(67, 56, 202, 0.2)" }}>
       <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 4, opacity: 0.9 }}>📋 내 할일</div>
-      <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{count.total}건</div>
+      <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{count.total > 0 ? count.total + "건" : "할일 없음"}</div>
       <div style={{ fontSize: 10, opacity: 0.9 }}>
         {count.overdue > 0 && <span style={{ marginRight: 6 }}>⏰ 지남 {count.overdue}</span>}
         {count.today > 0 && <span>📅 오늘 {count.today}</span>}
-        {count.overdue === 0 && count.today === 0 && <span>모두 진행 중</span>}
+        {count.total > 0 && count.overdue === 0 && count.today === 0 && <span>모두 진행 중</span>}
+        {count.total === 0 && <span>업무 노트에서 추가하세요</span>}
       </div>
     </div>
   );
@@ -3340,7 +3371,7 @@ function ActivityLogView() {
       groups[d].items.push(l);
     });
     return Object.values(groups);
-  }, [filtered]);
+  }, [cases, activeGroup, activeMonth, currentYear, filterAssignee]);
 
   // KPI
   var today = new Date().toDateString();
@@ -4875,14 +4906,18 @@ function CalendarView({ companies, onSelectCompany, profile }) {
   const [year, setYear] = useState(today.getFullYear());
   const [month, setMonth] = useState(today.getMonth());
   const [selectedDate, setSelectedDate] = useState(null);
-  const [googleEvents, setGoogleEvents] = useState([]);
-  const [gConnected, setGConnected] = useState(false);
+  // 양호님 캘린더용 + 이사님 캘린더용 토큰/이벤트 분리
+  const [googleEvents, setGoogleEvents] = useState([]); // 양호님 일정
+  const [directorEvents, setDirectorEvents] = useState([]); // 이사님 일정
+  const [gConnected, setGConnected] = useState(false); // 양호님 연결 여부
+  const [directorConnected, setDirectorConnected] = useState(false); // 이사님 연결 여부
   const [activeTab, setActiveTab] = useState("calendar"); // calendar | followup
   const [calSheet, setCalSheet] = useState("yangho"); // yangho | director
   const [customEvents, setCustomEvents] = useState([]);
   const [showAddEvent, setShowAddEvent] = useState(false);
   const [newEvent, setNewEvent] = useState({ title: "", date: "", time: "", memo: "", sheet: "yangho", color: "9" });
-  const [gToken, setGToken] = useState("");
+  const [gToken, setGToken] = useState(""); // 양호님 토큰
+  const [directorToken, setDirectorToken] = useState(""); // 이사님 토큰
   // 구글 캘린더 공식 색상 11가지 (colorId 1~11)
   const EVENT_COLORS = [
     { id: "1",  label: "라벤더",   bg: "#7986CB", light: "#E8EAF6" },
@@ -4916,8 +4951,10 @@ function CalendarView({ companies, onSelectCompany, profile }) {
   var saveEvent = async function() {
     if (!newEvent.title || !newEvent.date) { alert("제목과 날짜를 입력해주세요."); return; }
     var googleEventId = null;
+    // 어느 캘린더에 등록할지 calSheet 기준
+    var useToken = newEvent.sheet === "director" ? directorToken : gToken;
     // 구글 캘린더에도 동시 등록 (연결돼 있으면)
-    if (gToken) {
+    if (useToken) {
       try {
         var startObj, endObj;
         if (newEvent.time) {
@@ -4934,7 +4971,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
         }
         var gres = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
           method: "POST",
-          headers: { Authorization: "Bearer " + gToken, "Content-Type": "application/json" },
+          headers: { Authorization: "Bearer " + useToken, "Content-Type": "application/json" },
           body: JSON.stringify({
             summary: newEvent.title,
             description: newEvent.memo || "",
@@ -4957,7 +4994,8 @@ function CalendarView({ companies, onSelectCompany, profile }) {
       setCustomEvents(function(prev) { return [r.data].concat(prev); });
       // 구글에 등록된 경우 즉시 googleEvents에도 추가
       if (googleEventId) {
-        setGoogleEvents(function(prev) { return prev.concat([{
+        var setter = newEvent.sheet === "director" ? setDirectorEvents : setGoogleEvents;
+        setter(function(prev) { return prev.concat([{
           title: newEvent.title, date: newEvent.date, time: newEvent.time || "",
           color: newEvent.color || "9", googleEventId: googleEventId, memo: newEvent.memo || "",
         }]); });
@@ -5030,82 +5068,59 @@ function CalendarView({ companies, onSelectCompany, profile }) {
     );
   }, [companies, todayStr]);
 
-  // ─────────────────────────────────────────────────────────
-  // 구글 캘린더 영구 연동 (OAuth Code Flow + Supabase DB 토큰 저장)
-  // - 양호 캘린더 / 이사님 캘린더 2개를 분리 저장
-  // - calSheet 변수에 따라 적절한 토큰 조회 (yangho → '양호', director → '이사님')
-  // - refresh_token으로 자동 갱신 (영구 연동)
-  // ─────────────────────────────────────────────────────────
-  const GCAL_REDIRECT_URI = window.location.origin + "/oauth-callback";
-  const sheetToUserLabel = function(sheet) {
-    return sheet === "director" ? "이사님" : "양호";
-  };
-
-  // [1] 구글 OAuth 동의 화면으로 이동 (해당 캘린더의 주인이 로그인)
-  const connectGoogle = function() {
-    var userLabel = sheetToUserLabel(calSheet);
-    var scope = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email";
-    // state에 user_label 포함시켜 콜백 시 어떤 캘린더 연동인지 식별
-    var state = encodeURIComponent(JSON.stringify({ user_label: userLabel, sheet: calSheet }));
-    var authUrl = "https://accounts.google.com/o/oauth2/v2/auth"
-      + "?client_id=" + GOOGLE_CLIENT_ID
-      + "&redirect_uri=" + encodeURIComponent(GCAL_REDIRECT_URI)
-      + "&response_type=code"
-      + "&scope=" + encodeURIComponent(scope)
-      + "&access_type=offline"
-      + "&prompt=consent"
-      + "&include_granted_scopes=true"
-      + "&state=" + state;
+  // 구글 캘린더 연동 - target: "yangho" 또는 "director"
+  const connectGoogle = (target) => {
+    const scope = "https://www.googleapis.com/auth/calendar.events";
+    const redirectUri = window.location.origin;
+    // state 파라미터로 어느 캘린더용인지 전달 (돌아왔을 때 구분)
+    const stateParam = target || "yangho";
+    // prompt=select_account로 다른 계정 선택 강제
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${encodeURIComponent(scope)}&state=${stateParam}&prompt=select_account`;
     window.location.href = authUrl;
   };
 
-  // [2] DB에서 토큰 가져오기 + 만료시 자동 갱신 (Edge Function 호출)
-  var getValidAccessToken = async function(userLabel) {
-    try {
-      var refreshUrl = SUPABASE_URL + "/functions/v1/google-oauth-refresh";
-      var res = await fetch(refreshUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "apikey": SUPABASE_ANON_KEY,
-          "Authorization": "Bearer " + SUPABASE_ANON_KEY,
-        },
-        body: JSON.stringify({ user_label: userLabel }),
-      });
-      var data = await res.json();
-      if (!res.ok) {
-        return { ok: false, needsConnection: data.needsConnection || false, error: data.error };
-      }
-      return { ok: true, access_token: data.access_token, google_email: data.google_email };
-    } catch (err) {
-      return { ok: false, error: String(err) };
-    }
+  // 이사님 캘린더 연결 해제
+  const disconnectDirector = () => {
+    if (!confirm("이사님 캘린더 연결을 해제하시겠어요?")) return;
+    localStorage.removeItem("gcal_director_token");
+    setDirectorToken("");
+    setDirectorConnected(false);
+    setDirectorEvents([]);
   };
 
-  // [3] 구글 캘린더에서 일정 가져오기
-  var fetchGoogleEventsForSheet = async function(sheet) {
-    var userLabel = sheetToUserLabel(sheet);
-    var tokenResult = await getValidAccessToken(userLabel);
-    if (!tokenResult.ok) {
-      setGConnected(false);
-      setGToken("");
-      setGoogleEvents([]);
-      return;
-    }
-    setGConnected(true);
-    setGToken(tokenResult.access_token);
+  // 양호님 캘린더 연결 해제
+  const disconnectYangho = () => {
+    if (!confirm("김양호 캘린더 연결을 해제하시겠어요?")) return;
+    localStorage.removeItem("gcal_yangho_token");
+    setGToken("");
+    setGConnected(false);
+    setGoogleEvents([]);
+  };
 
+  // 캘린더 이벤트 가져오기 헬퍼
+  const fetchCalendarEvents = async (token, target) => {
     var startDate = new Date(year, month, 1).toISOString();
-    var endDate = new Date(year, month + 1, 0, 23, 59, 59).toISOString();
+    var endDate = new Date(year, month + 1, 0).toISOString();
     try {
-      var r = await fetch(
-        "https://www.googleapis.com/calendar/v3/calendars/primary/events"
-        + "?timeMin=" + encodeURIComponent(startDate)
-        + "&timeMax=" + encodeURIComponent(endDate)
-        + "&singleEvents=true&orderBy=startTime&maxResults=250",
-        { headers: { Authorization: "Bearer " + tokenResult.access_token } }
-      );
+      var r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${startDate}&timeMax=${endDate}&singleEvents=true&orderBy=startTime`, {
+        headers: { Authorization: "Bearer " + token }
+      });
       var data = await r.json();
+      if (data.error) {
+        // 토큰 만료 등
+        if (target === "yangho") {
+          localStorage.removeItem("gcal_yangho_token");
+          setGToken("");
+          setGConnected(false);
+          setGoogleEvents([]);
+        } else {
+          localStorage.removeItem("gcal_director_token");
+          setDirectorToken("");
+          setDirectorConnected(false);
+          setDirectorEvents([]);
+        }
+        return null;
+      }
       if (data.items) {
         var evs = data.items.map(function(item) {
           var dateStr = item.start.date || (item.start.dateTime ? item.start.dateTime.slice(0, 10) : "");
@@ -5119,74 +5134,68 @@ function CalendarView({ companies, onSelectCompany, profile }) {
             memo: item.description || "",
           };
         });
-        setGoogleEvents(evs);
-      } else {
-        setGoogleEvents([]);
+        if (target === "yangho") setGoogleEvents(evs);
+        else setDirectorEvents(evs);
       }
     } catch (err) {
-      setGoogleEvents([]);
+      console.error("캘린더 조회 실패:", err);
     }
   };
 
-  // [4] OAuth 콜백 처리: URL의 ?code=... 를 받아서 Edge Function으로 교환
+  // URL에서 access_token 확인 (구글 로그인 후 돌아올 때) + localStorage 복구
   useEffect(function() {
-    var urlParams = new URLSearchParams(window.location.search);
-    var code = urlParams.get("code");
-    var stateParam = urlParams.get("state");
-    if (code && stateParam) {
-      var stateData = null;
-      try { stateData = JSON.parse(decodeURIComponent(stateParam)); } catch (e) {}
-      if (!stateData || !stateData.user_label) {
-        window.history.replaceState(null, "", window.location.pathname);
-        return;
-      }
-      // Edge Function에 code 보내서 토큰 교환 + DB 저장
-      var exchangeUrl = SUPABASE_URL + "/functions/v1/smart-handler";
-      fetch(exchangeUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "apikey": SUPABASE_ANON_KEY,
-          "Authorization": "Bearer " + SUPABASE_ANON_KEY,
-        },
-        body: JSON.stringify({
-          code: code,
-          user_label: stateData.user_label,
-          redirect_uri: GCAL_REDIRECT_URI,
-        }),
-      })
-      .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
-      .then(function(result) {
-        if (result.ok) {
-          alert("✅ " + stateData.user_label + " 캘린더가 영구 연동되었습니다!\n(" + (result.data.google_email || "") + ")");
-          if (stateData.sheet) setCalSheet(stateData.sheet);
+    var hash = window.location.hash;
+    
+    // 구글 로그인 후 콜백 처리
+    if (hash && hash.includes("access_token")) {
+      var token = hash.split("access_token=")[1].split("&")[0];
+      var stateMatch = hash.match(/state=([^&]+)/);
+      var target = stateMatch ? stateMatch[1] : "yangho";
+      
+      if (token) {
+        if (target === "director") {
+          setDirectorToken(token);
+          setDirectorConnected(true);
+          localStorage.setItem("gcal_director_token", token);
+          fetchCalendarEvents(token, "director");
         } else {
-          alert("❌ 연동 실패: " + (result.data.error || "알 수 없는 오류"));
+          setGToken(token);
+          setGConnected(true);
+          localStorage.setItem("gcal_yangho_token", token);
+          fetchCalendarEvents(token, "yangho");
         }
-        // URL 정리 후 캘린더 로드
+        // URL 해시 제거
         window.history.replaceState(null, "", window.location.pathname);
-        fetchGoogleEventsForSheet(stateData.sheet || calSheet);
-      })
-      .catch(function(err) {
-        alert("❌ 연동 요청 실패: " + err.message);
-        window.history.replaceState(null, "", window.location.pathname);
-      });
+      }
+    } else {
+      // localStorage에 토큰 있으면 복구
+      var savedYangho = localStorage.getItem("gcal_yangho_token");
+      if (savedYangho) {
+        setGToken(savedYangho);
+        setGConnected(true);
+        fetchCalendarEvents(savedYangho, "yangho");
+      }
+      var savedDirector = localStorage.getItem("gcal_director_token");
+      if (savedDirector) {
+        setDirectorToken(savedDirector);
+        setDirectorConnected(true);
+        fetchCalendarEvents(savedDirector, "director");
+      }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // [5] 탭(calSheet) 또는 월(year/month) 변경 시 해당 캘린더 일정 다시 로드
+  // 월이 바뀌면 양쪽 캘린더 모두 새로 조회
   useEffect(function() {
-    fetchGoogleEventsForSheet(calSheet);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [calSheet, year, month]);
+    if (gToken) fetchCalendarEvents(gToken, "yangho");
+    if (directorToken) fetchCalendarEvents(directorToken, "director");
+  }, [year, month]);
 
   const selectedDateStr = selectedDate
     ? `${year}-${String(month+1).padStart(2,"0")}-${String(selectedDate).padStart(2,"0")}`
     : null;
   const selectedCrmEvents = selectedDateStr ? (crmEventsByDate[selectedDateStr] || []) : [];
   const selectedGoogleEvents = selectedDateStr
-    ? googleEvents.filter(e => e.date === selectedDateStr)
+    ? (calSheet === "director" ? directorEvents : googleEvents).filter(e => e.date === selectedDateStr)
     : [];
 
   const cells = [];
@@ -5201,8 +5210,8 @@ function CalendarView({ companies, onSelectCompany, profile }) {
           <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>연락 예정 · 팔로업 관리</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          {!gConnected ? (
-            <button onClick={connectGoogle}
+          {!gConnected && false ? (
+            <button onClick={() => connectGoogle("yangho")}
               style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
               📅 구글 캘린더 연동
             </button>
@@ -5227,34 +5236,43 @@ function CalendarView({ companies, onSelectCompany, profile }) {
 
       {/* 캘린더 시트 전환 + 일정추가 */}
       {activeTab === "calendar" && (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <button onClick={() => setCalSheet("yangho")}
-              style={{ padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: calSheet === "yangho" ? 700 : 400, background: calSheet === "yangho" ? "#4338CA" : "#fff", color: calSheet === "yangho" ? "#fff" : "#666", border: calSheet === "yangho" ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
+              style={{ padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: calSheet === "yangho" ? 700 : 400, background: calSheet === "yangho" ? "#4338CA" : "#fff", color: calSheet === "yangho" ? "#fff" : "#666", border: calSheet === "yangho" ? "none" : "1px solid #E8E5E0", cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}>
+              {gConnected && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#10B981" }}></span>}
               김양호 캘린더
             </button>
             <button onClick={() => setCalSheet("director")}
-              style={{ padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: calSheet === "director" ? 700 : 400, background: calSheet === "director" ? "#7C3AED" : "#fff", color: calSheet === "director" ? "#fff" : "#666", border: calSheet === "director" ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
+              style={{ padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: calSheet === "director" ? 700 : 400, background: calSheet === "director" ? "#7C3AED" : "#fff", color: calSheet === "director" ? "#fff" : "#666", border: calSheet === "director" ? "none" : "1px solid #E8E5E0", cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}>
+              {directorConnected && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#10B981" }}></span>}
               이사님 캘린더
             </button>
-            {/* 연동 상태 표시 */}
-            <span style={{ marginLeft: 8, padding: "4px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: gConnected ? "#DCFCE7" : "#FEE2E2", color: gConnected ? "#166534" : "#991B1B" }}>
-              {gConnected ? "✓ 구글 연동됨" : "✗ 미연동"}
-            </span>
-            {/* 미연동 시 연결 버튼 노출 */}
-            {!gConnected && (
-              <button onClick={connectGoogle}
-                style={{ padding: "6px 12px", background: "#4285F4", color: "#fff", border: "none", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer" }}
-                title={`${sheetToUserLabel(calSheet)}님 구글 계정으로 로그인하여 캘린더 영구 연동`}>
-                🔗 {sheetToUserLabel(calSheet)} 구글 계정 연동
+            {/* 연결/해제 버튼 - 현재 탭 기준 */}
+            {calSheet === "yangho" && !gConnected && (
+              <button onClick={() => connectGoogle("yangho")}
+                style={{ marginLeft: 8, padding: "6px 12px", background: "#fff", border: "1px solid #4338CA", borderRadius: 8, fontSize: 11, color: "#4338CA", fontWeight: 600, cursor: "pointer" }}>
+                🔗 김양호 구글 캘린더 연결
               </button>
             )}
-            {/* 연동된 경우 재연동 옵션 (만약 다른 계정으로 바꾸고 싶을 때) */}
-            {gConnected && (
-              <button onClick={connectGoogle}
-                style={{ padding: "6px 10px", background: "transparent", color: "#666", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 11, fontWeight: 500, cursor: "pointer" }}
-                title="다른 구글 계정으로 다시 연동">
-                재연동
+            {calSheet === "yangho" && gConnected && (
+              <button onClick={disconnectYangho}
+                style={{ marginLeft: 8, padding: "6px 10px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 11, color: "#888", cursor: "pointer" }}
+                title="연결 해제">
+                ✕ 연결 해제
+              </button>
+            )}
+            {calSheet === "director" && !directorConnected && (
+              <button onClick={() => connectGoogle("director")}
+                style={{ marginLeft: 8, padding: "6px 12px", background: "#fff", border: "1px solid #7C3AED", borderRadius: 8, fontSize: 11, color: "#7C3AED", fontWeight: 600, cursor: "pointer" }}>
+                🔗 이사님 구글 계정으로 로그인
+              </button>
+            )}
+            {calSheet === "director" && directorConnected && (
+              <button onClick={disconnectDirector}
+                style={{ marginLeft: 8, padding: "6px 10px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 11, color: "#888", cursor: "pointer" }}
+                title="연결 해제">
+                ✕ 연결 해제
               </button>
             )}
           </div>
@@ -5288,7 +5306,8 @@ function CalendarView({ companies, onSelectCompany, profile }) {
                 if (!d) return <div key={`e-${i}`} style={{ minHeight: 80, borderBottom: "1px solid #F0EDE8", borderRight: "1px solid #F0EDE8" }} />;
                 const dateStr = `${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
                 const crmEvs = crmEventsByDate[dateStr] || [];
-                const gEvs = googleEvents.filter(e => e.date === dateStr);
+                const sourceEvents = calSheet === "director" ? directorEvents : googleEvents;
+                const gEvs = sourceEvents.filter(e => e.date === dateStr);
                 const cEvs = customEvents.filter(e => e.date === dateStr && e.sheet === calSheet);
                 const isToday = dateStr === todayStr;
                 const isSelected = d === selectedDate;
@@ -5826,6 +5845,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   var currentYear = new Date().getFullYear();
   const [activeGroup, setActiveGroup] = useState(jumpToGroup || "소상공인시장진흥공단");
   const [activeMonth, setActiveMonth] = useState(jumpToMonth || new Date().getMonth() + 1);
+  const [statusFilter, setStatusFilter] = useState("all"); // "all" | "approved" | "inProgress" | "rejected"
   const [cases, setCases] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState(null);
@@ -5876,14 +5896,23 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   }, [jumpToMonth, jumpToGroup]);
 
   var filtered = useMemo(function() {
+    var APPROVED = ["승인","약정","완료"];
+    var IN_PROGRESS = ["진행 중","심사중","심사대기","최종제출","임시저장","우선도 평가","기관 방문 전","기관 방문 후 대기","온라인 신청 후 대기","실태 조사 예정","실태 조사 완료"];
+    var REJECTED = ["부결","반려","진행불가","신청취소"];
     return cases.filter(function(c) {
+      var matchMonth = activeMonth === "all" ? true : Number(c.month) === Number(activeMonth);
+      var matchStatus = true;
+      if (statusFilter === "approved") matchStatus = APPROVED.indexOf(c.status) >= 0;
+      else if (statusFilter === "inProgress") matchStatus = IN_PROGRESS.indexOf(c.status) >= 0;
+      else if (statusFilter === "rejected") matchStatus = REJECTED.indexOf(c.status) >= 0;
       return c.agency_group === activeGroup
-        && Number(c.month) === Number(activeMonth)
+        && matchMonth
         && Number(c.year) === currentYear
         && !c.deleted_at
-        && (filterAssignee === "전체" || c.assignee === filterAssignee);
+        && (filterAssignee === "전체" || c.assignee === filterAssignee)
+        && matchStatus;
     });
-  }, [cases, activeGroup, activeMonth, filterAssignee, currentYear]);
+  }, [cases, activeGroup, activeMonth, filterAssignee, currentYear, statusFilter]);
 
   var trashedCases = useMemo(function() {
     return cases.filter(function(c) { return !!c.deleted_at; });
@@ -5906,11 +5935,19 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   }, [cases, activeGroup, activeMonth]);
 
   var summary = useMemo(function() {
-    var approved = filtered.filter(function(c) { return ["승인","약정","완료"].indexOf(c.status) >= 0; }).length;
-    var inProgress = filtered.filter(function(c) { return ["진행 중","심사중","심사대기","최종제출","임시저장","우선도 평가","기관 방문 전","기관 방문 후 대기","온라인 신청 후 대기","실태 조사 예정","실태 조사 완료"].indexOf(c.status) >= 0; }).length;
-    var rejected = filtered.filter(function(c) { return ["부결","반려","진행불가","신청취소"].indexOf(c.status) >= 0; }).length;
-    return { total: filtered.length, approved: approved, inProgress: inProgress, rejected: rejected };
-  }, [filtered]);
+    // summary는 statusFilter 무관하게 항상 전체 카운트 보여줘야 함 (클릭 가능 표시용)
+    // 그래서 filtered가 아니라 별도로 계산
+    var baseList = cases.filter(function(c) {
+      var matchMonth = activeMonth === "all" ? true : Number(c.month) === Number(activeMonth);
+      return c.agency_group === activeGroup && matchMonth && Number(c.year) === currentYear && !c.deleted_at
+        && (filterAssignee === "전체" || c.assignee === filterAssignee);
+    });
+    var approved = baseList.filter(function(c) { return ["승인","약정","완료"].indexOf(c.status) >= 0; }).length;
+    var inProgress = baseList.filter(function(c) { return ["진행 중","심사중","심사대기","최종제출","임시저장","우선도 평가","기관 방문 전","기관 방문 후 대기","온라인 신청 후 대기","실태 조사 예정","실태 조사 완료"].indexOf(c.status) >= 0; }).length;
+    var rejected = baseList.filter(function(c) { return ["부결","반려","진행불가","신청취소"].indexOf(c.status) >= 0; }).length;
+    var total = baseList.length;
+    return { total: total, approved: approved, inProgress: inProgress, rejected: rejected };
+  }, [cases, activeGroup, activeMonth, filterAssignee, currentYear]);
 
   var activeGroupObj = AGENCY_GROUPS.find(function(g) { return g.id === activeGroup; });
   var groupColor = activeGroupObj ? activeGroupObj.color : "#4338CA";
@@ -6113,13 +6150,13 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         })}
       </div>
 
-      {/* 월 탭 */}
+      {/* 월 탭 + 전체 */}
       <div style={{ display: "flex", gap: 4, marginBottom: 18, flexWrap: "wrap" }}>
         {[1,2,3,4,5,6,7,8,9,10,11,12].map(function(m) {
           var hasData = monthsWithData.has(m);
           var isActive = Number(activeMonth) === m;
           return (
-            <div key={m} onClick={function() { setActiveMonth(m); setEditingId(null); setFilterAssignee("전체"); }}
+            <div key={m} onClick={function() { setActiveMonth(m); setEditingId(null); setFilterAssignee("전체"); setStatusFilter("all"); }}
               style={{ padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: isActive ? 700 : 400,
                 background: isActive ? groupColor : hasData ? "#fff" : "#F7F6F3",
                 color: isActive ? "#fff" : hasData ? "#333" : "#CCC",
@@ -6128,20 +6165,40 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
             </div>
           );
         })}
+        {/* 전체 월 보기 */}
+        <div onClick={function() { setActiveMonth("all"); setEditingId(null); setFilterAssignee("전체"); setStatusFilter("all"); }}
+          style={{ padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12,
+            fontWeight: activeMonth === "all" ? 700 : 600,
+            background: activeMonth === "all" ? groupColor : "#1A1917",
+            color: "#fff",
+            border: "none",
+            marginLeft: 8 }}>
+          📅 전체
+        </div>
       </div>
 
-      {/* 요약 카드 */}
+      {/* 요약 카드 (클릭으로 필터링) */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
         {[
-          { label: "총 진행", value: summary.total, color: "#1A1917" },
-          { label: "승인/약정", value: summary.approved, color: "#047857" },
-          { label: "진행중", value: summary.inProgress, color: "#4338CA" },
-          { label: "부결/반려", value: summary.rejected, color: "#DC2626" },
+          { label: "총 진행", value: summary.total, color: "#1A1917", key: "all" },
+          { label: "승인/약정", value: summary.approved, color: "#047857", key: "approved" },
+          { label: "진행중", value: summary.inProgress, color: "#4338CA", key: "inProgress" },
+          { label: "부결/반려", value: summary.rejected, color: "#DC2626", key: "rejected" },
         ].map(function(s) {
+          var isActive = statusFilter === s.key;
           return (
-            <div key={s.label} style={{ background: "#fff", borderRadius: 10, padding: "16px 20px", border: "1px solid #E8E5E0" }}>
-              <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>{s.label}</div>
-              <div style={{ fontSize: 28, fontWeight: 800, color: s.color }}>{s.value}건</div>
+            <div key={s.label} onClick={function() { setStatusFilter(function(prev) { return prev === s.key ? "all" : s.key; }); }}
+              style={{ background: isActive ? s.color : "#fff", borderRadius: 10, padding: "16px 20px",
+                border: isActive ? "2px solid " + s.color : "1px solid #E8E5E0",
+                cursor: "pointer", transition: "all 0.15s",
+                boxShadow: isActive ? "0 2px 8px rgba(0,0,0,0.12)" : "none" }}
+              onMouseEnter={function(e) { if (!isActive) e.currentTarget.style.background = "#FAFAFA"; }}
+              onMouseLeave={function(e) { if (!isActive) e.currentTarget.style.background = "#fff"; }}>
+              <div style={{ fontSize: 11, color: isActive ? "rgba(255,255,255,0.85)" : "#888", marginBottom: 6, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span>{s.label}</span>
+                {isActive && <span style={{ fontSize: 9, opacity: 0.85 }}>✓ 필터 중</span>}
+              </div>
+              <div style={{ fontSize: 28, fontWeight: 800, color: isActive ? "#fff" : s.color }}>{s.value}건</div>
             </div>
           );
         })}
@@ -6251,7 +6308,10 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                               style={{ padding: "4px 6px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 11, maxWidth: 160, boxSizing: "border-box" }} />
                           </div>
                         ) : (
-                          <span style={{ fontSize: 11, color: "#555" }}>{row.fund_product || "-"}</span>
+                          {row.fund_product ? (function() {
+                            var col = getProductColor(row.fund_product);
+                            return <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, fontWeight: 600, background: col.bg, color: col.text, whiteSpace: "nowrap" }}>{row.fund_product}</span>;
+                          })() : <span style={{ fontSize: 11, color: "#CCC" }}>-</span>}
                         )}
                       </td>
                     )}
@@ -6616,7 +6676,11 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                     { label: "신청금액", value: selectedCase.request_amount },
                     { label: "승인금액", value: selectedCase.approved_amount },
                     { label: "지역", value: selectedCase.region },
-                    { label: "신청상품", value: selectedCase.fund_product },
+                    { label: "신청상품", value: selectedCase.fund_product, 
+                      render: selectedCase.fund_product ? function() {
+                        var col = getProductColor(selectedCase.fund_product);
+                        return <span style={{ fontSize: 12, padding: "3px 10px", borderRadius: 6, fontWeight: 600, background: col.bg, color: col.text }}>{selectedCase.fund_product}</span>;
+                      } : null },
                   ];
                   return items;
                 })().map(function(item) {
