@@ -1135,7 +1135,7 @@ function CRMApp({ profile, session }) {
       {showNotifPanel && (
         <div style={{ position: "fixed", top: 0, left: 220, right: 0, bottom: 0, zIndex: 900 }} onClick={function() { setShowNotifPanel(false); }}>
           <div style={{ position: "absolute", top: 0, left: 0, width: 360, maxHeight: "100vh", background: "#fff", boxShadow: "4px 0 24px rgba(0,0,0,0.15)", overflowY: "auto" }}
-            onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
+            onClick={function(e) { e.stopPropagation(); }}>
             <div style={{ padding: "20px 20px 14px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 700 }}>🔔 알림</div>
@@ -1599,7 +1599,7 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
           {assignees.map(a => <option key={a}>{a}</option>)}
         </select>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8, alignItems: "start" }}>
         {STAGES.map((stage, si) => {
           const c = STAGE_COLORS[stage];
           const items = filtered.filter(co => co.stage === stage);
@@ -1626,7 +1626,7 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
                   {si < STAGES.length - 1 && conversionPct > 0 && <span style={{ color: c.text, opacity: 0.8 }}>↗ {conversionPct}%</span>}
                 </div>
               </div>
-              <div style={{ padding: "8px", display: "flex", flexDirection: "column", gap: 6, maxHeight: "calc(100vh - 220px)", overflowY: "auto" }}>
+              <div style={{ padding: "8px", display: "flex", flexDirection: "column", gap: 6, height: "calc(100vh - 280px)", overflowY: "auto", minHeight: 400 }}>
                 {items.map(co => {
                   const docPct = docRate(co.documents);
                   return (
@@ -2265,7 +2265,7 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
                       </span>
                     )}
                   </td>
-                  <td style={{ padding: "6px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 80 }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
+                  <td style={{ padding: "6px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 80 }} onClick={function(e) { e.stopPropagation(); }}>
                     <IndustryCell co={co} setCompanies={setCompanies} />
                   </td>
                   <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis" }}>{co.representative || "-"}</td>
@@ -2278,7 +2278,7 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap" }}>{[formatRevenue(co.revenue_2023), formatRevenue(co.revenue_2024), formatRevenue(co.revenue_2025)].filter(r=>r&&r!=="-").join(" / ") || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap" }}>{(co.credit_score_kcb || co.credit_score_nice) ? ((co.credit_score_kcb || "-") + " / " + (co.credit_score_nice || "-")) : "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.next_action || "-"}</td>
-                  <td style={{ padding: "11px 8px", whiteSpace: "nowrap" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
+                  <td style={{ padding: "11px 8px", whiteSpace: "nowrap" }} onClick={function(e) { e.stopPropagation(); }}>
                     <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
                       <button onClick={function() { onSelect(co); }} title="소통/상세보기"
                         style={{ background: "#EEF2FF", border: "none", borderRadius: 4, padding: "3px 7px", fontSize: 11, cursor: "pointer", color: "#4338CA", fontWeight: 600 }}>💬</button>
@@ -6623,7 +6623,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       {selectedCase && (
         <div style={{ position: "fixed", inset: 0, zIndex: 900 }} onClick={function() { setSelectedCase(null); }}>
           <div style={{ position: "absolute", top: 0, right: 0, width: 460, height: "100%", background: "#fff", boxShadow: "-4px 0 30px rgba(0,0,0,0.15)", overflowY: "auto" }}
-            onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
+            onClick={function(e) { e.stopPropagation(); }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 800 }}>{selectedCase.business_name}</div>
@@ -7229,7 +7229,7 @@ function DBLeadsView() {
       {selectedLead && (
         <div style={{ position: "fixed", inset: 0, zIndex: 900 }} onClick={function() { setSelectedLead(null); }}>
           <div style={{ position: "absolute", top: 0, right: 0, width: 480, height: "100%", background: "#fff", boxShadow: "-4px 0 30px rgba(0,0,0,0.15)", overflowY: "auto" }}
-            onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
+            onClick={function(e) { e.stopPropagation(); }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 800, color: "#1A1917" }}>{selectedLead.business_name || "(미입력)"}</div>
