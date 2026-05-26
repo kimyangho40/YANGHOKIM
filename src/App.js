@@ -6307,12 +6307,11 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                             <input value={editData.fund_product || ""} placeholder="직접 입력" onChange={function(e) { var v = e.target.value; setEditData(function(p) { return Object.assign({}, p, { fund_product: v }); }); }}
                               style={{ padding: "4px 6px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 11, maxWidth: 160, boxSizing: "border-box" }} />
                           </div>
-                        ) : (
-                          {row.fund_product ? (function() {
+                        ) : row.fund_product ? (function() {
                             var col = getProductColor(row.fund_product);
                             return <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, fontWeight: 600, background: col.bg, color: col.text, whiteSpace: "nowrap" }}>{row.fund_product}</span>;
-                          })() : <span style={{ fontSize: 11, color: "#CCC" }}>-</span>}
-                        )}
+                          })() : <span style={{ fontSize: 11, color: "#CCC" }}>-</span>
+                        }
                       </td>
                     )}
                     <td style={{ padding: "10px 12px" }}>
