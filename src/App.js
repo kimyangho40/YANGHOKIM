@@ -5030,89 +5030,156 @@ function CalendarView({ companies, onSelectCompany, profile }) {
     );
   }, [companies, todayStr]);
 
-  // 구글 캘린더 연동
-  const connectGoogle = () => {
-    const scope = "https://www.googleapis.com/auth/calendar.events";
-    const redirectUri = window.location.origin;
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${encodeURIComponent(scope)}`;
+  // ─────────────────────────────────────────────────────────
+  // 구글 캘린더 영구 연동 (OAuth Code Flow + Supabase DB 토큰 저장)
+  // - 양호 캘린더 / 이사님 캘린더 2개를 분리 저장
+  // - calSheet 변수에 따라 적절한 토큰 조회 (yangho → '양호', director → '이사님')
+  // - refresh_token으로 자동 갱신 (영구 연동)
+  // ─────────────────────────────────────────────────────────
+  const GCAL_REDIRECT_URI = window.location.origin + "/oauth-callback";
+  const sheetToUserLabel = function(sheet) {
+    return sheet === "director" ? "이사님" : "양호";
+  };
+
+  // [1] 구글 OAuth 동의 화면으로 이동 (해당 캘린더의 주인이 로그인)
+  const connectGoogle = function() {
+    var userLabel = sheetToUserLabel(calSheet);
+    var scope = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email";
+    // state에 user_label 포함시켜 콜백 시 어떤 캘린더 연동인지 식별
+    var state = encodeURIComponent(JSON.stringify({ user_label: userLabel, sheet: calSheet }));
+    var authUrl = "https://accounts.google.com/o/oauth2/v2/auth"
+      + "?client_id=" + GOOGLE_CLIENT_ID
+      + "&redirect_uri=" + encodeURIComponent(GCAL_REDIRECT_URI)
+      + "&response_type=code"
+      + "&scope=" + encodeURIComponent(scope)
+      + "&access_type=offline"
+      + "&prompt=consent"
+      + "&include_granted_scopes=true"
+      + "&state=" + state;
     window.location.href = authUrl;
   };
 
-  // URL에서 access_token 확인 (구글 로그인 후 돌아올 때)
-  useEffect(function() {
-    var hash = window.location.hash;
-    if (hash && hash.includes("access_token")) {
-      var token = hash.split("access_token=")[1].split("&")[0];
-      if (token) {
-        setGConnected(true);
-        setGToken(token);
-        sessionStorage.setItem("gcal_token", token);
-        // 이번 달 일정 불러오기
-        var startDate = new Date(year, month, 1).toISOString();
-        var endDate = new Date(year, month + 1, 0).toISOString();
-        fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${startDate}&timeMax=${endDate}&singleEvents=true&orderBy=startTime`, {
-          headers: { Authorization: "Bearer " + token }
-        })
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-          if (data.items) {
-            var evs = data.items.map(function(item) {
-              var dateStr = item.start.date || (item.start.dateTime ? item.start.dateTime.slice(0, 10) : "");
-              var timeStr = item.start.dateTime ? new Date(item.start.dateTime).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }) : "";
-              return {
-                title: item.summary || "",
-                date: dateStr,
-                time: timeStr,
-                color: item.colorId || "9",
-                googleEventId: item.id,
-                memo: item.description || "",
-              };
-            });
-            setGoogleEvents(evs);
-          }
-        })
-        .catch(function() {});
-        // URL 해시 제거
-        window.history.replaceState(null, "", window.location.pathname);
+  // [2] DB에서 토큰 가져오기 + 만료시 자동 갱신 (Edge Function 호출)
+  var getValidAccessToken = async function(userLabel) {
+    try {
+      var refreshUrl = SUPABASE_URL + "/functions/v1/google-oauth-refresh";
+      var res = await fetch(refreshUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SUPABASE_ANON_KEY,
+          "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({ user_label: userLabel }),
+      });
+      var data = await res.json();
+      if (!res.ok) {
+        return { ok: false, needsConnection: data.needsConnection || false, error: data.error };
       }
-    } else {
-      // 세션 스토리지에 토큰 있으면 복구
-      var savedToken = sessionStorage.getItem("gcal_token");
-      if (savedToken) {
-        setGToken(savedToken);
-        setGConnected(true);
-        var startDate2 = new Date(year, month, 1).toISOString();
-        var endDate2 = new Date(year, month + 1, 0).toISOString();
-        fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${startDate2}&timeMax=${endDate2}&singleEvents=true&orderBy=startTime`, {
-          headers: { Authorization: "Bearer " + savedToken }
-        })
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-          if (data.items) {
-            var evs2 = data.items.map(function(item) {
-              var dateStr = item.start.date || (item.start.dateTime ? item.start.dateTime.slice(0, 10) : "");
-              var timeStr = item.start.dateTime ? new Date(item.start.dateTime).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }) : "";
-              return {
-                title: item.summary || "",
-                date: dateStr,
-                time: timeStr,
-                color: item.colorId || "9",
-                googleEventId: item.id,
-                memo: item.description || "",
-              };
-            });
-            setGoogleEvents(evs2);
-          } else if (data.error) {
-            // 토큰 만료 등
-            sessionStorage.removeItem("gcal_token");
-            setGToken("");
-            setGConnected(false);
-          }
-        })
-        .catch(function() {});
-      }
+      return { ok: true, access_token: data.access_token, google_email: data.google_email };
+    } catch (err) {
+      return { ok: false, error: String(err) };
     }
-  }, [year, month]);
+  };
+
+  // [3] 구글 캘린더에서 일정 가져오기
+  var fetchGoogleEventsForSheet = async function(sheet) {
+    var userLabel = sheetToUserLabel(sheet);
+    var tokenResult = await getValidAccessToken(userLabel);
+    if (!tokenResult.ok) {
+      setGConnected(false);
+      setGToken("");
+      setGoogleEvents([]);
+      return;
+    }
+    setGConnected(true);
+    setGToken(tokenResult.access_token);
+
+    var startDate = new Date(year, month, 1).toISOString();
+    var endDate = new Date(year, month + 1, 0, 23, 59, 59).toISOString();
+    try {
+      var r = await fetch(
+        "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+        + "?timeMin=" + encodeURIComponent(startDate)
+        + "&timeMax=" + encodeURIComponent(endDate)
+        + "&singleEvents=true&orderBy=startTime&maxResults=250",
+        { headers: { Authorization: "Bearer " + tokenResult.access_token } }
+      );
+      var data = await r.json();
+      if (data.items) {
+        var evs = data.items.map(function(item) {
+          var dateStr = item.start.date || (item.start.dateTime ? item.start.dateTime.slice(0, 10) : "");
+          var timeStr = item.start.dateTime ? new Date(item.start.dateTime).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }) : "";
+          return {
+            title: item.summary || "",
+            date: dateStr,
+            time: timeStr,
+            color: item.colorId || "9",
+            googleEventId: item.id,
+            memo: item.description || "",
+          };
+        });
+        setGoogleEvents(evs);
+      } else {
+        setGoogleEvents([]);
+      }
+    } catch (err) {
+      setGoogleEvents([]);
+    }
+  };
+
+  // [4] OAuth 콜백 처리: URL의 ?code=... 를 받아서 Edge Function으로 교환
+  useEffect(function() {
+    var urlParams = new URLSearchParams(window.location.search);
+    var code = urlParams.get("code");
+    var stateParam = urlParams.get("state");
+    if (code && stateParam) {
+      var stateData = null;
+      try { stateData = JSON.parse(decodeURIComponent(stateParam)); } catch (e) {}
+      if (!stateData || !stateData.user_label) {
+        window.history.replaceState(null, "", window.location.pathname);
+        return;
+      }
+      // Edge Function에 code 보내서 토큰 교환 + DB 저장
+      var exchangeUrl = SUPABASE_URL + "/functions/v1/smart-handler";
+      fetch(exchangeUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SUPABASE_ANON_KEY,
+          "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({
+          code: code,
+          user_label: stateData.user_label,
+          redirect_uri: GCAL_REDIRECT_URI,
+        }),
+      })
+      .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+      .then(function(result) {
+        if (result.ok) {
+          alert("✅ " + stateData.user_label + " 캘린더가 영구 연동되었습니다!\n(" + (result.data.google_email || "") + ")");
+          if (stateData.sheet) setCalSheet(stateData.sheet);
+        } else {
+          alert("❌ 연동 실패: " + (result.data.error || "알 수 없는 오류"));
+        }
+        // URL 정리 후 캘린더 로드
+        window.history.replaceState(null, "", window.location.pathname);
+        fetchGoogleEventsForSheet(stateData.sheet || calSheet);
+      })
+      .catch(function(err) {
+        alert("❌ 연동 요청 실패: " + err.message);
+        window.history.replaceState(null, "", window.location.pathname);
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // [5] 탭(calSheet) 또는 월(year/month) 변경 시 해당 캘린더 일정 다시 로드
+  useEffect(function() {
+    fetchGoogleEventsForSheet(calSheet);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calSheet, year, month]);
 
   const selectedDateStr = selectedDate
     ? `${year}-${String(month+1).padStart(2,"0")}-${String(selectedDate).padStart(2,"0")}`
@@ -5160,8 +5227,8 @@ function CalendarView({ companies, onSelectCompany, profile }) {
 
       {/* 캘린더 시트 전환 + 일정추가 */}
       {activeTab === "calendar" && (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <button onClick={() => setCalSheet("yangho")}
               style={{ padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: calSheet === "yangho" ? 700 : 400, background: calSheet === "yangho" ? "#4338CA" : "#fff", color: calSheet === "yangho" ? "#fff" : "#666", border: calSheet === "yangho" ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
               김양호 캘린더
@@ -5170,6 +5237,26 @@ function CalendarView({ companies, onSelectCompany, profile }) {
               style={{ padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: calSheet === "director" ? 700 : 400, background: calSheet === "director" ? "#7C3AED" : "#fff", color: calSheet === "director" ? "#fff" : "#666", border: calSheet === "director" ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
               이사님 캘린더
             </button>
+            {/* 연동 상태 표시 */}
+            <span style={{ marginLeft: 8, padding: "4px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: gConnected ? "#DCFCE7" : "#FEE2E2", color: gConnected ? "#166534" : "#991B1B" }}>
+              {gConnected ? "✓ 구글 연동됨" : "✗ 미연동"}
+            </span>
+            {/* 미연동 시 연결 버튼 노출 */}
+            {!gConnected && (
+              <button onClick={connectGoogle}
+                style={{ padding: "6px 12px", background: "#4285F4", color: "#fff", border: "none", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+                title={`${sheetToUserLabel(calSheet)}님 구글 계정으로 로그인하여 캘린더 영구 연동`}>
+                🔗 {sheetToUserLabel(calSheet)} 구글 계정 연동
+              </button>
+            )}
+            {/* 연동된 경우 재연동 옵션 (만약 다른 계정으로 바꾸고 싶을 때) */}
+            {gConnected && (
+              <button onClick={connectGoogle}
+                style={{ padding: "6px 10px", background: "transparent", color: "#666", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 11, fontWeight: 500, cursor: "pointer" }}
+                title="다른 구글 계정으로 다시 연동">
+                재연동
+              </button>
+            )}
           </div>
           <button onClick={() => { setShowAddEvent(true); setNewEvent({ title: "", date: selectedDate ? `${year}-${String(month+1).padStart(2,"0")}-${String(selectedDate).padStart(2,"0")}` : "", time: "", memo: "", sheet: calSheet }); }}
             style={{ padding: "7px 14px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
