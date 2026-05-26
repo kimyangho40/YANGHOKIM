@@ -7316,17 +7316,34 @@ function DBLeadsView() {
                 </div>
               </div>
 
-              {/* 1~5차콜 */}
+              {/* 📝 통화 스크립트 메모 (큰 영역) - 상단 배치 */}
               <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 10, letterSpacing: "0.05em" }}>콜 기록</div>
-                {[1,2,3,4,5].map(function(ci) {
-                  var dateKey = "call_" + ci + "_date";
-                  var statusKey = "call_" + ci + "_status";
-                  var memoKey = "call_" + ci + "_memo";
-                  return (
-                    <div key={ci} style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 14px", marginBottom: 8, borderLeft: (selectedLead[dateKey] || selectedLead[statusKey] || selectedLead[memoKey]) ? "3px solid #4338CA" : "3px solid #E8E5E0" }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: "#4338CA", marginBottom: 6 }}>{ci}차콜</div>
-                      <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#4338CA", letterSpacing: "0.05em" }}>📝 통화 스크립트 (DB 13문항 + 메모)</div>
+                  <span style={{ fontSize: 10, color: "#888" }}>자동 저장</span>
+                </div>
+                <textarea value={selectedLead.script_memo || ""}
+                  placeholder="【고객정보】&#10;▷이름:&#10;▷연락처:&#10;▷회사이름:&#10;▷지역:&#10;&#10;【Q&A】&#10;1. 정책자금 / 세무기장 중 어떤 상담 문의&#10;-> &#10;2. 현재 하시는 업종 (제조업, 도소매업 등)&#10;-> &#10;3. 사업장 설립일자&#10;-> &#10;..."
+                  onChange={function(e) { setSelectedLead(function(p) { return Object.assign({}, p, { script_memo: e.target.value }); }); }}
+                  onBlur={async function() {
+                    var v = selectedLead.script_memo || null;
+                    var r = await supabase.from("db_leads").update({ script_memo: v, updated_at: new Date().toISOString() }).eq("id", selectedLead.id);
+                    if (!r.error) setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, { script_memo: v }) : l; }); });
+                  }}
+                  style={{ width: "100%", minHeight: 350, padding: "12px 14px", border: "2px solid #C7D2FE", borderRadius: 10, fontSize: 12, lineHeight: 1.7, fontFamily: "'Noto Sans KR', 'Malgun Gothic', monospace", boxSizing: "border-box", outline: "none", background: "#FAFAFF", resize: "vertical", whiteSpace: "pre-wrap" }} />
+              </div>
+
+              {/* 📞 콜 이력 (컴팩트) */}
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8, letterSpacing: "0.05em" }}>📞 콜 이력</div>
+                <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "8px 10px" }}>
+                  {[1,2,3,4,5].map(function(ci) {
+                    var dateKey = "call_" + ci + "_date";
+                    var statusKey = "call_" + ci + "_status";
+                    var hasData = selectedLead[dateKey] || selectedLead[statusKey];
+                    return (
+                      <div key={ci} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: ci < 5 ? 6 : 0, opacity: hasData ? 1 : 0.6 }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "#4338CA", width: 32, flexShrink: 0 }}>{ci}차</span>
                         <input type="date" value={selectedLead[dateKey] || ""}
                           onChange={function(e) { setSelectedLead(function(p) { return Object.assign({}, p, { [dateKey]: e.target.value }); }); }}
                           onBlur={async function() {
@@ -7334,7 +7351,7 @@ function DBLeadsView() {
                             var r = await supabase.from("db_leads").update(u).eq("id", selectedLead.id);
                             if (!r.error) setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, u) : l; }); });
                           }}
-                          style={{ flex: 1, padding: "6px 8px", border: "1px solid #fff", borderRadius: 6, fontSize: 12, background: "#fff" }} />
+                          style={{ flex: 1, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, background: "#fff" }} />
                         <select value={selectedLead[statusKey] || ""}
                           onChange={async function(e) {
                             var v = e.target.value;
@@ -7345,24 +7362,16 @@ function DBLeadsView() {
                               setSelectedLead(function(p) { return Object.assign({}, p, { [statusKey]: v }); });
                             }
                           }}
-                          style={{ flex: 1, padding: "6px 8px", border: "1px solid #fff", borderRadius: 6, fontSize: 12, background: "#fff" }}>
-                          <option value="">상태 선택</option>
+                          style={{ flex: 1, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, background: "#fff" }}>
+                          <option value="">-</option>
                           <option value="통화완료">통화완료</option><option value="부재">부재</option><option value="거절">거절</option>
                           <option value="문자발송">문자발송</option><option value="카톡발송">카톡발송</option><option value="콜백요청">콜백요청</option>
                           <option value="미팅예약">미팅예약</option><option value="상담완료">상담완료</option><option value="수신거부">수신거부</option>
                         </select>
                       </div>
-                      <input value={selectedLead[memoKey] || ""} placeholder={ci + "차콜 메모 (선택)"}
-                        onChange={function(e) { setSelectedLead(function(p) { return Object.assign({}, p, { [memoKey]: e.target.value }); }); }}
-                        onBlur={async function() {
-                          var u = {}; u[memoKey] = selectedLead[memoKey] || null; u.updated_at = new Date().toISOString();
-                          var r = await supabase.from("db_leads").update(u).eq("id", selectedLead.id);
-                          if (!r.error) setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, u) : l; }); });
-                        }}
-                        style={{ width: "100%", padding: "6px 8px", border: "1px solid #fff", borderRadius: 6, fontSize: 12, boxSizing: "border-box", outline: "none", background: "#fff" }} />
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
 
               {/* 이슈 메모 */}
