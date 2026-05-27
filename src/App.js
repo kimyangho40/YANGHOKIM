@@ -1356,6 +1356,11 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         return null; // 업무노트는 WorkNotesView에서 관리
       })()}
 
+      {/* 📋 내 할일 위젯 - 항상 표시 (work_notes 체크박스 기반) */}
+      <div style={{ marginBottom: 18 }}>
+        <MyTodoWidget setView={setView} />
+      </div>
+
       {/* 🆕 오늘의 할 일 위젯 */}
       {(function() {
         var today = new Date().toISOString().slice(0, 10);
@@ -1377,10 +1382,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
               <span style={{ fontSize: 11, color: "#92400E", background: "#FEF3C7", padding: "2px 8px", borderRadius: 99, fontWeight: 600, border: "1px solid #FCD34D" }}>{totalCount}건</span>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
-              {/* 📋 내 할일 위젯 - work_notes 체크박스 기반 */}
-              <MyTodoWidget setView={setView} />
-              
-              {/* companies 기반 위젯 제거됨 - work_notes 기반 "내 할일" 위젯이 메인 */}
+              {/* companies 기반 위젯 */}
               {stagnant14.length > 0 && (
                 <div onClick={function() { setView("stagnant"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
                   <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 700, marginBottom: 4 }}>🔴 심각 정체</div>
@@ -5046,7 +5048,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
     var userLabel = sheetToUserLabel(calSheet);
     var scope = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email";
     // state에 user_label 포함시켜 콜백 시 어떤 캘린더 연동인지 식별
-    var state = encodeURIComponent(JSON.stringify({ sheet: calSheet }));
+    var state = encodeURIComponent(JSON.stringify({ user_label: userLabel, sheet: calSheet }));
     var authUrl = "https://accounts.google.com/o/oauth2/v2/auth"
       + "?client_id=" + GOOGLE_CLIENT_ID
       + "&redirect_uri=" + encodeURIComponent(GCAL_REDIRECT_URI)
