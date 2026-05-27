@@ -1,50 +1,50 @@
-/* eslint-disable no-unused-vars, react-hooks/exhaustive-deps, no-redeclare */
+﻿/* eslint-disable no-unused-vars, react-hooks/exhaustive-deps, no-redeclare */
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-// ?�?� Supabase ?�정 ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── Supabase 설정 ─────────────────────────────────────────────────────────────
 const SUPABASE_URL = "https://ujdrjvnihxjvbkezjvwc.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVqZHJqdm5paHhqdmJrZXpqdndjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzOTgzODIsImV4cCI6MjA5Mzk3NDM4Mn0.K0zbRGT8SrDBeZoDyc_VM61xAHZye8V0p0m2PemNUWM";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// ?�?� ?�수 ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
-const STAGES = ["?�담/진단?�료", "?�수?�류 �??�증?�요�?, "기�??�청?��?방문?�정", "?�크립트 ?�달 ?�료", "기�??�청?�료/방문?�료", "?�사�??�태조사?��?, "?�태조사?�료/?�정?�료", "?�금집행?�료", "?�수료�?�?�??�금?�청", "?�금?�료/?�후관�?, "추�? 진행 ?�정", "추�? 진행 �?, "기�?"];
+// ── 상수 ─────────────────────────────────────────────────────────────────────
+const STAGES = ["상담/진단완료", "필수서류 및 인증서요청", "기관신청대기/방문예정", "스크립트 전달 완료", "기관신청완료/방문완료", "심사중/실태조사대기", "실태조사완료/약정완료", "자금집행완료", "수수료대기 및 입금요청", "입금완료/사후관리", "추가 진행 예정", "추가 진행 중", "기타"];
 const STAGE_COLORS = {
-  "?�담/진단?�료":           { bg: "#EEF2FF", text: "#4338CA", border: "#C7D2FE" },
-  "?�수?�류 �??�증?�요�?:  { bg: "#FFF7ED", text: "#C2410C", border: "#FED7AA" },
-  "기�??�청?��?방문?�정":   { bg: "#FFF1F2", text: "#BE123C", border: "#FECDD3" },
-  "?�크립트 ?�달 ?�료":       { bg: "#F0FDF4", text: "#15803D", border: "#BBF7D0" },
-  "기�??�청?�료/방문?�료":   { bg: "#ECFDF5", text: "#047857", border: "#A7F3D0" },
-  "?�사�??�태조사?��?:     { bg: "#FFFBEB", text: "#B45309", border: "#FDE68A" },
-  "?�태조사?�료/?�정?�료":   { bg: "#FEF3C7", text: "#92400E", border: "#FCD34D" },
-  "?�금집행?�료":            { bg: "#F5F3FF", text: "#7C3AED", border: "#DDD6FE" },
-  "?�수료�?�?�??�금?�청":  { bg: "#FDF4FF", text: "#A21CAF", border: "#F0ABFC" },
-  "?�금?�료/?�후관�?:       { bg: "#F0FDF4", text: "#166534", border: "#86EFAC" },
-  "추�? 진행 ?�정":          { bg: "#F5F3FF", text: "#6D28D9", border: "#C4B5FD" },
-  "추�? 진행 �?:            { bg: "#EFF6FF", text: "#1D4ED8", border: "#93C5FD" },
-  "기�?":                    { bg: "#F7F6F3", text: "#666",    border: "#D1D5DB" },
+  "상담/진단완료":           { bg: "#EEF2FF", text: "#4338CA", border: "#C7D2FE" },
+  "필수서류 및 인증서요청":  { bg: "#FFF7ED", text: "#C2410C", border: "#FED7AA" },
+  "기관신청대기/방문예정":   { bg: "#FFF1F2", text: "#BE123C", border: "#FECDD3" },
+  "스크립트 전달 완료":       { bg: "#F0FDF4", text: "#15803D", border: "#BBF7D0" },
+  "기관신청완료/방문완료":   { bg: "#ECFDF5", text: "#047857", border: "#A7F3D0" },
+  "심사중/실태조사대기":     { bg: "#FFFBEB", text: "#B45309", border: "#FDE68A" },
+  "실태조사완료/약정완료":   { bg: "#FEF3C7", text: "#92400E", border: "#FCD34D" },
+  "자금집행완료":            { bg: "#F5F3FF", text: "#7C3AED", border: "#DDD6FE" },
+  "수수료대기 및 입금요청":  { bg: "#FDF4FF", text: "#A21CAF", border: "#F0ABFC" },
+  "입금완료/사후관리":       { bg: "#F0FDF4", text: "#166534", border: "#86EFAC" },
+  "추가 진행 예정":          { bg: "#F5F3FF", text: "#6D28D9", border: "#C4B5FD" },
+  "추가 진행 중":            { bg: "#EFF6FF", text: "#1D4ED8", border: "#93C5FD" },
+  "기타":                    { bg: "#F7F6F3", text: "#666",    border: "#D1D5DB" },
 };
-const AGENCIES = ["?�상공인?�장진흥공단","중소벤처기업진흥공단","?�용보증기금","?�용보증?�단","기술보증기금","?��?금융진흥??,"구조?�신&?�업?�환","기�?"];
-const JUNGINGONG_PRODUCTS = ["창업기반지??,"�?��창업?�금","?�신?�장지??,"개발기술?�업??,"?�창??,"?�수기업?�출기업??10만불 미만)","?�출기업글로벌??10만불 ?�상)","?�업?�환","구조개선","기�?"];
-const SOJINGONG_PRODUCTS = ["?�용취약?�금","?�도?�특별자�?,"?�신?�장 촉진?�금(?�마??기술)","?�신?�장 촉진?�금(2???�속 매출 10% ?�장)","?�신?�장 촉진?�금(?�출 ?�금)","?�신?�장 촉진?�금(�???기�?)","?�생?�장지?�자�?,"�???기�?","?�리�?�?];
+const AGENCIES = ["소상공인시장진흥공단","중소벤처기업진흥공단","신용보증기금","신용보증재단","기술보증기금","서민금융진흥원","구조혁신&사업전환","기타"];
+const JUNGINGONG_PRODUCTS = ["창업기반지원","청년창업자금","혁신성장지원","개발기술사업화","재창업","내수기업수출기업화(10만불 미만)","수출기업글로벌화(10만불 이상)","사업전환","구조개선","기타"];
+const SOJINGONG_PRODUCTS = ["신용취약자금","재도전특별자금","혁신성장 촉진자금(스마트 기술)","혁신성장 촉진자금(2년 연속 매출 10% 신장)","혁신성장 촉진자금(수출 자금)","혁신성장 촉진자금(그 외 기타)","상생성장지원자금","그 외 기타","대리대출"];
 const AGENCY_GROUPS = [
-  { id: "?�상공인?�장진흥공단", label: "?�상공인?�장진흥공단", color: "#4338CA" },
-  { id: "?�용보증기금", label: "?�용보증기금", color: "#0F6E56" },
+  { id: "소상공인시장진흥공단", label: "소상공인시장진흥공단", color: "#4338CA" },
+  { id: "신용보증기금", label: "신용보증기금", color: "#0F6E56" },
   { id: "기술보증기금", label: "기술보증기금", color: "#0369A1" },
-  { id: "?�용보증?�단", label: "?�용보증?�단", color: "#B45309" },
+  { id: "신용보증재단", label: "신용보증재단", color: "#B45309" },
   { id: "중소벤처기업진흥공단", label: "중소벤처기업진흥공단", color: "#7C3AED" },
-  { id: "구조?�신&?�업?�환", label: "구조?�신&?�업?�환", color: "#BE123C" },
-  { id: "경정�?��", label: "경정�?��", color: "#0369A1" },
-  { id: "기�?", label: "기�?", color: "#555" },
+  { id: "구조혁신&사업전환", label: "구조혁신&사업전환", color: "#BE123C" },
+  { id: "경정청구", label: "경정청구", color: "#0369A1" },
+  { id: "기타", label: "기타", color: "#555" },
 ];
-const DOC_LIST = ["?�업?�등록증","최근 3?�치 ?�무?�표 (23??25??","최근 3?�치 부가??증명??(23??25??","법인 기업 금융거래 ?�인??,"?�?�자 ?�용?�수","4?�보험 명�?","?�별 고용보험 가?�자 명�?","�????�업?�환 ?�수 ?�류","최근 1???�출?�적 증명??,"?�업???��?금융거래 ?�인??,"?�?�자 ?�분�?,"?��?�?계약??,"?�사 ?�개???�는 ?�업계획??];
-const TEAMS = ["법인?�담","개인?�담","관리자"];
-const ASSIGNEES = ["미현","?�진","관??,"지??,"?�애","?�선","?�일","?�호"];
-const INDUSTRY_OPTIONS = ["?�조??,"?�업·?�업","?�박??,"?�식?�업","?�자?�거?�업","?�보?�신??,"?�소매업","?�비?�업","창고??,"?�동차임?�??];
-const DB_ASSIGNEES = ["미현","?�진","관??,"지??,"?�애","?�선","?�일"];
-const DB_MANAGERS = ["?�호","?�일","관??];
+const DOC_LIST = ["사업자등록증","최근 3년치 재무제표 (23년~25년)","최근 3년치 부가세 증명원 (23년~25년)","법인 기업 금융거래 확인서","대표자 신용점수","4대보험 명부","월별 고용보험 가입자 명부","그 외 사업전환 필수 서류","최근 1년 수출실적 증명서","사업자 대출 금융거래 확인서","대표자 신분증","임대차 계약서","회사 소개서 또는 사업계획서"];
+const TEAMS = ["법인전담","개인전담","관리자"];
+const ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일","양호"];
+const INDUSTRY_OPTIONS = ["제조업","농업·어업","숙박업","음식점업","전자상거래업","정보통신업","도소매업","서비스업","창고업","자동차임대업"];
+const DB_ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일"];
+const DB_MANAGERS = ["양호","동일","관호"];
 
-// ?�화번호 ?�동 ?�이???�맷 (01012345678 ??010-1234-5678)
+// 전화번호 자동 하이픈 포맷 (01012345678 → 010-1234-5678)
 function formatPhone(v) {
   if (!v) return "";
   var d = String(v).replace(/[^0-9]/g, "");
@@ -61,7 +61,7 @@ function formatPhone(v) {
   return d.slice(0,3) + "-" + d.slice(3,7) + "-" + d.slice(7,11);
 }
 
-// ?�업?�등록번???�동 ?�이??(1234567890 ??123-45-67890)
+// 사업자등록번호 자동 하이픈 (1234567890 → 123-45-67890)
 function formatBizNumber(v) {
   if (!v) return "";
   var d = String(v).replace(/[^0-9]/g, "");
@@ -71,135 +71,137 @@ function formatBizNumber(v) {
   return d.slice(0,3) + "-" + d.slice(3,5) + "-" + d.slice(5,10);
 }
 
-// 중소벤처기업진흥공단 / 구조?�신&?�업?�환 지??��부·지부 관??매핑
-// 값�? 배열 ??복수 관?��???�� 경우 2�??�어�?const JUNGINGONG_REGION_MAP = {
-  // ?�울지??��부
-  "중구": ["?�울지??��부"], "강북�?: ["?�울지??��부"], "?�원�?: ["?�울지??��부"], "?�봉�?: ["?�울지??��부"],
-  "?��?문구": ["?�울지??��부"], "마포�?: ["?�울지??��부"], "?��?문구": ["?�울지??��부"], "?�동�?: ["?�울지??��부"],
-  "?�북�?: ["?�울지??��부"], "?�산�?: ["?�울지??��부"], "?�?�구": ["?�울지??��부"], "종로�?: ["?�울지??��부"], "중랑�?: ["?�울지??��부"],
-  // ?�울?��?지부
-  "강동�?: ["?�울?��?지부"], "광진�?: ["?�울?��?지부"], "?�파�?: ["?�울?��?지부"],
-  // ?�울?��?지부
-  "?�천�?: ["?�울?��?지부"], "금천�?: ["?�울?��?지부"], "강서�?: ["?�울?��?지부"], "관?�구": ["?�울?��?지부"],
-  "구로�?: ["?�울?��?지부"], "?�작�?: ["?�울?��?지부"], "?�등?�구": ["?�울?��?지부"],
-  // ?�울?��?지부
-  "?�초�?: ["?�울?��?지부"], "강남�?: ["?�울?��?지부"],
-  // ?�천지??��부
-  "?�수�?: ["?�천지??��부"], "계양�?: ["?�천지??��부"], "?�동�?: ["?�천지??��부"], "부?�구": ["?�천지??��부"], "부천시": ["?�천지??��부"],
-  // ?�천?��?지부
-  "?�구": ["?�천?��?지부"], "?�구": ["?�천?��?지부"], "미추?��?: ["?�천?��?지부"], "강화�?: ["?�천?��?지부"], "?�진�?: ["?�천?��?지부"], "김?�시": ["?�천?��?지부"],
-  // 경기지??��부
-  "?�원??: ["경기지??��부"], "?�성??: ["경기지??��부"], "?�인??: ["경기지??��부"], "과천??: ["경기지??��부"],
-  "?�양??: ["경기지??��부"], "?�왕??: ["경기지??��부"], "군포??: ["경기지??��부"],
-  // 경기?��?지부 (가?�군, ?�평군�? 복수 관??
-  "광주??: ["경기?��?지부"], "구리??: ["경기?��?지부"], "?�양주시": ["경기?��?지부"],
-  "?�남??: ["경기?��?지부"], "?�천??: ["경기?��?지부"], "?�남??: ["경기?��?지부"], "?�주??: ["경기?��?지부"],
-  "가?�군": ["경기?��?지부","경기북�?지부"], "?�평�?: ["경기?��?지부","경기북�?지부"],
-  // 경기?��?지부 (?�성?�는 ?�산�??�신�?마도�??�양??비봉면이 복수)
-  "?�흥??: ["경기?��?지부"], "광명??: ["경기?��?지부"], "?�산??: ["경기?��?지부"],
-  "?�성??: ["경기?��?지부","경기?��?지부"],
-  // 경기?��?지부
-  "?�택??: ["경기?��?지부"], "?�산??: ["경기?��?지부"],
-  // 경기북�?지부
-  "고양??: ["경기북�?지부"], "?�두천시": ["경기북�?지부"], "?�정부??: ["경기북�?지부"],
-  "?�주??: ["경기북�?지부"], "?�천??: ["경기북�?지부"], "?�천�?: ["경기북�?지부"],
-  // 강원지??��부 (가?�군 복수???�에??처리??
-  "춘천??: ["강원지??��부"], "?�주??: ["강원지??��부"], "?�월�?: ["강원지??��부"],
-  "?�제�?: ["강원지??��부"], "철원�?: ["강원지??��부"], "?�천�?: ["강원지??��부"],
-  "?�천�?: ["강원지??��부"], "?�성�?: ["강원지??��부"],
-  // 강원?�동지부 (?�선�? ?�창�?복수)
-  "강릉??: ["강원?�동지부"], "?�해??: ["강원?�동지부"], "?�척??: ["강원?�동지부"],
-  "?�초??: ["강원?�동지부"], "?�백??: ["강원?�동지부"], "고성�?: ["강원?�동지부"], "?�양�?: ["강원?�동지부"],
-  "?�선�?: ["강원지??��부","강원?�동지부"], "?�창�?: ["강원지??��부","강원?�동지부"],
-  // ?�?��???��부
-  "?�??: ["?�?��???��부"], "계룡??: ["?�?��???��부"], "?�산??: ["?�?��???��부"],
-  "금산�?: ["?�?��???��부"], "?�천�?: ["?�?��???��부","충북지??��부"],
-  // ?�종지??��부 (?�천�?복수)
-  "?�종": ["?�종지??��부"], "공주??: ["?�종지??��부"], "�?���?: ["?�종지??��부"],
-  "보령??: ["?�종지??��부"], "부?�군": ["?�종지??��부"],
-  "?�천�?: ["?�종지??��부","충남지??��부"],
-  // 충남지??��부
-  "천안??: ["충남지??��부"], "?�산??: ["충남지??��부"], "?�산??: ["충남지??��부"],
-  "?�진??: ["충남지??��부"], "?�산�?: ["충남지??��부"], "?�안�?: ["충남지??��부"], "?�성�?: ["충남지??��부"],
-  // 충북지??��부
-  "�?��??: ["충북지??��부"], "보�?�?: ["충북지??��부"], "?�동�?: ["충북지??��부"],
-  "?�천�?충북": ["충북지??��부"], "진천�?: ["충북지??��부"], "증평�?: ["충북지??��부"], "?�성�?: ["충북지??��부"],
-  // 충북북�?지부
-  "충주??: ["충북북�?지부"], "?�천??: ["충북북�?지부"], "괴산�?: ["충북북�?지부"], "?�양�?: ["충북북�?지부"],
-  // ?�북지??��부
-  "?�주??: ["?�북지??��부"], "?�원??: ["?�북지??��부"], "무주�?: ["?�북지??��부"],
-  "?�창�?: ["?�북지??��부"], "?�주�?: ["?�북지??��부"], "?�실�?: ["?�북지??��부"],
-  "?�수�?: ["?�북지??��부"], "진안�?: ["?�북지??��부"], "?�읍??: ["?�북지??��부"],
-  "?�산??: ["?�북지??��부"], "김?�시": ["?�북지??��부"],
-  // ?�북?��?지부
-  "군산??: ["?�북?��?지부"], "고창�?: ["?�북?��?지부"], "부?�군": ["?�북?��?지부"], "?�천�??�북": ["?�북?��?지부"], "?�산???�북?��?": ["?�북?��?지부"],
-  // 광주지??��부 (?�광�? ?�평�? ?�주?�는 복수)
-  "광주": ["광주지??��부"], "?�양�?: ["광주지??��부"], "?�성�?: ["광주지??��부"], "?�순�?: ["광주지??��부"],
-  // ?�남지??��부 (?�광�? ?�평�? ?�주?? ?�흥�?복수)
-  "무안�?: ["?�남지??��부"], "목포??: ["?�남지??��부"], "강진�?: ["?�남지??��부"],
-  "?�안�?: ["?�남지??��부"], "?�암�?: ["?�남지??��부"], "?�도�?: ["?�남지??��부"],
-  "진도�?: ["?�남지??��부"], "?�남�?: ["?�남지??��부"],
-  "?�광�?: ["광주지??��부","?�남지??��부"], "?�평�?: ["광주지??��부","?�남지??��부"],
-  "?�주??: ["광주지??��부","?�남지??��부"], "?�흥�?: ["?�남지??��부","?�남?��?지부"],
-  // ?�남?��?지부
-  "?�천??: ["?�남?��?지부"], "광양??: ["?�남?��?지부"], "?�수??: ["?�남?��?지부"],
-  "고흥�?: ["?�남?��?지부"], "곡성�?: ["?�남?��?지부"], "구�?�?: ["?�남?��?지부"], "보성�?: ["?�남?��?지부"],
-  // ?�구�???��부
-  "?��?: ["?�구�???��부"],
-  // 경북지??��부 (봉화�?복수)
-  "구�???: ["경북지??��부"], "김천시": ["경북지??��부"], "문경??: ["경북지??��부"],
-  "?�주??: ["경북지??��부"], "?�동??: ["경북지??��부"], "?�주??: ["경북지??��부"],
-  "고령�?: ["경북지??��부"], "?�주�?: ["경북지??��부"], "?�천�?: ["경북지??��부"],
-  "?�성�?: ["경북지??��부"], "칠곡�?: ["경북지??��부"],
-  "봉화�?: ["경북지??��부","경북?��?지부"],
-  // 경북?��?지부
-  "?�항??: ["경북?��?지부"], "경주??: ["경북?��?지부","?�산지??��부"],
-  "?�덕�?: ["경북?��?지부"], "?�양�?: ["경북?��?지부"], "?�릉�?: ["경북?��?지부"], "?�진�?: ["경북?��?지부"], "�?���?: ["경북?��?지부"],
-  // 경북?��?지부
-  "경산??: ["경북?��?지부"], "?�천??: ["경북?��?지부"], "�?���?: ["경북?��?지부"],
-  // 부?�동부지??��부
-  "?�상�?: ["부?�동부지??��부"], "강서�?부??: ["부?�동부지??��부"], "?�구_부??: ["부?�동부지??��부"],
-  "부?�진�?: ["부?�동부지??��부"], "북구_부??: ["부?�동부지??��부"], "?�하�?: ["부?�동부지??��부"],
-  "?�구_부??: ["부?�동부지??��부"], "?�도�?: ["부?�동부지??��부"], "중구_부??: ["부?�동부지??��부"],
-  // 부?�동부지부
-  "?�운?��?: ["부?�동부지부"], "금정�?: ["부?�동부지부"], "?�구_부??: ["부?�동부지부"],
-  "?�래�?: ["부?�동부지부"], "?�영�?: ["부?�동부지부"], "?�제�?: ["부?�동부지부"], "기장�?: ["부?�동부지부"],
-  // ?�산지??��부 (경주?? ?�산??복수)
-  "?�산": ["?�산지??��부"], "?�동??: ["?�산지??��부"], "?�남�?: ["?�산지??��부"], "?�내�?: ["?�산지??��부"],
-  "?�산??: ["?�산지??��부","경남지??��부"],
-  // 경남지??��부
-  "창원??: ["경남지??��부"], "?�령�?: ["경남지??��부"], "?�안�?: ["경남지??��부"], "창녕�?: ["경남지??��부"],
-  // 경남?��?지부
-  "김?�시": ["경남?��?지부"], "밀?�시": ["경남?��?지부"],
-  // 경남?��?지부
-  "진주??: ["경남?��?지부"], "거제??: ["경남?��?지부"], "?�천??: ["경남?��?지부"],
-  "?�영??: ["경남?��?지부"], "거창�?: ["경남?��?지부"], "?�해�?: ["경남?��?지부"],
-  "?�청�?: ["경남?��?지부"], "?�동�?: ["경남?��?지부"], "?�양�?: ["경남?��?지부"], "?�천�?: ["경남?��?지부"],
-  // ?�주지??��부
-  "?�주??: ["?�주지??��부"], "?��??�시": ["?�주지??��부"],
+// 중소벤처기업진흥공단 / 구조혁신&사업전환 지역본부·지부 관할 매핑
+// 값은 배열 — 복수 관할지역의 경우 2개 들어감
+const JUNGINGONG_REGION_MAP = {
+  // 서울지역본부
+  "중구": ["서울지역본부"], "강북구": ["서울지역본부"], "노원구": ["서울지역본부"], "도봉구": ["서울지역본부"],
+  "동대문구": ["서울지역본부"], "마포구": ["서울지역본부"], "서대문구": ["서울지역본부"], "성동구": ["서울지역본부"],
+  "성북구": ["서울지역본부"], "용산구": ["서울지역본부"], "은평구": ["서울지역본부"], "종로구": ["서울지역본부"], "중랑구": ["서울지역본부"],
+  // 서울동부지부
+  "강동구": ["서울동부지부"], "광진구": ["서울동부지부"], "송파구": ["서울동부지부"],
+  // 서울서부지부
+  "양천구": ["서울서부지부"], "금천구": ["서울서부지부"], "강서구": ["서울서부지부"], "관악구": ["서울서부지부"],
+  "구로구": ["서울서부지부"], "동작구": ["서울서부지부"], "영등포구": ["서울서부지부"],
+  // 서울남부지부
+  "서초구": ["서울남부지부"], "강남구": ["서울남부지부"],
+  // 인천지역본부
+  "연수구": ["인천지역본부"], "계양구": ["인천지역본부"], "남동구": ["인천지역본부"], "부평구": ["인천지역본부"], "부천시": ["인천지역본부"],
+  // 인천서부지부
+  "서구": ["인천서부지부"], "동구": ["인천서부지부"], "미추홀구": ["인천서부지부"], "강화군": ["인천서부지부"], "옹진군": ["인천서부지부"], "김포시": ["인천서부지부"],
+  // 경기지역본부
+  "수원시": ["경기지역본부"], "안성시": ["경기지역본부"], "용인시": ["경기지역본부"], "과천시": ["경기지역본부"],
+  "안양시": ["경기지역본부"], "의왕시": ["경기지역본부"], "군포시": ["경기지역본부"],
+  // 경기동부지부 (가평군, 양평군은 복수 관할)
+  "광주시": ["경기동부지부"], "구리시": ["경기동부지부"], "남양주시": ["경기동부지부"],
+  "성남시": ["경기동부지부"], "이천시": ["경기동부지부"], "하남시": ["경기동부지부"], "여주시": ["경기동부지부"],
+  "가평군": ["경기동부지부","경기북부지부"], "양평군": ["경기동부지부","경기북부지부"],
+  // 경기서부지부 (화성시는 송산면/서신면/마도면/남양읍/비봉면이 복수)
+  "시흥시": ["경기서부지부"], "광명시": ["경기서부지부"], "안산시": ["경기서부지부"],
+  "화성시": ["경기서부지부","경기남부지부"],
+  // 경기남부지부
+  "평택시": ["경기남부지부"], "오산시": ["경기남부지부"],
+  // 경기북부지부
+  "고양시": ["경기북부지부"], "동두천시": ["경기북부지부"], "의정부시": ["경기북부지부"],
+  "파주시": ["경기북부지부"], "포천시": ["경기북부지부"], "연천군": ["경기북부지부"],
+  // 강원지역본부 (가평군 복수는 위에서 처리됨)
+  "춘천시": ["강원지역본부"], "원주시": ["강원지역본부"], "영월군": ["강원지역본부"],
+  "인제군": ["강원지역본부"], "철원군": ["강원지역본부"], "홍천군": ["강원지역본부"],
+  "화천군": ["강원지역본부"], "횡성군": ["강원지역본부"],
+  // 강원영동지부 (정선군, 평창군 복수)
+  "강릉시": ["강원영동지부"], "동해시": ["강원영동지부"], "삼척시": ["강원영동지부"],
+  "속초시": ["강원영동지부"], "태백시": ["강원영동지부"], "고성군": ["강원영동지부"], "양양군": ["강원영동지부"],
+  "정선군": ["강원지역본부","강원영동지부"], "평창군": ["강원지역본부","강원영동지부"],
+  // 대전지역본부
+  "대전": ["대전지역본부"], "계룡시": ["대전지역본부"], "논산시": ["대전지역본부"],
+  "금산군": ["대전지역본부"], "옥천군": ["대전지역본부","충북지역본부"],
+  // 세종지역본부 (서천군 복수)
+  "세종": ["세종지역본부"], "공주시": ["세종지역본부"], "청양군": ["세종지역본부"],
+  "보령시": ["세종지역본부"], "부여군": ["세종지역본부"],
+  "서천군": ["세종지역본부","충남지역본부"],
+  // 충남지역본부
+  "천안시": ["충남지역본부"], "서산시": ["충남지역본부"], "아산시": ["충남지역본부"],
+  "당진시": ["충남지역본부"], "예산군": ["충남지역본부"], "태안군": ["충남지역본부"], "홍성군": ["충남지역본부"],
+  // 충북지역본부
+  "청주시": ["충북지역본부"], "보은군": ["충북지역본부"], "영동군": ["충북지역본부"],
+  "옥천군_충북": ["충북지역본부"], "진천군": ["충북지역본부"], "증평군": ["충북지역본부"], "음성군": ["충북지역본부"],
+  // 충북북부지부
+  "충주시": ["충북북부지부"], "제천시": ["충북북부지부"], "괴산군": ["충북북부지부"], "단양군": ["충북북부지부"],
+  // 전북지역본부
+  "전주시": ["전북지역본부"], "남원시": ["전북지역본부"], "무주군": ["전북지역본부"],
+  "순창군": ["전북지역본부"], "완주군": ["전북지역본부"], "임실군": ["전북지역본부"],
+  "장수군": ["전북지역본부"], "진안군": ["전북지역본부"], "정읍시": ["전북지역본부"],
+  "익산시": ["전북지역본부"], "김제시": ["전북지역본부"],
+  // 전북서부지부
+  "군산시": ["전북서부지부"], "고창군": ["전북서부지부"], "부안군": ["전북서부지부"], "서천군_전북": ["전북서부지부"], "익산시_전북서부": ["전북서부지부"],
+  // 광주지역본부 (영광군, 함평군, 나주시는 복수)
+  "광주": ["광주지역본부"], "담양군": ["광주지역본부"], "장성군": ["광주지역본부"], "화순군": ["광주지역본부"],
+  // 전남지역본부 (영광군, 함평군, 나주시, 장흥군 복수)
+  "무안군": ["전남지역본부"], "목포시": ["전남지역본부"], "강진군": ["전남지역본부"],
+  "신안군": ["전남지역본부"], "영암군": ["전남지역본부"], "완도군": ["전남지역본부"],
+  "진도군": ["전남지역본부"], "해남군": ["전남지역본부"],
+  "영광군": ["광주지역본부","전남지역본부"], "함평군": ["광주지역본부","전남지역본부"],
+  "나주시": ["광주지역본부","전남지역본부"], "장흥군": ["전남지역본부","전남동부지부"],
+  // 전남동부지부
+  "순천시": ["전남동부지부"], "광양시": ["전남동부지부"], "여수시": ["전남동부지부"],
+  "고흥군": ["전남동부지부"], "곡성군": ["전남동부지부"], "구례군": ["전남동부지부"], "보성군": ["전남동부지부"],
+  // 대구지역본부
+  "대구": ["대구지역본부"],
+  // 경북지역본부 (봉화군 복수)
+  "구미시": ["경북지역본부"], "김천시": ["경북지역본부"], "문경시": ["경북지역본부"],
+  "상주시": ["경북지역본부"], "안동시": ["경북지역본부"], "영주시": ["경북지역본부"],
+  "고령군": ["경북지역본부"], "성주군": ["경북지역본부"], "예천군": ["경북지역본부"],
+  "의성군": ["경북지역본부"], "칠곡군": ["경북지역본부"],
+  "봉화군": ["경북지역본부","경북동부지부"],
+  // 경북동부지부
+  "포항시": ["경북동부지부"], "경주시": ["경북동부지부","울산지역본부"],
+  "영덕군": ["경북동부지부"], "영양군": ["경북동부지부"], "울릉군": ["경북동부지부"], "울진군": ["경북동부지부"], "청송군": ["경북동부지부"],
+  // 경북남부지부
+  "경산시": ["경북남부지부"], "영천시": ["경북남부지부"], "청도군": ["경북남부지부"],
+  // 부산동부지역본부
+  "사상구": ["부산동부지역본부"], "강서구_부산": ["부산동부지역본부"], "동구_부산": ["부산동부지역본부"],
+  "부산진구": ["부산동부지역본부"], "북구_부산": ["부산동부지역본부"], "사하구": ["부산동부지역본부"],
+  "서구_부산": ["부산동부지역본부"], "영도구": ["부산동부지역본부"], "중구_부산": ["부산동부지역본부"],
+  // 부산동부지부
+  "해운대구": ["부산동부지부"], "금정구": ["부산동부지부"], "남구_부산": ["부산동부지부"],
+  "동래구": ["부산동부지부"], "수영구": ["부산동부지부"], "연제구": ["부산동부지부"], "기장군": ["부산동부지부"],
+  // 울산지역본부 (경주시, 양산시 복수)
+  "울산": ["울산지역본부"], "외동읍": ["울산지역본부"], "내남면": ["울산지역본부"], "산내면": ["울산지역본부"],
+  "양산시": ["울산지역본부","경남지역본부"],
+  // 경남지역본부
+  "창원시": ["경남지역본부"], "의령군": ["경남지역본부"], "함안군": ["경남지역본부"], "창녕군": ["경남지역본부"],
+  // 경남동부지부
+  "김해시": ["경남동부지부"], "밀양시": ["경남동부지부"],
+  // 경남서부지부
+  "진주시": ["경남서부지부"], "거제시": ["경남서부지부"], "사천시": ["경남서부지부"],
+  "통영시": ["경남서부지부"], "거창군": ["경남서부지부"], "남해군": ["경남서부지부"],
+  "산청군": ["경남서부지부"], "하동군": ["경남서부지부"], "함양군": ["경남서부지부"], "합천군": ["경남서부지부"],
+  // 제주지역본부
+  "제주시": ["제주지역본부"], "서귀포시": ["제주지역본부"],
 };
 
-// 지??문자?�에????�?구�? 찾아??지??��부/지부 반환
+// 지역 문자열에서 시/군/구를 찾아서 지역본부/지부 반환
 function findJungingongBranch(regionStr) {
   if (!regionStr) return "";
   var matches = [];
-  // ?�력 ?�규?? 공백, _, -, ?�표 ??구분?��? ?�거
+  // 입력 정규화: 공백, _, -, 쉼표 등 구분자를 제거
   var normalized = (regionStr || "").replace(/[\s_\-,\.\/]/g, "");
-  // 모든 ?��? 길이 ?�림차순 ?�렬 (�??�름 ?�선 매칭 ???? "광주광역?? ??"광주?? 보다 먼�?)
+  // 모든 키를 길이 내림차순 정렬 (긴 이름 우선 매칭 — 예: "광주광역시" → "광주시" 보다 먼저)
   var sortedKeys = Object.keys(JUNGINGONG_REGION_MAP).sort(function(a, b) {
     return b.length - a.length;
   });
   sortedKeys.forEach(function(key) {
-    // _부?? _?�북 ??중복 ???�거
+    // _부산, _전북 등 중복 키 제거
     var pureKey = key.split("_")[0];
     if (!pureKey || pureKey.length < 2) return;
-    // 1) ?�체 ?�로 매칭 (?? "?�산??, "광주??)
+    // 1) 전체 키로 매칭 (예: "안산시", "광주시")
     var matched = normalized.indexOf(pureKey) >= 0;
-    // 2) ??�?�??��????�거?�고 매칭 (?? "?�산", "?�남")
+    // 2) 시/군/구 접미사 제거하고 매칭 (예: "안산", "성남")
     if (!matched) {
-      var keyWithoutSuffix = pureKey.replace(/(?�별??광역???�별?�치???�별?�치??광역????�?�?$/, "");
+      var keyWithoutSuffix = pureKey.replace(/(특별시|광역시|특별자치시|특별자치도|광역도|시|군|구)$/, "");
       if (keyWithoutSuffix.length >= 2) {
-        // ?�어 경계�?고려??매칭 ???? "?�산" 검????"고양"??"??�?매칭?��? ?�도�?        // ?��? ?�력?� ?�어 경계가 명확?��? ?�으므�? 그냥 indexOf�?처리
+        // 단어 경계를 고려해 매칭 — 예: "안산" 검색 시 "고양"의 "양"과 매칭되지 않도록
+        // 한글 입력은 단어 경계가 명확하지 않으므로, 그냥 indexOf로 처리
         matched = normalized.indexOf(keyWithoutSuffix) >= 0;
       }
     }
@@ -212,50 +214,51 @@ function findJungingongBranch(regionStr) {
   return matches.join(", ");
 }
 
-// 매출???�맷 ?�수
+// 매출액 포맷 함수
 const formatRevenue = (val) => {
   if (!val && val !== 0) return '-';
   const n = typeof val === 'string' ? parseInt(val.replace(/[^0-9]/g, '')) : val;
   if (isNaN(n) || n === 0) return '-';
-  // ?��? ?�위 분해: �?/ ??/ �?  var parts = [];
+  // 한글 단위 분해: 조 / 억 / 만
+  var parts = [];
   var jo = Math.floor(n / 1000000000000);
   var eok = Math.floor((n % 1000000000000) / 100000000);
   var man = Math.floor((n % 100000000) / 10000);
   var won = n % 10000;
-  if (jo > 0) parts.push(jo + '�?);
-  // ???�위 - 1000 ?�상?�면 천억 ?�시
+  if (jo > 0) parts.push(jo + '조');
+  // 억 단위 - 1000 이상이면 천억 표시
   if (eok > 0) {
     if (eok >= 1000) {
       var cheonEok = Math.floor(eok / 1000);
       var nam = eok % 1000;
-      var eokStr = cheonEok + '�?;
+      var eokStr = cheonEok + '천';
       if (nam > 0) eokStr += nam;
-      parts.push(eokStr + '??);
+      parts.push(eokStr + '억');
     } else {
-      parts.push(eok + '??);
+      parts.push(eok + '억');
     }
   }
-  // �??�위 - 1000 ?�상?�면 천만 ?�시
+  // 만 단위 - 1000 이상이면 천만 표시
   if (man > 0) {
     if (man >= 1000) {
       var cheonMan = Math.floor(man / 1000);
       var namMan = man % 1000;
-      var manStr = cheonMan + '�?;
+      var manStr = cheonMan + '천';
       if (namMan > 0) {
         var baekMan = Math.floor(namMan / 100);
         var restMan = namMan % 100;
-        if (baekMan > 0) manStr += baekMan + '�?;
+        if (baekMan > 0) manStr += baekMan + '백';
         if (restMan > 0) manStr += restMan;
       }
-      parts.push(manStr + '�?);
+      parts.push(manStr + '만');
     } else {
-      parts.push(man + '�?);
+      parts.push(man + '만');
     }
   }
   return parts.length > 0 ? parts.join(' ') : n.toLocaleString();
 };
 
-// ?�?� ?�이�??�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 아이콘 ────────────────────────────────────────────────────────────────────
 const Icon = ({ name, size = 16, color = "currentColor" }) => {
   const p = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" };
   const icons = {
@@ -285,13 +288,13 @@ const Icon = ({ name, size = 16, color = "currentColor" }) => {
   return icons[name] || null;
 };
 
-// ?�?� ?�틸 ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 유틸 ─────────────────────────────────────────────────────────────────────
 const docRate = (docs) => {
   if (!docs || docs.length === 0) return 0;
   return Math.round(docs.filter(d => d.received).length / docs.length * 100);
 };
 
-// ?�?� 메인 ???�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 메인 앱 ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
@@ -323,18 +326,18 @@ export default function App() {
   return <CRMApp profile={profile} session={session} />;
 }
 
-// ?�?� ?�플?�시 ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 스플래시 ──────────────────────────────────────────────────────────────────
 function Splash() {
   return (
     <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#1A1917", flexDirection: "column", gap: 16 }}>
       <div style={{ width: 40, height: 40, border: "3px solid #F7F6F3", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
       <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
-      <div style={{ color: "#666", fontSize: 13 }}>로딩 �?..</div>
+      <div style={{ color: "#666", fontSize: 13 }}>로딩 중...</div>
     </div>
   );
 }
 
-// ?�?� 로그???�원가???�면 ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 로그인/회원가입 화면 ──────────────────────────────────────────────────────
 function AuthScreen() {
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -347,7 +350,7 @@ function AuthScreen() {
     setError(""); setLoading(true);
     if (mode === "login") {
       const { error } = await supabase.auth.signInWithPassword({ email, password: pw });
-      if (error) setError("?�메???�는 비�?번호가 ?�?�어??");
+      if (error) setError("이메일 또는 비밀번호가 틀렸어요.");
     } else {
       const { error } = await supabase.auth.signUp({ email, password: pw });
       if (error) setError(error.message);
@@ -358,17 +361,17 @@ function AuthScreen() {
 
   return (
     <div style={{ height: "100vh", display: "flex", background: "#1A1917" }}>
-      {/* ?�쪽 브랜??*/}
+      {/* 왼쪽 브랜딩 */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", padding: "60px 80px" }}>
         <div style={{ fontSize: 11, letterSpacing: "0.14em", color: "#555", marginBottom: 12, textTransform: "uppercase" }}>Policy Fund</div>
         <h1 style={{ fontSize: 42, fontWeight: 800, color: "#F7F6F3", letterSpacing: "-0.04em", lineHeight: 1.15, margin: "0 0 20px" }}>
-          ?�책?�금<br />컨설??CRM
+          정책자금<br />컨설팅 CRM
         </h1>
         <p style={{ color: "#666", fontSize: 15, lineHeight: 1.7, maxWidth: 360 }}>
-          200�??�체, 15�??�?�의 ?�무�?br />?�나???�면?�서 관리하?�요.
+          200개 업체, 15명 팀원의 업무를<br />하나의 화면에서 관리하세요.
         </p>
         <div style={{ marginTop: 48, display: "flex", flexDirection: "column", gap: 14 }}>
-          {["5?�계 ?�이?�라??추적","?�류 체크리스???�동??,"?�체 ?�체 ?�시�??�림","?�?�별 ?�무 ?�?�보??].map(f => (
+          {["5단계 파이프라인 추적","서류 체크리스트 자동화","정체 업체 실시간 알림","팀원별 업무 대시보드"].map(f => (
             <div key={f} style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div style={{ width: 20, height: 20, borderRadius: "50%", background: "#2E2C29", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <Icon name="check" size={11} color="#4ADE80" />
@@ -379,41 +382,41 @@ function AuthScreen() {
         </div>
       </div>
 
-      {/* ?�른�?로그????*/}
+      {/* 오른쪽 로그인 폼 */}
       <div style={{ width: 420, display: "flex", alignItems: "center", justifyContent: "center", padding: 40 }}>
         <div style={{ width: "100%", background: "#fff", borderRadius: 16, padding: "40px 36px", boxShadow: "0 24px 80px rgba(0,0,0,0.4)" }}>
           {done ? (
             <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 40, marginBottom: 16 }}>?��</div>
-              <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>?�메?�을 ?�인?�주?�요</h2>
-              <p style={{ fontSize: 13, color: "#888", lineHeight: 1.6 }}>{email}�??�증 링크�?보냈?�요.<br />링크 ?�릭 ??로그?�하?�요.</p>
+              <div style={{ fontSize: 40, marginBottom: 16 }}>📧</div>
+              <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>이메일을 확인해주세요</h2>
+              <p style={{ fontSize: 13, color: "#888", lineHeight: 1.6 }}>{email}로 인증 링크를 보냈어요.<br />링크 클릭 후 로그인하세요.</p>
             </div>
           ) : (
             <>
-              <h2 style={{ fontSize: 20, fontWeight: 800, margin: "0 0 8px", letterSpacing: "-0.03em" }}>{mode === "login" ? "로그?? : "계정 만들�?}</h2>
-              <p style={{ fontSize: 13, color: "#888", margin: "0 0 28px" }}>{mode === "login" ? "?� CRM???�속?�세?? : "처음 ?�용?�시?�요? 계정??만드?�요"}</p>
+              <h2 style={{ fontSize: 20, fontWeight: 800, margin: "0 0 8px", letterSpacing: "-0.03em" }}>{mode === "login" ? "로그인" : "계정 만들기"}</h2>
+              <p style={{ fontSize: 13, color: "#888", margin: "0 0 28px" }}>{mode === "login" ? "팀 CRM에 접속하세요" : "처음 사용하시나요? 계정을 만드세요"}</p>
               {error && <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#DC2626", marginBottom: 16 }}>{error}</div>}
               <div style={{ marginBottom: 14 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 6 }}>?�메??/label>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 6 }}>이메일</label>
                 <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="name@company.com"
                   style={{ width: "100%", padding: "11px 14px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 14, boxSizing: "border-box", outline: "none" }}
                   onKeyDown={e => e.key === "Enter" && handle()} />
               </div>
               <div style={{ marginBottom: 24 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 6 }}>비�?번호</label>
-                <input type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="6???�상"
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 6 }}>비밀번호</label>
+                <input type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="6자 이상"
                   style={{ width: "100%", padding: "11px 14px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 14, boxSizing: "border-box", outline: "none" }}
                   onKeyDown={e => e.key === "Enter" && handle()} />
               </div>
               <button onClick={handle} disabled={loading}
                 style={{ width: "100%", padding: "13px", background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1 }}>
-                {loading ? "처리 �?.." : mode === "login" ? "로그?? : "가?�하�?}
+                {loading ? "처리 중..." : mode === "login" ? "로그인" : "가입하기"}
               </button>
               <div style={{ textAlign: "center", marginTop: 20, fontSize: 13, color: "#888" }}>
-                {mode === "login" ? "계정???�으?��??? " : "?��? 계정???�으?��??? "}
+                {mode === "login" ? "계정이 없으신가요? " : "이미 계정이 있으신가요? "}
                 <span onClick={() => { setMode(mode === "login" ? "signup" : "login"); setError(""); }}
                   style={{ color: "#4338CA", cursor: "pointer", fontWeight: 600 }}>
-                  {mode === "login" ? "가?�하�? : "로그??}
+                  {mode === "login" ? "가입하기" : "로그인"}
                 </span>
               </div>
             </>
@@ -424,10 +427,10 @@ function AuthScreen() {
   );
 }
 
-// ?�?� ?�로??최초 ?�정 ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 프로필 최초 설정 ──────────────────────────────────────────────────────────
 function SetupProfile({ userId, email, onDone }) {
   const [name, setName] = useState("");
-  const [team, setTeam] = useState("법인?�담");
+  const [team, setTeam] = useState("법인전담");
   const [loading, setLoading] = useState(false);
 
   const save = async () => {
@@ -441,15 +444,15 @@ function SetupProfile({ userId, email, onDone }) {
   return (
     <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#F7F6F3" }}>
       <div style={{ background: "#fff", borderRadius: 14, padding: "40px 36px", width: 380, boxShadow: "0 8px 40px rgba(0,0,0,0.1)" }}>
-        <h2 style={{ fontSize: 18, fontWeight: 800, margin: "0 0 6px" }}>?�로???�정</h2>
+        <h2 style={{ fontSize: 18, fontWeight: 800, margin: "0 0 6px" }}>프로필 설정</h2>
         <p style={{ fontSize: 13, color: "#888", margin: "0 0 28px" }}>{email}</p>
         <div style={{ marginBottom: 16 }}>
-          <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 6 }}>?�름 (?�무???�시???�름)</label>
-          <input value={name} onChange={e => setName(e.target.value)} placeholder="?? ?�원"
+          <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 6 }}>이름 (업무에 표시될 이름)</label>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="예: 정원"
             style={{ width: "100%", padding: "11px 14px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 14, boxSizing: "border-box", outline: "none" }} />
         </div>
         <div style={{ marginBottom: 28 }}>
-          <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 6 }}>?�속 ?�</label>
+          <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 6 }}>소속 팀</label>
           <select value={team} onChange={e => setTeam(e.target.value)}
             style={{ width: "100%", padding: "11px 14px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 14, background: "#fff", cursor: "pointer" }}>
             {TEAMS.map(t => <option key={t}>{t}</option>)}
@@ -457,14 +460,14 @@ function SetupProfile({ userId, email, onDone }) {
         </div>
         <button onClick={save} disabled={!name.trim() || loading}
           style={{ width: "100%", padding: "13px", background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: !name.trim() ? 0.5 : 1 }}>
-          {loading ? "?�??�?.." : "?�작?�기"}
+          {loading ? "저장 중..." : "시작하기"}
         </button>
       </div>
     </div>
   );
 }
 
-// ?�?� CRM 메인 ???�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── CRM 메인 앱 ───────────────────────────────────────────────────────────────
 function CRMApp({ profile, session }) {
   const [dashboardFilter, setDashboardFilter] = useState(null);
   const [view, setView] = useState(() => {
@@ -486,9 +489,9 @@ function CRMApp({ profile, session }) {
   const [selectedCompany, setSelectedCompany] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [search, setSearch] = useState("");
-  const [filterStage, setFilterStage] = useState("?�체");
-  const [filterAssignee, setFilterAssignee] = useState("?�체");
-  const [filterType, setFilterType] = useState("?�체");
+  const [filterStage, setFilterStage] = useState("전체");
+  const [filterAssignee, setFilterAssignee] = useState("전체");
+  const [filterType, setFilterType] = useState("전체");
   const [toast, setToast] = useState(null);
   const [showTodayAlert, setShowTodayAlert] = useState(false);
   const [workNotesBadge, setWorkNotesBadge] = useState(0);
@@ -500,7 +503,7 @@ function CRMApp({ profile, session }) {
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifRef = useRef(null);
 
-  // ?�림 ?�링 - ???�당 ???�트 ?�인 (30초마??
+  // 알림 폴링 - 내 담당 새 노트 확인 (30초마다)
   useEffect(function() {
     if (!profile) return;
     var lastChecked = localStorage.getItem("notif_last_checked_" + profile.name) || new Date(0).toISOString();
@@ -533,28 +536,32 @@ function CRMApp({ profile, session }) {
     setTimeout(() => setToast(null), 2800);
   };
 
-  // ?�이??로드
+  // 데이터 로드
   const fetchWorkNotesBadge = async (profileName) => {
     if (!profileName) return;
     try {
-      // 본인 ?�당 + ????+ 미완�?is_done=false) + ??��?��? ?��? 것만
+      // 본인 담당 + 할 일 + 미완료(is_done=false) + 삭제되지 않은 것만
       var r = await supabase.from("work_notes")
         .select("id, content, is_done")
         .eq("assignee", profileName)
         .eq("is_todo", true)
         .is("deleted_at", null);
       if (!r.error && r.data) {
-        // is_done??false???�트�?카운??        // 그리�?체크리스?��? ?�는 경우, 모든 ??��??체크?��? ?��? ?�트�?카운??        var incomplete = r.data.filter(function(n) {
-          if (n.is_done) return false; // ?��? ?�료???�트???�외
-          // 체크리스?��? ?�는 경우 모든 ??�� 체크 ?��? ?�인
+        // is_done이 false인 노트만 카운트
+        // 그리고 체크리스트가 있는 경우, 모든 항목이 체크되지 않은 노트만 카운트
+        var incomplete = r.data.filter(function(n) {
+          if (n.is_done) return false; // 이미 완료된 노트는 제외
+          // 체크리스트가 있는 경우 모든 항목 체크 여부 확인
           if (n.content && n.content.indexOf("- [") !== -1) {
             var lines = n.content.split("\n");
             var checkLines = lines.filter(function(l) { return /^- \[[ x]\]/.test(l.trim()); });
             if (checkLines.length > 0) {
               var uncheckedExists = checkLines.some(function(l) { return l.trim().indexOf("- [ ]") === 0; });
-              return uncheckedExists; // 미체????��???�으�?미완�?            }
+              return uncheckedExists; // 미체크 항목이 있으면 미완료
+            }
           }
-          return true; // ?�반 ???��? is_done=false?�면 미완�?        }).length;
+          return true; // 일반 할 일은 is_done=false이면 미완료
+        }).length;
         setWorkNotesBadge(incomplete);
       }
     } catch(e) {}
@@ -567,7 +574,8 @@ function CRMApp({ profile, session }) {
       supabase.from("profiles").select("*"),
       supabase.from("agency_cases").select("business_name, region").not("region", "is", null).limit(10000),
     ]);
-    // 기�?�??�황 지????기업 목록 ?�동 ?�기??    var companiesList = cos || [];
+    // 기관별 현황 지역 → 기업 목록 자동 동기화
+    var companiesList = cos || [];
     if (agencyCases && agencyCases.length > 0) {
       var regionMap = {};
       agencyCases.forEach(function(ac) {
@@ -582,7 +590,7 @@ function CRMApp({ profile, session }) {
           co.region = regionMap[co.name];
         }
       });
-      // �?지???�동 채우�?(백그?�운??
+      // 빈 지역 자동 채우기 (백그라운드)
       updates.forEach(function(u) {
         supabase.from("companies").update({ region: u.region }).eq("id", u.id);
       });
@@ -597,7 +605,7 @@ function CRMApp({ profile, session }) {
     if (profile?.name) fetchWorkNotesBadge(profile.name);
   }, [fetchAll]);
 
-  // 로그?????�늘 ?????�림 - 최초 1?�만
+  // 로그인 시 오늘 할 일 알림 - 최초 1회만
   const alertShownRef = useRef(false);
   useEffect(() => {
     if (companies.length > 0 && !alertShownRef.current) {
@@ -611,7 +619,7 @@ function CRMApp({ profile, session }) {
     }
   }, [companies]);
 
-  // ?�시�?구독
+  // 실시간 구독
   useEffect(() => {
     const channel = supabase.channel("crm-realtime")
       .on("postgres_changes", { event: "*", schema: "public", table: "companies" }, fetchAll)
@@ -623,18 +631,18 @@ function CRMApp({ profile, session }) {
   const filtered = useMemo(() => (companies || []).filter(c => {
     const s = search.toLowerCase();
     const matchSearch = !s || c.name?.includes(s) || c.representative?.includes(s);
-    const matchStage = filterStage === "?�체" || c.stage === filterStage;
-    const matchAssignee = filterAssignee === "?�체" || c.assignee === filterAssignee;
-    const matchType = filterType === "?�체" || c.type === filterType;
+    const matchStage = filterStage === "전체" || c.stage === filterStage;
+    const matchAssignee = filterAssignee === "전체" || c.assignee === filterAssignee;
+    const matchType = filterType === "전체" || c.type === filterType;
     return matchSearch && matchStage && matchAssignee && matchType;
   }), [companies, search, filterStage, filterAssignee, filterType]);
 
   const stagnant = companies.filter(c => c.stagnant_days >= 7);
-  const assignees = ["?�체", ...new Set(profiles.map(p => p.name))];
+  const assignees = ["전체", ...new Set(profiles.map(p => p.name))];
 
   const logout = () => supabase.auth.signOut();
 
-  // 30�??�동 로그?�웃
+  // 30분 자동 로그아웃
   useEffect(() => {
     let timer;
     const reset = () => {
@@ -647,7 +655,8 @@ function CRMApp({ profile, session }) {
     return () => { clearTimeout(timer); events.forEach(e => window.removeEventListener(e, reset)); };
   }, []);
 
-  // ?�사 ?�??  const saveCompany = async (data, prevData) => {
+  // 회사 저장
+  const saveCompany = async (data, prevData) => {
     const { documents, ...rest } = data;
     const { error } = await supabase.from("companies").update({
       name: rest.name, type: rest.type, representative: rest.representative,
@@ -669,19 +678,19 @@ function CRMApp({ profile, session }) {
       contract_date: rest.contract_date || null,
     }).eq("id", rest.id);
     if (!error) {
-      // ?�청?�정??+ ?�당기�????�으�?기�?�??�황???�동 반영
+      // 신청예정월 + 담당기관이 있으면 기관별 현황에 자동 반영
       if (rest.application_month && rest.agency) {
         var monthNum = parseInt(rest.application_month.split("-")[1], 10);
         var yearNum = parseInt(rest.application_month.split("-")[0], 10);
         var AGENCY_MAP = {
-          "?�상공인?�장진흥공단": "?�상공인?�장진흥공단",
+          "소상공인시장진흥공단": "소상공인시장진흥공단",
           "중소벤처기업진흥공단": "중소벤처기업진흥공단",
-          "?�용보증기금": "?�용보증기금",
+          "신용보증기금": "신용보증기금",
           "기술보증기금": "기술보증기금",
-          "?�용보증?�단": "?�용보증?�단",
-          "?��?금융진흥??: "?�용보증?�단",
-          "구조?�신&?�업?�환": "구조?�신&?�업?�환",
-          "기�?": "기�?",
+          "신용보증재단": "신용보증재단",
+          "서민금융진흥원": "신용보증재단",
+          "구조혁신&사업전환": "구조혁신&사업전환",
+          "기타": "기타",
         };
         var rawAgencies = rest.agency.split(",").map(function(a) { return a.trim(); }).filter(Boolean);
         var mappedGroups = [];
@@ -705,26 +714,27 @@ function CRMApp({ profile, session }) {
               region: rest.region || null,
               notes: rest.issue || null,
               contract_date: rest.contract_date || null,
-              status: "?�작 ??,
+              status: "시작 전",
             });
             if (!ins.error) addedCount++;
-            else showToast("기�?별현???�록 ?�패: " + ins.error.message, "error");
+            else showToast("기관별현황 등록 실패: " + ins.error.message, "error");
           }
         }
-        if (addedCount > 0) showToast("기�?�??�황??" + addedCount + "�??�동 ?�록?�어??(" + monthNum + "??!");
+        if (addedCount > 0) showToast("기관별 현황에 " + addedCount + "건 자동 등록됐어요 (" + monthNum + "월)!");
       }
-      // ?�슈/?�션 변�????�동 로그 ?�동 기록
+      // 이슈/액션 변경 시 활동 로그 자동 기록
       const logEntries = [];
       if (prevData && rest.issue && rest.issue !== prevData.issue) {
-        logEntries.push({ case_id: rest.id, case_type: "company", business_name: rest.name, assignee: rest.assignee, log_type: "issue_update", memo: "?�재 ?�슈: " + rest.issue.slice(0, 100), logged_by: rest.assignee });
+        logEntries.push({ case_id: rest.id, case_type: "company", business_name: rest.name, assignee: rest.assignee, log_type: "issue_update", memo: "현재 이슈: " + rest.issue.slice(0, 100), logged_by: rest.assignee });
       }
       if (prevData && rest.next_action && rest.next_action !== prevData.next_action) {
-        logEntries.push({ case_id: rest.id, case_type: "company", business_name: rest.name, assignee: rest.assignee, log_type: "action_update", memo: "?�음 ?�션: " + rest.next_action.slice(0, 100), logged_by: rest.assignee });
+        logEntries.push({ case_id: rest.id, case_type: "company", business_name: rest.name, assignee: rest.assignee, log_type: "action_update", memo: "다음 액션: " + rest.next_action.slice(0, 100), logged_by: rest.assignee });
       }
       if (logEntries.length > 0) {
         await supabase.from("activity_logs").insert(logEntries);
       }
-      // 기�?�??�황 ?�동 ?�기?? ?�사명이 같�? 모든 agency_cases???�보�?최신??      if (rest.name && prevData) {
+      // 기관별 현황 자동 동기화: 회사명이 같은 모든 agency_cases의 정보를 최신화
+      if (rest.name && prevData) {
         var syncUpdates = {};
         if (rest.representative !== prevData.representative) syncUpdates.representative = rest.representative || null;
         if (rest.business_number !== prevData.business_number) syncUpdates.business_number = rest.business_number || null;
@@ -733,44 +743,45 @@ function CRMApp({ profile, session }) {
         var prevAssignee = Array.isArray(prevData.assignee) ? prevData.assignee.join(", ") : (prevData.assignee || "");
         var newAssignee = Array.isArray(rest.assignee) ? rest.assignee.join(", ") : (rest.assignee || "");
         if (newAssignee !== prevAssignee) syncUpdates.assignee = newAssignee;
-        // ?�사�?변�???        var nameChanged = prevData.name && rest.name !== prevData.name;
+        // 회사명 변경 시
+        var nameChanged = prevData.name && rest.name !== prevData.name;
         if (nameChanged) syncUpdates.business_name = rest.name;
         if (Object.keys(syncUpdates).length > 0) {
           var oldName = nameChanged ? prevData.name : rest.name;
           var syncResult = await supabase.from("agency_cases").update(syncUpdates).eq("business_name", oldName).is("deleted_at", null);
           if (!syncResult.error && syncResult.count !== 0) {
-            // ?�기???�공 (조용??처리)
+            // 동기화 성공 (조용히 처리)
           }
         }
       }
-      showToast("?�?�됐?�요!"); fetchAll();
+      showToast("저장됐어요!"); fetchAll();
     }
-    else showToast("?�???�패: " + error.message, "error");
+    else showToast("저장 실패: " + error.message, "error");
   };
 
-  // ?�류 ?��?
+  // 서류 토글
   const toggleDoc = async (docId, current) => {
     await supabase.from("documents").update({ received: !current, received_at: !current ? new Date().toISOString().slice(0,10) : null }).eq("id", docId);
     fetchAll();
   };
 
-  // ?�규 ?�사 추�?
+  // 신규 회사 추가
   const addCompany = async (form) => {
-    if (!form.name || !form.name.trim()) { showToast("?�체명을 ?�력?�주?�요.", "error"); return; }
-    if (!form.representative || !form.representative.trim()) { showToast("?�?�자명을 ?�력?�주?�요.", "error"); return; }
+    if (!form.name || !form.name.trim()) { showToast("업체명을 입력해주세요.", "error"); return; }
+    if (!form.representative || !form.representative.trim()) { showToast("대표자명을 입력해주세요.", "error"); return; }
     var insertData = {
       name: form.name.trim(),
       type: form.type || "법인",
       representative: form.representative.trim(),
       phone: form.phone || "",
-      stage: form.stage || "?�담/진단?�료",
+      stage: form.stage || "상담/진단완료",
       assignee: form.assignee || "",
       agency: form.agency || "",
       last_contact: new Date().toISOString().slice(0,10),
       issue: form.issue || "",
       next_action: form.next_action || "",
       fee: form.fee || 5,
-      fee_status: "미수??,
+      fee_status: "미수령",
       stagnant_days: 0,
       stage_updated_at: new Date().toISOString().slice(0,10),
     };
@@ -788,7 +799,7 @@ function CRMApp({ profile, session }) {
     if (form.revenue_2023) insertData.revenue_2023 = parseInt(form.revenue_2023) || null;
     if (form.revenue_2024) insertData.revenue_2024 = parseInt(form.revenue_2024) || null;
     if (form.revenue_2025) insertData.revenue_2025 = parseInt(form.revenue_2025) || null;
-    // 빠른 ?�록?�서 agency_list(배열)?� agency 처리
+    // 빠른 등록에서 agency_list(배열)와 agency 처리
     if (Array.isArray(form.agency_list) && form.agency_list.length > 0) {
       insertData.agency = form.agency_list.join(", ");
       insertData.agency_list = form.agency_list.join(", ");
@@ -798,17 +809,17 @@ function CRMApp({ profile, session }) {
 
     const { data: co, error } = await supabase.from("companies").insert(insertData).select().single();
     if (!error && co) {
-      // ?�류 체크리스???�동 ?�성
+      // 서류 체크리스트 자동 생성
       var docsInsert = await supabase.from("documents").insert(DOC_LIST.map(d => ({ company_id: co.id, doc_name: d, received: false }))).select();
       var newCompany = Object.assign({}, co, { documents: docsInsert.data || [] });
-      showToast("?�규 ?�체가 ?�록?�어?? ?�세 ?�보�??�력?�세??");
+      showToast("신규 업체가 등록됐어요! 상세 정보를 입력하세요.");
       setShowAdd(false);
-      // ?�록 ??곧바�?기업 ?�세 ?�면 ?�동 ?�픈 (??�??????�도�?
+      // 등록 후 곧바로 기업 상세 화면 자동 오픈 (두 번 일 안 하도록)
       setSelectedCompany(newCompany);
       fetchAll();
     } else {
-      console.error("?�록 ?�패:", error);
-      showToast("?�록 ?�패: " + (error?.message || "?????�는 ?�류"), "error");
+      console.error("등록 실패:", error);
+      showToast("등록 실패: " + (error?.message || "알 수 없는 오류"), "error");
     }
   };
 
@@ -829,7 +840,7 @@ function CRMApp({ profile, session }) {
           justify-content: space-around; z-index: 200; border-top: 1px solid #2E2C29;
         }
       `}</style>
-      {/* ?�스??*/}
+      {/* 토스트 */}
       {toast && (
         <div style={{ position: "fixed", top: 20, right: 20, zIndex: 9999, background: toast.type === "success" ? "#15803D" : "#DC2626", color: "#fff", padding: "11px 18px", borderRadius: 8, fontSize: 13, fontWeight: 500, boxShadow: "0 4px 20px rgba(0,0,0,0.2)", animation: "fadein 0.2s ease" }}>
           <style>{`@keyframes fadein{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}`}</style>
@@ -837,7 +848,7 @@ function CRMApp({ profile, session }) {
         </div>
       )}
 
-      {/* ?�늘 ?????�림 ?�업 */}
+      {/* 오늘 할 일 알림 팝업 */}
       {showTodayAlert && (function() {
         const todayStr = new Date().toISOString().slice(0, 10);
         const todayContacts = companies.filter(c => c.next_contact === todayStr);
@@ -849,7 +860,7 @@ function CRMApp({ profile, session }) {
               onClick={e => e.stopPropagation()}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
                 <div>
-                  <div style={{ fontSize: 16, fontWeight: 800 }}>?�� ?�늘??????/div>
+                  <div style={{ fontSize: 16, fontWeight: 800 }}>📋 오늘의 할 일</div>
                   <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{new Date().toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "short" })}</div>
                 </div>
                 <button onClick={() => setShowTodayAlert(false)} style={{ background: "none", border: "none", cursor: "pointer" }}>
@@ -859,7 +870,7 @@ function CRMApp({ profile, session }) {
               {todayContacts.length > 0 && (
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: "#4338CA", marginBottom: 8, display: "flex", alignItems: "center", gap: 5 }}>
-                    ?�� ?�늘 ?�락 ?�정 ({todayContacts.length}�?
+                    📞 오늘 연락 예정 ({todayContacts.length}건)
                   </div>
                   {todayContacts.map(function(c) {
                     return (
@@ -880,7 +891,7 @@ function CRMApp({ profile, session }) {
               {stagnantList.length > 0 && (
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: "#DC2626", marginBottom: 8 }}>
-                    ?�️ ?�체 ?�체 ({stagnantList.length}�?
+                    ⚠️ 정체 업체 ({stagnantList.length}건)
                   </div>
                   {stagnantList.slice(0, 5).map(function(c) {
                     return (
@@ -890,7 +901,7 @@ function CRMApp({ profile, session }) {
                         onMouseLeave={e => e.currentTarget.style.background = "#FEF2F2"}>
                         <div>
                           <div style={{ fontSize: 13, fontWeight: 700 }}>{c.name}</div>
-                          <div style={{ fontSize: 11, color: "#888", marginTop: 1 }}>{c.stagnant_days}???�체 · {c.assignee}</div>
+                          <div style={{ fontSize: 11, color: "#888", marginTop: 1 }}>{c.stagnant_days}일 정체 · {c.assignee}</div>
                         </div>
                         <Icon name="chevronR" size={14} color="#DC2626" />
                       </div>
@@ -900,33 +911,33 @@ function CRMApp({ profile, session }) {
               )}
               {todayContacts.length === 0 && stagnantList.length === 0 && (
                 <div style={{ textAlign: "center", padding: "30px 0", color: "#AAA", fontSize: 13 }}>
-                  <div style={{ fontSize: 32, marginBottom: 10 }}>?��</div>
-                  ?�늘 ???�이 ?�어??
+                  <div style={{ fontSize: 32, marginBottom: 10 }}>🎉</div>
+                  오늘 할 일이 없어요!
                 </div>
               )}
               <button onClick={() => setShowTodayAlert(false)}
                 style={{ width: "100%", marginTop: 16, padding: "11px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                ?�인
+                확인
               </button>
             </div>
           </div>
         );
       })()}
 
-      {/* 빠른 메모 ?�업 */}
+      {/* 빠른 메모 팝업 */}
       {quickMemo && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center" }}
           onClick={() => setQuickMemo(false)}>
           <div style={{ background: "#fff", borderRadius: 14, padding: "22px", width: 380, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}
             onClick={e => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-              <div style={{ fontSize: 15, fontWeight: 800 }}>?�️ 빠른 메모</div>
+              <div style={{ fontSize: 15, fontWeight: 800 }}>✏️ 빠른 메모</div>
               <button onClick={() => setQuickMemo(false)} style={{ background: "none", border: "none", cursor: "pointer" }}>
                 <Icon name="x" size={18} color="#888" />
               </button>
             </div>
             <textarea value={quickMemoText} onChange={function(e) { var v = e.target.value; setQuickMemoText(v); }}
-              placeholder="메모 ?�용???�력?�세??.."
+              placeholder="메모 내용을 입력하세요..."
               rows={5} autoFocus
               style={{ width: "100%", padding: "12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, resize: "none", boxSizing: "border-box", outline: "none", lineHeight: 1.6 }} />
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
@@ -941,10 +952,11 @@ function CRMApp({ profile, session }) {
                 });
                 setQuickMemoText("");
                 setQuickMemo(false);
-                showToast("메모가 ?�?�됐?�요!");
+                showToast("메모가 저장됐어요!");
               }}
                 style={{ flex: 1, padding: "11px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                ?�무?�트???�??              </button>
+                업무노트에 저장
+              </button>
               <button onClick={() => setQuickMemo(false)}
                 style={{ padding: "11px 16px", background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>
                 취소
@@ -954,30 +966,30 @@ function CRMApp({ profile, session }) {
         </div>
       )}
 
-      {/* ?�이?�바 */}
+      {/* 사이드바 */}
       <div className="crm-sidebar" style={{ position: "fixed", left: 0, top: 0, width: 220, height: "100vh", background: "#1A1917", display: "flex", flexDirection: "column", zIndex: 100 }}>
         <div style={{ padding: "24px 20px 14px" }}>
           <div style={{ fontSize: 10, letterSpacing: "0.14em", color: "#555", textTransform: "uppercase", marginBottom: 5 }}>Policy Fund CRM</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: "#F7F6F3", letterSpacing: "-0.02em" }}>컨설??관�?/div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#F7F6F3", letterSpacing: "-0.02em" }}>컨설팅 관리</div>
         </div>
 
         {stagnant.length > 0 && (
           <div onClick={() => setView("stagnant")} style={{ margin: "0 12px 8px", background: "#7C2020", borderRadius: 8, padding: "8px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
             <Icon name="alert" size={13} color="#FCA5A5" />
-            <span style={{ color: "#FCA5A5", fontSize: 12, fontWeight: 600 }}>?�체 {stagnant.length}�?경보</span>
+            <span style={{ color: "#FCA5A5", fontSize: 12, fontWeight: 600 }}>정체 {stagnant.length}건 경보</span>
           </div>
         )}
 
         <nav style={{ padding: "6px 12px", flex: 1, overflowY: "auto", minHeight: 0 }}>
-          {/* ?�주 ?�는 메뉴 */}
+          {/* 자주 쓰는 메뉴 */}
           <div style={{ fontSize: 10, color: "#444", letterSpacing: "0.08em", padding: "4px 12px 6px", fontWeight: 600 }}>주요 메뉴</div>
           {[
-            { id: "dashboard",  label: "?�?�보??,   icon: "dashboard" },
-            { id: "mytodo",     label: "???�일",     icon: "check" },
-            { id: "agency",     label: "기�?�??�황", icon: "building" },
-            { id: "worknotes",  label: "?�무 ?�트",   icon: "edit" },
+            { id: "dashboard",  label: "대시보드",   icon: "dashboard" },
+            { id: "mytodo",     label: "내 할일",     icon: "check" },
+            { id: "agency",     label: "기관별 현황", icon: "building" },
+            { id: "worknotes",  label: "업무 노트",   icon: "edit" },
             { id: "list",       label: "기업 목록",   icon: "list" },
-            { id: "pipeline",   label: "?�이?�라??,  icon: "pipeline" },
+            { id: "pipeline",   label: "파이프라인",  icon: "pipeline" },
           ].map(({ id, label, icon }) => (
             <div key={id} onClick={() => setView(id)}
               style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 8, cursor: "pointer", marginBottom: 2, background: view === id ? "#2E2C29" : "transparent", color: view === id ? "#F7F6F3" : "#666", fontSize: 13, fontWeight: view === id ? 600 : 400 }}>
@@ -987,16 +999,16 @@ function CRMApp({ profile, session }) {
                 <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{workNotesBadge}</span>
               )}
               {id === "list" && stagnant.filter(function(c) { return c.stagnant_days >= 14; }).length > 0 && (
-                <span style={{ marginLeft: "auto", background: "#B45309", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>??/span>
+                <span style={{ marginLeft: "auto", background: "#B45309", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>⚠</span>
               )}
             </div>
           ))}
 
-          {/* ?�보�??�기 */}
+          {/* 더보기 접기 */}
           <div onClick={() => setMenuExpanded(m => !m)}
             style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", cursor: "pointer", color: "#555", fontSize: 12, marginTop: 4, marginBottom: 2 }}>
             <Icon name={menuExpanded ? "chevronL" : "chevronR"} size={12} color="#555" />
-            {menuExpanded ? "?�기" : "?�보�?}
+            {menuExpanded ? "접기" : "더보기"}
             {stagnant.length > 0 && !menuExpanded && (
               <span style={{ background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 6px" }}>{stagnant.length}</span>
             )}
@@ -1004,11 +1016,11 @@ function CRMApp({ profile, session }) {
 
           {menuExpanded && (
             <>
-              <div style={{ fontSize: 10, color: "#444", letterSpacing: "0.08em", padding: "4px 12px 6px", fontWeight: 600 }}>추�? 메뉴</div>
-              {/* DB리스??+ 캘린???�아??*/}
+              <div style={{ fontSize: 10, color: "#444", letterSpacing: "0.08em", padding: "4px 12px 6px", fontWeight: 600 }}>추가 메뉴</div>
+              {/* DB리스트 + 캘린더 위아래 */}
               {[
-                { id: "dbleads", label: "DB리스??, icon: "phone" },
-                { id: "calendar", label: "캘린??, icon: "calendar" },
+                { id: "dbleads", label: "DB리스트", icon: "phone" },
+                { id: "calendar", label: "캘린더", icon: "calendar" },
               ].map(function({ id, label, icon }) {
                 return (
                   <div key={id} onClick={function() { setView(id); }}
@@ -1019,11 +1031,11 @@ function CRMApp({ profile, session }) {
                 );
               })}
               {[
-                { id: "stagnant",    label: "?�체 ?�림",   icon: "alert", badge: stagnant.length },
-                { id: "activitylog", label: "?�동 로그",   icon: "activity" },
-                { id: "manual",      label: "?�료??,      icon: "folder" },
-                { id: "settlement",  label: "?�산관�?,    icon: "money" },
-                ...(profile.role === "admin" ? [{ id: "members", label: "?�??관�?, icon: "users" }] : []),
+                { id: "stagnant",    label: "정체 알림",   icon: "alert", badge: stagnant.length },
+                { id: "activitylog", label: "활동 로그",   icon: "activity" },
+                { id: "manual",      label: "자료실",      icon: "folder" },
+                { id: "settlement",  label: "정산관리",    icon: "money" },
+                ...(profile.role === "admin" ? [{ id: "members", label: "팀원 관리", icon: "users" }] : []),
               ].map(({ id, label, icon, badge }) => (
                 <div key={id} onClick={() => setView(id)}
                   style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 8, cursor: "pointer", marginBottom: 2, background: view === id ? "#2E2C29" : "transparent", color: view === id ? "#F7F6F3" : "#666", fontSize: 13, fontWeight: view === id ? 600 : 400 }}>
@@ -1038,30 +1050,30 @@ function CRMApp({ profile, session }) {
           )}
         </nav>
 
-        {/* ?�단 ?�로??*/}
+        {/* 하단 프로필 */}
         <div style={{ padding: "12px 16px 20px", borderTop: "1px solid #2E2C29" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
             <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#2E2C29", display: "flex", alignItems: "center", justifyContent: "center", color: "#F7F6F3", fontSize: 13, fontWeight: 700 }}>{profile.name?.[0]}</div>
             <div>
               <div style={{ color: "#F7F6F3", fontSize: 13, fontWeight: 600 }}>{profile.name}</div>
-              <div style={{ color: "#555", fontSize: 11 }}>{profile.team} · {profile.role === "admin" ? "관리자" : "?�??}</div>
+              <div style={{ color: "#555", fontSize: 11 }}>{profile.team} · {profile.role === "admin" ? "관리자" : "팀원"}</div>
             </div>
           </div>
           <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
             <button onClick={() => setQuickMemo(true)}
               style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "7px 6px", background: "#4338CA", border: "none", borderRadius: 6, color: "#fff", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>
-              ?�️ 빠른 메모
+              ✏️ 빠른 메모
             </button>
             <button onClick={() => setShowTodayAlert(true)}
               style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "7px 10px", background: "#2E2C29", border: "none", borderRadius: 6, color: "#888", fontSize: 11, cursor: "pointer" }}>
-              ?��
+              📋
               {companies.filter(c => c.next_contact === new Date().toISOString().slice(0,10)).length > 0 && (
                 <span style={{ position: "absolute", top: -3, right: -3, width: 8, height: 8, background: "#DC2626", borderRadius: "50%" }} />
               )}
             </button>
             <button onClick={function() { setShowNotifPanel(function(p) { return !p; }); }}
               style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", padding: "7px 10px", background: "#2E2C29", border: "none", borderRadius: 6, color: "#888", fontSize: 14, cursor: "pointer" }}>
-              ?��
+              🔔
               {notifications.length > 0 && (
                 <span style={{ position: "absolute", top: -3, right: -3, minWidth: 16, height: 16, background: "#DC2626", borderRadius: 99, fontSize: 9, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }}>{notifications.length}</span>
               )}
@@ -1069,46 +1081,47 @@ function CRMApp({ profile, session }) {
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             <button onClick={fetchAll} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "6px", background: "#2E2C29", border: "none", borderRadius: 6, color: "#888", fontSize: 11, cursor: "pointer" }}>
-              <Icon name="refresh" size={12} color="#888" /> ?�로고침
+              <Icon name="refresh" size={12} color="#888" /> 새로고침
             </button>
             <button onClick={logout} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "6px", background: "#2E2C29", border: "none", borderRadius: 6, color: "#888", fontSize: 11, cursor: "pointer" }}>
-              <Icon name="logout" size={12} color="#888" /> 로그?�웃
+              <Icon name="logout" size={12} color="#888" /> 로그아웃
             </button>
           </div>
         </div>
       </div>
 
-      {/* ?�림 ?�널 */}
+      {/* 알림 패널 */}
       {showNotifPanel && (
         <div style={{ position: "fixed", top: 0, left: 220, right: 0, bottom: 0, zIndex: 900 }} onClick={function() { setShowNotifPanel(false); }}>
           <div style={{ position: "absolute", top: 0, left: 0, width: 360, maxHeight: "100vh", background: "#fff", boxShadow: "4px 0 24px rgba(0,0,0,0.15)", overflowY: "auto" }}
             onClick={function(e) { e.stopPropagation(); }}>
             <div style={{ padding: "20px 20px 14px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <div>
-                <div style={{ fontSize: 16, fontWeight: 700 }}>?�� ?�림</div>
-                <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{profile?.name}?�에�????�무 ?�림</div>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>🔔 알림</div>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{profile?.name}님에게 온 업무 알림</div>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
                 {notifications.length > 0 && (
-                  <button onClick={markAllRead} style={{ fontSize: 11, color: "#4338CA", background: "none", border: "1px solid #C7D2FE", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>모두 ?�음</button>
+                  <button onClick={markAllRead} style={{ fontSize: 11, color: "#4338CA", background: "none", border: "1px solid #C7D2FE", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>모두 읽음</button>
                 )}
-                <button onClick={function() { setShowNotifPanel(false); }} style={{ background: "none", border: "none", fontSize: 18, color: "#888", cursor: "pointer" }}>??/button>
+                <button onClick={function() { setShowNotifPanel(false); }} style={{ background: "none", border: "none", fontSize: 18, color: "#888", cursor: "pointer" }}>✕</button>
               </div>
             </div>
             <div style={{ padding: "12px 16px" }}>
               {notifications.length === 0 ? (
                 <div style={{ padding: "40px 0", textAlign: "center", color: "#CCC", fontSize: 13 }}>
-                  <div style={{ fontSize: 32, marginBottom: 8 }}>?��</div>
-                  ?�로???�림???�어??                </div>
+                  <div style={{ fontSize: 32, marginBottom: 8 }}>🔔</div>
+                  새로운 알림이 없어요
+                </div>
               ) : (
                 notifications.map(function(note) {
                   return (
                     <div key={note.id} style={{ background: "#F8F9FF", border: "1px solid #E0E7FF", borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}
                       onClick={function() { setView("worknotes"); setShowNotifPanel(false); }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: "#1A1917", marginBottom: 4 }}>{note.title || "?�목 ?�음"}</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#1A1917", marginBottom: 4 }}>{note.title || "제목 없음"}</div>
                       {note.content && <div style={{ fontSize: 12, color: "#555", lineHeight: 1.6, whiteSpace: "pre-wrap", maxHeight: 60, overflow: "hidden" }}>{note.content}</div>}
                       <div style={{ fontSize: 11, color: "#AAA", marginTop: 6 }}>
-                        ?�성?? {note.created_by || note.assignee} · {new Date(note.created_at).toLocaleDateString("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                        작성자: {note.created_by || note.assignee} · {new Date(note.created_at).toLocaleDateString("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                       </div>
                     </div>
                   );
@@ -1125,7 +1138,7 @@ function CRMApp({ profile, session }) {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", flexDirection: "column", gap: 16 }}>
             <div style={{ width: 36, height: 36, border: "3px solid #E8E5E0", borderTopColor: "#1A1917", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
             <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-            <span style={{ color: "#888", fontSize: 13 }}>?�이??불러?�는 �?..</span>
+            <span style={{ color: "#888", fontSize: 13 }}>데이터 불러오는 중...</span>
           </div>
         ) : (
           <>
@@ -1138,7 +1151,7 @@ function CRMApp({ profile, session }) {
             {view === "calendar" && <CalendarView companies={companies} onSelectCompany={setSelectedCompany} profile={profile} />}
             {view === "manual" && <ManualView />}
             {view === "pipeline" && <PipelineView filtered={filtered} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} />}
-            {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={profile?.role === "admin" || profile?.name === "?�호"} onSelectCompany={setSelectedCompany} setView={setView} />}
+            {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={profile?.role === "admin" || profile?.name === "양호"} onSelectCompany={setSelectedCompany} setView={setView} />}
             {view === "list" && <ListView filtered={filtered} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} />}
             {view === "stagnant" && <StagnantView stagnant={stagnant} onSelect={setSelectedCompany} />}
             {view === "members" && profile.role === "admin" && <MembersView profiles={profiles} onRefresh={fetchAll} showToast={showToast} />}
@@ -1156,16 +1169,16 @@ function CRMApp({ profile, session }) {
           onAgencyRegistered={function() {}}
         />
       )}
-      {showAdd && <AddModal onClose={() => setShowAdd(false)} onAdd={addCompany} assignees={assignees.filter(a => a !== "?�체")} />}
+      {showAdd && <AddModal onClose={() => setShowAdd(false)} onAdd={addCompany} assignees={assignees.filter(a => a !== "전체")} />}
 
-      {/* 모바???�단 ?�비게이??*/}
+      {/* 모바일 하단 네비게이션 */}
       <div className="crm-mobile-nav">
         {[
-          { id: "dashboard",  label: "??,      icon: "dashboard" },
-          { id: "agency",     label: "기�?",     icon: "building" },
+          { id: "dashboard",  label: "홈",      icon: "dashboard" },
+          { id: "agency",     label: "기관",     icon: "building" },
           { id: "dbleads",    label: "DB",       icon: "phone" },
-          { id: "settlement", label: "?�산",     icon: "money" },
-          { id: "calendar",   label: "캘린??,   icon: "calendar" },
+          { id: "settlement", label: "정산",     icon: "money" },
+          { id: "calendar",   label: "캘린더",   icon: "calendar" },
         ].map(({ id, label, icon }) => (
           <div key={id} onClick={() => setView(id)}
             style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, cursor: "pointer", flex: 1, padding: "6px 0" }}>
@@ -1178,10 +1191,10 @@ function CRMApp({ profile, session }) {
   );
 }
 
-// ?�?� ?�?�보???�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 대시보드 ──────────────────────────────────────────────────────────────────
 function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, setDashboardFilter, onAdd }) {
-  const contractDone = companies.filter(c => c.fee_status === "?�수료수?�완�?).length;
-  const contracted = companies.filter(c => c.fee_status !== "미수??).length;
+  const contractDone = companies.filter(c => c.fee_status === "수수료수령완료").length;
+  const contracted = companies.filter(c => c.fee_status !== "미수령").length;
   // const thisWeek = companies.filter(c => c.next_contact && c.next_contact <= "2026-05-15").length;
   const stageCount = STAGES.reduce((a, s) => ({ ...a, [s]: companies.filter(c => c.stage === s).length }), {});
 
@@ -1202,24 +1215,24 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
   }, [thisMonth, thisYear]);
   const monthCases = agencyCases.filter(c => c.month === thisMonth && c.year === thisYear);
   const DASHBOARD_AGENCY_GROUPS = [
-    { id: "?�상공인?�장진흥공단", label: "?�진�?, color: "#4338CA", ids: ["?�상공인?�장진흥공단"] },
-    { id: "중소벤처기업진흥공단", label: "중진�?, color: "#7C3AED", ids: ["중소벤처기업진흥공단","구조?�신&?�업?�환"] },
-    { id: "기금", label: "보증기금", color: "#0F6E56", ids: ["?�용보증기금"] },
-    { id: "?�단", label: "보증?�단", color: "#B45309", ids: ["?�용보증?�단"] },
-    { id: "기�?", label: "경정�?��/기�?", color: "#555", ids: ["경정�?��","기�?"] },
+    { id: "소상공인시장진흥공단", label: "소진공", color: "#4338CA", ids: ["소상공인시장진흥공단"] },
+    { id: "중소벤처기업진흥공단", label: "중진공", color: "#7C3AED", ids: ["중소벤처기업진흥공단","구조혁신&사업전환"] },
+    { id: "기금", label: "보증기금", color: "#0F6E56", ids: ["신용보증기금"] },
+    { id: "재단", label: "보증재단", color: "#B45309", ids: ["신용보증재단"] },
+    { id: "기타", label: "경정청구/기타", color: "#555", ids: ["경정청구","기타"] },
   ];
   const agencyStats = DASHBOARD_AGENCY_GROUPS.map(function(g) {
     const cases = monthCases.filter(c => g.ids.includes(c.agency_group));
-    const approved = cases.filter(c => ["?�인","?�정","?�료"].includes(c.status)).length;
+    const approved = cases.filter(c => ["승인","약정","완료"].includes(c.status)).length;
     const total = cases.length;
     const rate = total > 0 ? Math.round(approved / total * 100) : 0;
     return { id: g.id, label: g.label, color: g.color, ids: g.ids, total, approved, rate };
   });
 
-  // ?�당?�별 KPI
+  // 담당자별 KPI
   const assigneeKpi = ASSIGNEES.map(function(name) {
     const myCases = monthCases.filter(c => c.assignee === name);
-    const approved = myCases.filter(c => ["?�인","?�정","?�료"].includes(c.status)).length;
+    const approved = myCases.filter(c => ["승인","약정","완료"].includes(c.status)).length;
     const goal = kpiGoals.find(g => g.assignee === name);
     const goalAmt = goal ? goal.goal_approvals : 0;
     const pct = goalAmt > 0 ? Math.min(Math.round(approved / goalAmt * 100), 100) : 0;
@@ -1243,20 +1256,20 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
     <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 28 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>?�?�보??/h1>
-          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>?�체 ?�황???�눈??/p>
+          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>대시보드</h1>
+          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>전체 현황을 한눈에</p>
         </div>
         <button onClick={onAdd} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-          <Icon name="plus" size={15} color="#F7F6F3" /> ?�규 ?�체 ?�록
+          <Icon name="plus" size={15} color="#F7F6F3" /> 신규 업체 등록
         </button>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 22 }}>
         {[
-          { label: "?�체 관�??�체", value: companies.length, sub: "법인 " + companies.filter(c=>c.type==="법인").length + " · 개인 " + companies.filter(c=>c.type==="개인").length, color: "#4338CA", viewId: "list" },
-          { label: "계약 ?�료", value: contracted + "�?, sub: "?�수�??�납 " + contractDone + "�?, color: "#15803D", viewId: "settlement" },
-          { label: "?��?�?, value: companies.filter(c=>["?�담/진단?�료","?�수?�류 �??�증?�요�?,"기�??�청?��?방문?�정","?�크립트 ?�달 ?�료"].includes(c.stage)).length + "�?, sub: "?�청 ???�계", color: "#B45309", viewId: "pipeline" },
-          { label: "진행�?, value: companies.filter(c=>["기�??�청?�료/방문?�료","?�사�??�태조사?��?,"?�태조사?�료/?�정?�료","?�금집행?�료"].includes(c.stage)).length + "�?, sub: "기�? ?�청 ?�후", color: "#7C3AED", viewId: "agency" },
+          { label: "전체 관리 업체", value: companies.length, sub: "법인 " + companies.filter(c=>c.type==="법인").length + " · 개인 " + companies.filter(c=>c.type==="개인").length, color: "#4338CA", viewId: "list" },
+          { label: "계약 완료", value: contracted + "건", sub: "수수료 완납 " + contractDone + "건", color: "#15803D", viewId: "settlement" },
+          { label: "대기 건", value: companies.filter(c=>["상담/진단완료","필수서류 및 인증서요청","기관신청대기/방문예정","스크립트 전달 완료"].includes(c.stage)).length + "건", sub: "신청 전 단계", color: "#B45309", viewId: "pipeline" },
+          { label: "진행중", value: companies.filter(c=>["기관신청완료/방문완료","심사중/실태조사대기","실태조사완료/약정완료","자금집행완료"].includes(c.stage)).length + "건", sub: "기관 신청 이후", color: "#7C3AED", viewId: "agency" },
         ].map((k, i) => (
           <div key={i} onClick={() => setView(k.viewId)}
             style={{ background: "#fff", borderRadius: 12, padding: "18px 20px", border: "1px solid #E8E5E0", cursor: "pointer", transition: "box-shadow 0.15s" }}
@@ -1266,14 +1279,14 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
             <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.04em", color: k.color }}>{k.value}</div>
             <div style={{ fontSize: 11, color: "#AAA", marginTop: 4, marginBottom: 8 }}>{k.sub}</div>
             <div style={{ fontSize: 11, color: k.color, fontWeight: 600, display: "flex", alignItems: "center", gap: 3 }}>
-              바로가�?<Icon name="chevronR" size={12} color={k.color} />
+              바로가기 <Icon name="chevronR" size={12} color={k.color} />
             </div>
           </div>
         ))}
       </div>
 
       <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>?�이?�라???�계�??�황</div>
+        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>파이프라인 단계별 현황</div>
         <div style={{ display: "flex", gap: 10 }}>
           {STAGES.map((stage, i) => {
             const c = STAGE_COLORS[stage];
@@ -1297,16 +1310,16 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         </div>
       </div>
 
-      {/* 기�?�??�번 ???�황 */}
+      {/* 기관별 이번 달 현황 */}
       {true && (
         <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>기�?�??�번 ???�황 <span style={{ fontSize: 12, color: "#888", fontWeight: 400 }}>{thisMonth}??/span></div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>기관별 이번 달 현황 <span style={{ fontSize: 12, color: "#888", fontWeight: 400 }}>{thisMonth}월</span></div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
             {agencyStats.map(function(g) {
               var allCases = agencyCases.filter(function(c) { return g.ids.includes(c.agency_group); });
-              var doneCases = allCases.filter(function(c) { return ["?�인","?�정","?�료"].includes(c.status) && c.contract_date; });
+              var doneCases = allCases.filter(function(c) { return ["승인","약정","완료"].includes(c.status) && c.contract_date; });
               var avgDays = 0;
               if (doneCases.length > 0) {
                 var totalDays = doneCases.reduce(function(s, c) {
@@ -1320,14 +1333,14 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
               return (
                 <div key={g.id} style={{ background: "#F7F6F3", borderRadius: 10, padding: "14px 16px", borderLeft: "3px solid " + g.color }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: g.color, marginBottom: 8 }}>{g.label}</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: "#1A1917", marginBottom: 2 }}>{g.total}�?/div>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>?�인 {g.approved}�?/div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: "#1A1917", marginBottom: 2 }}>{g.total}건</div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>승인 {g.approved}건</div>
                   <div style={{ height: 4, background: "#E8E5E0", borderRadius: 99 }}>
                     <div style={{ height: 4, background: g.color, borderRadius: 99, width: g.rate + "%" }} />
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5 }}>
-                    <span style={{ fontSize: 10, color: g.color, fontWeight: 600 }}>?�인??{g.rate}%</span>
-                    {avgDays > 0 && <span style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>?�균 {avgDays}??/span>}
+                    <span style={{ fontSize: 10, color: g.color, fontWeight: 600 }}>승인율 {g.rate}%</span>
+                    {avgDays > 0 && <span style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>평균 {avgDays}일</span>}
                   </div>
                 </div>
               );
@@ -1336,13 +1349,14 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         </div>
       )}
 
-      {/* ?�� 미완�??�무 ?�트 ?�젯 */}
+      {/* 🆕 미완료 업무 노트 위젯 */}
       {(function() {
         var today = new Date().toISOString().slice(0, 10);
-        var myTodos = companies ? [] : []; // ?�제 work_notes?�서 가?��????��?�?별도 처리
-        return null; // ?�무?�트??WorkNotesView?�서 관�?      })()}
+        var myTodos = companies ? [] : []; // 실제 work_notes에서 가져와야 하므로 별도 처리
+        return null; // 업무노트는 WorkNotesView에서 관리
+      })()}
 
-      {/* ?�� ?�늘???????�젯 */}
+      {/* 🆕 오늘의 할 일 위젯 */}
       {(function() {
         var today = new Date().toISOString().slice(0, 10);
         var tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
@@ -1358,34 +1372,34 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         return (
           <div style={{ background: "linear-gradient(135deg, #FFF7ED 0%, #FEF3C7 100%)", borderRadius: 12, padding: "20px 24px", border: "1px solid #FCD34D", marginBottom: 18 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-              <span style={{ fontSize: 16 }}>?��</span>
-              <div style={{ fontSize: 14, fontWeight: 700, color: "#92400E" }}>?�늘??????/div>
-              <span style={{ fontSize: 11, color: "#92400E", background: "#FEF3C7", padding: "2px 8px", borderRadius: 99, fontWeight: 600, border: "1px solid #FCD34D" }}>{totalCount}�?/span>
+              <span style={{ fontSize: 16 }}>📋</span>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#92400E" }}>오늘의 할 일</div>
+              <span style={{ fontSize: 11, color: "#92400E", background: "#FEF3C7", padding: "2px 8px", borderRadius: 99, fontWeight: 600, border: "1px solid #FCD34D" }}>{totalCount}건</span>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
-              {/* ?�� ???�일 ?�젯 - work_notes 체크박스 기반 */}
+              {/* 📋 내 할일 위젯 - work_notes 체크박스 기반 */}
               <MyTodoWidget setView={setView} />
               
-              {/* companies 기반 ?�젯 ?�거??- work_notes 기반 "???�일" ?�젯??메인 */}
+              {/* companies 기반 위젯 제거됨 - work_notes 기반 "내 할일" 위젯이 메인 */}
               {stagnant14.length > 0 && (
                 <div onClick={function() { setView("stagnant"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
-                  <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 700, marginBottom: 4 }}>?�� ?�각 ?�체</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: "#DC2626" }}>{stagnant14.length}�?/div>
-                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>14???�상 ?�체</div>
+                  <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 700, marginBottom: 4 }}>🔴 심각 정체</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "#DC2626" }}>{stagnant14.length}건</div>
+                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>14일 이상 정체</div>
                 </div>
               )}
               {stagnant7.length > 0 && (
                 <div onClick={function() { setView("stagnant"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #B45309" }}>
-                  <div style={{ fontSize: 10, color: "#B45309", fontWeight: 700, marginBottom: 4 }}>?�� ?�체 주의</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: "#B45309" }}>{stagnant7.length}�?/div>
-                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>7-13???�체</div>
+                  <div style={{ fontSize: 10, color: "#B45309", fontWeight: 700, marginBottom: 4 }}>🟡 정체 주의</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "#B45309" }}>{stagnant7.length}건</div>
+                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>7-13일 정체</div>
                 </div>
               )}
               {weekContracts.length > 0 && (
                 <div onClick={function() { setView("list"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #15803D" }}>
-                  <div style={{ fontSize: 10, color: "#15803D", fontWeight: 700, marginBottom: 4 }}>?�� ?�번 �?계약</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: "#15803D" }}>{weekContracts.length}�?/div>
-                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>7????계약 ?�정</div>
+                  <div style={{ fontSize: 10, color: "#15803D", fontWeight: 700, marginBottom: 4 }}>📋 이번 주 계약</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "#15803D" }}>{weekContracts.length}건</div>
+                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>7일 내 계약 예정</div>
                 </div>
               )}
             </div>
@@ -1393,49 +1407,49 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         );
       })()}
 
-      {/* ?�� 미수�?/ ?�금 ?�정 ?�젯 */}
+      {/* 🆕 미수금 / 입금 예정 위젯 */}
       {(function() {
-        var unpaidList = companies.filter(function(c) { return c.fee_status === "계약금수?? || c.fee_status === "미수??; });
+        var unpaidList = companies.filter(function(c) { return c.fee_status === "계약금수령" || c.fee_status === "미수령"; });
         var unpaidTotal = unpaidList.reduce(function(sum, c) { var amt = parseInt((c.received_amount || c.request_amount || "0").toString().replace(/[^0-9]/g, "")) || 0; return sum + amt; }, 0);
-        var paidList = companies.filter(function(c) { return c.fee_status === "?�수료수?�완�?; });
+        var paidList = companies.filter(function(c) { return c.fee_status === "수수료수령완료"; });
         var paidTotal = paidList.reduce(function(sum, c) { var amt = parseInt((c.received_amount || "0").toString().replace(/[^0-9]/g, "")) || 0; return sum + amt; }, 0);
-        var formatAmt = function(n) { if (n >= 100000000) return (n / 100000000).toFixed(1) + "??; if (n >= 10000) return Math.round(n / 10000) + "�?; return n + "??; };
+        var formatAmt = function(n) { if (n >= 100000000) return (n / 100000000).toFixed(1) + "억"; if (n >= 10000) return Math.round(n / 10000) + "만"; return n + "원"; };
         return (
           <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
-            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>?�� ?�수�??�황</div>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>💰 수수료 현황</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
               <div onClick={function() { setView("settlement"); }} style={{ background: "#FEF2F2", borderRadius: 10, padding: "14px 16px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
-                <div style={{ fontSize: 11, color: "#DC2626", fontWeight: 700, marginBottom: 5 }}>미수�?/div>
+                <div style={{ fontSize: 11, color: "#DC2626", fontWeight: 700, marginBottom: 5 }}>미수금</div>
                 <div style={{ fontSize: 22, fontWeight: 700, color: "#DC2626" }}>{formatAmt(unpaidTotal)}</div>
-                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>{unpaidList.length}�?미입�?/div>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>{unpaidList.length}건 미입금</div>
               </div>
               <div onClick={function() { setView("settlement"); }} style={{ background: "#F0FDF4", borderRadius: 10, padding: "14px 16px", cursor: "pointer", borderLeft: "3px solid #15803D" }}>
-                <div style={{ fontSize: 11, color: "#15803D", fontWeight: 700, marginBottom: 5 }}>?�금 ?�료</div>
+                <div style={{ fontSize: 11, color: "#15803D", fontWeight: 700, marginBottom: 5 }}>입금 완료</div>
                 <div style={{ fontSize: 22, fontWeight: 700, color: "#15803D" }}>{formatAmt(paidTotal)}</div>
-                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>{paidList.length}�??�료</div>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>{paidList.length}건 완료</div>
               </div>
               <div style={{ background: "#F7F6F3", borderRadius: 10, padding: "14px 16px", borderLeft: "3px solid #4338CA" }}>
-                <div style={{ fontSize: 11, color: "#4338CA", fontWeight: 700, marginBottom: 5 }}>�??�수�?/div>
+                <div style={{ fontSize: 11, color: "#4338CA", fontWeight: 700, marginBottom: 5 }}>총 수수료</div>
                 <div style={{ fontSize: 22, fontWeight: 700, color: "#4338CA" }}>{formatAmt(unpaidTotal + paidTotal)}</div>
-                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>?�체 ?�계</div>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>전체 합계</div>
               </div>
             </div>
           </div>
         );
       })()}
 
-      {/* KPI 목표 ?�성�?*/}
+      {/* KPI 목표 달성률 */}
       <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>?�당?�별 KPI ?�성�?<span style={{ fontSize: 12, color: "#888", fontWeight: 400 }}>{thisMonth}??목표</span></div>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>담당자별 KPI 달성률 <span style={{ fontSize: 12, color: "#888", fontWeight: 400 }}>{thisMonth}월 목표</span></div>
           <div style={{ display: "flex", gap: 6 }}>
             {editingKpi ? (
               <>
-                <button onClick={saveKpiGoals} style={{ fontSize: 12, padding: "5px 12px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>?�??/button>
+                <button onClick={saveKpiGoals} style={{ fontSize: 12, padding: "5px 12px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>저장</button>
                 <button onClick={function() { setEditingKpi(false); setKpiEdits({}); }} style={{ fontSize: 12, padding: "5px 10px", background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 6, cursor: "pointer" }}>취소</button>
               </>
             ) : (
-              <button onClick={function() { setEditingKpi(true); }} style={{ fontSize: 12, padding: "5px 12px", background: "#F7F6F3", color: "#555", border: "1px solid #E8E5E0", borderRadius: 6, cursor: "pointer" }}>목표 ?�정</button>
+              <button onClick={function() { setEditingKpi(true); }} style={{ fontSize: 12, padding: "5px 12px", background: "#F7F6F3", color: "#555", border: "1px solid #E8E5E0", borderRadius: 6, cursor: "pointer" }}>목표 설정</button>
             )}
           </div>
         </div>
@@ -1446,7 +1460,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
               return (
                 <div key={name} style={{ background: "#F7F6F3", borderRadius: 8, padding: "12px 14px" }}>
                   <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>{name}</div>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>?�인 목표 (�?</div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>승인 목표 (건)</div>
                   <input type="number" min="0"
                     defaultValue={kpiEdits[name] !== undefined ? kpiEdits[name] : (goal ? goal.goal_approvals : 0)}
                     onChange={function(e) { var n = name; setKpiEdits(function(p) { return Object.assign({}, p, { [n]: e.target.value }); }); }}
@@ -1457,7 +1471,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
           </div>
         ) : assigneeKpi.length === 0 ? (
           <div style={{ textAlign: "center", color: "#CCC", fontSize: 13, padding: "20px 0" }}>
-            ?�번 ???�이?��? ?�어?? 목표 ?�정 버튼???�러 KPI�??�정?�주?�요.
+            이번 달 데이터가 없어요. 목표 설정 버튼을 눌러 KPI를 설정해주세요.
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -1469,14 +1483,14 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
                       <span style={{ fontSize: 13, fontWeight: 600 }}>{a.name}</span>
-                      <span style={{ fontSize: 12, color: "#888" }}>?�인 {a.approved}�?{a.goalAmt > 0 ? "/ 목표 " + a.goalAmt + "�? : ""}</span>
+                      <span style={{ fontSize: 12, color: "#888" }}>승인 {a.approved}건 {a.goalAmt > 0 ? "/ 목표 " + a.goalAmt + "건" : ""}</span>
                     </div>
                     <div style={{ height: 6, background: "#E8E5E0", borderRadius: 99 }}>
                       <div style={{ height: 6, background: color, borderRadius: 99, width: a.pct + "%", transition: "width 0.5s ease" }} />
                     </div>
                   </div>
                   <span style={{ fontSize: 12, fontWeight: 700, color: color, minWidth: 36, textAlign: "right" }}>
-                    {a.goalAmt > 0 ? a.pct + "%" : a.approved + "�?}
+                    {a.goalAmt > 0 ? a.pct + "%" : a.approved + "건"}
                   </span>
                 </div>
               );
@@ -1487,7 +1501,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0" }}>
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>?�당?�별 ?�무 ?�황</div>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>담당자별 업무 현황</div>
           {profiles.filter(p => p.role !== "admin").map(p => {
             const mine = companies.filter(c => c.assignee === p.name);
             const stag = mine.filter(c => c.stagnant_days >= 7);
@@ -1497,9 +1511,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
                 <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#1A1917", color: "#F7F6F3", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{p.name[0]}</div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{p.name} <span style={{ fontWeight: 400, color: "#888", fontSize: 11 }}>{p.team}</span></div>
-                  <div style={{ fontSize: 11, color: "#888" }}>{mine.length}�??�체 ?�당</div>
+                  <div style={{ fontSize: 11, color: "#888" }}>{mine.length}개 업체 담당</div>
                 </div>
-                {stag.length > 0 && <span style={{ fontSize: 10, color: "#DC2626", background: "#FEF2F2", padding: "2px 7px", borderRadius: 99, fontWeight: 600, flexShrink: 0 }}>?�체 {stag.length}</span>}
+                {stag.length > 0 && <span style={{ fontSize: 10, color: "#DC2626", background: "#FEF2F2", padding: "2px 7px", borderRadius: 99, fontWeight: 600, flexShrink: 0 }}>정체 {stag.length}</span>}
                 <div style={{ width: 70, height: 5, background: "#E8E5E0", borderRadius: 99, flexShrink: 0 }}>
                   <div style={{ height: 5, background: "#1A1917", borderRadius: 99, width: pct + "%" }} />
                 </div>
@@ -1509,7 +1523,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         </div>
 
         <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0" }}>
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>?�늘 ?�슈 · ?�통???�요</div>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>오늘 이슈 · 재통화 필요</div>
           {companies.filter(c => c.stagnant_days >= 7 || (c.next_contact && c.next_contact <= new Date().toISOString().slice(0,10))).slice(0, 6).map(c => (
             <div key={c.id} onClick={() => onSelectCompany(c)}
               style={{ padding: "9px 12px", borderRadius: 8, border: "1px solid #E8E5E0", marginBottom: 7, cursor: "pointer", display: "flex", gap: 10, alignItems: "flex-start" }}>
@@ -1522,7 +1536,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
             </div>
           ))}
           {companies.filter(c => c.stagnant_days >= 7 || (c.next_contact && c.next_contact <= new Date().toISOString().slice(0,10))).length === 0 && (
-            <div style={{ textAlign: "center", color: "#CCC", fontSize: 13, padding: "30px 0" }}>?�늘 ?�슈가 ?�어???��</div>
+            <div style={{ textAlign: "center", color: "#CCC", fontSize: 13, padding: "30px 0" }}>오늘 이슈가 없어요 👍</div>
           )}
         </div>
       </div>
@@ -1530,14 +1544,14 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
   );
 }
 
-// ?�?� ?�이?�라???�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 파이프라인 ────────────────────────────────────────────────────────────────
 function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, onSelect }) {
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 22 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>?�이?�라??/h1>
-          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>?�계�??�체 ?�황</p>
+          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>파이프라인</h1>
+          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>단계별 업체 현황</p>
         </div>
         <select value={filterAssignee} onChange={e => setFilterAssignee(e.target.value)}
           style={{ padding: "7px 12px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 13, background: "#fff", cursor: "pointer" }}>
@@ -1548,13 +1562,13 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
         {STAGES.map((stage, si) => {
           const c = STAGE_COLORS[stage];
           const items = filtered.filter(co => co.stage === stage);
-          // ?�균 체류 ?�수 계산
+          // 평균 체류 일수 계산
           var avgStay = 0;
           if (items.length > 0) {
             var totalStay = items.reduce(function(s, co) { return s + (co.stagnant_days || 0); }, 0);
             avgStay = Math.round(totalStay / items.length);
           }
-          // ?�음 ?�계로의 ?�환??(?�순?? ?�재 ?�계 + ?�후 ?�계 / ?�체)
+          // 다음 단계로의 전환율 (단순화: 현재 단계 + 이후 단계 / 전체)
           var nextStages = STAGES.slice(si + 1);
           var afterCount = filtered.filter(function(co) { return nextStages.includes(co.stage); }).length;
           var conversionPct = items.length + afterCount > 0 ? Math.round(afterCount / (items.length + afterCount) * 100) : 0;
@@ -1567,8 +1581,8 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
                 </div>
                 <div style={{ fontSize: 11, fontWeight: 700, color: c.text, lineHeight: 1.3, marginBottom: 6 }}>{stage}</div>
                 <div style={{ display: "flex", gap: 6, fontSize: 9, fontWeight: 600 }}>
-                  {avgStay > 0 && <span style={{ color: c.text, opacity: 0.8 }}>?�균 {avgStay}??/span>}
-                  {si < STAGES.length - 1 && conversionPct > 0 && <span style={{ color: c.text, opacity: 0.8 }}>??{conversionPct}%</span>}
+                  {avgStay > 0 && <span style={{ color: c.text, opacity: 0.8 }}>평균 {avgStay}일</span>}
+                  {si < STAGES.length - 1 && conversionPct > 0 && <span style={{ color: c.text, opacity: 0.8 }}>↗ {conversionPct}%</span>}
                 </div>
               </div>
               <div style={{ padding: "8px", display: "flex", flexDirection: "column", gap: 6, maxHeight: "calc(100vh - 220px)", overflowY: "auto" }}>
@@ -1581,7 +1595,7 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
                       onMouseLeave={e => e.currentTarget.style.background = co.stagnant_days >= 7 ? "#FEF2F2" : "#F7F6F3"}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
                         <span style={{ fontSize: 12, fontWeight: 700, color: "#1A1917", lineHeight: 1.3 }}>{co.name}</span>
-                        {co.stagnant_days >= 7 && <span style={{ fontSize: 9, color: "#DC2626", fontWeight: 800, background: "#FEE2E2", padding: "2px 5px", borderRadius: 4, flexShrink: 0, marginLeft: 4 }}>??co.stagnant_days}??/span>}
+                        {co.stagnant_days >= 7 && <span style={{ fontSize: 9, color: "#DC2626", fontWeight: 800, background: "#FEE2E2", padding: "2px 5px", borderRadius: 4, flexShrink: 0, marginLeft: 4 }}>⚠{co.stagnant_days}일</span>}
                       </div>
                       <div style={{ display: "flex", gap: 5, marginBottom: 6 }}>
                         <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 99, background: co.type === "법인" ? "#EEF2FF" : "#F0FDF4", color: co.type === "법인" ? "#4338CA" : "#15803D", fontWeight: 600 }}>{co.type}</span>
@@ -1591,12 +1605,12 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
                         <div style={{ flex: 1, height: 3, background: "#E8E5E0", borderRadius: 99 }}>
                           <div style={{ height: 3, background: docPct === 100 ? "#15803D" : c.text, borderRadius: 99, width: docPct + "%", transition: "width 0.3s" }} />
                         </div>
-                        <span style={{ fontSize: 9, color: "#AAA", flexShrink: 0 }}>?�류 {docPct}%</span>
+                        <span style={{ fontSize: 9, color: "#AAA", flexShrink: 0 }}>서류 {docPct}%</span>
                       </div>
                     </div>
                   );
                 })}
-                {items.length === 0 && <div style={{ fontSize: 12, color: "#DDD", textAlign: "center", padding: "24px 0" }}>?�음</div>}
+                {items.length === 0 && <div style={{ fontSize: 12, color: "#DDD", textAlign: "center", padding: "24px 0" }}>없음</div>}
               </div>
             </div>
           );
@@ -1606,10 +1620,10 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
   );
 }
 
-// ?�?� 기업 목록 ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 기업 목록 ─────────────────────────────────────────────────────────────────
 
 // ============================================================
-// ?�� ???�일 ?�면 - work_notes content?�서 체크박스 ?�싱
+// 📋 내 할일 화면 - work_notes content에서 체크박스 파싱
 // ============================================================
 function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
   const [notes, setNotes] = useState([]);
@@ -1636,26 +1650,28 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
     setLoading(false);
   }
 
-  // ?�트 content?�서 체크박스 ??��???�싱 (�???���?마감?�도 추출)
+  // 노트 content에서 체크박스 항목들 파싱 (각 항목별 마감일도 추출)
   function parseCheckboxes(noteContent) {
     if (!noteContent) return [];
     var lines = noteContent.split("\n");
     var items = [];
     lines.forEach(function(line, idx) {
-      // - [ ] ?�는 - [x] ?�턴 매칭
+      // - [ ] 또는 - [x] 패턴 매칭
       var match = line.match(/^(\s*)- \[([ x])\]\s*(.*)$/i);
       if (match) {
         var textFull = match[3].trim();
         var itemDueDate = null;
         var displayText = textFull;
         
-        // 마감??추출: [MM/DD] ?�는 [YYYY-MM-DD] ?�는 ??MM/DD
-        // ?�선?�위: ?�괄호 > ?�살??        var bracketMatch = textFull.match(/\[(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2})\]/);
-        var arrowMatch = !bracketMatch && textFull.match(/??s*(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2})\s*$/);
+        // 마감일 추출: [MM/DD] 또는 [YYYY-MM-DD] 또는 → MM/DD
+        // 우선순위: 대괄호 > 화살표
+        var bracketMatch = textFull.match(/\[(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2})\]/);
+        var arrowMatch = !bracketMatch && textFull.match(/→\s*(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2})\s*$/);
         var dateStr = bracketMatch ? bracketMatch[1] : (arrowMatch ? arrowMatch[1] : null);
         
         if (dateStr) {
-          // YYYY-MM-DD ?�는 MM/DD�?YYYY-MM-DD�?변??          if (dateStr.indexOf("-") >= 0) {
+          // YYYY-MM-DD 또는 MM/DD를 YYYY-MM-DD로 변환
+          if (dateStr.indexOf("-") >= 0) {
             itemDueDate = dateStr;
           } else {
             var parts = dateStr.split("/");
@@ -1663,13 +1679,13 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
             var mm = parts[0].padStart(2, "0");
             var dd = parts[1].padStart(2, "0");
             itemDueDate = year + "-" + mm + "-" + dd;
-            // 과거 ?�짜�??�년?�로 (?? 12?�에 1/5 = ?�음??1/5)
+            // 과거 날짜면 내년으로 (예: 12월에 1/5 = 다음해 1/5)
             if (itemDueDate < new Date(Date.now() - 180 * 86400000).toISOString().slice(0, 10)) {
               itemDueDate = (year + 1) + "-" + mm + "-" + dd;
             }
           }
-          // ?�시 ?�스?�에???�짜 부�??�거
-          displayText = textFull.replace(/\[\d{4}-\d{2}-\d{2}\]|\[\d{1,2}\/\d{1,2}\]/, "").replace(/??s*\d{4}-\d{2}-\d{2}\s*$|??s*\d{1,2}\/\d{1,2}\s*$/, "").trim();
+          // 표시 텍스트에서 날짜 부분 제거
+          displayText = textFull.replace(/\[\d{4}-\d{2}-\d{2}\]|\[\d{1,2}\/\d{1,2}\]/, "").replace(/→\s*\d{4}-\d{2}-\d{2}\s*$|→\s*\d{1,2}\/\d{1,2}\s*$/, "").trim();
         }
         
         items.push({
@@ -1684,7 +1700,7 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
     return items;
   }
 
-  // 체크박스 ?��? - content ?�스??직접 ?�정
+  // 체크박스 토글 - content 텍스트 직접 수정
   async function toggleCheckbox(noteId, lineIdx, currentChecked) {
     var note = notes.find(function(n) { return n.id === noteId; });
     if (!note || !note.content) return;
@@ -1704,42 +1720,44 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
     lines[lineIdx] = newLine;
     var newContent = lines.join("\n");
     
-    // ?��????�데?�트
+    // 낙관적 업데이트
     setNotes(function(prev) {
       return prev.map(function(n) {
         return n.id === noteId ? Object.assign({}, n, { content: newContent }) : n;
       });
     });
     
-    // DB ?�??    var r = await supabase.from("work_notes")
+    // DB 저장
+    var r = await supabase.from("work_notes")
       .update({ content: newContent, updated_at: new Date().toISOString() })
       .eq("id", noteId);
     
     if (r.error) {
-      // ?�패 ???�복
+      // 실패 시 원복
       setNotes(function(prev) {
         return prev.map(function(n) {
           return n.id === noteId ? Object.assign({}, n, { content: note.content }) : n;
         });
       });
-      alert("?�???�패: " + r.error.message);
+      alert("저장 실패: " + r.error.message);
     }
   }
 
-  // 모든 ?�트?�서 체크박스 ??��??추출 + 메�??�이??결합
-  // ??���?마감?�이 ?�으�?그걸 ?�선, ?�으�??�트??due_date ?�용
+  // 모든 노트에서 체크박스 항목들 추출 + 메타데이터 결합
+  // 항목별 마감일이 있으면 그걸 우선, 없으면 노트의 due_date 사용
   var allItems = [];
   notes.forEach(function(note) {
     var items = parseCheckboxes(note.content);
     items.forEach(function(item) {
-      if (item.text) { // �???�� ?�외
+      if (item.text) { // 빈 항목 제외
         allItems.push({
           noteId: note.id,
-          noteTitle: note.title || "(?�목 ?�음)",
+          noteTitle: note.title || "(제목 없음)",
           assignee: note.assignee,
           taggedCompany: note.tagged_company,
-          dueDate: item.itemDueDate || note.due_date,  // ??���??�선
-          itemDueDate: item.itemDueDate,                // ??���?마감???�시??          checked: item.checked,
+          dueDate: item.itemDueDate || note.due_date,  // 항목별 우선
+          itemDueDate: item.itemDueDate,                // 항목별 마감일 표시용
+          checked: item.checked,
           text: item.text,
           lineIdx: item.lineIdx
         });
@@ -1747,7 +1765,7 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
     });
   });
 
-  // 카테고리�?분류
+  // 카테고리별 분류
   var today = new Date().toISOString().slice(0, 10);
   var tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
   var weekEnd = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
@@ -1762,14 +1780,14 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
   var noDue = unchecked.filter(function(i) { return !i.dueDate; });
   var later = unchecked.filter(function(i) { return i.dueDate && i.dueDate > weekEnd; });
 
-  // 카테고리 ?�더 ?�퍼
+  // 카테고리 렌더 헬퍼
   function renderSection(title, items, color, bgColor, icon) {
     if (items.length === 0) return null;
     return (
       <div style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, padding: "6px 12px", background: bgColor, borderRadius: 8, borderLeft: "3px solid " + color }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: color }}>{icon} {title}</span>
-          <span style={{ fontSize: 11, color: color, opacity: 0.8 }}>({items.length}�?</span>
+          <span style={{ fontSize: 11, color: color, opacity: 0.8 }}>({items.length}건)</span>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {items.map(function(item, idx) {
@@ -1794,17 +1812,18 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
                 )}
                 {daysOverdue > 0 && (
                   <span style={{ color: "#DC2626", fontSize: 10, fontWeight: 600, flexShrink: 0 }}>
-                    {daysOverdue}??지??                  </span>
+                    {daysOverdue}일 지남
+                  </span>
                 )}
                 {item.dueDate && daysOverdue <= 0 && (
-                  <span style={{ color: item.itemDueDate ? "#4338CA" : "#888", fontSize: 10, flexShrink: 0, fontWeight: item.itemDueDate ? 600 : 400 }} title={item.itemDueDate ? "????��??개별 마감?? : "?�트 마감??}>
-                    {item.itemDueDate ? "?�� " : ""}{item.dueDate.slice(5)}
+                  <span style={{ color: item.itemDueDate ? "#4338CA" : "#888", fontSize: 10, flexShrink: 0, fontWeight: item.itemDueDate ? 600 : 400 }} title={item.itemDueDate ? "이 항목의 개별 마감일" : "노트 마감일"}>
+                    {item.itemDueDate ? "📅 " : ""}{item.dueDate.slice(5)}
                   </span>
                 )}
                 <button onClick={function() { setView && setView("worknotes"); }}
                   style={{ background: "none", border: "none", color: "#888", fontSize: 11, cursor: "pointer", padding: "2px 4px", flexShrink: 0 }}
-                  title="?�본 ?�트�??�동">
-                  ?��
+                  title="원본 노트로 이동">
+                  📝
                 </button>
               </div>
             );
@@ -1815,7 +1834,7 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
   }
 
   if (loading) {
-    return <div style={{ padding: 40, textAlign: "center", color: "#888" }}>불러?�는 �?..</div>;
+    return <div style={{ padding: 40, textAlign: "center", color: "#888" }}>불러오는 중...</div>;
   }
 
   return (
@@ -1823,10 +1842,11 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>
-            ???�일 {currentUser && <span style={{ fontSize: 14, color: "#888", fontWeight: 400 }}>· {currentUser}</span>}
+            내 할일 {currentUser && <span style={{ fontSize: 14, color: "#888", fontWeight: 400 }}>· {currentUser}</span>}
           </h1>
           <div style={{ fontSize: 12, color: "#888", marginTop: 4 }}>
-            ?�료 {checked.length}�?/ 미완�?{unchecked.length}�?          </div>
+            완료 {checked.length}건 / 미완료 {unchecked.length}건
+          </div>
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           {isAdmin && (
@@ -1836,20 +1856,20 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
                   background: viewMode === "mine" ? "#1A1917" : "#fff",
                   color: viewMode === "mine" ? "#fff" : "#666",
                   border: viewMode === "mine" ? "none" : "1px solid #E8E5E0" }}>
-                ??것만
+                내 것만
               </button>
               <button onClick={function() { setViewMode("all"); }}
                 style={{ padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer",
                   background: viewMode === "all" ? "#1A1917" : "#fff",
                   color: viewMode === "all" ? "#fff" : "#666",
                   border: viewMode === "all" ? "none" : "1px solid #E8E5E0" }}>
-                ?�체 보기
+                전체 보기
               </button>
               {viewMode === "all" && (
                 <select value={filterAssignee} onChange={function(e) { setFilterAssignee(e.target.value); }}
                   style={{ padding: "6px 10px", borderRadius: 6, fontSize: 12, border: "1px solid #E8E5E0", outline: "none" }}>
-                  <option value="">모든 ?�당??/option>
-                  {["미현","?�진","관??,"지??,"?�애","?�선","?�일","?�호","?�원"].map(function(a) {
+                  <option value="">모든 담당자</option>
+                  {["미현","유진","관호","지혜","현애","인선","동일","양호","정원"].map(function(a) {
                     return <option key={a} value={a}>{a}</option>;
                   })}
                 </select>
@@ -1861,30 +1881,30 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
 
       {allItems.length === 0 && (
         <div style={{ background: "#F7F6F3", borderRadius: 12, padding: 40, textAlign: "center", color: "#888" }}>
-          <div style={{ fontSize: 30, marginBottom: 12 }}>?��</div>
-          <div style={{ fontSize: 14, marginBottom: 6 }}>?�일???�어??</div>
-          <div style={{ fontSize: 11 }}>?�무 ?�트??체크박스 ?�태�??�일???�어주세??</div>
+          <div style={{ fontSize: 30, marginBottom: 12 }}>📝</div>
+          <div style={{ fontSize: 14, marginBottom: 6 }}>할일이 없어요!</div>
+          <div style={{ fontSize: 11 }}>업무 노트에 체크박스 형태로 할일을 적어주세요.</div>
           <button onClick={function() { setView && setView("worknotes"); }}
             style={{ marginTop: 16, padding: "8px 16px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, cursor: "pointer" }}>
-            ?�무 ?�트�??�동
+            업무 노트로 이동
           </button>
         </div>
       )}
 
-      {renderSection("기한 지??, overdue, "#DC2626", "#FEF2F2", "??)}
-      {renderSection("?�늘", todayItems, "#4338CA", "#EEF2FF", "?��")}
-      {renderSection("?�일", tomorrowItems, "#7C3AED", "#F5F3FF", "?��")}
-      {renderSection("?�번 �?, thisWeek, "#0F6E56", "#E1F5EE", "?���?)}
-      {renderSection("기한 ?�음", noDue, "#888", "#F7F6F3", "?��")}
-      {renderSection("?�중??, later, "#999", "#F7F6F3", "?��")}
+      {renderSection("기한 지남", overdue, "#DC2626", "#FEF2F2", "⏰")}
+      {renderSection("오늘", todayItems, "#4338CA", "#EEF2FF", "📅")}
+      {renderSection("내일", tomorrowItems, "#7C3AED", "#F5F3FF", "📆")}
+      {renderSection("이번 주", thisWeek, "#0F6E56", "#E1F5EE", "🗓️")}
+      {renderSection("기한 없음", noDue, "#888", "#F7F6F3", "📥")}
+      {renderSection("나중에", later, "#999", "#F7F6F3", "🔮")}
       
       {checked.length > 0 && (
         <details style={{ marginTop: 24 }}>
           <summary style={{ cursor: "pointer", fontSize: 12, color: "#888", padding: "8px 12px", background: "#F7F6F3", borderRadius: 8 }}>
-            ???�료????{checked.length}�?보기
+            ✓ 완료한 일 {checked.length}건 보기
           </summary>
           <div style={{ marginTop: 8 }}>
-            {renderSection("", checked.slice(0, 50), "#9CA3AF", "#F7F6F3", "??)}
+            {renderSection("", checked.slice(0, 50), "#9CA3AF", "#F7F6F3", "✓")}
           </div>
         </details>
       )}
@@ -1893,7 +1913,7 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
 }
 
 
-// ?�� ?�?�보?�용 ???�일 미니 ?�젯
+// 📋 대시보드용 내 할일 미니 위젯
 function MyTodoWidget({ setView }) {
   const [count, setCount] = useState({ total: 0, overdue: 0, today: 0 });
   
@@ -1932,24 +1952,25 @@ function MyTodoWidget({ setView }) {
   return (
     <div onClick={function() { setView("mytodo"); }}
       style={{ background: "linear-gradient(135deg, #4338CA 0%, #6366F1 100%)", borderRadius: 10, padding: "14px 16px", cursor: "pointer", color: "#fff", boxShadow: "0 2px 8px rgba(67, 56, 202, 0.2)" }}>
-      <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 4, opacity: 0.9 }}>?�� ???�일</div>
-      <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{count.total}�?/div>
+      <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 4, opacity: 0.9 }}>📋 내 할일</div>
+      <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{count.total}건</div>
       <div style={{ fontSize: 10, opacity: 0.9 }}>
-        {count.overdue > 0 && <span style={{ marginRight: 6 }}>??지??{count.overdue}</span>}
-        {count.today > 0 && <span>?�� ?�늘 {count.today}</span>}
-        {count.overdue === 0 && count.today === 0 && <span>모두 진행 �?/span>}
+        {count.overdue > 0 && <span style={{ marginRight: 6 }}>⏰ 지남 {count.overdue}</span>}
+        {count.today > 0 && <span>📅 오늘 {count.today}</span>}
+        {count.overdue === 0 && count.today === 0 && <span>모두 진행 중</span>}
       </div>
     </div>
   );
 }
 
-// ?�?� ?�종 ?� 컴포?�트 (?�라???�집 + ?�동?�성 ?�롭?�운) ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 업종 셀 컴포넌트 (인라인 편집 + 자동완성 드롭다운) ──────────────────────
 function IndustryCell({ co, setCompanies }) {
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState("");
   const ref = useRef(null);
 
-  // industry??"?�조?? ?�소매업" 같�? ?�표 구분 문자??  var selectedList = (co.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+  // industry는 "제조업, 도소매업" 같은 쉼표 구분 문자열
+  var selectedList = (co.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
 
   useEffect(function() {
     if (!editing) return;
@@ -1991,14 +2012,14 @@ function IndustryCell({ co, setCompanies }) {
       onMouseEnter={function(e) { e.currentTarget.style.background = "#EEF2FF"; }}
       onMouseLeave={function(e) { e.currentTarget.style.background = selectedList.length > 0 ? "#EEF2FF" : "transparent"; }}
       title={selectedList.join(", ")}>
-      {selectedList.length > 0 ? selectedList.join(", ") : "+ ?�종"}
+      {selectedList.length > 0 ? selectedList.join(", ") : "+ 업종"}
     </span>
   );
 
   return (
     <div ref={ref} style={{ position: "relative" }}>
       <div style={{ position: "absolute", top: 0, left: 0, zIndex: 999, background: "#fff", border: "1px solid #4338CA", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.12)", minWidth: 260, padding: 10 }}>
-        <div style={{ fontSize: 10, color: "#888", marginBottom: 6, fontWeight: 700 }}>?�종 ?�택 (복수 가??</div>
+        <div style={{ fontSize: 10, color: "#888", marginBottom: 6, fontWeight: 700 }}>업종 선택 (복수 가능)</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
           {INDUSTRY_OPTIONS.map(function(opt) {
             var sel = selectedList.indexOf(opt) >= 0;
@@ -2007,31 +2028,31 @@ function IndustryCell({ co, setCompanies }) {
                 style={{ padding: "3px 9px", borderRadius: 99, fontSize: 10, fontWeight: sel ? 700 : 400,
                   background: sel ? "#4338CA" : "#fff", color: sel ? "#fff" : "#666",
                   border: sel ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
-                {sel ? "??" : ""}{opt}
+                {sel ? "✓ " : ""}{opt}
               </button>
             );
           })}
         </div>
-        {/* 직접 ?�력??커스?� ?�종 ?�시 */}
+        {/* 직접 입력한 커스텀 업종 표시 */}
         {selectedList.filter(function(s) { return INDUSTRY_OPTIONS.indexOf(s) < 0; }).length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
             {selectedList.filter(function(s) { return INDUSTRY_OPTIONS.indexOf(s) < 0; }).map(function(s) {
               return (
                 <span key={s} style={{ background: "#0F6E56", color: "#fff", padding: "3px 9px", borderRadius: 99, fontSize: 10, fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                  ??{s}
-                  <span onClick={function() { toggleItem(s); }} style={{ cursor: "pointer", fontSize: 11, opacity: 0.8 }}>??/span>
+                  ✓ {s}
+                  <span onClick={function() { toggleItem(s); }} style={{ cursor: "pointer", fontSize: 11, opacity: 0.8 }}>✕</span>
                 </span>
               );
             })}
           </div>
         )}
-        <input value={val} placeholder="직접 ?�력 ??Enter (?? 부?�산?��???"
+        <input value={val} placeholder="직접 입력 후 Enter (예: 부동산임대업)"
           onChange={function(e) { setVal(e.target.value); }}
           onKeyDown={function(e) { if (e.key === "Enter") { e.preventDefault(); addCustom(); } if (e.key === "Escape") { setEditing(false); setVal(""); } }}
           style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 10, outline: "none", boxSizing: "border-box" }} />
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, paddingTop: 6, borderTop: "1px solid #F0EDE8" }}>
-          <span style={{ fontSize: 10, color: "#888" }}>{selectedList.length}�??�택??/span>
-          <button onClick={function() { setEditing(false); setVal(""); }} style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 5, padding: "4px 12px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>?�료</button>
+          <span style={{ fontSize: 10, color: "#888" }}>{selectedList.length}개 선택됨</span>
+          <button onClick={function() { setEditing(false); setVal(""); }} style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 5, padding: "4px 12px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>완료</button>
         </div>
       </div>
     </div>
@@ -2054,7 +2075,7 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
     }
   };
   var permanentDeleteCompany = async function(id) {
-    if (!window.confirm("?�구 ??��?�니?? 복구?????�습?�다.")) return;
+    if (!window.confirm("영구 삭제합니다. 복구할 수 없습니다.")) return;
     var r = await supabase.from("companies").delete().eq("id", id);
     if (!r.error) setTrashedCompanies(function(prev) { return prev.filter(function(c) { return c.id !== id; }); });
   };
@@ -2071,9 +2092,9 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
     if (!r.error) {
       setCompanies(function(prev) { return prev.map(function(c) { return c.id === id ? Object.assign({}, c, { name: newName }) : c; }); });
       setEditNameId(null);
-      if (showToast) showToast("?�체명이 변경됐?�요!");
+      if (showToast) showToast("업체명이 변경됐어요!");
     } else {
-      alert("?�???�패: " + r.error.message);
+      alert("저장 실패: " + r.error.message);
     }
   };
 
@@ -2083,9 +2104,9 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
     if (!r.error) {
       setCompanies(function(prev) { return prev.map(function(c) { return c.id === id ? Object.assign({}, c, { region: newRegion }) : c; }); });
       setEditRegionId(null);
-      if (showToast) showToast("지??�� ?�?�됐?�요!");
+      if (showToast) showToast("지역이 저장됐어요!");
     } else {
-      alert("?�???�패: " + r.error.message);
+      alert("저장 실패: " + r.error.message);
     }
   };
   return (
@@ -2093,48 +2114,49 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
       {dashboardFilter && (
         <div style={{ background: dashboardFilter.type === "overdue" ? "#FEF2F2" : dashboardFilter.type === "today" ? "#EEF2FF" : "#F5F3FF", border: "1px solid " + (dashboardFilter.type === "overdue" ? "#FECACA" : dashboardFilter.type === "today" ? "#C7D2FE" : "#DDD6FE"), borderRadius: 10, padding: "12px 16px", marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 16 }}>{dashboardFilter.type === "overdue" ? "?? : dashboardFilter.type === "today" ? "?��" : "?��"}</span>
+            <span style={{ fontSize: 16 }}>{dashboardFilter.type === "overdue" ? "⏰" : dashboardFilter.type === "today" ? "📅" : "📆"}</span>
             <div>
               <span style={{ fontSize: 13, fontWeight: 700, color: dashboardFilter.type === "overdue" ? "#DC2626" : dashboardFilter.type === "today" ? "#4338CA" : "#7C3AED" }}>
-                {dashboardFilter.type === "overdue" ? "기한 지??기업" : dashboardFilter.type === "today" ? "?�늘 ?�락/계약 기업" : "?�일 ?�락/계약 기업"} {dashboardFilter.items.length}�?              </span>
+                {dashboardFilter.type === "overdue" ? "기한 지난 기업" : dashboardFilter.type === "today" ? "오늘 연락/계약 기업" : "내일 연락/계약 기업"} {dashboardFilter.items.length}건
+              </span>
               <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
                 {dashboardFilter.items.map(function(c) { return c.name; }).join(", ")}
               </div>
             </div>
           </div>
-          <button onClick={function() { setDashboardFilter && setDashboardFilter(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#888" }}>??/button>
+          <button onClick={function() { setDashboardFilter && setDashboardFilter(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#888" }}>✕</button>
         </div>
       )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>기업 목록 <span style={{ fontSize: 15, color: "#888", fontWeight: 400 }}>{filtered.length}�?/span></h1>
+        <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>기업 목록 <span style={{ fontSize: 15, color: "#888", fontWeight: 400 }}>{filtered.length}개</span></h1>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={onAdd} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-            <Icon name="plus" size={15} color="#F7F6F3" /> ?�규 ?�록
+            <Icon name="plus" size={15} color="#F7F6F3" /> 신규 등록
           </button>
           <button onClick={openTrash} style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
-            ?���??��???trashedCompanies.length > 0 ? " (" + trashedCompanies.length + ")" : ""}
+            🗑️ 휴지통{trashedCompanies.length > 0 ? " (" + trashedCompanies.length + ")" : ""}
           </button>
         </div>
       </div>
       <div style={{ background: "#fff", borderRadius: 10, padding: "12px 16px", border: "1px solid #E8E5E0", marginBottom: 14, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         <div style={{ position: "relative", flex: 1, minWidth: 160 }}>
           <div style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }}><Icon name="search" size={14} color="#AAA" /></div>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="?�체�?· ?�?�자 검??
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="업체명 · 대표자 검색"
             style={{ width: "100%", padding: "8px 10px 8px 32px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 13, outline: "none", boxSizing: "border-box" }} />
         </div>
         {[
-          { v: filterStage, set: setFilterStage, opts: ["?�체", ...STAGES] },
+          { v: filterStage, set: setFilterStage, opts: ["전체", ...STAGES] },
           { v: filterAssignee, set: setFilterAssignee, opts: assignees },
-          { v: filterType, set: setFilterType, opts: ["?�체", "법인", "개인"] },
+          { v: filterType, set: setFilterType, opts: ["전체", "법인", "개인"] },
         ].map(({ v, set, opts }, i) => (
           <select key={i} value={v} onChange={e => set(e.target.value)}
             style={{ padding: "8px 10px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 13, background: "#fff", cursor: "pointer" }}>
             {opts.map(o => <option key={o}>{o}</option>)}
           </select>
         ))}
-        {(search || filterStage !== "?�체" || filterAssignee !== "?�체" || filterType !== "?�체") && (
-          <button onClick={() => { setSearch(""); setFilterStage("?�체"); setFilterAssignee("?�체"); setFilterType("?�체"); }}
-            style={{ fontSize: 12, color: "#888", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>초기??/button>
+        {(search || filterStage !== "전체" || filterAssignee !== "전체" || filterType !== "전체") && (
+          <button onClick={() => { setSearch(""); setFilterStage("전체"); setFilterAssignee("전체"); setFilterType("전체"); }}
+            style={{ fontSize: 12, color: "#888", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>초기화</button>
         )}
       </div>
       <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
@@ -2142,8 +2164,8 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1200 }}>
           <thead>
             <tr style={{ background: "#F7F6F3", borderBottom: "1px solid #E8E5E0", position: "sticky", top: 0, zIndex: 2 }}>
-              {["?�체�?,"?�형","지??,"?�종","?�?�자","?�당","진행?�계","?�체?�수","?�청?�정/?�금","계약??,"진행기�?","23??25??매출","?�용?�수","기�?","?�업"].map(h => (
-                <th key={h} style={{ padding: "10px 8px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left", letterSpacing: "0.03em", whiteSpace: "nowrap", background: "#F7F6F3", maxWidth: h === "지?? ? 90 : h === "?�?�자" ? 70 : undefined }}>{h}</th>
+              {["업체명","유형","지역","업종","대표자","담당","진행단계","정체일수","신청예정/자금","계약일","진행기관","23년~25년 매출","신용점수","기타","작업"].map(h => (
+                <th key={h} style={{ padding: "10px 8px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left", letterSpacing: "0.03em", whiteSpace: "nowrap", background: "#F7F6F3", maxWidth: h === "지역" ? 90 : h === "대표자" ? 70 : undefined }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -2161,13 +2183,13 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
                         <input value={editNameVal} onChange={function(e) { var v = e.target.value; setEditNameVal(v); }} autoFocus
                           onKeyDown={e => { if (e.key === "Enter") saveNameEdit(co.id); if (e.key === "Escape") setEditNameId(null); }}
                           style={{ padding: "3px 7px", border: "1px solid #4338CA", borderRadius: 5, fontSize: 13, fontWeight: 600, outline: "none", width: 140 }} />
-                        <button onClick={() => saveNameEdit(co.id)} style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 4, padding: "2px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>?�??/button>
+                        <button onClick={() => saveNameEdit(co.id)} style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 4, padding: "2px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>저장</button>
                         <button onClick={() => setEditNameId(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#888" }}>취소</button>
                       </div>
                     ) : (
                       <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
                         <span>{co.name}</span>
-                        {co.stagnant_days >= 7 && <span style={{ fontSize: 10, color: "#DC2626" }}>??/span>}
+                        {co.stagnant_days >= 7 && <span style={{ fontSize: 10, color: "#DC2626" }}>⚠</span>}
                         <button onClick={e => { e.stopPropagation(); setEditNameId(co.id); setEditNameVal(co.name); }}
                           style={{ background: "none", border: "none", cursor: "pointer", padding: 2, opacity: 0, transition: "opacity 0.15s" }}
                           onMouseEnter={e => e.currentTarget.style.opacity = 1}
@@ -2177,23 +2199,23 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
                       </div>
                     )}
                   </td>
-                  <td style={{ padding: "11px 13px", whiteSpace: "nowrap" }}><span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 99, background: co.type === "법인" ? "#EEF2FF" : "#F0FDF4", color: co.type === "법인" ? "#4338CA" : "#15803D", fontWeight: 600 }}>{co.type === "법인" ? "법인?�업?? : "개인?�업??}</span></td>
+                  <td style={{ padding: "11px 13px", whiteSpace: "nowrap" }}><span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 99, background: co.type === "법인" ? "#EEF2FF" : "#F0FDF4", color: co.type === "법인" ? "#4338CA" : "#15803D", fontWeight: 600 }}>{co.type === "법인" ? "법인사업자" : "개인사업자"}</span></td>
                   <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 90, overflow: "hidden", textOverflow: "ellipsis" }} onClick={e => e.stopPropagation()}>
                     {editRegionId === co.id ? (
                       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                         <input value={editRegionVal} onChange={function(e) { var v = e.target.value; setEditRegionVal(v); }} autoFocus
                           onKeyDown={function(e) { if (e.key === "Enter") saveRegionEdit(co.id); if (e.key === "Escape") setEditRegionId(null); }}
-                          placeholder="?? ?�울 강남"
+                          placeholder="예: 서울 강남"
                           style={{ padding: "3px 7px", border: "1px solid #4338CA", borderRadius: 5, fontSize: 12, outline: "none", width: 90 }} />
-                        <button onClick={function() { saveRegionEdit(co.id); }} style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 4, padding: "2px 6px", fontSize: 10, cursor: "pointer", fontWeight: 600 }}>??/button>
-                        <button onClick={function() { setEditRegionId(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 10, color: "#888" }}>??/button>
+                        <button onClick={function() { saveRegionEdit(co.id); }} style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 4, padding: "2px 6px", fontSize: 10, cursor: "pointer", fontWeight: 600 }}>✓</button>
+                        <button onClick={function() { setEditRegionId(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 10, color: "#888" }}>✕</button>
                       </div>
                     ) : (
                       <span onClick={function(e) { e.stopPropagation(); setEditRegionId(co.id); setEditRegionVal(co.region || ""); }}
                         style={{ cursor: "pointer", padding: "2px 6px", borderRadius: 4, display: "inline-flex", alignItems: "center", gap: 3 }}
                         onMouseEnter={function(e) { e.currentTarget.style.background = "#EEF2FF"; }}
                         onMouseLeave={function(e) { e.currentTarget.style.background = "transparent"; }}>
-                        {co.region || <span style={{ color: "#CCC" }}>+ ?�력</span>}
+                        {co.region || <span style={{ color: "#CCC" }}>+ 입력</span>}
                         <Icon name="edit" size={10} color="#AAA" />
                       </span>
                     )}
@@ -2204,7 +2226,7 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
                   <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis" }}>{co.representative || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 12, whiteSpace: "nowrap" }}>{co.assignee || "-"}</td>
                   <td style={{ padding: "11px 13px", whiteSpace: "nowrap" }}><span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, fontWeight: 600 }}>{co.stage}</span></td>
-                  <td style={{ padding: "11px 13px", whiteSpace: "nowrap", textAlign: "center" }}>{(function() { var d = co.stagnant_days || 0; if (d >= 14) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", fontWeight: 700 }}>??{d}??/span>; if (d >= 7) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEF3C7", color: "#B45309", fontWeight: 700 }}>{d}??/span>; return <span style={{ fontSize: 11, color: "#AAA" }}>{d}??/span>; })()}</td>
+                  <td style={{ padding: "11px 13px", whiteSpace: "nowrap", textAlign: "center" }}>{(function() { var d = co.stagnant_days || 0; if (d >= 14) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", fontWeight: 700 }}>⚠ {d}일</span>; if (d >= 7) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEF3C7", color: "#B45309", fontWeight: 700 }}>{d}일</span>; return <span style={{ fontSize: 11, color: "#AAA" }}>{d}일</span>; })()}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.fund_plan || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 12, color: "#555", whiteSpace: "nowrap" }}>{co.contract_date || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.agency || "-"}</td>
@@ -2213,18 +2235,18 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.next_action || "-"}</td>
                   <td style={{ padding: "11px 8px", whiteSpace: "nowrap" }} onClick={function(e) { e.stopPropagation(); }}>
                     <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
-                      <button onClick={function() { onSelect(co); }} title="?�통/?�세보기"
-                        style={{ background: "#EEF2FF", border: "none", borderRadius: 4, padding: "3px 7px", fontSize: 11, cursor: "pointer", color: "#4338CA", fontWeight: 600 }}>?��</button>
-                      <button onClick={function() { onSelect(co); }} title="?�정"
+                      <button onClick={function() { onSelect(co); }} title="소통/상세보기"
+                        style={{ background: "#EEF2FF", border: "none", borderRadius: 4, padding: "3px 7px", fontSize: 11, cursor: "pointer", color: "#4338CA", fontWeight: 600 }}>💬</button>
+                      <button onClick={function() { onSelect(co); }} title="수정"
                         style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
                         <Icon name="edit" size={14} color="#888" />
                       </button>
                       <button onClick={async function() {
-                        if (!window.confirm("'" + co.name + "' ?�체�??��??�으�??�동?�까??")) return;
+                        if (!window.confirm("'" + co.name + "' 업체를 휴지통으로 이동할까요?")) return;
                         await supabase.from("companies").update({ deleted_at: new Date().toISOString() }).eq("id", co.id);
                         setCompanies(function(prev) { return prev.filter(function(c) { return c.id !== co.id; }); });
-                        if (showToast) showToast("?��??�으�??�동?�어??");
-                      }} title="??��(?��???"
+                        if (showToast) showToast("휴지통으로 이동됐어요!");
+                      }} title="삭제(휴지통)"
                         style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
                         <Icon name="x" size={14} color="#CCC" />
                       </button>
@@ -2236,21 +2258,21 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
           </tbody>
         </table>
         </div>
-        {filtered.length === 0 && <div style={{ padding: "40px", textAlign: "center", color: "#CCC", fontSize: 13 }}>검??결과가 ?�어??/div>}
+        {filtered.length === 0 && <div style={{ padding: "40px", textAlign: "center", color: "#CCC", fontSize: 13 }}>검색 결과가 없어요</div>}
       </div>
 
-      {/* 기업목록 ?��???모달 */}
+      {/* 기업목록 휴지통 모달 */}
       {showCompanyTrash && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
           onClick={function(e) { if (e.target === e.currentTarget) setShowCompanyTrash(false); }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 640, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
-              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>?���?기업목록 ?��???({trashedCompanies.length}�?</h2>
-              <button onClick={function() { setShowCompanyTrash(false); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#888" }}>??/button>
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ 기업목록 휴지통 ({trashedCompanies.length}건)</h2>
+              <button onClick={function() { setShowCompanyTrash(false); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#888" }}>✕</button>
             </div>
             <div style={{ padding: "16px 24px" }}>
               {trashedCompanies.length === 0 ? (
-                <div style={{ padding: "40px 0", textAlign: "center", color: "#CCC", fontSize: 13 }}>?��??�이 비어 ?�습?�다</div>
+                <div style={{ padding: "40px 0", textAlign: "center", color: "#CCC", fontSize: 13 }}>휴지통이 비어 있습니다</div>
               ) : (
                 trashedCompanies.map(function(co) {
                   var deletedAt = co.deleted_at ? new Date(co.deleted_at).toLocaleDateString("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
@@ -2258,11 +2280,11 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
                     <div key={co.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderBottom: "1px solid #F0EDE8" }}>
                       <div>
                         <div style={{ fontWeight: 600, fontSize: 14 }}>{co.name}</div>
-                        <div style={{ fontSize: 11, color: "#AAA", marginTop: 2 }}>??��?? {deletedAt} · {co.assignee || "-"}</div>
+                        <div style={{ fontSize: 11, color: "#AAA", marginTop: 2 }}>삭제일: {deletedAt} · {co.assignee || "-"}</div>
                       </div>
                       <div style={{ display: "flex", gap: 6 }}>
                         <button onClick={function() { restoreCompany(co.id); }} style={{ background: "#EEF2FF", color: "#4338CA", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>복구</button>
-                        <button onClick={function() { permanentDeleteCompany(co.id); }} style={{ background: "#FEE2E2", color: "#DC2626", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>?�구??��</button>
+                        <button onClick={function() { permanentDeleteCompany(co.id); }} style={{ background: "#FEE2E2", color: "#DC2626", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>영구삭제</button>
                       </div>
                     </div>
                   );
@@ -2276,18 +2298,18 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
   );
 }
 
-// ?�?� ?�체 ?�림 ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 정체 알림 ─────────────────────────────────────────────────────────────────
 function StagnantView({ stagnant, onSelect }) {
   return (
     <>
       <div style={{ marginBottom: 24 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>?�체 ?�체 ?�림</h1>
-        <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>7???�상 같�? ?�계??머물???�는 ?�체</p>
+        <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>정체 업체 알림</h1>
+        <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>7일 이상 같은 단계에 머물러 있는 업체</p>
       </div>
       {stagnant.length === 0 ? (
         <div style={{ background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 12, padding: "40px", textAlign: "center" }}>
-          <div style={{ fontSize: 32, marginBottom: 12 }}>??/div>
-          <div style={{ fontSize: 15, fontWeight: 600, color: "#15803D" }}>모든 ?�체가 ?�상 진행 중이?�요!</div>
+          <div style={{ fontSize: 32, marginBottom: 12 }}>✅</div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: "#15803D" }}>모든 업체가 정상 진행 중이에요!</div>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -2298,7 +2320,7 @@ function StagnantView({ stagnant, onSelect }) {
                 style={{ background: "#fff", border: "1px solid #FECACA", borderRadius: 12, padding: "18px 22px", cursor: "pointer", display: "flex", gap: 18, alignItems: "flex-start" }}>
                 <div style={{ background: "#FEF2F2", borderRadius: 10, padding: "10px 14px", textAlign: "center", flexShrink: 0 }}>
                   <div style={{ fontSize: 22, fontWeight: 800, color: "#DC2626" }}>{co.stagnant_days}</div>
-                  <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 600 }}>???�체</div>
+                  <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 600 }}>일 정체</div>
                 </div>
                 <div style={{ flex: 1 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
@@ -2306,9 +2328,9 @@ function StagnantView({ stagnant, onSelect }) {
                     <span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 99, background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, fontWeight: 600 }}>{co.stage}</span>
                     <span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 99, background: co.type === "법인" ? "#EEF2FF" : "#F0FDF4", color: co.type === "법인" ? "#4338CA" : "#15803D", fontWeight: 600 }}>{co.type}</span>
                   </div>
-                  <div style={{ fontSize: 12, color: "#666", marginBottom: 7 }}>?�당: {co.assignee} · {co.agency}</div>
-                  {co.issue && <div style={{ fontSize: 12, background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 7, padding: "7px 11px", color: "#92400E", marginBottom: 5 }}><strong>?�슈:</strong> {co.issue}</div>}
-                  {co.next_action && <div style={{ fontSize: 12, fontWeight: 600 }}>??{co.next_action}</div>}
+                  <div style={{ fontSize: 12, color: "#666", marginBottom: 7 }}>담당: {co.assignee} · {co.agency}</div>
+                  {co.issue && <div style={{ fontSize: 12, background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 7, padding: "7px 11px", color: "#92400E", marginBottom: 5 }}><strong>이슈:</strong> {co.issue}</div>}
+                  {co.next_action && <div style={{ fontSize: 12, fontWeight: 600 }}>→ {co.next_action}</div>}
                 </div>
               </div>
             );
@@ -2319,22 +2341,22 @@ function StagnantView({ stagnant, onSelect }) {
   );
 }
 
-// ?�?� ?�??관�?(관리자 ?�용) ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 팀원 관리 (관리자 전용) ───────────────────────────────────────────────────
 function MembersView({ profiles, onRefresh, showToast }) {
   const updateRole = async (id, role) => {
     await supabase.from("profiles").update({ role }).eq("id", id);
-    showToast("권한??변경됐?�요");
+    showToast("권한이 변경됐어요");
     onRefresh();
   };
 
   return (
     <>
-      <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: "0 0 22px" }}>?�??관�?/h1>
+      <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: "0 0 22px" }}>팀원 관리</h1>
       <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ background: "#F7F6F3", borderBottom: "1px solid #E8E5E0" }}>
-              {["?�름","?�속?�","권한","가?�일"].map(h => (
+              {["이름","소속팀","권한","가입일"].map(h => (
                 <th key={h} style={{ padding: "11px 16px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left" }}>{h}</th>
               ))}
             </tr>
@@ -2352,7 +2374,7 @@ function MembersView({ profiles, onRefresh, showToast }) {
                 <td style={{ padding: "13px 16px" }}>
                   <select value={p.role} onChange={e => updateRole(p.id, e.target.value)}
                     style={{ padding: "5px 9px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 12, background: "#fff", cursor: "pointer" }}>
-                    <option value="member">?�??/option>
+                    <option value="member">팀원</option>
                     <option value="admin">관리자</option>
                   </select>
                 </td>
@@ -2363,13 +2385,13 @@ function MembersView({ profiles, onRefresh, showToast }) {
         </table>
       </div>
       <div style={{ marginTop: 16, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "14px 18px", fontSize: 13, color: "#92400E" }}>
-        ?�� ???�??추�?: ?�?�에�???주소�?공유?�고 ?�메?�로 ?�원가?�하�??�주?�요. 가???????�면???�동?�로 ?��??�요.
+        💡 새 팀원 추가: 팀원에게 앱 주소를 공유하고 이메일로 회원가입하게 해주세요. 가입 후 이 화면에 자동으로 나타나요.
       </div>
     </>
   );
 }
 
-// ?�?� 기업 ?�세 모달 ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 기업 상세 모달 ─────────────────────────────────────────────────────────────
 function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAgencyRegistered }) {
   const [tab, setTab] = useState("info");
   const [data, setData] = useState({ ...company });
@@ -2413,7 +2435,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   };
 
   const copyComm = () => {
-    const txt = `[${data.name}] / ${data.representative} ?�??n?�재?�계: ${data.stage}\n?�슈: ${data.issue}\n?�음?�션: ${data.next_action}\n기한: ${data.next_contact}\n?�당: ${data.assignee}`;
+    const txt = `[${data.name}] / ${data.representative} 대표\n현재단계: ${data.stage}\n이슈: ${data.issue}\n다음액션: ${data.next_action}\n기한: ${data.next_contact}\n담당: ${data.assignee}`;
     navigator.clipboard?.writeText(txt).then(() => {});
   };
 
@@ -2421,21 +2443,21 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "flex-end" }}
       onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={{ width: 460, height: "100vh", background: "#fff", overflowY: "auto", boxShadow: "-8px 0 40px rgba(0,0,0,0.15)", display: "flex", flexDirection: "column" }}>
-        {/* ?�더 */}
+        {/* 헤더 */}
         <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid #E8E5E0", background: sc.bg || "#F7F6F3" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
             <div>
               <div style={{ display: "flex", gap: 7, marginBottom: 6, flexWrap: "wrap" }}>
                 <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#fff", color: data.type === "법인" ? "#4338CA" : "#15803D", fontWeight: 700 }}>{data.type}</span>
                 <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: sc.text, color: "#fff", fontWeight: 600 }}>{data.stage}</span>
-                {data.stagnant_days >= 7 && <span style={{ fontSize: 11, color: "#DC2626", fontWeight: 700, background: "#FEF2F2", padding: "2px 8px", borderRadius: 99 }}>??{data.stagnant_days}???�체</span>}
+                {data.stagnant_days >= 7 && <span style={{ fontSize: 11, color: "#DC2626", fontWeight: 700, background: "#FEF2F2", padding: "2px 8px", borderRadius: 99 }}>⚠ {data.stagnant_days}일 정체</span>}
               </div>
               {editingName ? (
                 <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 2 }}>
                   <input value={nameInput} onChange={e => setNameInput(e.target.value)} autoFocus
                     style={{ fontSize: 18, fontWeight: 700, padding: "4px 8px", border: "1px solid #C7D2FE", borderRadius: 6, outline: "none", background: "#fff", width: 260 }} />
                   <button onClick={() => { setData(p => ({ ...p, name: nameInput })); setEditingName(false); }}
-                    style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 6, padding: "5px 10px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>?�인</button>
+                    style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 6, padding: "5px 10px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>확인</button>
                   <button onClick={() => { setNameInput(data.name); setEditingName(false); }}
                     style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 6, padding: "5px 8px", fontSize: 12, cursor: "pointer" }}>취소</button>
                 </div>
@@ -2450,21 +2472,21 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               )}
               <div style={{ fontSize: 13, color: "#666", marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
                 <span onClick={function() {
-                  var v = prompt("?�?�자�??�정:", data.representative || "");
+                  var v = prompt("대표자명 수정:", data.representative || "");
                   if (v !== null) setData(function(p) { return Object.assign({}, p, { representative: v }); });
                 }} style={{ cursor: "pointer", borderBottom: "1px dashed #CCC" }}
-                  title="?�릭?�여 ?�정">{data.representative || "?�?�자 ?�력"} ?�??/span>
+                  title="클릭하여 수정">{data.representative || "대표자 입력"} 대표</span>
                 <span>·</span>
                 <span onClick={function() {
-                  var v = prompt("?�화번호 ?�정:", data.phone || "");
+                  var v = prompt("전화번호 수정:", data.phone || "");
                   if (v !== null) setData(function(p) { return Object.assign({}, p, { phone: v }); });
                 }} style={{ cursor: "pointer", borderBottom: "1px dashed #CCC" }}
-                  title="?�릭?�여 ?�정">{data.phone || "?�화번호 ?�력"}</span>
+                  title="클릭하여 수정">{data.phone || "전화번호 입력"}</span>
               </div>
             </div>
             <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#888" }}><Icon name="x" size={20} color="#888" /></button>
           </div>
-          {/* ?�계 변�?*/}
+          {/* 단계 변경 */}
           <div style={{ display: "flex", gap: 4, marginTop: 14, flexWrap: "wrap" }}>
             {STAGES.map(s => (
               <button key={s} onClick={() => setData(p => ({ ...p, stage: s }))}
@@ -2475,15 +2497,15 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           </div>
         </div>
 
-        {/* ??*/}
+        {/* 탭 */}
         <div style={{ display: "flex", borderBottom: "1px solid #E8E5E0", background: "#FAFAF8", overflowX: "auto" }}>
           {[
-            { id: "info", label: "기본?�보" },
-            { id: "docs", label: "?�류?�황" },
-            { id: "history", label: "?�슈·?�션" },
-            { id: "agency", label: "기�?진행", badge: agencyCases.length },
-            { id: "settlement", label: "?�산?�황", badge: settlements.length },
-            { id: "comm", label: "?�통?�역", badge: commLogs.length },
+            { id: "info", label: "기본정보" },
+            { id: "docs", label: "서류현황" },
+            { id: "history", label: "이슈·액션" },
+            { id: "agency", label: "기관진행", badge: agencyCases.length },
+            { id: "settlement", label: "정산현황", badge: settlements.length },
+            { id: "comm", label: "소통내역", badge: commLogs.length },
           ].map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
               style={{ flex: "0 0 auto", padding: "11px 14px", fontSize: 12, fontWeight: tab === t.id ? 700 : 400, color: tab === t.id ? "#1A1917" : "#888", background: "none", border: "none", borderBottom: `2px solid ${tab === t.id ? "#1A1917" : "transparent"}`, cursor: "pointer", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 4 }}>
@@ -2497,7 +2519,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           {tab === "info" && (
             <>
               <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "12px 14px", marginBottom: 10 }}>
-                <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>?�당 기�? (복수 ?�택 가??</div>
+                <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>담당 기관 (복수 선택 가능)</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   {AGENCIES.map(ag => {
                     const selected = (data.agency || "").split(",").map(s => s.trim()).filter(Boolean).includes(ag);
@@ -2512,45 +2534,45 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                     );
                   })}
                 </div>
-                {data.agency && <div style={{ fontSize: 11, color: "#4338CA", marginTop: 8, fontWeight: 600 }}>?�택: {data.agency}</div>}
+                {data.agency && <div style={{ fontSize: 11, color: "#4338CA", marginTop: 8, fontWeight: 600 }}>선택: {data.agency}</div>}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>?�락�?/div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>연락처</div>
                   <input type="text" value={data.phone || ""} placeholder="01012345678" onChange={function(e) { var v = formatPhone(e.target.value); setData(function(p) { return Object.assign({}, p, { phone: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>종업????/div>
-                  <input type="number" value={data.employee_count || ""} placeholder="�? onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { employee_count: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>종업원 수</div>
+                  <input type="number" value={data.employee_count || ""} placeholder="명" onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { employee_count: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>KCB / NICE</div>
                   <input type="text" inputMode="numeric" value={(data.credit_score_kcb || "") + (data.credit_score_nice ? " / " + data.credit_score_nice : "")} placeholder="KCB / NICE" onChange={function(e) { var raw = e.target.value.replace(/[^0-9]/g, ""); var kcb = raw.slice(0, 3); var nice = raw.slice(3, 6); setData(function(p) { return Object.assign({}, p, { credit_score_kcb: kcb, credit_score_nice: nice }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none", minWidth: 0, boxSizing: "border-box" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>?�립?�월</div>
-                  <input type="text" inputMode="numeric" value={(function() { if (!data.founded_year && !data.founded_month) return ""; var y = data.founded_year || ""; var m = data.founded_month; if (!m && m !== 0) return y; return y + "-" + String(m); })()} placeholder="YYYY-MM (?? 2018-08)" onChange={function(e) { var raw = e.target.value.replace(/[^0-9]/g, ""); var year = raw.slice(0, 4); var monthRaw = raw.slice(4, 6); var monthNum; if (monthRaw.length === 0) { monthNum = ""; } else { monthNum = parseInt(monthRaw); if (monthNum > 12) monthNum = 12; } setData(function(p) { return Object.assign({}, p, { founded_year: year, founded_month: monthNum }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none", minWidth: 0, boxSizing: "border-box" }} />
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>설립연월</div>
+                  <input type="text" inputMode="numeric" value={(function() { if (!data.founded_year && !data.founded_month) return ""; var y = data.founded_year || ""; var m = data.founded_month; if (!m && m !== 0) return y; return y + "-" + String(m); })()} placeholder="YYYY-MM (예: 2018-08)" onChange={function(e) { var raw = e.target.value.replace(/[^0-9]/g, ""); var year = raw.slice(0, 4); var monthRaw = raw.slice(4, 6); var monthNum; if (monthRaw.length === 0) { monthNum = ""; } else { monthNum = parseInt(monthRaw); if (monthNum > 12) monthNum = 12; } setData(function(p) { return Object.assign({}, p, { founded_year: year, founded_month: monthNum }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none", minWidth: 0, boxSizing: "border-box" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>계약??/div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>계약일</div>
                   <input type="date" value={data.contract_date || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { contract_date: v }); }); }} style={{ width: "auto", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>?�업?�등록번??/div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>사업자등록번호</div>
                   <input type="text" value={data.business_number || ""} placeholder="1234567890" onChange={function(e) { var v = formatBizNumber(e.target.value); setData(function(p) { return Object.assign({}, p, { business_number: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
                 </div>
               </div>
-              {/* ?�업???�형 + 지??*/}
+              {/* 사업자 유형 + 지역 */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>?�업???�형</div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>사업자 유형</div>
                   <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-                    {["개인?�업??,"법인?�업??].map(function(t) {
+                    {["개인사업자","법인사업자"].map(function(t) {
                       var sel = data.business_type === t;
                       return (
                         <button key={t} onClick={function() { setData(function(p) { return Object.assign({}, p, { business_type: t }); }); }}
                           style={{ flex: 1, padding: "6px 8px", borderRadius: 6, fontSize: 12, fontWeight: 600,
-                            background: sel ? (t === "법인?�업?? ? "#4338CA" : "#0F6E56") : "#fff",
+                            background: sel ? (t === "법인사업자" ? "#4338CA" : "#0F6E56") : "#fff",
                             color: sel ? "#fff" : "#666",
                             border: sel ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
                           {t}
@@ -2558,7 +2580,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                       );
                     })}
                   </div>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>?�종 (복수 ?�택 가??</div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>업종 (복수 선택 가능)</div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
                     {INDUSTRY_OPTIONS.map(function(ind) {
                       var cur = (data.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
@@ -2575,12 +2597,12 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                           style={{ padding: "4px 9px", borderRadius: 99, fontSize: 11, fontWeight: sel ? 700 : 400,
                             background: sel ? "#4338CA" : "#fff", color: sel ? "#fff" : "#666",
                             border: sel ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
-                          {sel ? "??" : ""}{ind}
+                          {sel ? "✓ " : ""}{ind}
                         </button>
                       );
                     })}
                   </div>
-                  {/* 직접 ?�력??커스?� ?�종 ?�시 */}
+                  {/* 직접 입력한 커스텀 업종 표시 */}
                   {(function() {
                     var cur = (data.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
                     var custom = cur.filter(function(s) { return INDUSTRY_OPTIONS.indexOf(s) < 0; });
@@ -2590,19 +2612,19 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                         {custom.map(function(s) {
                           return (
                             <span key={s} style={{ background: "#0F6E56", color: "#fff", padding: "3px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                              ??{s}
+                              ✓ {s}
                               <span onClick={function() {
                                 var arr = (data.industry || "").split(",").map(function(x) { return x.trim(); }).filter(Boolean);
                                 arr = arr.filter(function(x) { return x !== s; });
                                 setData(function(p) { return Object.assign({}, p, { industry: arr.length > 0 ? arr.join(", ") : "" }); });
-                              }} style={{ cursor: "pointer", fontSize: 12, opacity: 0.85 }}>??/span>
+                              }} style={{ cursor: "pointer", fontSize: 12, opacity: 0.85 }}>✕</span>
                             </span>
                           );
                         })}
                       </div>
                     );
                   })()}
-                  <input type="text" placeholder="직접 ?�력 ??Enter�?추�? (?? 부?�산?��???"
+                  <input type="text" placeholder="직접 입력 후 Enter로 추가 (예: 부동산임대업)"
                     onKeyDown={function(e) {
                       if (e.key !== "Enter") return;
                       e.preventDefault();
@@ -2617,13 +2639,13 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                     style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, outline: "none", boxSizing: "border-box" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>지??/div>
-                  <input type="text" value={data.region || ""} placeholder="?? ?�울_강남, 경기_?�산" onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { region: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>지역</div>
+                  <input type="text" value={data.region || ""} placeholder="예: 서울_강남, 경기_안산" onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { region: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
                 </div>
               </div>
-              {/* ?�당???�중?�택 */}
+              {/* 담당자 다중선택 */}
               <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "12px 14px", marginBottom: 10 }}>
-                <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>?�당??(복수 ?�택 가??</div>
+                <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>담당자 (복수 선택 가능)</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   {ASSIGNEES.map(name => {
                     const selected = (data.assignee || "").split(",").map(s => s.trim()).filter(Boolean).includes(name);
@@ -2638,19 +2660,19 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                     );
                   })}
                 </div>
-                {data.assignee && <div style={{ fontSize: 11, color: "#555", marginTop: 8, fontWeight: 600 }}>?�택: {data.assignee}</div>}
+                {data.assignee && <div style={{ fontSize: 11, color: "#555", marginTop: 8, fontWeight: 600 }}>선택: {data.assignee}</div>}
               </div>
               <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "13px 15px", marginBottom: 12 }}>
-                <div style={{ fontSize: 12, color: "#888", marginBottom: 4, fontWeight: 600 }}>최근 3개년 매출??/div>
-                <div style={{ fontSize: 10, color: "#AAA", marginBottom: 10 }}>???�위�??�력 (?? 790000000 ??7.9???�동 ?�시)</div>
+                <div style={{ fontSize: 12, color: "#888", marginBottom: 4, fontWeight: 600 }}>최근 3개년 매출액</div>
+                <div style={{ fontSize: 10, color: "#AAA", marginBottom: 10 }}>원 단위로 입력 (예: 790000000 → 7.9억 자동 표시)</div>
                 <div style={{ display: "flex", gap: 8 }}>
-                  {[["2023??, "revenue_2023"], ["2024??, "revenue_2024"], ["2025??, "revenue_2025"]].map(([label, key]) => (
+                  {[["2023년", "revenue_2023"], ["2024년", "revenue_2024"], ["2025년", "revenue_2025"]].map(([label, key]) => (
                     <div key={key} style={{ flex: 1, textAlign: "center", background: "#fff", borderRadius: 7, padding: "10px 8px" }}>
                       <div style={{ fontSize: 11, color: "#AAA", marginBottom: 4 }}>{label}</div>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#4338CA", marginBottom: 4 }}>{formatRevenue(data[key])}</div>
                       <input
                         type="number"
-                        placeholder="???�위 ?�력"
+                        placeholder="원 단위 입력"
                         value={data[key] || ""}
                         onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { [key]: v ? parseInt(v) : null }); }); }}
                         style={{ width: "100%", fontSize: 11, textAlign: "center", border: "1px solid #E8E5E0", borderRadius: 5, padding: "4px", outline: "none", boxSizing: "border-box" }} />
@@ -2659,9 +2681,9 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 </div>
               </div>
               <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "13px 15px" }}>
-                <div style={{ fontSize: 12, color: "#888", marginBottom: 8, fontWeight: 600 }}>?�수�??�황</div>
+                <div style={{ fontSize: 12, color: "#888", marginBottom: 8, fontWeight: 600 }}>수수료 현황</div>
                 <div style={{ display: "flex", gap: 6 }}>
-                  {["미수??,"계약금수??,"?�수료수?�완�?].map(s => (
+                  {["미수령","계약금수령","수수료수령완료"].map(s => (
                     <button key={s} onClick={() => setData(p => ({ ...p, fee_status: s }))}
                       style={{ flex: 1, padding: "7px 4px", borderRadius: 7, border: `1px solid ${data.fee_status === s ? "#1A1917" : "#E8E5E0"}`, background: data.fee_status === s ? "#1A1917" : "#fff", color: data.fee_status === s ? "#fff" : "#888", fontSize: 11, cursor: "pointer", fontWeight: data.fee_status === s ? 700 : 400 }}>
                       {s}
@@ -2675,7 +2697,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           {tab === "docs" && (
             <div>
               <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "12px 14px", marginBottom: 10 }}>
-                <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>?�령 ?�료 ?�류 (복수 ?�택 가??</div>
+                <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>수령 완료 서류 (복수 선택 가능)</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   {DOC_LIST.map(function(doc) {
                     const selected = (data.received_docs || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean).includes(doc);
@@ -2692,11 +2714,12 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 </div>
                 {data.received_docs ? (
                   <div style={{ fontSize: 11, color: "#15803D", marginTop: 10, fontWeight: 600 }}>
-                    ?�령?�료: {data.received_docs.split(",").filter(Boolean).length}�?                  </div>
+                    수령완료: {data.received_docs.split(",").filter(Boolean).length}개
+                  </div>
                 ) : null}
               </div>
               <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "12px 14px" }}>
-                <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>미수???�류</div>
+                <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>미수령 서류</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   {DOC_LIST.filter(function(doc) {
                     return !(data.received_docs || "").split(",").map(function(s) { return s.trim(); }).includes(doc);
@@ -2711,46 +2734,47 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           {tab === "history" && (
             <>
               <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 12, color: "#888", marginBottom: 6, fontWeight: 600 }}>?�재 ?�슈</div>
+                <div style={{ fontSize: 12, color: "#888", marginBottom: 6, fontWeight: 600 }}>현재 이슈</div>
                 <textarea value={data.issue || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return { ...p, issue: v }; }); }}
                   style={{ width: "100%", padding: "11px 13px", border: "1px solid #FED7AA", borderRadius: 8, fontSize: 13, resize: "vertical", minHeight: 80, background: "#FFF7ED", color: "#92400E", boxSizing: "border-box", outline: "none" }} />
               </div>
               <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 12, color: "#888", marginBottom: 6, fontWeight: 600 }}>차기 ?�무 / ?�음 ?�션</div>
+                <div style={{ fontSize: 12, color: "#888", marginBottom: 6, fontWeight: 600 }}>차기 업무 / 다음 액션</div>
                 <textarea value={data.next_action || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return { ...p, next_action: v }; }); }}
                   style={{ width: "100%", padding: "11px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, resize: "vertical", minHeight: 80, boxSizing: "border-box", outline: "none" }} />
               </div>
               <div style={{ background: "#F7F6F3", border: "1px solid #E8E5E0", borderRadius: 8, padding: "13px 15px" }}>
-                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10, color: "#555" }}>?�� 카톡 공유???�통 ?�식</div>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10, color: "#555" }}>📋 카톡 공유용 소통 양식</div>
                 <textarea
                   value={kakaoText}
                   onChange={function(e) { setKakaoText(e.target.value); }}
-                  placeholder={"?�시)\n[" + (data.name||"?�체�?) + "] / " + (data.representative||"?�?�자") + " ?�??n?�재?�계: " + (data.stage||"") + "\n?�슈: \n?�음?�션: \n기한: \n?�당: " + (data.assignee||"")}
+                  placeholder={"예시)\n[" + (data.name||"업체명") + "] / " + (data.representative||"대표자") + " 대표\n현재단계: " + (data.stage||"") + "\n이슈: \n다음액션: \n기한: \n담당: " + (data.assignee||"")}
                   style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 12, lineHeight: 1.9, fontFamily: "monospace", resize: "vertical", minHeight: 130, background: "#fff", boxSizing: "border-box", outline: "none" }}
                 />
                 <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                   <button onClick={function() {
-                    var defaultTxt = "[" + data.name + "] / " + data.representative + " ?�??n?�재?�계: " + data.stage + "\n?�슈: " + (data.issue||"") + "\n?�음?�션: " + (data.next_action||"") + "\n기한: " + (data.next_contact||"") + "\n?�당: " + (data.assignee||"");
+                    var defaultTxt = "[" + data.name + "] / " + data.representative + " 대표\n현재단계: " + data.stage + "\n이슈: " + (data.issue||"") + "\n다음액션: " + (data.next_action||"") + "\n기한: " + (data.next_contact||"") + "\n담당: " + (data.assignee||"");
                     setKakaoText(defaultTxt);
-                  }} style={{ fontSize: 12, color: "#888", background: "none", border: "1px solid #E8E5E0", borderRadius: 6, padding: "5px 12px", cursor: "pointer" }}>기본�?불러?�기</button>
+                  }} style={{ fontSize: 12, color: "#888", background: "none", border: "1px solid #E8E5E0", borderRadius: 6, padding: "5px 12px", cursor: "pointer" }}>기본값 불러오기</button>
                   <button onClick={function() { navigator.clipboard?.writeText(kakaoText).then(function() {}); }}
                     style={{ fontSize: 12, color: "#4338CA", background: "none", border: "1px solid #C7D2FE", borderRadius: 6, padding: "5px 12px", cursor: "pointer", fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}>
-                    <Icon name="copy" size={13} color="#4338CA" /> 복사?�기
+                    <Icon name="copy" size={13} color="#4338CA" /> 복사하기
                   </button>
                 </div>
               </div>
             </>
           )}
 
-          {/* 기�?�?진행?�황 ??*/}
+          {/* 기관별 진행현황 탭 */}
           {tab === "agency" && (
             <div>
               {loadingExtra ? (
-                <div style={{ textAlign: "center", padding: "40px 0", color: "#AAA", fontSize: 13 }}>불러?�는 �?..</div>
+                <div style={{ textAlign: "center", padding: "40px 0", color: "#AAA", fontSize: 13 }}>불러오는 중...</div>
               ) : agencyCases.length === 0 ? (
                 <div style={{ textAlign: "center", padding: "40px 0", color: "#CCC", fontSize: 13 }}>
-                  <div style={{ fontSize: 32, marginBottom: 10 }}>?��</div>
-                  기�?�?진행 ?�이?��? ?�어??                </div>
+                  <div style={{ fontSize: 32, marginBottom: 10 }}>📋</div>
+                  기관별 진행 데이터가 없어요
+                </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   {agencyCases.map(function(c, i) {
@@ -2762,18 +2786,18 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                             <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: grpColor, color: "#fff", fontWeight: 700 }}>{c.agency_group}</span>
                             {c.agency_sub && <span style={{ fontSize: 11, color: "#888" }}>{c.agency_sub}</span>}
-                            <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#fff", color: "#555", border: "1px solid #E8E5E0" }}>{c.status || "진행�?}</span>
+                            <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#fff", color: "#555", border: "1px solid #E8E5E0" }}>{c.status || "진행중"}</span>
                           </div>
-                          <span style={{ fontSize: 11, color: "#AAA" }}>{c.month}??/span>
+                          <span style={{ fontSize: 11, color: "#AAA" }}>{c.month}월</span>
                         </div>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
                           {[
-                            { label: "?�청금액", value: c.request_amount },
-                            { label: "?�청?�품", value: c.request_fund },
-                            { label: "?�당??, value: c.assignee },
-                            { label: "?�청??, value: c.application_date },
-                            { label: "?�인결과", value: c.approval_result },
-                            { label: "?�인금액", value: c.approved_amount },
+                            { label: "신청금액", value: c.request_amount },
+                            { label: "신청상품", value: c.request_fund },
+                            { label: "담당자", value: c.assignee },
+                            { label: "신청일", value: c.application_date },
+                            { label: "승인결과", value: c.approval_result },
+                            { label: "승인금액", value: c.approved_amount },
                           ].map(function(item) {
                             return item.value ? (
                               <div key={item.label} style={{ background: "#fff", borderRadius: 6, padding: "7px 10px" }}>
@@ -2792,35 +2816,36 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
             </div>
           )}
 
-          {/* ?�산?�황 ??*/}
+          {/* 정산현황 탭 */}
           {tab === "settlement" && (
             <div>
               {loadingExtra ? (
-                <div style={{ textAlign: "center", padding: "40px 0", color: "#AAA", fontSize: 13 }}>불러?�는 �?..</div>
+                <div style={{ textAlign: "center", padding: "40px 0", color: "#AAA", fontSize: 13 }}>불러오는 중...</div>
               ) : settlements.length === 0 ? (
                 <div style={{ textAlign: "center", padding: "40px 0", color: "#CCC", fontSize: 13 }}>
-                  <div style={{ fontSize: 32, marginBottom: 10 }}>?��</div>
-                  ?�산 ?�이?��? ?�어??                </div>
+                  <div style={{ fontSize: 32, marginBottom: 10 }}>💰</div>
+                  정산 데이터가 없어요
+                </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   {settlements.map(function(s) {
                     return (
                       <div key={s.id} style={{ background: "#F7F6F3", borderRadius: 10, padding: "14px 16px", border: "1px solid #E8E5E0" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                          <span style={{ fontSize: 12, fontWeight: 700, color: "#1A1917" }}>{s.agency_group || "-"} · {s.month}??/span>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: "#1A1917" }}>{s.agency_group || "-"} · {s.month}월</span>
                           <div style={{ display: "flex", gap: 5 }}>
-                            {s.invoice_issued && <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 99, background: "#ECFDF5", color: "#047857", fontWeight: 600 }}>?�금계산??발행</span>}
-                            {s.fee_received && <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 99, background: "#EEF2FF", color: "#4338CA", fontWeight: 600 }}>?�금?�료</span>}
+                            {s.invoice_issued && <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 99, background: "#ECFDF5", color: "#047857", fontWeight: 600 }}>세금계산서 발행</span>}
+                            {s.fee_received && <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 99, background: "#EEF2FF", color: "#4338CA", fontWeight: 600 }}>입금완료</span>}
                           </div>
                         </div>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
                           {[
-                            { label: "?�청금액", value: s.request_amount, color: "#333" },
-                            { label: "계약�?, value: s.contract_fee, color: "#333" },
-                            { label: "?�수�?, value: s.commission_fee, color: "#7C3AED" },
-                            { label: "?�금금액", value: s.received_amount, color: "#047857" },
-                            { label: "계약??, value: s.contract_date, color: "#555" },
-                            { label: "?�금??, value: s.fee_received_date, color: "#555" },
+                            { label: "신청금액", value: s.request_amount, color: "#333" },
+                            { label: "계약금", value: s.contract_fee, color: "#333" },
+                            { label: "수수료", value: s.commission_fee, color: "#7C3AED" },
+                            { label: "입금금액", value: s.received_amount, color: "#047857" },
+                            { label: "계약일", value: s.contract_date, color: "#555" },
+                            { label: "입금일", value: s.fee_received_date, color: "#555" },
                           ].map(function(item) {
                             return item.value ? (
                               <div key={item.label} style={{ background: "#fff", borderRadius: 6, padding: "7px 10px" }}>
@@ -2839,24 +2864,25 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
             </div>
           )}
 
-          {/* ?�통?�역 ??*/}
+          {/* 소통내역 탭 */}
           {tab === "comm" && (
             <div>
-              {/* ?�통 ?�력 */}
+              {/* 소통 입력 */}
               <div style={{ background: "#F7F6F3", borderRadius: 10, padding: "14px", marginBottom: 16, border: "1px solid #E8E5E0" }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 8 }}>?�통 ?�용 기록</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 8 }}>소통 내용 기록</div>
                 <textarea value={commInput} onChange={function(e) { var v = e.target.value; setCommInput(v); }}
-                  placeholder="?�화 결과, 방문 ?�용, 메모 ???�유�?�� ?�력?�세??.."
+                  placeholder="통화 결과, 방문 내용, 메모 등 자유롭게 입력하세요..."
                   rows={3} style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, resize: "none", boxSizing: "border-box", outline: "none", lineHeight: 1.6 }} />
                 <button onClick={saveCommLog} disabled={!commInput.trim()}
                   style={{ width: "100%", marginTop: 8, padding: "10px", background: commInput.trim() ? "#1A1917" : "#E8E5E0", color: commInput.trim() ? "#F7F6F3" : "#AAA", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: commInput.trim() ? "pointer" : "not-allowed" }}>
-                  ?�??                </button>
+                  저장
+                </button>
               </div>
-              {/* ?�통 로그 목록 */}
+              {/* 소통 로그 목록 */}
               {loadingExtra ? (
-                <div style={{ textAlign: "center", padding: "20px 0", color: "#AAA", fontSize: 13 }}>불러?�는 �?..</div>
+                <div style={{ textAlign: "center", padding: "20px 0", color: "#AAA", fontSize: 13 }}>불러오는 중...</div>
               ) : commLogs.length === 0 ? (
-                <div style={{ textAlign: "center", padding: "30px 0", color: "#CCC", fontSize: 13 }}>?�직 ?�통 ?�역???�어??/div>
+                <div style={{ textAlign: "center", padding: "30px 0", color: "#CCC", fontSize: 13 }}>아직 소통 내역이 없어요</div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   {commLogs.map(function(log, i) {
@@ -2885,22 +2911,23 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           )}
         </div>
 
-        {/* ?�??버튼 */}
+        {/* 저장 버튼 */}
         <div style={{ padding: "14px 24px", borderTop: "1px solid #E8E5E0", display: "flex", gap: 8 }}>
           <button onClick={() => onSave({ ...data, name: nameInput || data.name }, company)}
             style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
-            <Icon name="save" size={15} color="#F7F6F3" /> DB???�??          </button>
+            <Icon name="save" size={15} color="#F7F6F3" /> DB에 저장
+          </button>
           <button onClick={async function() {
-            if (!data.agency) { alert("?�당기�????�택?�주?�요!"); return; }
+            if (!data.agency) { alert("담당기관을 선택해주세요!"); return; }
             var AGENCY_MAP = {
-              "?�상공인?�장진흥공단": "?�상공인?�장진흥공단",
+              "소상공인시장진흥공단": "소상공인시장진흥공단",
               "중소벤처기업진흥공단": "중소벤처기업진흥공단",
-              "?�용보증기금": "?�용보증기금",
+              "신용보증기금": "신용보증기금",
               "기술보증기금": "기술보증기금",
-              "?�용보증?�단": "?�용보증?�단",
-              "?��?금융진흥??: "?�용보증?�단",
-              "구조?�신&?�업?�환": "구조?�신&?�업?�환",
-              "기�?": "기�?",
+              "신용보증재단": "신용보증재단",
+              "서민금융진흥원": "신용보증재단",
+              "구조혁신&사업전환": "구조혁신&사업전환",
+              "기타": "기타",
             };
             var companyName = nameInput || data.name;
             var rawAgencies = data.agency.split(",").map(function(a) { return a.trim(); }).filter(Boolean);
@@ -2909,39 +2936,41 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               var g = AGENCY_MAP[a];
               if (g && mappedGroups.indexOf(g) === -1) mappedGroups.push(g);
             });
-            if (mappedGroups.length === 0) { alert("매핑??기�????�어??"); return; }
+            if (mappedGroups.length === 0) { alert("매핑된 기관이 없어요!"); return; }
 
-            // 기�?별로 ?�록 ???�력받기
+            // 기관별로 등록 월 입력받기
             var nowDate = new Date();
             var defaultYM = nowDate.getFullYear() + "-" + String(nowDate.getMonth() + 1).padStart(2, "0");
-            // 기본�? data.application_month가 ?�으�?그걸, ?�으�??�번 ??            var baseDefault = data.application_month || defaultYM;
-            var agencyMonths = {}; // { 기�?�? "2026-05" }
+            // 기본값: data.application_month가 있으면 그걸, 없으면 이번 달
+            var baseDefault = data.application_month || defaultYM;
+            var agencyMonths = {}; // { 기관명: "2026-05" }
             for (var ai = 0; ai < mappedGroups.length; ai++) {
               var agName = mappedGroups[ai];
-              var promptMsg = "[" + agName + "]\n?�느 ?�에 ?�록?�까??\n?�식: YYYY-MM (?? 2026-05)";
+              var promptMsg = "[" + agName + "]\n어느 월에 등록할까요?\n형식: YYYY-MM (예: 2026-05)";
               if (mappedGroups.length > 1) {
                 promptMsg = "(" + (ai + 1) + "/" + mappedGroups.length + ") " + promptMsg;
               }
               var inputYM = prompt(promptMsg, baseDefault);
-              if (inputYM === null) return; // 취소 ???�체 ?�록 취소
+              if (inputYM === null) return; // 취소 → 전체 등록 취소
               inputYM = inputYM.trim() || baseDefault;
               if (!/^\d{4}-\d{2}$/.test(inputYM)) {
-                alert("?�식???�바르�? ?�습?�다. ?? 2026-05\n?�록??취소?�니??");
+                alert("형식이 올바르지 않습니다. 예: 2026-05\n등록을 취소합니다.");
                 return;
               }
               var mNum = parseInt(inputYM.split("-")[1], 10);
               if (mNum < 1 || mNum > 12) {
-                alert("?��? 1~12 ?�이?�야 ?�니??\n?�록??취소?�니??");
+                alert("월은 1~12 사이여야 합니다.\n등록을 취소합니다.");
                 return;
               }
               agencyMonths[agName] = inputYM;
-              baseDefault = inputYM; // ?�음 기�? 기본값을 직전???�력??값으�?            }
+              baseDefault = inputYM; // 다음 기관 기본값을 직전에 입력한 값으로
+            }
 
-            // 기�?별로 각각 ?�록
+            // 기관별로 각각 등록
             var addedCount = 0;
             var skippedCount = 0;
             var errorMessages = [];
-            var registeredGroups = []; // �?번째 ?�록??기�?/??(?�동??
+            var registeredGroups = []; // 첫 번째 등록된 기관/월 (이동용)
             for (var gi = 0; gi < mappedGroups.length; gi++) {
               var agencyGroup = mappedGroups[gi];
               var ym = agencyMonths[agencyGroup];
@@ -2970,7 +2999,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 region: data.region || null,
                 notes: data.issue || null,
                 contract_date: data.contract_date || null,
-                status: "?�작 ??,
+                status: "시작 전",
               };
               var ins = await supabase.from("agency_cases").insert(insertData);
               if (!ins.error) {
@@ -2983,29 +3012,29 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               }
             }
             if (errorMessages.length > 0) {
-              alert("???�록 ?�패!\n" + errorMessages.join("\n"));
+              alert("❌ 등록 실패!\n" + errorMessages.join("\n"));
               return;
             }
-            // ?�록 결과 메시지 (기�?�????�시)
-            var detailMsg = mappedGroups.map(function(g) { return g + " ??" + agencyMonths[g]; }).join("\n");
+            // 등록 결과 메시지 (기관별 월 표시)
+            var detailMsg = mappedGroups.map(function(g) { return g + " → " + agencyMonths[g]; }).join("\n");
             var msg = "";
-            if (addedCount > 0) msg += "기�?별현?�에 " + addedCount + "�??�록?�어??\n\n" + detailMsg + "\n";
-            if (skippedCount > 0) msg += "\n(?��? ?�록??" + skippedCount + "건�? 건너?�었?�요)\n";
-            if (!msg) { alert("?�록??건이 ?�어??(모두 중복)"); return; }
-            msg += "\n?�인???�르�?기�?�??�황?�로 ?�동?�니??";
+            if (addedCount > 0) msg += "기관별현황에 " + addedCount + "건 등록됐어요!\n\n" + detailMsg + "\n";
+            if (skippedCount > 0) msg += "\n(이미 등록된 " + skippedCount + "건은 건너뛰었어요)\n";
+            if (!msg) { alert("등록된 건이 없어요 (모두 중복)"); return; }
+            msg += "\n확인을 누르면 기관별 현황으로 이동합니다.";
             alert(msg);
-            // ?�간 기다�????�이지 ?�동 (DB 반영 ?��?
+            // 약간 기다린 후 페이지 이동 (DB 반영 대기)
             await new Promise(function(r) { setTimeout(r, 300); });
             if (registeredGroups.length > 0) {
               window.location.href = window.location.origin + "?view=agency&month=" + registeredGroups[0].month + "&group=" + encodeURIComponent(registeredGroups[0].group);
             }
           }}
             style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, background: "#4338CA", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-            <Icon name="building" size={15} color="#fff" /> 기�?별현?�에 ?�록
+            <Icon name="building" size={15} color="#fff" /> 기관별현황에 등록
           </button>
           <button onClick={onClose}
             style={{ padding: "12px 18px", background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>
-            ?�기
+            닫기
           </button>
         </div>
       </div>
@@ -3013,13 +3042,13 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   );
 }
 
-// ?�?� ?�규 ?�록 모달 ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 신규 등록 모달 ─────────────────────────────────────────────────────────────
 function AddModal({ onClose, onAdd, assignees }) {
-  // 빠른 ?�록 모달 - ?�수 ?�보�?받고, ?�머지???�세 ?�면?�서 ?�력
+  // 빠른 등록 모달 - 필수 정보만 받고, 나머지는 상세 화면에서 입력
   const [form, setForm] = useState({
     name: "", type: "법인", representative: "", phone: "",
-    stage: "?�담/진단?�료", assignee: "", agency_list: [],
-    business_type: "법인?�업??, industry: "",
+    stage: "상담/진단완료", assignee: "", agency_list: [],
+    business_type: "법인사업자", industry: "",
   });
   const set = function(k, v) { setForm(function(p) { return Object.assign({}, p, { [k]: v }); }); };
   const toggleAgency = function(a) {
@@ -3043,43 +3072,43 @@ function AddModal({ onClose, onAdd, assignees }) {
       <div style={{ background: "#fff", borderRadius: 14, width: 460, maxHeight: "92vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ padding: "20px 24px 14px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
           <div>
-            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>빠른 ?�규 ?�록</h2>
-            <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>?�수 ?�보�??�력?�면 ?�세 ?�면???�려??/div>
+            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>빠른 신규 등록</h2>
+            <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>필수 정보만 입력하면 상세 화면이 열려요</div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><Icon name="x" size={18} color="#888" /></button>
         </div>
         <div style={{ padding: "18px 24px" }}>
-          {/* ?�체�?*/}
+          {/* 업체명 */}
           <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
-            <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>?�체�?*</div>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>업체명 *</div>
             <input value={form.name} onChange={function(e) { set("name", e.target.value); }} autoFocus
               style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
           </div>
 
-          {/* ?�?�자 + ?�락�?*/}
+          {/* 대표자 + 연락처 */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
             <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-              <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>?�?�자�?*</div>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>대표자명 *</div>
               <input value={form.representative} onChange={function(e) { set("representative", e.target.value); }}
                 style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
             </div>
             <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-              <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>?�락�?/div>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>연락처</div>
               <input value={form.phone} placeholder="01012345678" onChange={function(e) { set("phone", formatPhone(e.target.value)); }}
                 style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
             </div>
           </div>
 
-          {/* ?�업???�형 */}
+          {/* 사업자 유형 */}
           <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
-            <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>?�업???�형</div>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>사업자 유형</div>
             <div style={{ display: "flex", gap: 6 }}>
-              {["개인?�업??,"법인?�업??].map(function(t) {
+              {["개인사업자","법인사업자"].map(function(t) {
                 var sel = form.business_type === t;
                 return (
-                  <button key={t} onClick={function() { set("business_type", t); set("type", t === "법인?�업?? ? "법인" : "개인"); }}
+                  <button key={t} onClick={function() { set("business_type", t); set("type", t === "법인사업자" ? "법인" : "개인"); }}
                     style={{ flex: 1, padding: "6px 8px", borderRadius: 6, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer",
-                      background: sel ? (t === "법인?�업?? ? "#4338CA" : "#0F6E56") : "#fff", color: sel ? "#fff" : "#888" }}>
+                      background: sel ? (t === "법인사업자" ? "#4338CA" : "#0F6E56") : "#fff", color: sel ? "#fff" : "#888" }}>
                     {t}
                   </button>
                 );
@@ -3087,9 +3116,9 @@ function AddModal({ onClose, onAdd, assignees }) {
             </div>
           </div>
 
-          {/* ?�종 (복수 ?�택 가?? */}
+          {/* 업종 (복수 선택 가능) */}
           <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
-            <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>?�종 (복수 ?�택 가??</div>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>업종 (복수 선택 가능)</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
               {INDUSTRY_OPTIONS.map(function(ind) {
                 var cur = (form.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
@@ -3104,7 +3133,7 @@ function AddModal({ onClose, onAdd, assignees }) {
                   }}
                     style={{ padding: "4px 9px", borderRadius: 99, fontSize: 11, fontWeight: sel ? 700 : 400, border: sel ? "none" : "1px solid #E8E5E0", cursor: "pointer",
                       background: sel ? "#4338CA" : "#fff", color: sel ? "#fff" : "#666" }}>
-                    {sel ? "??" : ""}{ind}
+                    {sel ? "✓ " : ""}{ind}
                   </button>
                 );
               })}
@@ -3118,19 +3147,19 @@ function AddModal({ onClose, onAdd, assignees }) {
                   {custom.map(function(s) {
                     return (
                       <span key={s} style={{ background: "#0F6E56", color: "#fff", padding: "3px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                        ??{s}
+                        ✓ {s}
                         <span onClick={function() {
                           var arr = (form.industry || "").split(",").map(function(x) { return x.trim(); }).filter(Boolean);
                           arr = arr.filter(function(x) { return x !== s; });
                           set("industry", arr.length > 0 ? arr.join(", ") : "");
-                        }} style={{ cursor: "pointer", fontSize: 12, opacity: 0.85 }}>??/span>
+                        }} style={{ cursor: "pointer", fontSize: 12, opacity: 0.85 }}>✕</span>
                       </span>
                     );
                   })}
                 </div>
               );
             })()}
-            <input type="text" placeholder="직접 ?�력 ??Enter�?추�? (?? 부?�산?��???"
+            <input type="text" placeholder="직접 입력 후 Enter로 추가 (예: 부동산임대업)"
               onKeyDown={function(e) {
                 if (e.key !== "Enter") return;
                 e.preventDefault();
@@ -3145,18 +3174,18 @@ function AddModal({ onClose, onAdd, assignees }) {
               style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, outline: "none", boxSizing: "border-box" }} />
           </div>
 
-          {/* 진행 ?�계 */}
+          {/* 진행 단계 */}
           <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
-            <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>진행 ?�계</div>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>진행 단계</div>
             <select value={form.stage} onChange={function(e) { set("stage", e.target.value); }}
               style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none", cursor: "pointer" }}>
               {STAGES.map(function(s) { return <option key={s}>{s}</option>; })}
             </select>
           </div>
 
-          {/* ?�당 기�? (복수 ?�택) */}
+          {/* 담당 기관 (복수 선택) */}
           <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
-            <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>?�당 기�? (복수 ?�택 가??</div>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>담당 기관 (복수 선택 가능)</div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               {AGENCIES.map(function(a) {
                 var sel = (form.agency_list || []).includes(a);
@@ -3169,9 +3198,9 @@ function AddModal({ onClose, onAdd, assignees }) {
             </div>
           </div>
 
-          {/* ?�당??(복수 ?�택) */}
+          {/* 담당자 (복수 선택) */}
           <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 14 }}>
-            <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>?�당??(복수 ?�택 가??</div>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>담당자 (복수 선택 가능)</div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               {assignees.map(function(a) {
                 var sel = (form.assignee || "").split(", ").filter(Boolean).includes(a);
@@ -3185,19 +3214,20 @@ function AddModal({ onClose, onAdd, assignees }) {
           </div>
 
           <div style={{ background: "#FEF3C7", borderRadius: 8, padding: "10px 13px", marginBottom: 12, fontSize: 11, color: "#B45309", lineHeight: 1.5 }}>
-            ?�� ?�록 ??곧바�??�세 ?�면???�려??<br />매출, ?�용?�수, 지?????�머지 ?�보??거기???�력?�세??
+            💡 등록 후 곧바로 상세 화면이 열려요.<br />매출, 신용점수, 지역 등 나머지 정보는 거기서 입력하세요.
           </div>
 
           <button onClick={function() {
-            if (!form.name || !form.name.trim()) { alert("?�체명을 ?�력?�주?�요."); return; }
-            if (!form.representative || !form.representative.trim()) { alert("?�?�자명을 ?�력?�주?�요."); return; }
+            if (!form.name || !form.name.trim()) { alert("업체명을 입력해주세요."); return; }
+            if (!form.representative || !form.representative.trim()) { alert("대표자명을 입력해주세요."); return; }
             var formToSend = Object.assign({}, form, {
               agency: (form.agency_list && form.agency_list[0]) || "",
               agency_list_str: (form.agency_list || []).join(", "),
             });
             onAdd(formToSend);
           }} style={{ width: "100%", padding: "13px", background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
-            ?�록?�고 ?�세 ?�보 ?�력?�기 ??          </button>
+            등록하고 상세 정보 입력하기 →
+          </button>
         </div>
       </div>
     </div>
@@ -3206,15 +3236,15 @@ function AddModal({ onClose, onAdd, assignees }) {
 
 
 
-// ?�?� ?�동 로그 ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 활동 로그 ──────────────────────────────────────────────────────────────────
 function ActivityLogView() {
   const [logs, setLogs] = useState([]);
   const [cases, setCases] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filterAssignee, setFilterAssignee] = useState("?�체");
-  const [filterAgency, setFilterAgency] = useState("?�체");
-  const [filterType, setFilterType] = useState("?�체");
-  // ?�동 메모 ?�력
+  const [filterAssignee, setFilterAssignee] = useState("전체");
+  const [filterAgency, setFilterAgency] = useState("전체");
+  const [filterType, setFilterType] = useState("전체");
+  // 수동 메모 입력
   const [memoInput, setMemoInput] = useState("");
   const [memoAssignee, setMemoAssignee] = useState("");
   const [memoAgency, setMemoAgency] = useState("");
@@ -3232,7 +3262,8 @@ function ActivityLogView() {
     setLoading(false);
   };
 
-  // ?�동?�성 - ?�업?�명 ?�력 ??agency_cases 검??  var handleMemoNameInput = function(val) {
+  // 자동완성 - 사업자명 입력 시 agency_cases 검색
+  var handleMemoNameInput = function(val) {
     setMemoInput(val);
     if (val.length < 1) { setMemoSuggestions([]); return; }
     var matches = cases.filter(function(c) {
@@ -3249,8 +3280,8 @@ function ActivityLogView() {
   };
 
   var saveMemo = async function() {
-    if (!memoInput.trim()) { alert("?�업?�명???�력?�주?�요."); return; }
-    if (!memoAssignee) { alert("?�당?��? ?�택?�주?�요."); return; }
+    if (!memoInput.trim()) { alert("사업자명을 입력해주세요."); return; }
+    if (!memoAssignee) { alert("담당자를 선택해주세요."); return; }
     setMemoSaving(true);
     var r = await supabase.from("activity_logs").insert({
       business_name: memoInput.trim(),
@@ -3266,18 +3297,18 @@ function ActivityLogView() {
     setMemoSaving(false);
   };
 
-  // ?�터
+  // 필터
   var filtered = useMemo(function() {
     return logs.filter(function(l) {
-      if (filterAssignee !== "?�체" && l.assignee !== filterAssignee) return false;
-      if (filterAgency !== "?�체" && l.agency_group !== filterAgency) return false;
-      if (filterType === "?�동") return l.log_type === "status_change";
-      if (filterType === "?�동") return l.log_type === "manual_memo";
+      if (filterAssignee !== "전체" && l.assignee !== filterAssignee) return false;
+      if (filterAgency !== "전체" && l.agency_group !== filterAgency) return false;
+      if (filterType === "자동") return l.log_type === "status_change";
+      if (filterType === "수동") return l.log_type === "manual_memo";
       return true;
     });
   }, [logs, filterAssignee, filterAgency, filterType]);
 
-  // ?�짜 ?�맷
+  // 날짜 포맷
   var fmtTime = function(iso) {
     if (!iso) return "";
     var d = new Date(iso);
@@ -3286,11 +3317,11 @@ function ActivityLogView() {
     var mins = Math.floor(diff / 60000);
     var hours = Math.floor(diff / 3600000);
     var days = Math.floor(diff / 86400000);
-    if (mins < 1) return "방금 ??;
-    if (mins < 60) return mins + "�???;
-    if (hours < 24) return hours + "?�간 ??;
-    if (days === 1) return "?�제";
-    if (days < 7) return days + "????;
+    if (mins < 1) return "방금 전";
+    if (mins < 60) return mins + "분 전";
+    if (hours < 24) return hours + "시간 전";
+    if (days === 1) return "어제";
+    if (days < 7) return days + "일 전";
     return d.toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
   };
 
@@ -3300,7 +3331,8 @@ function ActivityLogView() {
     return d.toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "short" });
   };
 
-  // ?�짜 그룹??  var groupedLogs = useMemo(function() {
+  // 날짜 그룹핑
+  var groupedLogs = useMemo(function() {
     var groups = {};
     filtered.forEach(function(l) {
       var d = l.created_at ? new Date(l.created_at).toDateString() : "unknown";
@@ -3316,7 +3348,7 @@ function ActivityLogView() {
   var todayLogs = logs.filter(function(l) { return l.created_at && new Date(l.created_at).toDateString() === today; });
   var weekLogs = logs.filter(function(l) { return l.created_at && new Date(l.created_at) >= thisWeekStart; });
 
-  // ?�당?�별 ?�동??(?�번 �?
+  // 담당자별 활동량 (이번 주)
   var staffStats = useMemo(function() {
     var map = {};
     weekLogs.forEach(function(l) {
@@ -3328,7 +3360,7 @@ function ActivityLogView() {
   }, [weekLogs]);
   var maxStaff = staffStats.length > 0 ? staffStats[0][1] : 1;
 
-  // 기�?�??�늘 ?�동
+  // 기관별 오늘 활동
   var agencyToday = useMemo(function() {
     var map = {};
     todayLogs.forEach(function(l) {
@@ -3339,10 +3371,11 @@ function ActivityLogView() {
     return Object.entries(map).sort(function(a,b) { return b[1]-a[1]; });
   }, [todayLogs]);
 
-  // ?�태 변�?배�? ??  var STATUS_COLORS_MAP = {
-    "?�인": { bg: "#ECFDF5", text: "#047857" }, "?�정": { bg: "#ECFDF5", text: "#047857" }, "?�료": { bg: "#ECFDF5", text: "#047857" },
-    "?�사�?: { bg: "#EEF2FF", text: "#4338CA" }, "최종?�출": { bg: "#EEF2FF", text: "#4338CA" }, "진행 �?: { bg: "#EEF2FF", text: "#4338CA" },
-    "부�?: { bg: "#FEF2F2", text: "#DC2626" }, "반려": { bg: "#FEF2F2", text: "#DC2626" }, "진행불�?": { bg: "#FEF2F2", text: "#DC2626" },
+  // 상태 변경 배지 색
+  var STATUS_COLORS_MAP = {
+    "승인": { bg: "#ECFDF5", text: "#047857" }, "약정": { bg: "#ECFDF5", text: "#047857" }, "완료": { bg: "#ECFDF5", text: "#047857" },
+    "심사중": { bg: "#EEF2FF", text: "#4338CA" }, "최종제출": { bg: "#EEF2FF", text: "#4338CA" }, "진행 중": { bg: "#EEF2FF", text: "#4338CA" },
+    "부결": { bg: "#FEF2F2", text: "#DC2626" }, "반려": { bg: "#FEF2F2", text: "#DC2626" }, "진행불가": { bg: "#FEF2F2", text: "#DC2626" },
     "보류": { bg: "#F5F3FF", text: "#7C3AED" }, "중단": { bg: "#F5F3FF", text: "#7C3AED" },
   };
   var statusBadge = function(s) {
@@ -3350,38 +3383,39 @@ function ActivityLogView() {
     return <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: sc.bg, color: sc.text, fontWeight: 600 }}>{s}</span>;
   };
 
-  // 기�? 배�? ??  var agencyColor = function(ag) {
-    var map = { "?�상공인?�장진흥공단": "#4338CA", "?�용보증기금": "#0F6E56", "?�용보증?�단": "#B45309", "중소벤처기업진흥공단": "#7C3AED", "구조?�신&?�업?�환": "#BE123C", "경정�?��": "#0369A1" };
+  // 기관 배지 색
+  var agencyColor = function(ag) {
+    var map = { "소상공인시장진흥공단": "#4338CA", "신용보증기금": "#0F6E56", "신용보증재단": "#B45309", "중소벤처기업진흥공단": "#7C3AED", "구조혁신&사업전환": "#BE123C", "경정청구": "#0369A1" };
     return map[ag] || "#888";
   };
 
   if (loading) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", flexDirection: "column", gap: 16 }}>
       <div style={{ width: 36, height: 36, border: "3px solid #E8E5E0", borderTopColor: "#1A1917", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-      <span style={{ color: "#888", fontSize: 13 }}>?�동 로그 불러?�는 �?..</span>
+      <span style={{ color: "#888", fontSize: 13 }}>활동 로그 불러오는 중...</span>
     </div>
   );
 
   return (
     <div>
-      {/* ?�더 */}
+      {/* 헤더 */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>?�동 로그</h1>
-          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>?�태 변�??�동 기록 · ?�동 메모</p>
+          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>활동 로그</h1>
+          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>상태 변경 자동 기록 · 수동 메모</p>
         </div>
         <button onClick={fetchAll} style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#555", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
-          <Icon name="refresh" size={13} color="#555" /> ?�로고침
+          <Icon name="refresh" size={13} color="#555" /> 새로고침
         </button>
       </div>
 
       {/* KPI */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
         {[
-          { label: "?�늘 ?�동", value: todayLogs.length + "�?, sub: "?�동 " + todayLogs.filter(function(l){return l.log_type==="status_change";}).length + " · ?�동 " + todayLogs.filter(function(l){return l.log_type==="manual_memo";}).length, color: "#4338CA" },
-          { label: "?�번 �??�동", value: weekLogs.length + "�?, sub: "?�태변�?메모 ?�산", color: "#047857" },
-          { label: "?�번 �??�태변�?, value: weekLogs.filter(function(l){return l.log_type==="status_change";}).length + "�?, sub: "?�동 기록", color: "#7C3AED" },
-          { label: "?�번 �?메모", value: weekLogs.filter(function(l){return l.log_type==="manual_memo";}).length + "�?, sub: "?�동 ?�성", color: "#B45309" },
+          { label: "오늘 활동", value: todayLogs.length + "건", sub: "자동 " + todayLogs.filter(function(l){return l.log_type==="status_change";}).length + " · 수동 " + todayLogs.filter(function(l){return l.log_type==="manual_memo";}).length, color: "#4338CA" },
+          { label: "이번 주 활동", value: weekLogs.length + "건", sub: "상태변경+메모 합산", color: "#047857" },
+          { label: "이번 주 상태변경", value: weekLogs.filter(function(l){return l.log_type==="status_change";}).length + "건", sub: "자동 기록", color: "#7C3AED" },
+          { label: "이번 주 메모", value: weekLogs.filter(function(l){return l.log_type==="manual_memo";}).length + "건", sub: "수동 작성", color: "#B45309" },
         ].map(function(k, i) {
           return (
             <div key={i} style={{ background: "#fff", borderRadius: 10, padding: "16px 18px", border: "1px solid #E8E5E0" }}>
@@ -3393,41 +3427,41 @@ function ActivityLogView() {
         })}
       </div>
 
-      {/* ?�터 */}
+      {/* 필터 */}
       <div style={{ display: "flex", gap: 16, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
         <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-          <span style={{ fontSize: 12, color: "#888" }}>?�형:</span>
-          {["?�체","?�동","?�동"].map(function(t) {
+          <span style={{ fontSize: 12, color: "#888" }}>유형:</span>
+          {["전체","자동","수동"].map(function(t) {
             return <div key={t} onClick={function(){setFilterType(t);}} style={{ padding: "4px 12px", borderRadius: 99, cursor: "pointer", fontSize: 12, background: filterType===t ? "#1A1917" : "#fff", color: filterType===t ? "#fff" : "#666", border: filterType===t ? "none" : "1px solid #E8E5E0" }}>{t}</div>;
           })}
         </div>
         <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-          <span style={{ fontSize: 12, color: "#888" }}>기�?:</span>
-          {["?�체","?�상공인?�장진흥공단","?�용보증기금","?�용보증?�단","중소벤처기업진흥공단","구조?�신&?�업?�환"].map(function(a) {
+          <span style={{ fontSize: 12, color: "#888" }}>기관:</span>
+          {["전체","소상공인시장진흥공단","신용보증기금","신용보증재단","중소벤처기업진흥공단","구조혁신&사업전환"].map(function(a) {
             return <div key={a} onClick={function(){setFilterAgency(a);}} style={{ padding: "4px 12px", borderRadius: 99, cursor: "pointer", fontSize: 12, background: filterAgency===a ? "#1A1917" : "#fff", color: filterAgency===a ? "#fff" : "#666", border: filterAgency===a ? "none" : "1px solid #E8E5E0" }}>{a}</div>;
           })}
         </div>
         <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-          <span style={{ fontSize: 12, color: "#888" }}>?�당??</span>
-          {["?�체"].concat(ASSIGNEES).map(function(a) {
+          <span style={{ fontSize: 12, color: "#888" }}>담당자:</span>
+          {["전체"].concat(ASSIGNEES).map(function(a) {
             return <div key={a} onClick={function(){setFilterAssignee(a);}} style={{ padding: "4px 12px", borderRadius: 99, cursor: "pointer", fontSize: 12, background: filterAssignee===a ? "#1A1917" : "#fff", color: filterAssignee===a ? "#fff" : "#666", border: filterAssignee===a ? "none" : "1px solid #E8E5E0" }}>{a}</div>;
           })}
         </div>
       </div>
 
-      {/* 메인 ?�이?�웃 */}
+      {/* 메인 레이아웃 */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16, alignItems: "start" }}>
 
-        {/* ?�?�라??*/}
+        {/* 타임라인 */}
         <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
-          {/* ?�동 메모 ?�력�?*/}
+          {/* 수동 메모 입력창 */}
           <div style={{ padding: "16px 20px", borderBottom: "2px solid #E8E5E0", background: "#FAFAF8" }}>
-            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: "#333" }}>?�️ ?�동 메모 ?�기�?/div>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: "#333" }}>✏️ 수동 메모 남기기</div>
             <div style={{ position: "relative", marginBottom: 8 }}>
               <input
                 value={memoInput}
                 onChange={function(e) { handleMemoNameInput(e.target.value); }}
-                placeholder="?�업?�명 검???�는 직접 ?�력..."
+                placeholder="사업자명 검색 또는 직접 입력..."
                 style={{ width: "100%", padding: "9px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }}
               />
               {memoSuggestions.length > 0 && (
@@ -3452,26 +3486,26 @@ function ActivityLogView() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
               <select value={memoAssignee} onChange={function(e) { setMemoAssignee(e.target.value); }}
                 style={{ padding: "9px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>
-                <option value="">?�당???�택</option>
+                <option value="">담당자 선택</option>
                 {ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
               </select>
               <select value={memoAgency} onChange={function(e) { setMemoAgency(e.target.value); }}
                 style={{ padding: "9px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>
-                <option value="">기�? ?�택 (?�택?�항)</option>
-                {["?�상공인?�장진흥공단","?�용보증기금","?�용보증?�단","중소벤처기업진흥공단","구조?�신&?�업?�환","경정�?��","기�?"].map(function(a) { return <option key={a} value={a}>{a}</option>; })}
+                <option value="">기관 선택 (선택사항)</option>
+                {["소상공인시장진흥공단","신용보증기금","신용보증재단","중소벤처기업진흥공단","구조혁신&사업전환","경정청구","기타"].map(function(a) { return <option key={a} value={a}>{a}</option>; })}
               </select>
             </div>
             <button onClick={saveMemo} disabled={memoSaving}
               style={{ width: "100%", padding: "10px", background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: memoSaving ? "not-allowed" : "pointer", opacity: memoSaving ? 0.7 : 1 }}>
-              {memoSaving ? "?�??�?.." : "메모 ?�??}
+              {memoSaving ? "저장 중..." : "메모 저장"}
             </button>
           </div>
 
-          {/* ?�?�라??목록 */}
+          {/* 타임라인 목록 */}
           {filtered.length === 0 ? (
             <div style={{ padding: "60px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>
-              ?�동 기록???�습?�다.<br/>
-              <span style={{ fontSize: 12 }}>기�?�??�황?�서 ?�태�?변경하거나 메모�??�겨보세??</span>
+              활동 기록이 없습니다.<br/>
+              <span style={{ fontSize: 12 }}>기관별 현황에서 상태를 변경하거나 메모를 남겨보세요.</span>
             </div>
           ) : (
             <div style={{ padding: "16px 20px" }}>
@@ -3486,11 +3520,11 @@ function ActivityLogView() {
                         return (
                           <div key={log.id} style={{ display: "flex", gap: 12, paddingBottom: 16, position: "relative" }}>
                             {!isLast && <div style={{ position: "absolute", left: 14, top: 30, bottom: 0, width: 1, background: "#E8E5E0" }} />}
-                            {/* ?�이�?*/}
+                            {/* 아이콘 */}
                             <div style={{ width: 28, height: 28, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: isAuto ? "#EEF2FF" : "#FFF7ED", fontSize: 13 }}>
-                              {isAuto ? "?��" : "?�️"}
+                              {isAuto ? "🔄" : "✏️"}
                             </div>
-                            {/* ?�용 */}
+                            {/* 내용 */}
                             <div style={{ flex: 1 }}>
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
                                 <div style={{ fontSize: 13, fontWeight: 700 }}>
@@ -3506,13 +3540,13 @@ function ActivityLogView() {
                                 {isAuto ? (
                                   <>
                                     {log.old_status && statusBadge(log.old_status)}
-                                    <span style={{ fontSize: 11, color: "#AAA" }}>??/span>
+                                    <span style={{ fontSize: 11, color: "#AAA" }}>→</span>
                                     {log.new_status && statusBadge(log.new_status)}
-                                    <span style={{ fontSize: 11, color: "#888" }}>?�태 변�?/span>
+                                    <span style={{ fontSize: 11, color: "#888" }}>상태 변경</span>
                                   </>
                                 ) : (
                                   <>
-                                    <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 99, background: "#FFF7ED", color: "#C2410C", fontWeight: 600 }}>?�동 메모</span>
+                                    <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 99, background: "#FFF7ED", color: "#C2410C", fontWeight: 600 }}>수동 메모</span>
                                     {log.memo && <span style={{ fontSize: 12, color: "#555" }}>{log.memo}</span>}
                                   </>
                                 )}
@@ -3529,16 +3563,16 @@ function ActivityLogView() {
           )}
         </div>
 
-        {/* ?�른�??�이??*/}
+        {/* 오른쪽 사이드 */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {/* ?�당?�별 ?�동??*/}
+          {/* 담당자별 활동량 */}
           <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
             <div style={{ padding: "14px 16px", borderBottom: "1px solid #E8E5E0", fontSize: 13, fontWeight: 700 }}>
-              ?�당?�별 ?�동??<span style={{ fontSize: 11, color: "#AAA", fontWeight: 400 }}>?�번 �?/span>
+              담당자별 활동량 <span style={{ fontSize: 11, color: "#AAA", fontWeight: 400 }}>이번 주</span>
             </div>
             <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
               {staffStats.length === 0 ? (
-                <div style={{ fontSize: 12, color: "#AAA", textAlign: "center", padding: "16px 0" }}>?�번 �??�동 ?�음</div>
+                <div style={{ fontSize: 12, color: "#AAA", textAlign: "center", padding: "16px 0" }}>이번 주 활동 없음</div>
               ) : staffStats.map(function(s) {
                 var pct = Math.round(s[1] / maxStaff * 100);
                 return (
@@ -3547,7 +3581,7 @@ function ActivityLogView() {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
                         <span style={{ fontSize: 12, fontWeight: 600 }}>{s[0]}</span>
-                        <span style={{ fontSize: 11, color: "#888" }}>{s[1]}�?/span>
+                        <span style={{ fontSize: 11, color: "#888" }}>{s[1]}건</span>
                       </div>
                       <div style={{ height: 4, background: "#E8E5E0", borderRadius: 99 }}>
                         <div style={{ height: 4, background: "#1A1917", borderRadius: 99, width: pct + "%" }} />
@@ -3559,19 +3593,19 @@ function ActivityLogView() {
             </div>
           </div>
 
-          {/* ?�늘 기�?�??�약 */}
+          {/* 오늘 기관별 요약 */}
           <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
             <div style={{ padding: "14px 16px", borderBottom: "1px solid #E8E5E0", fontSize: 13, fontWeight: 700 }}>
-              ?�늘 기�?�??�동 <span style={{ fontSize: 11, color: "#AAA", fontWeight: 400 }}>건수</span>
+              오늘 기관별 활동 <span style={{ fontSize: 11, color: "#AAA", fontWeight: 400 }}>건수</span>
             </div>
             <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 6 }}>
               {agencyToday.length === 0 ? (
-                <div style={{ fontSize: 12, color: "#AAA", textAlign: "center", padding: "16px 0" }}>?�늘 ?�동 ?�음</div>
+                <div style={{ fontSize: 12, color: "#AAA", textAlign: "center", padding: "16px 0" }}>오늘 활동 없음</div>
               ) : agencyToday.map(function(a) {
                 return (
                   <div key={a[0]} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: "#F7F6F3", borderRadius: 8 }}>
                     <span style={{ fontSize: 12, color: "#555" }}>{a[0]}</span>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: agencyColor(a[0]) }}>{a[1]}�?/span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: agencyColor(a[0]) }}>{a[1]}건</span>
                   </div>
                 );
               })}
@@ -3583,10 +3617,10 @@ function ActivityLogView() {
   );
 }
 
-// ?�?� ?�무?�트 ?�정 카드 (?�립 컴포?�트 - ?�력버그 방�?) ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 업무노트 수정 카드 (독립 컴포넌트 - 입력버그 방지) ─────────────────────────
 function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
-  // content가 변경되�?checkItems?� freeText�?분리
-  // editNote.checkItems가 ?��? ?�으�?그걸 ?�선 ?�용 (?�용?��? ?�집 중인 ?�태)
+  // content가 변경되면 checkItems와 freeText로 분리
+  // editNote.checkItems가 이미 있으면 그걸 우선 사용 (사용자가 편집 중인 상태)
   
   function parseContent(text) {
     if (!text) return { items: [], freeText: "" };
@@ -3600,7 +3634,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
         var dateStr = null;
         var displayText = textFull;
         var bracketMatch = textFull.match(/\[(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2})\]/);
-        var arrowMatch = !bracketMatch && textFull.match(/??s*(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2})\s*$/);
+        var arrowMatch = !bracketMatch && textFull.match(/→\s*(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2})\s*$/);
         if (bracketMatch || arrowMatch) {
           var raw = (bracketMatch ? bracketMatch[1] : arrowMatch[1]);
           if (raw.indexOf("-") >= 0) {
@@ -3610,7 +3644,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
             var year = new Date().getFullYear();
             dateStr = year + "-" + parts[0].padStart(2,"0") + "-" + parts[1].padStart(2,"0");
           }
-          displayText = textFull.replace(/\[\d{4}-\d{2}-\d{2}\]|\[\d{1,2}\/\d{1,2}\]/, "").replace(/??s*\d{4}-\d{2}-\d{2}\s*$|??s*\d{1,2}\/\d{1,2}\s*$/, "").trim();
+          displayText = textFull.replace(/\[\d{4}-\d{2}-\d{2}\]|\[\d{1,2}\/\d{1,2}\]/, "").replace(/→\s*\d{4}-\d{2}-\d{2}\s*$|→\s*\d{1,2}\/\d{1,2}\s*$/, "").trim();
         }
         items.push({ checked: m[2].toLowerCase() === "x", text: displayText, dueDate: dateStr || "" });
       } else {
@@ -3620,7 +3654,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
     return { items: items, freeText: freeLines.join("\n").trim() };
   }
 
-  // 처음 ??번만 ?�싱 - editNote.checkItems가 ?�으�?content?�서 추출
+  // 처음 한 번만 파싱 - editNote.checkItems가 없으면 content에서 추출
   useEffect(function() {
     if (editNote && editNote.id && (editNote.checkItems === undefined || editNote.checkItems === null)) {
       var parsed = parseContent(editNote.content || "");
@@ -3638,37 +3672,37 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
 
   return (
     <div style={{ background: "#F0FDF4", border: "2px solid #86EFAC", borderRadius: 12, padding: "18px 20px" }}>
-      <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D", marginBottom: 12 }}>?�️ ?�트 ?�정</div>
+      <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D", marginBottom: 12 }}>✏️ 노트 수정</div>
       <div style={{ display: "flex", gap: 16, marginBottom: 10 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
           <input type="checkbox" checked={editNote.is_todo || false} onChange={function(e) { setEditNote(function(p) { return Object.assign({}, p, { is_todo: e.target.checked }); }); }} />
-          ?�� ???�로 ?�록
+          📋 할 일로 등록
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
           <input type="checkbox" checked={editNote.pinned || false} onChange={function(e) { setEditNote(function(p) { return Object.assign({}, p, { pinned: e.target.checked }); }); }} />
-          ?�� ?�단 고정
+          📌 상단 고정
         </label>
       </div>
-      <input value={editNote.title || ""} placeholder="?�목 (?�택?�항)" onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
+      <input value={editNote.title || ""} placeholder="제목 (선택사항)" onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
         style={{ width: "100%", padding: "10px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 14, fontWeight: 600, boxSizing: "border-box", outline: "none", marginBottom: 10, background: "#fff" }} />
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-        <label style={{ fontSize: 12, color: "#15803D", fontWeight: 600, whiteSpace: "nowrap" }}>?�� 마감??/label>
+        <label style={{ fontSize: 12, color: "#15803D", fontWeight: 600, whiteSpace: "nowrap" }}>📅 마감일</label>
         <input type="date" value={editNote.due_date || ""} onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { due_date: v }); }); }}
           style={{ width: "auto", padding: "7px 10px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, background: "#fff", outline: "none" }} />
         {editNote.due_date && <button onClick={function() { setEditNote(function(p) { return Object.assign({}, p, { due_date: "" }); }); }}
-          style={{ background: "none", border: "none", cursor: "pointer", color: "#AAA", fontSize: 14 }}>??/button>}
+          style={{ background: "none", border: "none", cursor: "pointer", color: "#AAA", fontSize: 14 }}>✕</button>}
       </div>
-      {/* 체크리스????��??*/}
+      {/* 체크리스트 항목들 */}
       {checkItems.length > 0 && (
         <div style={{ border: "1px solid #86EFAC", borderRadius: 8, padding: "10px 12px", marginBottom: 8, background: "#fff" }}>
           {checkItems.map(function(item, idx) {
             return (
               <div key={idx} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
                 <input type="checkbox" checked={item.checked || false} onChange={function(e) { var ck = e.target.checked; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { checked: ck }); return Object.assign({}, p, { checkItems: items }); }); }} style={{ width: 15, height: 15, flexShrink: 0, cursor: "pointer" }} />
-                <input type="text" value={item.text || ""} placeholder={"??�� " + (idx + 1) + " (?? ?�크립트 ?�성)"}
+                <input type="text" value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성)"}
                   onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); }}
                   style={{ flex: 1, border: "none", outline: "none", fontSize: 13, background: "transparent", textDecoration: item.checked ? "line-through" : "none", color: item.checked ? "#AAA" : "#333" }} />
-                <input type="date" value={item.dueDate || ""} title="????��??마감??(?�택)"
+                <input type="date" value={item.dueDate || ""} title="이 항목의 마감일 (선택)"
                   onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { dueDate: v }); return Object.assign({}, p, { checkItems: items }); }); }}
                   style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, color: "#4338CA", outline: "none", width: 130 }} />
                 <button onClick={function() { setEditNote(function(p) { var items = (p.checkItems || []).filter(function(_, i) { return i !== idx; }); return Object.assign({}, p, { checkItems: items }); }); }}
@@ -3678,7 +3712,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
           })}
         </div>
       )}
-      {/* 체크리스??버튼 + textarea */}
+      {/* 체크리스트 버튼 + textarea */}
       <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
         <button onClick={function() {
           setEditNote(function(p) {
@@ -3686,30 +3720,30 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
             return Object.assign({}, p, { checkItems: items, is_todo: true });
           });
         }} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", background: "#fff", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, color: "#15803D", fontWeight: 600, cursor: "pointer" }}>
-          ?�️ 체크리스????�� 추�?
+          ☑️ 체크리스트 항목 추가
         </button>
         <span style={{ fontSize: 10, color: "#888", alignSelf: "center", lineHeight: 1.4 }}>
-          ?�� 직접 ?�력 ?? <code style={{ background: "#F0EDE8", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>- [ ] ?�일 [5/30]</code> ?�는 <code style={{ background: "#F0EDE8", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>- [ ] ?�일 ??5/30</code>
+          💡 직접 입력 시: <code style={{ background: "#F0EDE8", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>- [ ] 할일 [5/30]</code> 또는 <code style={{ background: "#F0EDE8", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>- [ ] 할일 → 5/30</code>
         </span>
       </div>
-      <textarea value={freeContent} placeholder={checkItems.length > 0 ? "추�? 메모 (?�택?�항)..." : "?�용???�유�?�� ?�력?�세??.."} 
+      <textarea value={freeContent} placeholder={checkItems.length > 0 ? "추가 메모 (선택사항)..." : "내용을 자유롭게 입력하세요..."} 
         onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { freeContent: v }); }); }} 
         rows={checkItems.length > 0 ? 4 : 8}
         style={{ width: "100%", padding: "12px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, lineHeight: 1.75, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff", minHeight: 120 }} />
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-        <button onClick={saveEdit} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "10px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>?�??/button>
+        <button onClick={saveEdit} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "10px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
         <button onClick={onCancel} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 16px", fontSize: 13, cursor: "pointer" }}>취소</button>
       </div>
     </div>
   );
 }
 
-// ?�?� ?�무?�트 카드 (?�립 컴포?�트 - ?�력버그 방�?) ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 업무노트 카드 (독립 컴포넌트 - 입력버그 방지) ──────────────────────────────
 function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditingId, toggleDone, togglePin, deleteNote, fmtDate, currentUserName, onChecklistChange }) {
   var isEditing = editingId === note.id;
   var isMyNote = true;
 
-  // 체크리스???�싱: "- [ ] ??��" ?�는 "- [x] ??��" ?�식
+  // 체크리스트 파싱: "- [ ] 항목" 또는 "- [x] 항목" 형식
   var parseChecklist = function(content) {
     if (!content) return null;
     var lines = content.split("\n");
@@ -3739,7 +3773,7 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
   };
 
   if (isEditing) {
-    // ?�집 중에??그리?�에??빠짐 (?�단 ?�체 ??���?별도 ?�더�?
+    // 편집 중에는 그리드에서 빠짐 (상단 전체 폭으로 별도 렌더링)
     return null;
   }
 
@@ -3751,25 +3785,25 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
             <input type="checkbox" checked={note.is_done || false} onChange={function() { toggleDone(note); }}
               style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#1A1917" }} />
           )}
-          {note.pinned && <span style={{ fontSize: 14 }}>?��</span>}
+          {note.pinned && <span style={{ fontSize: 14 }}>📌</span>}
           <span style={{ fontSize: 14, fontWeight: 700, color: "#1A1917", textDecoration: note.is_done ? "line-through" : "none" }}>
-            {note.title || <span style={{ color: "#CCC", fontWeight: 400 }}>?�목 ?�음</span>}
+            {note.title || <span style={{ color: "#CCC", fontWeight: 400 }}>제목 없음</span>}
           </span>
           {note.is_todo && (
             <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 99, background: note.is_done ? "#ECFDF5" : "#EEF2FF", color: note.is_done ? "#047857" : "#4338CA", fontWeight: 600 }}>
-              {note.is_done ? "?�료" : "?�일"}
+              {note.is_done ? "완료" : "할일"}
             </span>
           )}
           {totalCount > 0 && (
             <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 99, background: checkedCount === totalCount ? "#ECFDF5" : "#F3F4F6", color: checkedCount === totalCount ? "#047857" : "#555", fontWeight: 600 }}>
-              ??{checkedCount}/{totalCount}
+              ✓ {checkedCount}/{totalCount}
             </span>
           )}
         </div>
         {isMyNote && (
           <div style={{ display: "flex", gap: 4 }}>
-            <button onClick={function() { togglePin(note); }} title={note.pinned ? "고정 ?�제" : "고정"}
-              style={{ background: "none", border: "none", cursor: "pointer", padding: 4, fontSize: 14, opacity: note.pinned ? 1 : 0.4 }}>?��</button>
+            <button onClick={function() { togglePin(note); }} title={note.pinned ? "고정 해제" : "고정"}
+              style={{ background: "none", border: "none", cursor: "pointer", padding: 4, fontSize: 14, opacity: note.pinned ? 1 : 0.4 }}>📌</button>
             <button onClick={function() { setEditingId(note.id); setEditNote(Object.assign({}, note)); window.scrollTo({ top: 0, behavior: "smooth" }); }}
               style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Icon name="edit" size={14} color="#888" /></button>
             <button onClick={function() { deleteNote(note.id); }}
@@ -3778,7 +3812,7 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
         )}
       </div>
 
-      {/* 마감???�시 */}
+      {/* 마감일 표시 */}
       {note.due_date && (function() {
         var today = new Date().toISOString().slice(0, 10);
         var dday = Math.ceil((new Date(note.due_date) - new Date(today)) / 86400000);
@@ -3787,14 +3821,14 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
         var ddayBg = dday < 0 ? "#FEE2E2" : dday === 0 ? "#FFF7ED" : dday <= 3 ? "#FEF3C7" : "#F0FDF4";
         return (
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-            <span style={{ fontSize: 10, color: "#888" }}>?�� 마감:</span>
+            <span style={{ fontSize: 10, color: "#888" }}>📅 마감:</span>
             <span style={{ fontSize: 11, color: "#555" }}>{note.due_date}</span>
             <span style={{ fontSize: 10, fontWeight: 700, color: ddayColor, background: ddayBg, padding: "1px 6px", borderRadius: 99 }}>{ddayLabel}</span>
           </div>
         );
       })()}
 
-      {/* 체크리스??or ?�반 ?�용 */}
+      {/* 체크리스트 or 일반 내용 */}
       {note.content && (
         checklist ? (
           <div style={{ marginBottom: 10 }}>
@@ -3831,18 +3865,18 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
   );
 }
 
-// ?�?� ?�무 ?�트 ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
-// ?�?� 브라?��? ?�시 ?�림 ?�수 ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 업무 노트 ──────────────────────────────────────────────────────────────────
+// ── 브라우저 푸시 알림 함수 ──────────────────────────────────────────────
 async function sendPushToUser(userName, payload) {
   try {
     var subs = await supabase.from("push_subscriptions").select("subscription").eq("user_name", userName);
-    if (!subs.data || subs.data.length === 0) return; // 구독 ?�보 ?�으�??�스
+    if (!subs.data || subs.data.length === 0) return; // 구독 정보 없으면 패스
     for (var i = 0; i < subs.data.length; i++) {
       var sub = subs.data[i].subscription;
       if (sub && sub.endpoint) {
-        // ?�시 API 직접 ?�출 (?�라?�언?�에??Notification API ?�용)
+        // 푸시 API 직접 호출 (클라이언트에서 Notification API 활용)
         if ("serviceWorker" in navigator && "PushManager" in window) {
-          // 로컬 ?�림?�로 ?��?(같�? PC?�서�??�동)
+          // 로컬 알림으로 대체 (같은 PC에서만 작동)
           if (Notification.permission === "granted") {
             var n = new Notification(payload.title, {
               body: payload.body,
@@ -3856,19 +3890,19 @@ async function sendPushToUser(userName, payload) {
       }
     }
   } catch(e) {
-    // ?�시 ?�패?�도 ?�?��? ?�료
+    // 푸시 실패해도 저장은 완료
   }
 }
 
 function WorkNotesView({ profile, onBadgeUpdate }) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filterAssignee, setFilterAssignee] = useState("?�체");
+  const [filterAssignee, setFilterAssignee] = useState("전체");
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [newNote, setNewNote] = useState({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "" });
   const [editNote, setEditNote] = useState({});
-  const [filterType, setFilterType] = useState("?�체"); // ?�체 / 메모 / ?�일
+  const [filterType, setFilterType] = useState("전체"); // 전체 / 메모 / 할일
   const [replyId, setReplyId] = useState(null);
   const [replyText, setReplyText] = useState("");
   const [showTrash, setShowTrash] = useState(false);
@@ -3877,16 +3911,16 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   const [companiesList, setCompaniesList] = useState([]);
   const [pushEnabled, setPushEnabled] = useState(false);
 
-  // 브라?��? ?�시 ?�림 권한 ?�청
+  // 브라우저 푸시 알림 권한 요청
   useEffect(function() {
     if (!profile?.name) return;
     if ("Notification" in window) {
       if (Notification.permission === "default") {
-        // ?�동?�로 권한 ?�청 (처음 ?�속 ??
+        // 자동으로 권한 요청 (처음 접속 시)
         Notification.requestPermission().then(function(perm) {
           if (perm === "granted") {
             setPushEnabled(true);
-            // 구독 ?�보 DB???�??(간단 버전: endpoint�??�??
+            // 구독 정보 DB에 저장 (간단 버전: endpoint만 저장)
             supabase.from("push_subscriptions").upsert({
               user_name: profile.name,
               subscription: { endpoint: "browser-" + profile.name, type: "notification" }
@@ -3908,13 +3942,13 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     fetchCompaniesList();
   }, []);
 
-  // 기업 목록 가?�오�?(?�동 감�???
+  // 기업 목록 가져오기 (자동 감지용)
   var fetchCompaniesList = async function() {
     var r = await supabase.from("companies").select("id, name").is("deleted_at", null);
     if (!r.error) setCompaniesList(r.data || []);
   };
 
-  // ?�스?�에??기업�??�동 감�?
+  // 텍스트에서 기업명 자동 감지
   var detectCompaniesInText = function(text) {
     if (!text || !companiesList || companiesList.length === 0) return [];
     var found = [];
@@ -3926,7 +3960,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     return found;
   };
 
-  // ?�동로그???�동 기록
+  // 활동로그에 자동 기록
   var logToActivity = async function(company, memo) {
     if (!company || !memo) return;
     await supabase.from("activity_logs").insert({
@@ -3966,16 +4000,16 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   };
 
   var permanentDeleteNote = async function(id) {
-    if (!window.confirm("?�전????��?�시겠습?�까? 복구?????�습?�다.")) return;
+    if (!window.confirm("완전히 삭제하시겠습니까? 복구할 수 없습니다.")) return;
     var r = await supabase.from("work_notes").delete().eq("id", id);
     if (!r.error) setTrashedNotes(function(prev) { return prev.filter(function(n) { return n.id !== id; }); });
   };
 
   var filtered = useMemo(function() {
     return notes.filter(function(n) {
-      if (filterAssignee !== "?�체" && n.assignee !== filterAssignee) return false;
+      if (filterAssignee !== "전체" && n.assignee !== filterAssignee) return false;
       if (filterType === "메모") return !n.is_todo;
-      if (filterType === "?�일") return n.is_todo;
+      if (filterType === "할일") return n.is_todo;
       return true;
     });
   }, [notes, filterAssignee, filterType]);
@@ -3984,7 +4018,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   var unpinned = filtered.filter(function(n) { return !n.pinned; });
 
   var saveNew = async function() {
-    // checkItems가 ?�으�?content�?변?�해???�치�?(마감??[YYYY-MM-DD] ?�함)
+    // checkItems가 있으면 content로 변환해서 합치기 (마감일 [YYYY-MM-DD] 포함)
     var checkContent = (newNote.checkItems && newNote.checkItems.length > 0)
       ? newNote.checkItems.filter(function(i) { return i.text.trim(); }).map(function(i) {
           var line = "- [ ] " + i.text.trim();
@@ -3994,8 +4028,8 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       : "";
     var finalContent = newNote.content.trim();
     if (checkContent) finalContent = finalContent ? finalContent + "\n" + checkContent : checkContent;
-    if (!newNote.title.trim() && !finalContent.trim()) { alert("?�목 ?�는 ?�용???�력?�주?�요."); return; }
-    var assigneeName = newNote.target_assignee || profile?.name || "?�체";
+    if (!newNote.title.trim() && !finalContent.trim()) { alert("제목 또는 내용을 입력해주세요."); return; }
+    var assigneeName = newNote.target_assignee || profile?.name || "전체";
     var insertObj = {
       assignee: assigneeName,
       title: newNote.title.trim(),
@@ -4009,25 +4043,25 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     if (!r.error && r.data) {
       setNotes(function(prev) { return [r.data].concat(prev); });
       setShowAdd(false);
-      // ?�당?�에�?브라?��? ?�시 ?�림 ?�송
+      // 담당자에게 브라우저 푸시 알림 전송
       if (assigneeName !== (profile?.name || "")) {
         await sendPushToUser(assigneeName, {
-          title: "?�� ???�무가 배정?�어??,
-          body: (newNote.title || finalContent.split("\n")[0] || "???�무") + (newNote.due_date ? " · 마감: " + newNote.due_date : ""),
+          title: "📋 새 업무가 배정됐어요",
+          body: (newNote.title || finalContent.split("\n")[0] || "새 업무") + (newNote.due_date ? " · 마감: " + newNote.due_date : ""),
           url: window.location.origin + "?view=worknotes"
         });
       }
-      // 기업�??�동 감�? ???�동로그 ?�동 기록
+      // 기업명 자동 감지 → 활동로그 자동 기록
       var fullText = (newNote.title || "") + " " + finalContent;
       var detected = detectCompaniesInText(fullText);
       for (var i = 0; i < detected.length; i++) {
-        await logToActivity(detected[i], "?�� ?�무?�트: " + (newNote.title || newNote.content.split("\n")[0]));
+        await logToActivity(detected[i], "📝 업무노트: " + (newNote.title || newNote.content.split("\n")[0]));
       }
       setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "" });
-      // ?�이?�바 뱃�? ?�데?�트
+      // 사이드바 뱃지 업데이트
       if (onBadgeUpdate) onBadgeUpdate();
     } else if (r.error) {
-      alert("?�???�패: " + r.error.message);
+      alert("저장 실패: " + r.error.message);
     }
   };
 
@@ -4047,7 +4081,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     var r = await supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", noteId);
     if (!r.error) {
       setNotes(function(prev) { return prev.map(function(n) { return n.id === noteId ? Object.assign({}, n, { content: newContent }) : n; }); });
-      // 방금 체크 ?�료????��??기업명이 ?�으�??�동로그 기록
+      // 방금 체크 완료된 항목에 기업명이 있으면 활동로그 기록
       var prevNote = notes.find(function(n) { return n.id === noteId; });
       if (prevNote) {
         var prevLines = (prevNote.content || "").split("\n");
@@ -4055,23 +4089,24 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
         for (var i = 0; i < newLines.length; i++) {
           var prevLine = prevLines[i] || "";
           var newLine = newLines[i];
-          // ?�로 체크????�� (- [ ] ??- [x])
+          // 새로 체크된 항목 (- [ ] → - [x])
           if (/^- \[x\]/.test(newLine.trim()) && /^- \[ \]/.test(prevLine.trim())) {
             var itemText = newLine.trim().replace(/^- \[x\]\s*/, "");
             var detected = detectCompaniesInText(itemText);
             for (var j = 0; j < detected.length; j++) {
-              await logToActivity(detected[j], "???�료: " + itemText);
+              await logToActivity(detected[j], "✅ 완료: " + itemText);
             }
           }
         }
       }
-      // ?�이?�바 뱃�? ?�데?�트
+      // 사이드바 뱃지 업데이트
       if (onBadgeUpdate) onBadgeUpdate();
     }
   };
 
   var saveEdit = async function() {
-    // checkItems + freeContent�??�시 content�??�치�?    var finalContent = editNote.content || "";
+    // checkItems + freeContent를 다시 content로 합치기
+    var finalContent = editNote.content || "";
     if (editNote.checkItems !== undefined) {
       var checkLines = (editNote.checkItems || []).filter(function(i) { return (i.text || "").trim(); }).map(function(i) {
         var line = "- [" + (i.checked ? "x" : " ") + "] " + i.text.trim();
@@ -4104,7 +4139,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     var r = await supabase.from("work_notes").update({ is_done: !note.is_done, updated_at: new Date().toISOString() }).eq("id", note.id);
     if (!r.error) {
       setNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { is_done: !note.is_done }) : n; }); });
-      // ?�이?�바 뱃�? ?�데?�트
+      // 사이드바 뱃지 업데이트
       if (onBadgeUpdate) onBadgeUpdate();
     }
   };
@@ -4115,7 +4150,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   };
 
   var deleteNote = async function(id) {
-    if (!window.confirm("?��??�으�??�동?�시겠습?�까? (?��??�에??복구 가??")) return;
+    if (!window.confirm("휴지통으로 이동하시겠습니까? (휴지통에서 복구 가능)")) return;
     var r = await supabase.from("work_notes").update({ deleted_at: new Date().toISOString() }).eq("id", id);
     if (!r.error) {
       setNotes(function(prev) { return prev.filter(function(n) { return n.id !== id; }); });
@@ -4131,48 +4166,49 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     var mins = Math.floor(diff / 60000);
     var hours = Math.floor(diff / 3600000);
     var days = Math.floor(diff / 86400000);
-    if (mins < 1) return "방금 ??;
-    if (mins < 60) return mins + "�???;
-    if (hours < 24) return hours + "?�간 ??;
-    if (days === 1) return "?�제";
-    if (days < 7) return days + "????;
+    if (mins < 1) return "방금 전";
+    if (mins < 60) return mins + "분 전";
+    if (hours < 24) return hours + "시간 전";
+    if (days === 1) return "어제";
+    if (days < 7) return days + "일 전";
     return d.toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
   };
 
   if (loading) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", flexDirection: "column", gap: 16 }}>
       <div style={{ width: 36, height: 36, border: "3px solid #E8E5E0", borderTopColor: "#1A1917", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-      <span style={{ color: "#888", fontSize: 13 }}>?�무 ?�트 불러?�는 �?..</span>
+      <span style={{ color: "#888", fontSize: 13 }}>업무 노트 불러오는 중...</span>
     </div>
   );
 
   return (
     <div>
-      {/* ?�더 */}
+      {/* 헤더 */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>?�무 ?�트</h1>
-          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>메모 · ????· ?�무?��?</p>
+          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>업무 노트</h1>
+          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>메모 · 할 일 · 업무일지</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={function() { setShowAdd(true); setNewNote({ title: "", content: "", is_todo: false, pinned: false, checkItems: [] }); }}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-            <Icon name="plus" size={15} color="#F7F6F3" /> ???�트
+            <Icon name="plus" size={15} color="#F7F6F3" /> 새 노트
           </button>
           <button onClick={openTrash}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
-            ?���??��???          </button>
+            🗑️ 휴지통
+          </button>
           <button onClick={fetchNotes} style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#555", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
             <Icon name="refresh" size={13} color="#555" />
           </button>
         </div>
       </div>
 
-      {/* ?�터 */}
+      {/* 필터 */}
       <div style={{ display: "flex", gap: 16, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
         <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-          <span style={{ fontSize: 12, color: "#888" }}>?�당??</span>
-          {["?�체"].concat(ASSIGNEES).map(function(a) {
+          <span style={{ fontSize: 12, color: "#888" }}>담당자:</span>
+          {["전체"].concat(ASSIGNEES).map(function(a) {
             return (
               <div key={a} onClick={function() { setFilterAssignee(a); }}
                 style={{ padding: "5px 13px", borderRadius: 99, cursor: "pointer", fontSize: 12, fontWeight: filterAssignee === a ? 700 : 400,
@@ -4184,8 +4220,8 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
           })}
         </div>
         <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-          <span style={{ fontSize: 12, color: "#888" }}>?�형:</span>
-          {["?�체","메모","?�일"].map(function(t) {
+          <span style={{ fontSize: 12, color: "#888" }}>유형:</span>
+          {["전체","메모","할일"].map(function(t) {
             return (
               <div key={t} onClick={function() { setFilterType(t); }}
                 style={{ padding: "5px 13px", borderRadius: 99, cursor: "pointer", fontSize: 12,
@@ -4198,7 +4234,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
         </div>
       </div>
 
-      {/* ?�트 ?�정 ??(?�집 중일 ???�단 ?�체 ??���??�시) */}
+      {/* 노트 수정 폼 (편집 중일 때 상단 전체 폭으로 표시) */}
       {editingId && (
         <div style={{ marginBottom: 20 }}>
           <NoteEditCard
@@ -4211,47 +4247,47 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
         </div>
       )}
 
-      {/* ???�트 ?�성 ??*/}
+      {/* 새 노트 작성 폼 */}
       {showAdd && (
         <div style={{ background: "#F0FDF4", border: "2px solid #86EFAC", borderRadius: 12, padding: "18px 20px", marginBottom: 20 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D", marginBottom: 12 }}>?�️ ???�트 ?�성</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D", marginBottom: 12 }}>✏️ 새 노트 작성</div>
           <div style={{ display: "flex", gap: 16, marginBottom: 10 }}>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
               <input type="checkbox" checked={newNote.is_todo} onChange={function(e) { setNewNote(function(p) { return Object.assign({}, p, { is_todo: e.target.checked }); }); }} />
-              ?�� ???�로 ?�록
+              📋 할 일로 등록
             </label>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
               <input type="checkbox" checked={newNote.pinned} onChange={function(e) { setNewNote(function(p) { return Object.assign({}, p, { pinned: e.target.checked }); }); }} />
-              ?�� ?�단 고정
+              📌 상단 고정
             </label>
           </div>
           <div style={{ marginBottom: 10 }}>
             <select value={newNote.target_assignee || profile?.name || ""} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { target_assignee: v }); }); }}
               style={{ padding: "8px 12px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, background: "#fff", width: "auto" }}>
-              <option value="">?�당???�택</option>
+              <option value="">담당자 선택</option>
               {ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
             </select>
           </div>
-          <input value={newNote.title} placeholder="?�목 (?�택?�항)" onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
+          <input value={newNote.title} placeholder="제목 (선택사항)" onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
             style={{ width: "100%", padding: "10px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 14, fontWeight: 600, boxSizing: "border-box", outline: "none", marginBottom: 10, background: "#fff" }} />
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-            <label style={{ fontSize: 12, color: "#15803D", fontWeight: 600, whiteSpace: "nowrap" }}>?�� 마감??/label>
+            <label style={{ fontSize: 12, color: "#15803D", fontWeight: 600, whiteSpace: "nowrap" }}>📅 마감일</label>
             <input type="date" value={newNote.due_date || ""} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { due_date: v }); }); }}
               style={{ width: "auto", padding: "7px 10px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, background: "#fff", outline: "none" }} />
             {newNote.due_date && <button onClick={function() { setNewNote(function(p) { return Object.assign({}, p, { due_date: "" }); }); }}
-              style={{ background: "none", border: "none", cursor: "pointer", color: "#AAA", fontSize: 14 }}>??/button>}
+              style={{ background: "none", border: "none", cursor: "pointer", color: "#AAA", fontSize: 14 }}>✕</button>}
           </div>
-          {/* 체크리스????��??*/}
+          {/* 체크리스트 항목들 */}
           {newNote.checkItems && newNote.checkItems.length > 0 && (
             <div style={{ border: "1px solid #86EFAC", borderRadius: 8, padding: "10px 12px", marginBottom: 8, background: "#fff" }}>
               {newNote.checkItems.map(function(item, idx) {
                 return (
                   <div key={idx} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
                     <input type="checkbox" disabled style={{ width: 15, height: 15, flexShrink: 0 }} />
-                    <input type="text" value={item.text || ""} placeholder={"??�� " + (idx + 1) + " (?? ?�크립트 ?�성)"}
+                    <input type="text" value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성)"}
                       onChange={function(e) { var v = e.target.value; setNewNote(function(p) { var items = p.checkItems.slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); }}
                       style={{ flex: 1, border: "none", outline: "none", fontSize: 13, background: "transparent" }} autoFocus={idx === newNote.checkItems.length - 1} />
-                    <input type="date" value={item.dueDate || ""} title="????��??마감??(?�택)"
+                    <input type="date" value={item.dueDate || ""} title="이 항목의 마감일 (선택)"
                       onChange={function(e) { var v = e.target.value; setNewNote(function(p) { var items = p.checkItems.slice(); items[idx] = Object.assign({}, items[idx], { dueDate: v }); return Object.assign({}, p, { checkItems: items }); }); }}
                       style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, color: "#4338CA", outline: "none", width: 130 }} />
                     <button onClick={function() { setNewNote(function(p) { var items = p.checkItems.filter(function(_, i) { return i !== idx; }); return Object.assign({}, p, { checkItems: items }); }); }}
@@ -4261,7 +4297,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
               })}
             </div>
           )}
-          {/* 체크리스??버튼 + textarea */}
+          {/* 체크리스트 버튼 + textarea */}
           <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
             <button onClick={function() {
               setNewNote(function(p) {
@@ -4269,43 +4305,43 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
                 return Object.assign({}, p, { checkItems: items, is_todo: true });
               });
             }} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", background: "#fff", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, color: "#15803D", fontWeight: 600, cursor: "pointer" }}>
-              ?�️ 체크리스????�� 추�?
+              ☑️ 체크리스트 항목 추가
             </button>
             <span style={{ fontSize: 10, color: "#888", alignSelf: "center", lineHeight: 1.4 }}>
-              ?�� 직접 ?�력 ?? <code style={{ background: "#F0EDE8", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>- [ ] ?�일 [5/30]</code> ?�는 <code style={{ background: "#F0EDE8", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>- [ ] ?�일 ??5/30</code>
+              💡 직접 입력 시: <code style={{ background: "#F0EDE8", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>- [ ] 할일 [5/30]</code> 또는 <code style={{ background: "#F0EDE8", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>- [ ] 할일 → 5/30</code>
             </span>
           </div>
-          <textarea value={newNote.content} placeholder={newNote.checkItems && newNote.checkItems.length > 0 ? "추�? 메모 (?�택?�항)..." : "?�용???�유�?�� ?�력?�세?? ?�무 메모, ?�늘 ???? 주의?�항 ??.."} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { content: v }); }); }} rows={newNote.checkItems && newNote.checkItems.length > 0 ? 2 : 6}
+          <textarea value={newNote.content} placeholder={newNote.checkItems && newNote.checkItems.length > 0 ? "추가 메모 (선택사항)..." : "내용을 자유롭게 입력하세요. 업무 메모, 오늘 할 일, 주의사항 등..."} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { content: v }); }); }} rows={newNote.checkItems && newNote.checkItems.length > 0 ? 2 : 6}
             style={{ width: "100%", padding: "12px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, lineHeight: 1.75, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff" }} />
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-            <button onClick={saveNew} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "10px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>?�??/button>
+            <button onClick={saveNew} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "10px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
             <button onClick={function() { setShowAdd(false); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 16px", fontSize: 13, cursor: "pointer" }}>취소</button>
           </div>
         </div>
       )}
 
-      {/* ?�트 목록 */}
+      {/* 노트 목록 */}
       {filtered.length === 0 ? (
         <div style={{ textAlign: "center", color: "#CCC", fontSize: 14, padding: "80px 0" }}>
-          <div style={{ fontSize: 40, marginBottom: 12 }}>?��</div>
-          ?�직 ?�성???�트가 ?�어??<br />
-          <span style={{ fontSize: 13 }}>"???�트" 버튼???�러 �?메모�??�겨보세??</span>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>📝</div>
+          아직 작성된 노트가 없어요.<br />
+          <span style={{ fontSize: 13 }}>"새 노트" 버튼을 눌러 첫 메모를 남겨보세요!</span>
         </div>
       ) : (
         <div>
-          {/* 고정 ?�트 */}
+          {/* 고정 노트 */}
           {pinned.length > 0 && (
             <div style={{ marginBottom: 20 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#B45309", letterSpacing: "0.05em", marginBottom: 10 }}>?�� 고정???�트</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#B45309", letterSpacing: "0.05em", marginBottom: 10 }}>📌 고정된 노트</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
                 {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} />; })}
               </div>
             </div>
           )}
-          {/* ?�반 ?�트 */}
+          {/* 일반 노트 */}
           {unpinned.length > 0 && (
             <div>
-              {pinned.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: "#888", letterSpacing: "0.05em", marginBottom: 10 }}>?�체 ?�트</div>}
+              {pinned.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: "#888", letterSpacing: "0.05em", marginBottom: 10 }}>전체 노트</div>}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
                 {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} />; })}
               </div>
@@ -4314,13 +4350,13 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
         </div>
       )}
 
-      {/* ?��???모달 */}
+      {/* 휴지통 모달 */}
       {showTrash && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
           onClick={function(e) { if (e.target === e.currentTarget) setShowTrash(false); }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 560, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
-              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>?���??�무?�트 ?��???({trashedNotes.length}�?</h2>
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ 업무노트 휴지통 ({trashedNotes.length}건)</h2>
               <button onClick={function() { setShowTrash(false); }} style={{ background: "none", border: "none", cursor: "pointer" }}>
                 <Icon name="x" size={18} color="#888" />
               </button>
@@ -4328,8 +4364,8 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div style={{ padding: "16px 24px" }}>
               {trashedNotes.length === 0 ? (
                 <div style={{ textAlign: "center", padding: "40px 0", color: "#CCC", fontSize: 14 }}>
-                  <div style={{ fontSize: 36, marginBottom: 10 }}>?���?/div>
-                  ?��??�이 비어 ?�습?�다
+                  <div style={{ fontSize: 36, marginBottom: 10 }}>🗑️</div>
+                  휴지통이 비어 있습니다
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -4339,8 +4375,8 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
                       <div key={note.id} style={{ background: "#F7F6F3", borderRadius: 10, padding: "14px 16px", border: "1px solid #E8E5E0" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
                           <div>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: "#1A1917", marginBottom: 2 }}>{note.title || "(?�목 ?�음)"}</div>
-                            <div style={{ fontSize: 11, color: "#AAA" }}>{note.assignee} · ??��?? {deletedAt}</div>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: "#1A1917", marginBottom: 2 }}>{note.title || "(제목 없음)"}</div>
+                            <div style={{ fontSize: 11, color: "#AAA" }}>{note.assignee} · 삭제일: {deletedAt}</div>
                           </div>
                           <div style={{ display: "flex", gap: 6 }}>
                             <button onClick={function() { restoreNote(note.id); }}
@@ -4349,7 +4385,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
                             </button>
                             <button onClick={function() { permanentDeleteNote(note.id); }}
                               style={{ background: "#FEF2F2", color: "#DC2626", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
-                              ?�전??��
+                              완전삭제
                             </button>
                           </div>
                         </div>
@@ -4370,10 +4406,10 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     </div>
   );
 }
-// ?�?� ?�산관�??�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 정산관리 ──────────────────────────────────────────────────────────────────
 function SettlementView() {
-  const [cases, setCases] = useState([]);       // ?�동 (agency_cases)
-  const [manuals, setManuals] = useState([]);   // ?�동 (settlement_manual)
+  const [cases, setCases] = useState([]);       // 자동 (agency_cases)
+  const [manuals, setManuals] = useState([]);   // 수동 (settlement_manual)
   const [loading, setLoading] = useState(true);
   const [activeMonth, setActiveMonth] = useState(new Date().getMonth() + 1);
   const [editingId, setEditingId] = useState(null);
@@ -4387,7 +4423,7 @@ function SettlementView() {
   var fetchData = async function() {
     setLoading(true);
     var r1 = await supabase.from("agency_cases").select("*")
-      .in("status", ["?�인","?�정","?�료","?�금집행?�료"])
+      .in("status", ["승인","약정","완료","자금집행완료"])
       .order("created_at", { ascending: false });
     var r2 = await supabase.from("settlement_manual").select("*")
       .is("deleted_at", null)
@@ -4397,7 +4433,7 @@ function SettlementView() {
     setLoading(false);
   };
 
-  // ?�동 + ?�동 ?�산 (?�재 ??
+  // 자동 + 수동 합산 (현재 월)
   var filteredAuto = useMemo(function() {
     return cases.filter(function(c) { return c.month === activeMonth && c.year === 2026 && !c.deleted_at; });
   }, [cases, activeMonth]);
@@ -4412,7 +4448,8 @@ function SettlementView() {
     return auto.concat(manual);
   }, [filteredAuto, filteredManual]);
 
-  // ????�� - ?�이???�는 ??  var monthsWithData = useMemo(function() {
+  // 월 탭용 - 데이터 있는 월
+  var monthsWithData = useMemo(function() {
     var s = new Set();
     cases.forEach(function(c) { if (c.year === 2026 && !c.deleted_at) s.add(c.month); });
     manuals.forEach(function(m) { if (m.year === 2026) s.add(m.month); });
@@ -4427,14 +4464,14 @@ function SettlementView() {
   var formatAmt = function(v) {
     var n = typeof v === "number" ? v : parseAmt(v);
     if (!n || n === 0) return "-";
-    if (n >= 100000000) return (n / 100000000).toFixed(1) + "??;
+    if (n >= 100000000) return (n / 100000000).toFixed(1) + "억";
     if (n >= 10000000) return (n / 10000000).toFixed(0) + "천만";
     if (n >= 1000000) return (n / 1000000).toFixed(0) + "백만";
-    if (n >= 10000) return (n / 10000).toFixed(0) + "�?;
-    return n.toLocaleString() + "??;
+    if (n >= 10000) return (n / 10000).toFixed(0) + "만";
+    return n.toLocaleString() + "원";
   };
 
-  // KPI ?�산
+  // KPI 합산
   var monthSummary = useMemo(function() {
     var totalCommission = 0;
     var totalReceived = 0;
@@ -4453,7 +4490,8 @@ function SettlementView() {
     };
   }, [allFiltered, filteredAuto, filteredManual]);
 
-  // ?�동 �??�??  var saveEditAuto = async function() {
+  // 자동 건 저장
+  var saveEditAuto = async function() {
     var updates = {
       contract_fee: editData.contract_fee || null,
       contract_date: editData.contract_date || null,
@@ -4473,7 +4511,8 @@ function SettlementView() {
     }
   };
 
-  // ?�동 �??�??  var saveEditManual = async function() {
+  // 수동 건 저장
+  var saveEditManual = async function() {
     var updates = {
       business_name: editData.business_name || null,
       agency_group: editData.agency_group || null,
@@ -4501,21 +4540,21 @@ function SettlementView() {
     else saveEditAuto();
   };
 
-  // ?�동 �???��
+  // 수동 건 삭제
   var deleteManual = async function(id) {
-    if (!window.confirm("??��?�시겠습?�까?")) return;
+    if (!window.confirm("삭제하시겠습니까?")) return;
     var r = await supabase.from("settlement_manual").update({ deleted_at: new Date().toISOString() }).eq("id", id);
     if (!r.error) setManuals(function(prev) { return prev.filter(function(m) { return m.id !== id; }); });
   };
 
-  // ?�동 ?�규 ?�록
+  // 수동 신규 등록
   var openAddManual = function() {
     setNewManual({ year: 2026, month: activeMonth, business_name: "", agency_group: "", assignee: "", request_amount: "", contract_fee: "", commission_fee: "", received_amount: "", contract_date: "", invoice_issued: false, fee_received: false, fee_received_date: "", settlement_notes: "" });
     setShowAddManual(true);
   };
 
   var saveNewManual = async function() {
-    if (!newManual.business_name) { alert("?�업?�명?� ?�수?�니??"); return; }
+    if (!newManual.business_name) { alert("사업자명은 필수입니다."); return; }
     var dataToSave = Object.assign({}, newManual, {
       contract_date: newManual.contract_date || null,
       fee_received_date: newManual.fee_received_date || null,
@@ -4525,18 +4564,19 @@ function SettlementView() {
       setManuals(function(prev) { return prev.concat([r.data]); });
       setShowAddManual(false);
     } else {
-      alert("?�???�패: " + (r.error ? r.error.message : ""));
+      alert("저장 실패: " + (r.error ? r.error.message : ""));
     }
   };
 
   if (loading) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", flexDirection: "column", gap: 16 }}>
       <div style={{ width: 36, height: 36, border: "3px solid #E8E5E0", borderTopColor: "#1A1917", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-      <span style={{ color: "#888", fontSize: 13 }}>?�산 ?�이??불러?�는 �?..</span>
+      <span style={{ color: "#888", fontSize: 13 }}>정산 데이터 불러오는 중...</span>
     </div>
   );
 
-  // 공통 ?�집 ???�더�?  var renderEditRow = function(row, idx) {
+  // 공통 편집 행 렌더링
+  var renderEditRow = function(row, idx) {
     var isManual = row._source === "manual";
     return (
       <tr key={row.id + "-edit"} style={{ borderBottom: "1px solid #F0EDE8", background: "#FEFCE8" }}>
@@ -4549,7 +4589,7 @@ function SettlementView() {
         <td style={{ padding: "6px 8px" }}>
           {isManual
             ? <select value={editData.agency_group || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { agency_group: e.target.value }); }); }} style={{ width: 80, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11 }}>
-                <option value="">?�택</option>
+                <option value="">선택</option>
                 {AGENCY_GROUPS.map(function(g) { return <option key={g.id} value={g.id}>{g.label}</option>; })}
               </select>
             : <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 99, background: "#EEF2FF", color: "#4338CA", fontWeight: 600 }}>{row.agency_group}</span>}
@@ -4557,7 +4597,7 @@ function SettlementView() {
         <td style={{ padding: "6px 8px" }}>
           {isManual
             ? <select value={editData.assignee || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { assignee: e.target.value }); }); }} style={{ width: 70, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11 }}>
-                <option value="">?�택</option>
+                <option value="">선택</option>
                 {ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
               </select>
             : <span style={{ fontSize: 12, color: "#555" }}>{row.assignee || "-"}</span>}
@@ -4568,13 +4608,13 @@ function SettlementView() {
             : <span style={{ fontSize: 12, color: "#555" }}>{row.request_amount || "-"}</span>}
         </td>
         <td style={{ padding: "6px 8px" }}>
-          <input value={editData.contract_fee || ""} placeholder="계약�? onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { contract_fee: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
+          <input value={editData.contract_fee || ""} placeholder="계약금" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { contract_fee: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
         </td>
         <td style={{ padding: "6px 8px" }}>
-          <input value={editData.commission_fee || ""} placeholder="?�수�? onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { commission_fee: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
+          <input value={editData.commission_fee || ""} placeholder="수수료" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { commission_fee: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
         </td>
         <td style={{ padding: "6px 8px" }}>
-          <input value={editData.received_amount || ""} placeholder="?�금금액" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { received_amount: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
+          <input value={editData.received_amount || ""} placeholder="입금금액" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { received_amount: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
         </td>
         <td style={{ padding: "6px 8px" }}>
           <input type="date" value={editData.contract_date || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { contract_date: e.target.value }); }); }} style={{ width: 115, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
@@ -4593,7 +4633,7 @@ function SettlementView() {
         </td>
         <td style={{ padding: "6px 8px", textAlign: "center" }}>
           <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
-            <button onClick={saveEdit} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 4, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>?�??/button>
+            <button onClick={saveEdit} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 4, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>저장</button>
             <button onClick={function() { setEditingId(null); setEditData({}); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 4, padding: "3px 6px", fontSize: 11, cursor: "pointer" }}>취소</button>
           </div>
         </td>
@@ -4601,13 +4641,14 @@ function SettlementView() {
     );
   };
 
-  // ?�기 ???�더�?  var renderReadRow = function(row, idx) {
+  // 읽기 행 렌더링
+  var renderReadRow = function(row, idx) {
     var isManual = row._source === "manual";
     return (
       <tr key={row.id} style={{ borderBottom: "1px solid #F0EDE8", background: idx % 2 === 0 ? "#fff" : "#FAFAF8" }}>
         <td style={{ padding: "9px 8px", color: "#AAA", fontSize: 11, textAlign: "center" }}>
           {isManual
-            ? <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 99, background: "#FFF7ED", color: "#C2410C", fontWeight: 700 }}>?�동</span>
+            ? <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 99, background: "#FFF7ED", color: "#C2410C", fontWeight: 700 }}>수동</span>
             : idx + 1}
         </td>
         <td style={{ padding: "9px 8px", fontWeight: 600, whiteSpace: "nowrap" }}>{row.business_name || "-"}</td>
@@ -4617,24 +4658,24 @@ function SettlementView() {
         <td style={{ padding: "9px 8px", fontSize: 12, color: "#555" }}>{row.assignee || "-"}</td>
         <td style={{ padding: "9px 8px", fontSize: 12, color: "#555" }}>{row.request_amount || "-"}</td>
         <td style={{ padding: "9px 8px" }}>
-          {row.contract_fee ? <span style={{ fontSize: 12, fontWeight: 700, color: "#333" }}>{row.contract_fee}</span> : <span style={{ fontSize: 11, color: "#CCC" }}>미입??/span>}
+          {row.contract_fee ? <span style={{ fontSize: 12, fontWeight: 700, color: "#333" }}>{row.contract_fee}</span> : <span style={{ fontSize: 11, color: "#CCC" }}>미입력</span>}
         </td>
         <td style={{ padding: "9px 8px" }}>
-          {row.commission_fee ? <span style={{ fontSize: 12, fontWeight: 700, color: "#7C3AED" }}>{row.commission_fee}</span> : <span style={{ fontSize: 11, color: "#CCC" }}>미입??/span>}
+          {row.commission_fee ? <span style={{ fontSize: 12, fontWeight: 700, color: "#7C3AED" }}>{row.commission_fee}</span> : <span style={{ fontSize: 11, color: "#CCC" }}>미입력</span>}
         </td>
         <td style={{ padding: "9px 8px" }}>
-          {row.received_amount ? <span style={{ fontSize: 12, fontWeight: 700, color: "#047857" }}>{row.received_amount}</span> : <span style={{ fontSize: 11, color: "#CCC" }}>미입??/span>}
+          {row.received_amount ? <span style={{ fontSize: 12, fontWeight: 700, color: "#047857" }}>{row.received_amount}</span> : <span style={{ fontSize: 11, color: "#CCC" }}>미입력</span>}
         </td>
         <td style={{ padding: "9px 8px", fontSize: 11, color: "#888" }}>{row.contract_date || "-"}</td>
         <td style={{ padding: "9px 8px", textAlign: "center" }}>
           {row.invoice_issued
-            ? <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#ECFDF5", color: "#047857", fontWeight: 600 }}>발행?�료</span>
-            : <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#F7F6F3", color: "#AAA" }}>미발??/span>}
+            ? <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#ECFDF5", color: "#047857", fontWeight: 600 }}>발행완료</span>
+            : <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#F7F6F3", color: "#AAA" }}>미발행</span>}
         </td>
         <td style={{ padding: "9px 8px", textAlign: "center" }}>
           {row.fee_received
-            ? <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#ECFDF5", color: "#047857", fontWeight: 600 }}>?�금?�료</span>
-            : <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#FFF7ED", color: "#C2410C" }}>미입�?/span>}
+            ? <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#ECFDF5", color: "#047857", fontWeight: 600 }}>입금완료</span>
+            : <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#FFF7ED", color: "#C2410C" }}>미입금</span>}
         </td>
         <td style={{ padding: "9px 8px", fontSize: 11, color: "#888" }}>{row.fee_received_date || "-"}</td>
         <td style={{ padding: "9px 8px", fontSize: 11, color: "#555", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.settlement_notes || "-"}</td>
@@ -4660,20 +4701,20 @@ function SettlementView() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>?�산관�?/h1>
-          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>계약�?· ?�수�?· ?�금계산??관�?/p>
+          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>정산관리</h1>
+          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>계약금 · 수수료 · 세금계산서 관리</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={openAddManual} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-            <Icon name="plus" size={15} color="#F7F6F3" /> 직접 ?�록
+            <Icon name="plus" size={15} color="#F7F6F3" /> 직접 등록
           </button>
           <button onClick={fetchData} style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#555", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
-            <Icon name="refresh" size={13} color="#555" /> ?�로고침
+            <Icon name="refresh" size={13} color="#555" /> 새로고침
           </button>
         </div>
       </div>
 
-      {/* ????*/}
+      {/* 월 탭 */}
       <div style={{ display: "flex", gap: 4, marginBottom: 18, flexWrap: "wrap" }}>
         {MONTHS_LIST.map(function(m) {
           var isActive = activeMonth === m;
@@ -4684,7 +4725,7 @@ function SettlementView() {
                 background: isActive ? "#1A1917" : has ? "#fff" : "#F7F6F3",
                 color: isActive ? "#fff" : has ? "#333" : "#CCC",
                 border: isActive ? "none" : has ? "1px solid #E8E5E0" : "1px solid #EDEBE8" }}>
-              {m}??has && !isActive ? " ?? : ""}
+              {m}월{has && !isActive ? " ●" : ""}
             </div>
           );
         })}
@@ -4693,11 +4734,11 @@ function SettlementView() {
       {/* KPI 카드 */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
         {[
-          { label: "�?건수", value: monthSummary.total + "�?, color: "#4338CA", sub: "?�동 " + monthSummary.autoCount + " · ?�동 " + monthSummary.manualCount },
-          { label: "?�수�??�정", value: monthSummary.commissionSet + "�?, color: "#047857", sub: "?�수�??�력 ?�료" },
-          { label: "?�금 ?�료", value: monthSummary.depositDone + "�?, color: "#7C3AED", sub: "?�수�??�령 ?�료" },
-          { label: "?�상 ??매출", value: formatAmt(monthSummary.totalCommission), color: "#B45309", sub: "?�수�??�산" },
-          { label: "?�제 ?�금??, value: formatAmt(monthSummary.totalReceived), color: "#047857", sub: "?�금금액 ?�산" },
+          { label: "총 건수", value: monthSummary.total + "건", color: "#4338CA", sub: "자동 " + monthSummary.autoCount + " · 수동 " + monthSummary.manualCount },
+          { label: "수수료 설정", value: monthSummary.commissionSet + "건", color: "#047857", sub: "수수료 입력 완료" },
+          { label: "입금 완료", value: monthSummary.depositDone + "건", color: "#7C3AED", sub: "수수료 수령 완료" },
+          { label: "예상 월 매출", value: formatAmt(monthSummary.totalCommission), color: "#B45309", sub: "수수료 합산" },
+          { label: "실제 입금액", value: formatAmt(monthSummary.totalReceived), color: "#047857", sub: "입금금액 합산" },
         ].map(function(k, i) {
           return (
             <div key={i} style={{ background: "#fff", borderRadius: 10, padding: "16px 18px", border: "1px solid #E8E5E0" }}>
@@ -4709,18 +4750,18 @@ function SettlementView() {
         })}
       </div>
 
-      {/* ?�이�?*/}
+      {/* 테이블 */}
       <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
         {allFiltered.length === 0 ? (
           <div style={{ padding: "60px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>
-            {activeMonth}???�이?��? ?�습?�다. 직접 ?�록?�거??기�?�??�황?�서 ?�인 ?�태�?변경해주세??
+            {activeMonth}월 데이터가 없습니다. 직접 등록하거나 기관별 현황에서 승인 상태로 변경해주세요.
           </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ background: "#F7F6F3", borderBottom: "2px solid #E8E5E0" }}>
-                  {["#","?�업?�명","기�?","?�당??,"?�청금액","계약�?,"?�수�?,"?�금금액","계약??,"?�금계산??,"?�금?�료","?�금??,"비고","?�업"].map(function(h) {
+                  {["#","사업자명","기관","담당자","신청금액","계약금","수수료","입금금액","계약일","세금계산서","입금완료","입금일","비고","작업"].map(function(h) {
                     return <th key={h} style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, whiteSpace: "nowrap" }}>{h}</th>;
                   })}
                 </tr>
@@ -4735,45 +4776,45 @@ function SettlementView() {
         )}
       </div>
 
-      {/* 직접 ?�록 모달 */}
+      {/* 직접 등록 모달 */}
       {showAddManual && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
           onClick={function(e) { if (e.target === e.currentTarget) setShowAddManual(false); }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 520, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
-              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>?�산 직접 ?�록 ({activeMonth}??</h2>
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>정산 직접 등록 ({activeMonth}월)</h2>
               <button onClick={function() { setShowAddManual(false); }} style={{ background: "none", border: "none", cursor: "pointer" }}><Icon name="x" size={18} color="#888" /></button>
             </div>
             <div style={{ padding: "20px 24px" }}>
               <div style={{ marginBottom: 13 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>?�업?�명 *</label>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>사업자명 *</label>
                 <input value={newManual.business_name || ""} onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { business_name: e.target.value }); }); }}
                   style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 13 }}>
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>기�?</label>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>기관</label>
                   <select value={newManual.agency_group || ""} onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { agency_group: e.target.value }); }); }}
                     style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>
-                    <option value="">?�택</option>
+                    <option value="">선택</option>
                     {AGENCY_GROUPS.map(function(g) { return <option key={g.id} value={g.id}>{g.label}</option>; })}
                   </select>
                 </div>
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>?�당??/label>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>담당자</label>
                   <select value={newManual.assignee || ""} onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { assignee: e.target.value }); }); }}
                     style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>
-                    <option value="">?�택</option>
+                    <option value="">선택</option>
                     {ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
                   </select>
                 </div>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 13 }}>
-                {[["?�청금액","request_amount"],["계약�?,"contract_fee"],["?�수�?,"commission_fee"]].map(function(f) {
+                {[["신청금액","request_amount"],["계약금","contract_fee"],["수수료","commission_fee"]].map(function(f) {
                   return (
                     <div key={f[1]}>
                       <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>{f[0]}</label>
-                      <input value={newManual[f[1]] || ""} placeholder="?? 300�? onChange={function(e) { var k = f[1]; setNewManual(function(p) { return Object.assign({}, p, { [k]: e.target.value }); }); }}
+                      <input value={newManual[f[1]] || ""} placeholder="예: 300만" onChange={function(e) { var k = f[1]; setNewManual(function(p) { return Object.assign({}, p, { [k]: e.target.value }); }); }}
                         style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
                     </div>
                   );
@@ -4781,12 +4822,12 @@ function SettlementView() {
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 13 }}>
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>?�금금액</label>
-                  <input value={newManual.received_amount || ""} placeholder="?? 300�? onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { received_amount: e.target.value }); }); }}
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>입금금액</label>
+                  <input value={newManual.received_amount || ""} placeholder="예: 300만" onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { received_amount: e.target.value }); }); }}
                     style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
                 </div>
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>계약??/label>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>계약일</label>
                   <input type="date" value={newManual.contract_date || ""} onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { contract_date: e.target.value }); }); }}
                     style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
                 </div>
@@ -4794,16 +4835,16 @@ function SettlementView() {
               <div style={{ display: "flex", gap: 20, marginBottom: 13 }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
                   <input type="checkbox" checked={newManual.invoice_issued || false} onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { invoice_issued: e.target.checked }); }); }} />
-                  ?�금계산??발행?�료
+                  세금계산서 발행완료
                 </label>
                 <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
                   <input type="checkbox" checked={newManual.fee_received || false} onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { fee_received: e.target.checked }); }); }} />
-                  ?�금?�료
+                  입금완료
                 </label>
               </div>
               {newManual.fee_received && (
                 <div style={{ marginBottom: 13 }}>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>?�금??/label>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>입금일</label>
                   <input type="date" value={newManual.fee_received_date || ""} onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { fee_received_date: e.target.value }); }); }}
                     style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
                 </div>
@@ -4814,7 +4855,7 @@ function SettlementView() {
                   style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, resize: "vertical", boxSizing: "border-box", outline: "none" }} />
               </div>
               <button onClick={saveNewManual} style={{ width: "100%", padding: "13px", background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
-                ?�록?�기
+                등록하기
               </button>
             </div>
           </div>
@@ -4825,9 +4866,9 @@ function SettlementView() {
 }
 const MONTHS_LIST = [1,2,3,4,5,6,7,8,9,10,11,12];
 
-// ?�?� 캘린??(구�? 캘린???�동 + ?�로???�림) ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+// ── 캘린더 (구글 캘린더 연동 + 팔로업 알림) ───────────────────────────────────
 const GOOGLE_CLIENT_ID = "675906307078-pl29fdq2uuqj2011qn4arjc6u1uvkbq3.apps.googleusercontent.com";
-const FOLLOWUP_STAGES = ["기�??�청?�료/방문?�료", "?�태조사?�료/?�정?�료", "?�사�??�태조사?��?];
+const FOLLOWUP_STAGES = ["기관신청완료/방문완료", "실태조사완료/약정완료", "심사중/실태조사대기"];
 
 function CalendarView({ companies, onSelectCompany, profile }) {
   const today = new Date();
@@ -4842,52 +4883,52 @@ function CalendarView({ companies, onSelectCompany, profile }) {
   const [showAddEvent, setShowAddEvent] = useState(false);
   const [newEvent, setNewEvent] = useState({ title: "", date: "", time: "", memo: "", sheet: "yangho", color: "9" });
   const [gToken, setGToken] = useState("");
-  // 구�? 캘린??공식 ?�상 11가지 (colorId 1~11)
+  // 구글 캘린더 공식 색상 11가지 (colorId 1~11)
   const EVENT_COLORS = [
-    { id: "1",  label: "?�벤??,   bg: "#7986CB", light: "#E8EAF6" },
-    { id: "2",  label: "?�이지",   bg: "#33B679", light: "#E0F2E9" },
-    { id: "3",  label: "그레?�프", bg: "#8E24AA", light: "#F3E5F5" },
-    { id: "4",  label: "?�라밍고", bg: "#E67C73", light: "#FCE4EC" },
-    { id: "5",  label: "바나??,   bg: "#F6BF26", light: "#FFF8E1" },
-    { id: "6",  label: "?��?�?,   bg: "#F4511E", light: "#FFEBE0" },
-    { id: "7",  label: "?�콕",     bg: "#039BE5", light: "#E1F5FE" },
-    { id: "8",  label: "그래?�이??, bg: "#616161", light: "#EEEEEE" },
+    { id: "1",  label: "라벤더",   bg: "#7986CB", light: "#E8EAF6" },
+    { id: "2",  label: "세이지",   bg: "#33B679", light: "#E0F2E9" },
+    { id: "3",  label: "그레이프", bg: "#8E24AA", light: "#F3E5F5" },
+    { id: "4",  label: "플라밍고", bg: "#E67C73", light: "#FCE4EC" },
+    { id: "5",  label: "바나나",   bg: "#F6BF26", light: "#FFF8E1" },
+    { id: "6",  label: "탠저린",   bg: "#F4511E", light: "#FFEBE0" },
+    { id: "7",  label: "피콕",     bg: "#039BE5", light: "#E1F5FE" },
+    { id: "8",  label: "그래파이트", bg: "#616161", light: "#EEEEEE" },
     { id: "9",  label: "블루베리", bg: "#3F51B5", light: "#E8EAF6" },
     { id: "10", label: "바질",     bg: "#0B8043", light: "#E0F2E9" },
-    { id: "11", label: "?�마??,   bg: "#D50000", light: "#FFEBEE" },
+    { id: "11", label: "토마토",   bg: "#D50000", light: "#FFEBEE" },
   ];
   const getColorById = function(id) {
     var c = EVENT_COLORS.find(function(x) { return x.id === String(id); });
     return c || EVENT_COLORS[8]; // 기본: 블루베리
   };
   const todayStr = today.toISOString().slice(0, 10);
-  const MONTH_NAMES = ["1??,"2??,"3??,"4??,"5??,"6??,"7??,"8??,"9??,"10??,"11??,"12??];
-  const DAY_NAMES = ["??,"??,"??,"??,"�?,"�?,"??];
+  const MONTH_NAMES = ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"];
+  const DAY_NAMES = ["일","월","화","수","목","금","토"];
   const firstDay = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
 
-  // 커스?� ?�정 불러?�기
+  // 커스텀 일정 불러오기
   useEffect(function() {
     supabase.from("calendar_events").select("*").order("created_at", { ascending: false })
       .then(function(r) { if (!r.error && r.data) setCustomEvents(r.data); });
   }, []);
 
   var saveEvent = async function() {
-    if (!newEvent.title || !newEvent.date) { alert("?�목�??�짜�??�력?�주?�요."); return; }
+    if (!newEvent.title || !newEvent.date) { alert("제목과 날짜를 입력해주세요."); return; }
     var googleEventId = null;
-    // 구�? 캘린?�에???�시 ?�록 (?�결???�으�?
+    // 구글 캘린더에도 동시 등록 (연결돼 있으면)
     if (gToken) {
       try {
         var startObj, endObj;
         if (newEvent.time) {
-          // ?�간 ?�는 ?�정: 1?�간 기본
+          // 시간 있는 일정: 1시간 기본
           var startISO = newEvent.date + "T" + newEvent.time + ":00";
           var startD = new Date(startISO);
           var endD = new Date(startD.getTime() + 60 * 60 * 1000);
           startObj = { dateTime: startD.toISOString(), timeZone: "Asia/Seoul" };
           endObj = { dateTime: endD.toISOString(), timeZone: "Asia/Seoul" };
         } else {
-          // 종일 ?�정
+          // 종일 일정
           startObj = { date: newEvent.date };
           endObj = { date: newEvent.date };
         }
@@ -4914,7 +4955,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
     }).select().single();
     if (!r.error && r.data) {
       setCustomEvents(function(prev) { return [r.data].concat(prev); });
-      // 구�????�록??경우 즉시 googleEvents?�도 추�?
+      // 구글에 등록된 경우 즉시 googleEvents에도 추가
       if (googleEventId) {
         setGoogleEvents(function(prev) { return prev.concat([{
           title: newEvent.title, date: newEvent.date, time: newEvent.time || "",
@@ -4924,11 +4965,11 @@ function CalendarView({ companies, onSelectCompany, profile }) {
       setNewEvent({ title: "", date: "", time: "", memo: "", sheet: calSheet, color: "9" });
       setShowAddEvent(false);
     } else {
-      alert("?�???�패: " + (r.error ? r.error.message : ""));
+      alert("저장 실패: " + (r.error ? r.error.message : ""));
     }
   };
 
-  // CRM ?�정 ?�상 ?�데?�트 (구�??�도 반영)
+  // CRM 일정 색상 업데이트 (구글에도 반영)
   var updateEventColor = async function(eventId, colorId) {
     var ev = customEvents.find(function(e) { return e.id === eventId; });
     var r = await supabase.from("calendar_events").update({ color: colorId }).eq("id", eventId);
@@ -4939,7 +4980,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
     }
   };
 
-  // 구�? 캘린???�정 ?�상 직접 ?�데?�트
+  // 구글 캘린더 일정 색상 직접 업데이트
   var updateGoogleEventColor = async function(googleEventId, colorId) {
     if (!gToken || !googleEventId) return;
     try {
@@ -4953,15 +4994,15 @@ function CalendarView({ companies, onSelectCompany, profile }) {
           return prev.map(function(e) { return e.googleEventId === googleEventId ? Object.assign({}, e, { color: colorId }) : e; });
         });
       } else {
-        alert("구�? ?�정 ?�상 변�??�패. ?�시 ?�동?�주?�요.");
+        alert("구글 일정 색상 변경 실패. 다시 연동해주세요.");
       }
     } catch (err) {
-      alert("구�? ?�정 ?�상 변�??�패: " + err.message);
+      alert("구글 일정 색상 변경 실패: " + err.message);
     }
   };
 
   var deleteEvent = async function(id) {
-    if (!window.confirm("???�정????��?�까??")) return;
+    if (!window.confirm("이 일정을 삭제할까요?")) return;
     await supabase.from("calendar_events").delete().eq("id", id);
     setCustomEvents(function(prev) { return prev.filter(function(e) { return e.id !== id; }); });
   };
@@ -4969,7 +5010,8 @@ function CalendarView({ companies, onSelectCompany, profile }) {
   const prevMonth = () => { if (month === 0) { setYear(y=>y-1); setMonth(11); } else setMonth(m=>m-1); };
   const nextMonth = () => { if (month === 11) { setYear(y=>y+1); setMonth(0); } else setMonth(m=>m+1); };
 
-  // CRM ???�락 ?�정???�벤??  const crmEventsByDate = useMemo(() => {
+  // CRM 내 연락 예정일 이벤트
+  const crmEventsByDate = useMemo(() => {
     const map = {};
     companies.forEach(c => {
       if (c.next_contact) {
@@ -4980,7 +5022,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
     return map;
   }, [companies]);
 
-  // ?�로???�요 �?(기�?방문/?�태조사 ?�음??
+  // 팔로업 필요 건 (기관방문/실태조사 다음날)
   const followupList = useMemo(() => {
     return companies.filter(c =>
       FOLLOWUP_STAGES.includes(c.stage) &&
@@ -4988,21 +5030,22 @@ function CalendarView({ companies, onSelectCompany, profile }) {
     );
   }, [companies, todayStr]);
 
-  // ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
-  // 구�? 캘린???�구 ?�동 (OAuth Code Flow + Supabase DB ?�큰 ?�??
-  // - ?�호 캘린??/ ?�사??캘린??2개�? 분리 ?�??  // - calSheet 변?�에 ?�라 ?�절???�큰 조회 (yangho ??'?�호', director ??'?�사??)
-  // - refresh_token?�로 ?�동 갱신 (?�구 ?�동)
-  // ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
+  // ─────────────────────────────────────────────────────────
+  // 구글 캘린더 영구 연동 (OAuth Code Flow + Supabase DB 토큰 저장)
+  // - 양호 캘린더 / 이사님 캘린더 2개를 분리 저장
+  // - calSheet 변수에 따라 적절한 토큰 조회 (yangho → '양호', director → '이사님')
+  // - refresh_token으로 자동 갱신 (영구 연동)
+  // ─────────────────────────────────────────────────────────
   const GCAL_REDIRECT_URI = window.location.origin + "/";
   const sheetToUserLabel = function(sheet) {
-    return sheet === "director" ? "?�사?? : "?�호";
+    return sheet === "director" ? "이사님" : "양호";
   };
 
-  // [1] 구�? OAuth ?�의 ?�면?�로 ?�동 (?�당 캘린?�의 주인??로그??
+  // [1] 구글 OAuth 동의 화면으로 이동 (해당 캘린더의 주인이 로그인)
   const connectGoogle = function() {
     var userLabel = sheetToUserLabel(calSheet);
     var scope = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email";
-    // state??user_label ?�함?�켜 콜백 ???�떤 캘린???�동?��? ?�별
+    // state에 user_label 포함시켜 콜백 시 어떤 캘린더 연동인지 식별
     var state = encodeURIComponent(JSON.stringify({ user_label: userLabel, sheet: calSheet }));
     var authUrl = "https://accounts.google.com/o/oauth2/v2/auth"
       + "?client_id=" + GOOGLE_CLIENT_ID
@@ -5016,7 +5059,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
     window.location.href = authUrl;
   };
 
-  // [2] DB?�서 ?�큰 가?�오�?+ 만료???�동 갱신 (Edge Function ?�출)
+  // [2] DB에서 토큰 가져오기 + 만료시 자동 갱신 (Edge Function 호출)
   var getValidAccessToken = async function(userLabel) {
     try {
       var refreshUrl = SUPABASE_URL + "/functions/v1/google-oauth-refresh";
@@ -5039,7 +5082,8 @@ function CalendarView({ companies, onSelectCompany, profile }) {
     }
   };
 
-  // [3] 구�? 캘린?�에???�정 가?�오�?  var fetchGoogleEventsForSheet = async function(sheet) {
+  // [3] 구글 캘린더에서 일정 가져오기
+  var fetchGoogleEventsForSheet = async function(sheet) {
     var userLabel = sheetToUserLabel(sheet);
     var tokenResult = await getValidAccessToken(userLabel);
     if (!tokenResult.ok) {
@@ -5084,7 +5128,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
     }
   };
 
-  // [4] OAuth 콜백 처리: URL???code=... �?받아??Edge Function?�로 교환
+  // [4] OAuth 콜백 처리: URL의 ?code=... 를 받아서 Edge Function으로 교환
   useEffect(function() {
     var urlParams = new URLSearchParams(window.location.search);
     var code = urlParams.get("code");
@@ -5096,7 +5140,8 @@ function CalendarView({ companies, onSelectCompany, profile }) {
         window.history.replaceState(null, "", window.location.pathname);
         return;
       }
-      // Edge Function??code 보내???�큰 교환 + DB ?�??      var exchangeUrl = SUPABASE_URL + "/functions/v1/smart-handler";
+      // Edge Function에 code 보내서 토큰 교환 + DB 저장
+      var exchangeUrl = SUPABASE_URL + "/functions/v1/smart-handler";
       fetch(exchangeUrl, {
         method: "POST",
         headers: {
@@ -5113,24 +5158,24 @@ function CalendarView({ companies, onSelectCompany, profile }) {
       .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
       .then(function(result) {
         if (result.ok) {
-          alert("??" + stateData.user_label + " 캘린?��? ?�구 ?�동?�었?�니??\n(" + (result.data.google_email || "") + ")");
+          alert("✅ " + stateData.user_label + " 캘린더가 영구 연동되었습니다!\n(" + (result.data.google_email || "") + ")");
           if (stateData.sheet) setCalSheet(stateData.sheet);
         } else {
-          alert("???�동 ?�패: " + (result.data.error || "?????�는 ?�류"));
+          alert("❌ 연동 실패: " + (result.data.error || "알 수 없는 오류"));
         }
-        // URL ?�리 ??캘린??로드
+        // URL 정리 후 캘린더 로드
         window.history.replaceState(null, "", window.location.pathname);
         fetchGoogleEventsForSheet(stateData.sheet || calSheet);
       })
       .catch(function(err) {
-        alert("???�동 ?�청 ?�패: " + err.message);
+        alert("❌ 연동 요청 실패: " + err.message);
         window.history.replaceState(null, "", window.location.pathname);
       });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // [5] ??calSheet) ?�는 ??year/month) 변�????�당 캘린???�정 ?�시 로드
+  // [5] 탭(calSheet) 또는 월(year/month) 변경 시 해당 캘린더 일정 다시 로드
   useEffect(function() {
     fetchGoogleEventsForSheet(calSheet);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -5152,26 +5197,26 @@ function CalendarView({ companies, onSelectCompany, profile }) {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>캘린??/h1>
-          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>?�락 ?�정 · ?�로??관�?/p>
+          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>캘린더</h1>
+          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>연락 예정 · 팔로업 관리</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           {!gConnected ? (
             <button onClick={connectGoogle}
               style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
-              ?�� 구�? 캘린???�동
+              📅 구글 캘린더 연동
             </button>
           ) : (
-            <span style={{ fontSize: 12, color: "#15803D", padding: "8px 12px", background: "#F0FDF4", borderRadius: 8, border: "1px solid #86EFAC" }}>??구�? ?�동??/span>
+            <span style={{ fontSize: 12, color: "#15803D", padding: "8px 12px", background: "#F0FDF4", borderRadius: 8, border: "1px solid #86EFAC" }}>✅ 구글 연동됨</span>
           )}
         </div>
       </div>
 
-      {/* ??*/}
+      {/* 탭 */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         {[
-          { id: "calendar", label: "?�� ?�정 캘린?? },
-          { id: "followup", label: `?�� ?�로???�요 ${followupList.length > 0 ? `(${followupList.length})` : ""}` },
+          { id: "calendar", label: "📅 일정 캘린더" },
+          { id: "followup", label: `🔔 팔로업 필요 ${followupList.length > 0 ? `(${followupList.length})` : ""}` },
         ].map(t => (
           <button key={t.id} onClick={() => setActiveTab(t.id)}
             style={{ padding: "8px 16px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 13, fontWeight: activeTab === t.id ? 700 : 400, background: activeTab === t.id ? "#1A1917" : "#fff", color: activeTab === t.id ? "#fff" : "#666", border: activeTab === t.id ? "none" : "1px solid #E8E5E0" }}>
@@ -5180,52 +5225,55 @@ function CalendarView({ companies, onSelectCompany, profile }) {
         ))}
       </div>
 
-      {/* 캘린???�트 ?�환 + ?�정추�? */}
+      {/* 캘린더 시트 전환 + 일정추가 */}
       {activeTab === "calendar" && (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <button onClick={() => setCalSheet("yangho")}
               style={{ padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: calSheet === "yangho" ? 700 : 400, background: calSheet === "yangho" ? "#4338CA" : "#fff", color: calSheet === "yangho" ? "#fff" : "#666", border: calSheet === "yangho" ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
-              김?�호 캘린??            </button>
+              김양호 캘린더
+            </button>
             <button onClick={() => setCalSheet("director")}
               style={{ padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: calSheet === "director" ? 700 : 400, background: calSheet === "director" ? "#7C3AED" : "#fff", color: calSheet === "director" ? "#fff" : "#666", border: calSheet === "director" ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
-              ?�사??캘린??            </button>
-            {/* ?�동 ?�태 ?�시 */}
+              이사님 캘린더
+            </button>
+            {/* 연동 상태 표시 */}
             <span style={{ marginLeft: 8, padding: "4px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: gConnected ? "#DCFCE7" : "#FEE2E2", color: gConnected ? "#166534" : "#991B1B" }}>
-              {gConnected ? "??구�? ?�동?? : "??미연??}
+              {gConnected ? "✓ 구글 연동됨" : "✗ 미연동"}
             </span>
-            {/* 미연?????�결 버튼 ?�출 */}
+            {/* 미연동 시 연결 버튼 노출 */}
             {!gConnected && (
               <button onClick={connectGoogle}
                 style={{ padding: "6px 12px", background: "#4285F4", color: "#fff", border: "none", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer" }}
-                title={`${sheetToUserLabel(calSheet)}??구�? 계정?�로 로그?�하??캘린???�구 ?�동`}>
-                ?�� {sheetToUserLabel(calSheet)} 구�? 계정 ?�동
+                title={`${sheetToUserLabel(calSheet)}님 구글 계정으로 로그인하여 캘린더 영구 연동`}>
+                🔗 {sheetToUserLabel(calSheet)} 구글 계정 연동
               </button>
             )}
-            {/* ?�동??경우 ?�연???�션 (만약 ?�른 계정?�로 바꾸�??�을 ?? */}
+            {/* 연동된 경우 재연동 옵션 (만약 다른 계정으로 바꾸고 싶을 때) */}
             {gConnected && (
               <button onClick={connectGoogle}
                 style={{ padding: "6px 10px", background: "transparent", color: "#666", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 11, fontWeight: 500, cursor: "pointer" }}
-                title="?�른 구�? 계정?�로 ?�시 ?�동">
-                ?�연??              </button>
+                title="다른 구글 계정으로 다시 연동">
+                재연동
+              </button>
             )}
           </div>
           <button onClick={() => { setShowAddEvent(true); setNewEvent({ title: "", date: selectedDate ? `${year}-${String(month+1).padStart(2,"0")}-${String(selectedDate).padStart(2,"0")}` : "", time: "", memo: "", sheet: calSheet }); }}
             style={{ padding: "7px 14px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-            + ?�정 추�?
+            + 일정 추가
           </button>
         </div>
       )}
 
       {activeTab === "calendar" && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16, alignItems: "start" }}>
-          {/* 캘린??본체 */}
+          {/* 캘린더 본체 */}
           <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #E8E5E0", overflow: "hidden" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: "1px solid #E8E5E0" }}>
               <button onClick={prevMonth} style={{ background: "none", border: "1px solid #E8E5E0", borderRadius: 8, padding: "6px 10px", cursor: "pointer", display: "flex", alignItems: "center" }}>
                 <Icon name="chevronL" size={16} color="#555" />
               </button>
-              <div style={{ fontSize: 18, fontWeight: 700 }}>{year}??{MONTH_NAMES[month]}</div>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>{year}년 {MONTH_NAMES[month]}</div>
               <button onClick={nextMonth} style={{ background: "none", border: "1px solid #E8E5E0", borderRadius: 8, padding: "6px 10px", cursor: "pointer", display: "flex", alignItems: "center" }}>
                 <Icon name="chevronR" size={16} color="#555" />
               </button>
@@ -5255,7 +5303,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
                       <div style={{ width: 22, height: 22, borderRadius: "50%", background: isToday ? "#1A1917" : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>
                         <span style={{ fontSize: 12, fontWeight: isToday ? 700 : 400, color: isToday ? "#fff" : dow===0 ? "#DC2626" : dow===6 ? "#4338CA" : "#333" }}>{d}</span>
                       </div>
-                      {hasFollowup && <span style={{ fontSize: 8, background: "#FEF3C7", color: "#B45309", borderRadius: 3, padding: "1px 3px", fontWeight: 700 }}>?�로??/span>}
+                      {hasFollowup && <span style={{ fontSize: 8, background: "#FEF3C7", color: "#B45309", borderRadius: 3, padding: "1px 3px", fontWeight: 700 }}>팔로업</span>}
                     </div>
                     {crmEvs.slice(0, 2).map((ev, ei) => (
                       <div key={ei} style={{ fontSize: 9, background: "#4338CA", color: "#fff", borderRadius: 3, padding: "1px 4px", marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.name}</div>
@@ -5263,7 +5311,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
                     {gEvs.slice(0, 1).map((ev, ei) => {
                       var gcol = getColorById(ev.color || "9");
                       return (
-                        <div key={ei} style={{ fontSize: 9, background: gcol.bg, color: "#fff", borderRadius: 3, padding: "1px 4px", marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>?�� {ev.title}</div>
+                        <div key={ei} style={{ fontSize: 9, background: gcol.bg, color: "#fff", borderRadius: 3, padding: "1px 4px", marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📅 {ev.title}</div>
                       );
                     })}
                     {cEvs.slice(0, 2).map((ev, ei) => {
@@ -5279,25 +5327,25 @@ function CalendarView({ companies, onSelectCompany, profile }) {
             </div>
           </div>
 
-          {/* ?�측 ?�널 */}
+          {/* 우측 패널 */}
           <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #E8E5E0", overflow: "hidden" }}>
             <div style={{ padding: "14px 16px", borderBottom: "1px solid #E8E5E0", background: "#F7F6F3" }}>
-              <div style={{ fontSize: 13, fontWeight: 700 }}>{selectedDate ? `${month+1}??${selectedDate}???�정` : "?�짜�??�택?�세??}</div>
-              {selectedDate && <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{selectedCrmEvents.length + selectedGoogleEvents.length}�?/div>}
+              <div style={{ fontSize: 13, fontWeight: 700 }}>{selectedDate ? `${month+1}월 ${selectedDate}일 일정` : "날짜를 선택하세요"}</div>
+              {selectedDate && <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{selectedCrmEvents.length + selectedGoogleEvents.length}건</div>}
             </div>
             <div style={{ padding: "12px", maxHeight: 500, overflowY: "auto" }}>
-              {!selectedDate && <div style={{ textAlign: "center", padding: "40px 0", color: "#CCC", fontSize: 13 }}>?��<br/>?�짜�??�릭?�세??/div>}
+              {!selectedDate && <div style={{ textAlign: "center", padding: "40px 0", color: "#CCC", fontSize: 13 }}>📅<br/>날짜를 클릭하세요</div>}
               {selectedGoogleEvents.map((ev, i) => {
                 var gcol = getColorById(ev.color || "9");
                 return (
                   <div key={i} style={{ padding: "10px 12px", borderRadius: 10, borderLeft: "4px solid " + gcol.bg, border: "1px solid " + gcol.light, borderLeftWidth: 4, marginBottom: 8, background: gcol.light }}>
-                    <div style={{ fontSize: 11, color: gcol.bg, fontWeight: 700, marginBottom: 2 }}>?�� 구�? 캘린??/div>
+                    <div style={{ fontSize: 11, color: gcol.bg, fontWeight: 700, marginBottom: 2 }}>📅 구글 캘린더</div>
                     <div style={{ fontSize: 13, fontWeight: 700 }}>{ev.title}</div>
                     {ev.time && <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{ev.time}</div>}
                     {ev.memo && <div style={{ fontSize: 12, color: "#555", marginTop: 4, lineHeight: 1.5 }}>{ev.memo}</div>}
-                    {/* 구�? ?�정 ?�상 변�?*/}
+                    {/* 구글 일정 색상 변경 */}
                     <div style={{ display: "flex", gap: 4, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 10, color: "#888" }}>?�상:</span>
+                      <span style={{ fontSize: 10, color: "#888" }}>색상:</span>
                       {EVENT_COLORS.map(function(c) {
                         var sel = (ev.color || "9") === c.id;
                         return (
@@ -5318,17 +5366,17 @@ function CalendarView({ companies, onSelectCompany, profile }) {
                     style={{ padding: "10px 12px", borderRadius: 10, border: `1px solid ${isFollowup ? "#FED7AA" : "#E8E5E0"}`, marginBottom: 8, cursor: "pointer", background: isFollowup ? "#FFF7ED" : "#fff" }}
                     onMouseEnter={e => e.currentTarget.style.background = isFollowup ? "#FEF3C7" : "#F7F6F3"}
                     onMouseLeave={e => e.currentTarget.style.background = isFollowup ? "#FFF7ED" : "#fff"}>
-                    {isFollowup && <div style={{ fontSize: 10, color: "#B45309", fontWeight: 700, marginBottom: 4 }}>?�� ?�로???�요</div>}
+                    {isFollowup && <div style={{ fontSize: 10, color: "#B45309", fontWeight: 700, marginBottom: 4 }}>🔔 팔로업 필요</div>}
                     <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 3 }}>{ev.name}</div>
-                    <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>{ev.assignee} · {ev.representative} ?�??/div>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>{ev.assignee} · {ev.representative} 대표</div>
                     <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 99, background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, fontWeight: 600 }}>{ev.stage}</span>
                   </div>
                 );
               })}
               {selectedDate && selectedCrmEvents.length === 0 && selectedGoogleEvents.length === 0 && customEvents.filter(e => e.date === selectedDateStr && e.sheet === calSheet).length === 0 && (
-                <div style={{ textAlign: "center", padding: "30px 0", color: "#CCC", fontSize: 13 }}>?????�정???�어??/div>
+                <div style={{ textAlign: "center", padding: "30px 0", color: "#CCC", fontSize: 13 }}>이 날 일정이 없어요</div>
               )}
-              {/* 커스?� ?�정 */}
+              {/* 커스텀 일정 */}
               {selectedDate && customEvents.filter(e => e.date === selectedDateStr && e.sheet === calSheet).map(function(ev) {
                 var col = getColorById(ev.color || "blue");
                 return (
@@ -5339,9 +5387,9 @@ function CalendarView({ companies, onSelectCompany, profile }) {
                         {ev.time && <div style={{ fontSize: 11, color: "#888" }}>{ev.time}</div>}
                         {ev.memo && <div style={{ fontSize: 12, color: "#555", marginTop: 4, lineHeight: 1.5 }}>{ev.memo}</div>}
                         <div style={{ fontSize: 10, color: "#AAA", marginTop: 4 }}>{ev.created_by || "-"}</div>
-                        {/* ?�상 변�?*/}
+                        {/* 색상 변경 */}
                         <div style={{ display: "flex", gap: 4, marginTop: 8, alignItems: "center" }}>
-                          <span style={{ fontSize: 10, color: "#888" }}>?�상:</span>
+                          <span style={{ fontSize: 10, color: "#888" }}>색상:</span>
                           {EVENT_COLORS.map(function(c) {
                             var sel = (ev.color || "blue") === c.id;
                             return (
@@ -5364,27 +5412,27 @@ function CalendarView({ companies, onSelectCompany, profile }) {
         </div>
       )}
 
-      {/* ?�로????*/}
+      {/* 팔로업 탭 */}
       {activeTab === "followup" && (
         <div>
           <div style={{ background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 10, padding: "12px 16px", marginBottom: 16, fontSize: 13, color: "#92400E", display: "flex", gap: 10, alignItems: "flex-start" }}>
-            <span style={{ fontSize: 18 }}>?��</span>
+            <span style={{ fontSize: 18 }}>🔔</span>
             <div>
-              <div style={{ fontWeight: 700, marginBottom: 3 }}>?�로?�이 ?�요???�체?�요</div>
-              <div style={{ fontSize: 12, lineHeight: 1.6 }}>기�? 방문/?�태조사 ?�후 ?�계???�체?�이?�요. ?�?�자가 기�??????�?�했?��?, 진행 ?�황???�떤지 ?�인?�주?�요!</div>
+              <div style={{ fontWeight: 700, marginBottom: 3 }}>팔로업이 필요한 업체예요</div>
+              <div style={{ fontSize: 12, lineHeight: 1.6 }}>기관 방문/실태조사 이후 단계의 업체들이에요. 대표자가 기관에 잘 대응했는지, 진행 상황이 어떤지 확인해주세요!</div>
             </div>
           </div>
           {followupList.length === 0 ? (
             <div style={{ textAlign: "center", padding: "60px 0", color: "#CCC", fontSize: 13 }}>
-              <div style={{ fontSize: 36, marginBottom: 12 }}>?��</div>
-              ?�로?�이 ?�요???�체가 ?�어??
+              <div style={{ fontSize: 36, marginBottom: 12 }}>🎉</div>
+              팔로업이 필요한 업체가 없어요!
             </div>
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
               {followupList.map(function(c) {
                 const sc = STAGE_COLORS[c.stage] || {};
-                const isVisit = c.stage === "기�??�청?�료/방문?�료";
-                const isInspect = c.stage === "?�사�??�태조사?��? || c.stage === "?�태조사?�료/?�정?�료";
+                const isVisit = c.stage === "기관신청완료/방문완료";
+                const isInspect = c.stage === "심사중/실태조사대기" || c.stage === "실태조사완료/약정완료";
                 return (
                   <div key={c.id} onClick={() => onSelectCompany(c)}
                     style={{ background: "#fff", borderRadius: 12, border: "1px solid #FED7AA", padding: "16px", cursor: "pointer", transition: "box-shadow 0.15s" }}
@@ -5393,28 +5441,28 @@ function CalendarView({ companies, onSelectCompany, profile }) {
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
                       <div>
                         <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 3 }}>{c.name}</div>
-                        <div style={{ fontSize: 12, color: "#888" }}>{c.representative} ?�??· {c.assignee}</div>
+                        <div style={{ fontSize: 12, color: "#888" }}>{c.representative} 대표 · {c.assignee}</div>
                       </div>
                       <span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, fontWeight: 700, flexShrink: 0, marginLeft: 8 }}>{c.stage}</span>
                     </div>
                     <div style={{ background: "#FFF7ED", borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
                       <div style={{ fontSize: 11, fontWeight: 700, color: "#B45309", marginBottom: 4 }}>
-                        {isVisit ? "?�� 기�? 방문 ???�로?? : isInspect ? "?�� ?�태조사 ???�로?? : "?�� 진행 ?�황 ?�인"}
+                        {isVisit ? "🏢 기관 방문 후 팔로업" : isInspect ? "🔍 실태조사 후 팔로업" : "📋 진행 상황 확인"}
                       </div>
                       <div style={{ fontSize: 12, color: "#92400E", lineHeight: 1.6 }}>
-                        {isVisit ? "?�?�자가 기�? 방문 ???�땠?��? ?�인?�주?�요. 추�? ?�류 ?�청???�었?�요?" :
-                         isInspect ? "?�태조사 결과가 ?�떻�??�는지 ?�인?�주?�요. ?�사관???�떤 ?�드백을 줬나??" :
-                         "?�재 진행 ?�황???�?�자?�게 ?�인?�주?�요."}
+                        {isVisit ? "대표자가 기관 방문 후 어땠는지 확인해주세요. 추가 서류 요청이 있었나요?" :
+                         isInspect ? "실태조사 결과가 어떻게 됐는지 확인해주세요. 심사관이 어떤 피드백을 줬나요?" :
+                         "현재 진행 상황을 대표자에게 확인해주세요."}
                       </div>
                     </div>
                     {c.issue && (
                       <div style={{ fontSize: 11, color: "#666", background: "#F7F6F3", borderRadius: 6, padding: "7px 10px", marginBottom: 8 }}>
-                        ?�� {c.issue.slice(0, 80)}{c.issue.length > 80 ? "..." : ""}
+                        📌 {c.issue.slice(0, 80)}{c.issue.length > 80 ? "..." : ""}
                       </div>
                     )}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <span style={{ fontSize: 11, color: "#AAA" }}>?�락 ?�정: {c.next_contact || "-"}</span>
-                      <span style={{ fontSize: 11, color: "#4338CA", fontWeight: 600 }}>?�세보기 ??/span>
+                      <span style={{ fontSize: 11, color: "#AAA" }}>연락 예정: {c.next_contact || "-"}</span>
+                      <span style={{ fontSize: 11, color: "#4338CA", fontWeight: 600 }}>상세보기 →</span>
                     </div>
                   </div>
                 );
@@ -5424,32 +5472,33 @@ function CalendarView({ companies, onSelectCompany, profile }) {
         </div>
       )}
 
-      {/* ?�정 추�? 모달 */}
+      {/* 일정 추가 모달 */}
       {showAddEvent && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center" }}
           onClick={() => setShowAddEvent(false)}>
           <div style={{ background: "#fff", borderRadius: 14, padding: "22px", width: 380, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}
             onClick={e => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <div style={{ fontSize: 15, fontWeight: 800 }}>?�� ?�정 추�?</div>
+              <div style={{ fontSize: 15, fontWeight: 800 }}>📅 일정 추가</div>
               <button onClick={() => setShowAddEvent(false)} style={{ background: "none", border: "none", cursor: "pointer" }}>
                 <Icon name="x" size={18} color="#888" />
               </button>
             </div>
             <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>캘린??/div>
+              <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>캘린더</div>
               <div style={{ display: "flex", gap: 6 }}>
                 <button onClick={() => setNewEvent(function(p) { return Object.assign({}, p, { sheet: "yangho" }); })}
                   style={{ flex: 1, padding: "8px", borderRadius: 7, fontSize: 12, fontWeight: 600, background: newEvent.sheet === "yangho" ? "#4338CA" : "#fff", color: newEvent.sheet === "yangho" ? "#fff" : "#666", border: newEvent.sheet === "yangho" ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
-                  김?�호
+                  김양호
                 </button>
                 <button onClick={() => setNewEvent(function(p) { return Object.assign({}, p, { sheet: "director" }); })}
                   style={{ flex: 1, padding: "8px", borderRadius: 7, fontSize: 12, fontWeight: 600, background: newEvent.sheet === "director" ? "#7C3AED" : "#fff", color: newEvent.sheet === "director" ? "#fff" : "#666", border: newEvent.sheet === "director" ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
-                  ?�사??                </button>
+                  이사님
+                </button>
               </div>
             </div>
             <input value={newEvent.title} onChange={function(e) { var v = e.target.value; setNewEvent(function(p) { return Object.assign({}, p, { title: v }); }); }}
-              placeholder="?�정 ?�목 *" style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none", marginBottom: 8 }} />
+              placeholder="일정 제목 *" style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none", marginBottom: 8 }} />
             <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
               <input type="date" value={newEvent.date} onChange={function(e) { var v = e.target.value; setNewEvent(function(p) { return Object.assign({}, p, { date: v }); }); }}
                 style={{ flex: 1, padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13 }} />
@@ -5457,10 +5506,10 @@ function CalendarView({ companies, onSelectCompany, profile }) {
                 style={{ flex: 1, padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13 }} />
             </div>
             <textarea value={newEvent.memo} onChange={function(e) { var v = e.target.value; setNewEvent(function(p) { return Object.assign({}, p, { memo: v }); }); }}
-              placeholder="메모 (?�택)" rows={3}
+              placeholder="메모 (선택)" rows={3}
               style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, resize: "none", boxSizing: "border-box", outline: "none", marginBottom: 12 }} />
             <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>?�상</div>
+              <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>색상</div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {EVENT_COLORS.map(function(c) {
                   var selected = newEvent.color === c.id;
@@ -5474,7 +5523,8 @@ function CalendarView({ companies, onSelectCompany, profile }) {
             </div>
             <button onClick={saveEvent}
               style={{ width: "100%", padding: "11px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-              ?�??            </button>
+              저장
+            </button>
           </div>
         </div>
       )}
@@ -5485,27 +5535,27 @@ const DRIVE_FOLDER_ID = "15noP_C-r-ZTo56xGbjUWFv2gAKDzXMJa";
 const DRIVE_FOLDER_URL = "https://drive.google.com/drive/folders/15noP_C-r-ZTo56xGbjUWFv2gAKDzXMJa";
 
 const FILE_ICONS = {
-  pdf:  { icon: "?��", color: "#DC2626", bg: "#FEF2F2" },
-  xlsx: { icon: "?��", color: "#15803D", bg: "#F0FDF4" },
-  xls:  { icon: "?��", color: "#15803D", bg: "#F0FDF4" },
-  hwp:  { icon: "?��", color: "#1D4ED8", bg: "#EFF6FF" },
-  hwpx: { icon: "?��", color: "#1D4ED8", bg: "#EFF6FF" },
-  docx: { icon: "?��", color: "#1D4ED8", bg: "#EFF6FF" },
-  doc:  { icon: "?��", color: "#1D4ED8", bg: "#EFF6FF" },
-  pptx: { icon: "?��", color: "#EA580C", bg: "#FFF7ED" },
-  ppt:  { icon: "?��", color: "#EA580C", bg: "#FFF7ED" },
-  png:  { icon: "?���?, color: "#7C3AED", bg: "#F5F3FF" },
-  jpg:  { icon: "?���?, color: "#7C3AED", bg: "#F5F3FF" },
-  jpeg: { icon: "?���?, color: "#7C3AED", bg: "#F5F3FF" },
-  mp3:  { icon: "?��", color: "#B45309", bg: "#FFFBEB" },
-  m4a:  { icon: "?��", color: "#B45309", bg: "#FFFBEB" },
-  txt:  { icon: "?��", color: "#555",    bg: "#F7F6F3" },
-  zip:  { icon: "?���?, color: "#555",    bg: "#F7F6F3" },
+  pdf:  { icon: "📄", color: "#DC2626", bg: "#FEF2F2" },
+  xlsx: { icon: "📊", color: "#15803D", bg: "#F0FDF4" },
+  xls:  { icon: "📊", color: "#15803D", bg: "#F0FDF4" },
+  hwp:  { icon: "📝", color: "#1D4ED8", bg: "#EFF6FF" },
+  hwpx: { icon: "📝", color: "#1D4ED8", bg: "#EFF6FF" },
+  docx: { icon: "📝", color: "#1D4ED8", bg: "#EFF6FF" },
+  doc:  { icon: "📝", color: "#1D4ED8", bg: "#EFF6FF" },
+  pptx: { icon: "📑", color: "#EA580C", bg: "#FFF7ED" },
+  ppt:  { icon: "📑", color: "#EA580C", bg: "#FFF7ED" },
+  png:  { icon: "🖼️", color: "#7C3AED", bg: "#F5F3FF" },
+  jpg:  { icon: "🖼️", color: "#7C3AED", bg: "#F5F3FF" },
+  jpeg: { icon: "🖼️", color: "#7C3AED", bg: "#F5F3FF" },
+  mp3:  { icon: "🎵", color: "#B45309", bg: "#FFFBEB" },
+  m4a:  { icon: "🎵", color: "#B45309", bg: "#FFFBEB" },
+  txt:  { icon: "📃", color: "#555",    bg: "#F7F6F3" },
+  zip:  { icon: "🗜️", color: "#555",    bg: "#F7F6F3" },
 };
 
 function getFileIcon(name) {
   var ext = (name || "").split(".").pop().toLowerCase();
-  return FILE_ICONS[ext] || { icon: "?��", color: "#888", bg: "#F7F6F3" };
+  return FILE_ICONS[ext] || { icon: "📁", color: "#888", bg: "#F7F6F3" };
 }
 
 function formatFileSize(bytes) {
@@ -5521,7 +5571,7 @@ function ManualView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [currentFolderId, setCurrentFolderId] = useState(DRIVE_FOLDER_ID);
-  const [breadcrumb, setBreadcrumb] = useState([{ id: DRIVE_FOLDER_ID, name: "?�료?? }]);
+  const [breadcrumb, setBreadcrumb] = useState([{ id: DRIVE_FOLDER_ID, name: "자료실" }]);
   const [search, setSearch] = useState("");
   const [lastRefresh, setLastRefresh] = useState(null);
 
@@ -5529,11 +5579,11 @@ function ManualView() {
     setLoading(true);
     setError(null);
     try {
-      // Google Drive API - 공개 ?�더 ?�일 목록 조회
-      const apiKey = "AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFmBBY"; // 공개??API ???�요
+      // Google Drive API - 공개 폴더 파일 목록 조회
+      const apiKey = "AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFmBBY"; // 공개용 API 키 필요
       const url = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&fields=files(id,name,mimeType,size,modifiedTime,webViewLink,webContentLink)&orderBy=name&key=${apiKey}`;
       const res = await fetch(url);
-      if (!res.ok) throw new Error("API ?�류");
+      if (!res.ok) throw new Error("API 오류");
       const data = await res.json();
       const items = data.files || [];
       const folderMime = "application/vnd.google-apps.folder";
@@ -5573,34 +5623,35 @@ function ManualView() {
 
   return (
     <div>
-      {/* ?�더 */}
+      {/* 헤더 */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>?�료??/h1>
-          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>Google Drive?� ?�시�??�동 · ?�로????��??Drive?�서</p>
+          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>자료실</h1>
+          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>Google Drive와 실시간 연동 · 업로드/삭제는 Drive에서</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <a href={DRIVE_FOLDER_URL} target="_blank" rel="noreferrer"
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#4338CA", color: "#fff", border: "none", borderRadius: 8, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", textDecoration: "none" }}>
-            ?�� Drive?�서 ?�일 관�?          </a>
+            📂 Drive에서 파일 관리
+          </a>
           <button onClick={() => fetchFiles(currentFolderId)}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#555", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
-            <Icon name="refresh" size={13} color="#555" /> ?�로고침
+            <Icon name="refresh" size={13} color="#555" /> 새로고침
           </button>
         </div>
       </div>
 
-      {/* ?�내 배너 */}
+      {/* 안내 배너 */}
       <div style={{ background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 10, padding: "12px 16px", marginBottom: 16, fontSize: 13, color: "#4338CA", display: "flex", alignItems: "center", gap: 10 }}>
-        <span style={{ fontSize: 18 }}>?��</span>
-        <span><strong>?�일 추�?/??�� 방법:</strong> ?�른�???"Drive?�서 ?�일 관�? 버튼 ?�릭 ??Google Drive?�서 ?�로?�하거나 ??�� ??"?�로고침" 버튼?�로 CRM??반영</span>
+        <span style={{ fontSize: 18 }}>💡</span>
+        <span><strong>파일 추가/삭제 방법:</strong> 오른쪽 위 "Drive에서 파일 관리" 버튼 클릭 → Google Drive에서 업로드하거나 삭제 → "새로고침" 버튼으로 CRM에 반영</span>
       </div>
 
-      {/* 브레?�크??*/}
+      {/* 브레드크럼 */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
         {breadcrumb.map((crumb, idx) => (
           <span key={crumb.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            {idx > 0 && <span style={{ color: "#CCC", fontSize: 13 }}>??/span>}
+            {idx > 0 && <span style={{ color: "#CCC", fontSize: 13 }}>›</span>}
             <span
               onClick={() => goToBreadcrumb(idx)}
               style={{ fontSize: 13, fontWeight: idx === breadcrumb.length - 1 ? 700 : 400, color: idx === breadcrumb.length - 1 ? "#1A1917" : "#4338CA", cursor: idx === breadcrumb.length - 1 ? "default" : "pointer", textDecoration: idx === breadcrumb.length - 1 ? "none" : "underline" }}>
@@ -5610,15 +5661,15 @@ function ManualView() {
         ))}
         {lastRefresh && (
           <span style={{ marginLeft: "auto", fontSize: 11, color: "#AAA" }}>
-            마�?�??�데?�트: {lastRefresh.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}
+            마지막 업데이트: {lastRefresh.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}
           </span>
         )}
       </div>
 
-      {/* 검??*/}
+      {/* 검색 */}
       <div style={{ position: "relative", marginBottom: 16 }}>
         <div style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)" }}><Icon name="search" size={15} color="#AAA" /></div>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="?�일�?검??.."
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="파일명 검색..."
           style={{ width: "100%", padding: "10px 14px 10px 36px", border: "1px solid #E8E5E0", borderRadius: 9, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
       </div>
 
@@ -5626,30 +5677,30 @@ function ManualView() {
       {loading && (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "40vh", flexDirection: "column", gap: 14 }}>
           <div style={{ width: 32, height: 32, border: "3px solid #E8E5E0", borderTopColor: "#4338CA", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-          <span style={{ color: "#888", fontSize: 13 }}>?�일 목록 불러?�는 �?..</span>
+          <span style={{ color: "#888", fontSize: 13 }}>파일 목록 불러오는 중...</span>
         </div>
       )}
 
-      {/* ?�류 - API ???�는 경우 */}
+      {/* 오류 - API 키 없는 경우 */}
       {!loading && error && (
         <div style={{ background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 12, padding: "28px 24px", textAlign: "center" }}>
-          <div style={{ fontSize: 32, marginBottom: 12 }}>?��</div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "#92400E", marginBottom: 8 }}>Google Drive 직접 ?�속</div>
+          <div style={{ fontSize: 32, marginBottom: 12 }}>🔗</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#92400E", marginBottom: 8 }}>Google Drive 직접 접속</div>
           <p style={{ fontSize: 13, color: "#B45309", marginBottom: 20, lineHeight: 1.7 }}>
-            Drive API ?�결???�한 추�? ?�정???�요?�요.<br/>
-            ?�래 버튼?�로 Drive??직접 ?�속?�서 ?�일??관리하?�요.
+            Drive API 연결을 위한 추가 설정이 필요해요.<br/>
+            아래 버튼으로 Drive에 직접 접속해서 파일을 관리하세요.
           </p>
-          {/* ?�더 바로가�?버튼??*/}
+          {/* 폴더 바로가기 버튼들 */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10, marginBottom: 20, textAlign: "left" }}>
             {[
-              { name: "?�� 기술보증기금", path: "기술보증기금" },
-              { name: "?�� 보증기�? ?�음 ?�일", path: "보증기�? ?�음 ?�일" },
-              { name: "?�� 보증?�단 메뉴??�??�료", path: "보증?�단 메뉴??�??�료" },
-              { name: "?�� ?�상공인 공단", path: "?�상공인 공단" },
-              { name: "?�� ?�크립트 가?�드", path: "?�크립트 가?�드" },
-              { name: "?�� ?�용보증기금", path: "?�용보증기금" },
-              { name: "?�� 중진�?, path: "중진�? },
-              { name: "?�� 추�??�종 ?�안??, path: "추�??�종 ?�안?? },
+              { name: "📁 기술보증기금", path: "기술보증기금" },
+              { name: "📁 보증기관 녹음 파일", path: "보증기관 녹음 파일" },
+              { name: "📁 보증재단 메뉴얼 및 자료", path: "보증재단 메뉴얼 및 자료" },
+              { name: "📁 소상공인 공단", path: "소상공인 공단" },
+              { name: "📁 스크립트 가이드", path: "스크립트 가이드" },
+              { name: "📁 신용보증기금", path: "신용보증기금" },
+              { name: "📁 중진공", path: "중진공" },
+              { name: "📁 추가업종 제안서", path: "추가업종 제안서" },
             ].map(folder => (
               <a key={folder.name} href={DRIVE_FOLDER_URL} target="_blank" rel="noreferrer"
                 style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, color: "#333", textDecoration: "none", fontWeight: 500 }}>
@@ -5659,25 +5710,25 @@ function ManualView() {
           </div>
           <a href={DRIVE_FOLDER_URL} target="_blank" rel="noreferrer"
             style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "#4338CA", color: "#fff", borderRadius: 9, padding: "12px 24px", fontSize: 14, fontWeight: 700, textDecoration: "none" }}>
-            ?�� Google Drive ?�료???�기
+            📂 Google Drive 자료실 열기
           </a>
         </div>
       )}
 
-      {/* ?�일/?�더 목록 */}
+      {/* 파일/폴더 목록 */}
       {!loading && !error && (
         <>
-          {/* ?�더 목록 */}
+          {/* 폴더 목록 */}
           {filteredFolders.length > 0 && (
             <div style={{ marginBottom: 20 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: "#888", letterSpacing: "0.04em", marginBottom: 10 }}>?�� ?�더</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#888", letterSpacing: "0.04em", marginBottom: 10 }}>📁 폴더</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 10 }}>
                 {filteredFolders.map(folder => (
                   <div key={folder.id} onClick={() => goToFolder(folder)}
                     style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 15px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 10, cursor: "pointer", transition: "all 0.15s" }}
                     onMouseEnter={e => e.currentTarget.style.background = "#F0F0EC"}
                     onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
-                    <span style={{ fontSize: 22 }}>?��</span>
+                    <span style={{ fontSize: 22 }}>📁</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{folder.name}</div>
                       <div style={{ fontSize: 11, color: "#AAA" }}>{fmtDate(folder.modifiedTime)}</div>
@@ -5688,11 +5739,11 @@ function ManualView() {
             </div>
           )}
 
-          {/* ?�일 목록 */}
+          {/* 파일 목록 */}
           {filteredFiles.length > 0 && (
             <div>
               <div style={{ fontSize: 12, fontWeight: 700, color: "#888", letterSpacing: "0.04em", marginBottom: 10 }}>
-                ?�� ?�일 <span style={{ fontWeight: 400 }}>({filteredFiles.length}�?</span>
+                📄 파일 <span style={{ fontWeight: 400 }}>({filteredFiles.length}개)</span>
               </div>
               <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
                 {filteredFiles.map((file, i) => {
@@ -5715,12 +5766,12 @@ function ManualView() {
                       <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
                         <a href={file.webViewLink} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
                           style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, background: "#EEF2FF", color: "#4338CA", textDecoration: "none", fontWeight: 600 }}>
-                          ?�기
+                          열기
                         </a>
                         {file.webContentLink && (
                           <a href={file.webContentLink} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
                             style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, background: "#F0FDF4", color: "#15803D", textDecoration: "none", fontWeight: 600 }}>
-                            ?�운로드
+                            다운로드
                           </a>
                         )}
                       </div>
@@ -5733,8 +5784,8 @@ function ManualView() {
 
           {filteredFolders.length === 0 && filteredFiles.length === 0 && (
             <div style={{ textAlign: "center", padding: "60px 20px", color: "#AAA", fontSize: 13 }}>
-              <div style={{ fontSize: 36, marginBottom: 12 }}>?��</div>
-              {search ? "검??결과가 ?�어?? : "???�더가 비어 ?�어??}
+              <div style={{ fontSize: 36, marginBottom: 12 }}>📭</div>
+              {search ? "검색 결과가 없어요" : "이 폴더가 비어 있어요"}
             </div>
           )}
         </>
@@ -5742,45 +5793,45 @@ function ManualView() {
     </div>
   );
 }
-const BOJUNG_AGENCIES = ["?�용보증기금", "기술보증기금"];
+const BOJUNG_AGENCIES = ["신용보증기금", "기술보증기금"];
 
 const JUNGINGONG_REGIONS = [
-  "?�울지??��부", "?�울?��?지부", "?�울?��?지부", "?�울?��?지부",
-  "?�천지??��부", "?�천?��?지부",
-  "경기지??��부", "경기?��?지부", "경기?��?지부", "경기?��?지부", "경기북�?지부",
-  "강원지??��부", "강원?�동지부",
-  "?�?��???��부", "?�종지??��부", "충남지??��부", "충북지??��부", "충북북�?지부",
-  "?�북지??��부", "?�북?��?지부", "광주지??��부", "?�남지??��부", "?�남?��?지부",
-  "?�구�???��부",
-  "경북지??��부", "경북?��?지부", "경북?��?지부",
-  "부?��???��부", "부?�동부지부", "?�산지??��부",
-  "경남지??��부", "경남?��?지부", "경남?��?지부",
-  "?�주지??��부"
+  "서울지역본부", "서울동부지부", "서울서부지부", "서울남부지부",
+  "인천지역본부", "인천서부지부",
+  "경기지역본부", "경기동부지부", "경기서부지부", "경기남부지부", "경기북부지부",
+  "강원지역본부", "강원영동지부",
+  "대전지역본부", "세종지역본부", "충남지역본부", "충북지역본부", "충북북부지부",
+  "전북지역본부", "전북서부지부", "광주지역본부", "전남지역본부", "전남동부지부",
+  "대구지역본부",
+  "경북지역본부", "경북동부지부", "경북남부지부",
+  "부산지역본부", "부산동부지부", "울산지역본부",
+  "경남지역본부", "경남동부지부", "경남서부지부",
+  "제주지역본부"
 ];
 
 const STATUS_COLORS_MAP = {
-  "?�인": { bg: "#ECFDF5", text: "#047857" }, "?�정": { bg: "#ECFDF5", text: "#047857" }, "?�료": { bg: "#ECFDF5", text: "#047857" },
-  "최종?�출": { bg: "#EEF2FF", text: "#4338CA" }, "?�사�?: { bg: "#EEF2FF", text: "#4338CA" }, "?�사?��?: { bg: "#EEF2FF", text: "#4338CA" },
-  "진행 �?: { bg: "#EEF2FF", text: "#4338CA" }, "?�선???��?": { bg: "#EEF2FF", text: "#4338CA" }, "?�선???��? ?�비": { bg: "#EEF2FF", text: "#4338CA" },
-  "?�시?�??: { bg: "#FFF7ED", text: "#C2410C" }, "기�? 방문 ??: { bg: "#FFF7ED", text: "#C2410C" }, "기�? 방문 ???��?: { bg: "#FFF7ED", text: "#C2410C" },
-  "?�라???�청 ???��?: { bg: "#FFF7ED", text: "#C2410C" }, "?�태 조사 ?�정": { bg: "#FFFBEB", text: "#B45309" }, "?�태 조사 ?�료": { bg: "#FFFBEB", text: "#B45309" },
-  "부�?: { bg: "#FEF2F2", text: "#DC2626" }, "반려": { bg: "#FEF2F2", text: "#DC2626" }, "진행불�?": { bg: "#FEF2F2", text: "#DC2626" }, "?�청취소": { bg: "#FEF2F2", text: "#DC2626" },
+  "승인": { bg: "#ECFDF5", text: "#047857" }, "약정": { bg: "#ECFDF5", text: "#047857" }, "완료": { bg: "#ECFDF5", text: "#047857" },
+  "최종제출": { bg: "#EEF2FF", text: "#4338CA" }, "심사중": { bg: "#EEF2FF", text: "#4338CA" }, "심사대기": { bg: "#EEF2FF", text: "#4338CA" },
+  "진행 중": { bg: "#EEF2FF", text: "#4338CA" }, "우선도 평가": { bg: "#EEF2FF", text: "#4338CA" }, "우선도 평가 예비": { bg: "#EEF2FF", text: "#4338CA" },
+  "임시저장": { bg: "#FFF7ED", text: "#C2410C" }, "기관 방문 전": { bg: "#FFF7ED", text: "#C2410C" }, "기관 방문 후 대기": { bg: "#FFF7ED", text: "#C2410C" },
+  "온라인 신청 후 대기": { bg: "#FFF7ED", text: "#C2410C" }, "실태 조사 예정": { bg: "#FFFBEB", text: "#B45309" }, "실태 조사 완료": { bg: "#FFFBEB", text: "#B45309" },
+  "부결": { bg: "#FEF2F2", text: "#DC2626" }, "반려": { bg: "#FEF2F2", text: "#DC2626" }, "진행불가": { bg: "#FEF2F2", text: "#DC2626" }, "신청취소": { bg: "#FEF2F2", text: "#DC2626" },
   "보류": { bg: "#F5F3FF", text: "#7C3AED" }, "중단": { bg: "#F5F3FF", text: "#7C3AED" },
-  "?�작 ??: { bg: "#F7F6F3", text: "#888" }, "?�청못함": { bg: "#F7F6F3", text: "#888" },
+  "시작 전": { bg: "#F7F6F3", text: "#888" }, "신청못함": { bg: "#F7F6F3", text: "#888" },
 };
 
-const ALL_STATUS_OPTIONS = ["?�작 ??,"진행 �?,"기�? 방문 ??,"기�? 방문 ???��?,"?�라???�청 ???��?,"?�시?�??,"최종?�출","?�선???��? ?�비","?�선???��?","?�태 조사 ?�정","?�태 조사 ?�료","?�사?��?,"?�사�?,"?�인","?�정","?�료","부�?,"반려","보류","중단","진행불�?","?�청취소","?�청못함"];
+const ALL_STATUS_OPTIONS = ["시작 전","진행 중","기관 방문 전","기관 방문 후 대기","온라인 신청 후 대기","임시저장","최종제출","우선도 평가 예비","우선도 평가","실태 조사 예정","실태 조사 완료","심사대기","심사중","승인","약정","완료","부결","반려","보류","중단","진행불가","신청취소","신청못함"];
 
 function AgencyView({ jumpToMonth, jumpToGroup }) {
   var currentYear = new Date().getFullYear();
-  const [activeGroup, setActiveGroup] = useState(jumpToGroup || "?�상공인?�장진흥공단");
+  const [activeGroup, setActiveGroup] = useState(jumpToGroup || "소상공인시장진흥공단");
   const [activeMonth, setActiveMonth] = useState(jumpToMonth || new Date().getMonth() + 1);
   const [cases, setCases] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState(null);
   const [editData, setEditData] = useState({});
   const [showTrash, setShowTrash] = useState(false);
-  const [filterAssignee, setFilterAssignee] = useState("?�체");
+  const [filterAssignee, setFilterAssignee] = useState("전체");
   const [showAddCase, setShowAddCase] = useState(false);
   const [newCase, setNewCase] = useState({});
   const [companySuggestions, setCompanySuggestions] = useState([]);
@@ -5789,7 +5840,8 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
 
   var fetchCases = async function() {
     setLoading(true);
-    // Supabase 1000�?기본 limit ?�회: range�??�이�?    var allData = [];
+    // Supabase 1000건 기본 limit 우회: range로 페이징
+    var allData = [];
     var pageSize = 1000;
     var offset = 0;
     while (true) {
@@ -5805,7 +5857,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       allData = allData.concat(result.data);
       if (result.data.length < pageSize) break;
       offset += pageSize;
-      if (offset > 50000) break; // ?�전?�치
+      if (offset > 50000) break; // 안전장치
     }
     setCases(allData);
     setLoading(false);
@@ -5829,7 +5881,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         && Number(c.month) === Number(activeMonth)
         && Number(c.year) === currentYear
         && !c.deleted_at
-        && (filterAssignee === "?�체" || c.assignee === filterAssignee);
+        && (filterAssignee === "전체" || c.assignee === filterAssignee);
     });
   }, [cases, activeGroup, activeMonth, filterAssignee, currentYear]);
 
@@ -5850,13 +5902,13 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     cases.filter(function(c) {
       return c.agency_group === activeGroup && Number(c.month) === Number(activeMonth) && !c.deleted_at;
     }).forEach(function(c) { if (c.assignee) s.add(c.assignee); });
-    return ["?�체"].concat(Array.from(s).sort());
+    return ["전체"].concat(Array.from(s).sort());
   }, [cases, activeGroup, activeMonth]);
 
   var summary = useMemo(function() {
-    var approved = filtered.filter(function(c) { return ["?�인","?�정","?�료"].indexOf(c.status) >= 0; }).length;
-    var inProgress = filtered.filter(function(c) { return ["진행 �?,"?�사�?,"?�사?��?,"최종?�출","?�시?�??,"?�선???��?","기�? 방문 ??,"기�? 방문 ???��?,"?�라???�청 ???��?,"?�태 조사 ?�정","?�태 조사 ?�료"].indexOf(c.status) >= 0; }).length;
-    var rejected = filtered.filter(function(c) { return ["부�?,"반려","진행불�?","?�청취소"].indexOf(c.status) >= 0; }).length;
+    var approved = filtered.filter(function(c) { return ["승인","약정","완료"].indexOf(c.status) >= 0; }).length;
+    var inProgress = filtered.filter(function(c) { return ["진행 중","심사중","심사대기","최종제출","임시저장","우선도 평가","기관 방문 전","기관 방문 후 대기","온라인 신청 후 대기","실태 조사 예정","실태 조사 완료"].indexOf(c.status) >= 0; }).length;
+    var rejected = filtered.filter(function(c) { return ["부결","반려","진행불가","신청취소"].indexOf(c.status) >= 0; }).length;
     return { total: filtered.length, approved: approved, inProgress: inProgress, rejected: rejected };
   }, [filtered]);
 
@@ -5890,14 +5942,14 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     setNewCase({
       agency_group: activeGroup, year: currentYear, month: Number(activeMonth),
       business_name: "", representative: "", business_number: "",
-      assignee: "", status: "?�작 ??, request_amount: "", region: "", notes: "",
+      assignee: "", status: "시작 전", request_amount: "", region: "", notes: "",
     });
     setCompanySuggestions([]);
     setShowAddCase(true);
   };
 
   var saveNewCase = async function() {
-    if (!newCase.business_name) { alert("?�업?�명?� ?�수?�니??"); return; }
+    if (!newCase.business_name) { alert("사업자명은 필수입니다."); return; }
     var insertData = {
       agency_group: activeGroup,
       year: currentYear,
@@ -5906,7 +5958,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       representative: newCase.representative || null,
       business_number: newCase.business_number || null,
       assignee: newCase.assignee || null,
-      status: newCase.status || "?�작 ??,
+      status: newCase.status || "시작 전",
       request_amount: newCase.request_amount || null,
       region: newCase.region || null,
       notes: newCase.notes || null,
@@ -5918,7 +5970,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       setNewCase({});
       setCompanySuggestions([]);
     } else {
-      alert("?�???�패: " + (result.error ? result.error.message : "?????�는 ?�러"));
+      alert("저장 실패: " + (result.error ? result.error.message : "알 수 없는 에러"));
     }
   };
 
@@ -5940,7 +5992,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   };
 
   var deleteCase = async function(id) {
-    if (!window.confirm("?��??�으�??�동?�시겠습?�까?")) return;
+    if (!window.confirm("휴지통으로 이동하시겠습니까?")) return;
     var now = new Date().toISOString();
     var result = await supabase.from("agency_cases").update({ deleted_at: now }).eq("id", id);
     if (!result.error) setCases(function(prev) { return prev.map(function(c) { return c.id === id ? Object.assign({}, c, { deleted_at: now }) : c; }); });
@@ -5952,47 +6004,47 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   };
 
   var permanentDelete = async function(id) {
-    if (!window.confirm("?�구 ??��?�니?? 복구?????�습?�다.")) return;
+    if (!window.confirm("영구 삭제합니다. 복구할 수 없습니다.")) return;
     var result = await supabase.from("agency_cases").delete().eq("id", id);
     if (!result.error) setCases(function(prev) { return prev.filter(function(c) { return c.id !== id; }); });
   };
 
   var GUJOHYEOK_STATUS_OPTIONS = [
-    "?�작??,"?�류 ?�출 ?�료","?��?진단 ?�료","?�문 ?�원 배정","?�문 ?�원 ?�사 ?�료",
-    "컨설?�트 ?�청 ?�료","컨설??진행�?,"컨설??최종 ?�료","?�인 ?�청???�출 ?�료",
-    "?�산 ?�진?�로 컨설?�트 보류","?�산 ?�진?�로 ?�금 ?�청 보류","?�업?�환 ?�인"
+    "시작전","서류 제출 완료","자가진단 완료","전문 위원 배정","전문 위원 실사 완료",
+    "컨설턴트 신청 완료","컨설팅 진행중","컨설팅 최종 완료","승인 신청서 제출 완료",
+    "예산 소진으로 컨설턴트 보류","예산 소진으로 자금 신청 보류","사업전환 승인"
   ];
   var GUJOHYEOK_STATUS_COLORS = {
-    "?�작??:                       { bg: "#F7F6F3", text: "#888" },
-    "?�류 ?�출 ?�료":               { bg: "#E6F1FB", text: "#185FA5" },
-    "?��?진단 ?�료":                { bg: "#E6F1FB", text: "#0C447C" },
-    "?�문 ?�원 배정":               { bg: "#FAEEDA", text: "#633806" },
-    "?�문 ?�원 ?�사 ?�료":          { bg: "#FAEEDA", text: "#412402" },
-    "컨설?�트 ?�청 ?�료":           { bg: "#FAEEDA", text: "#412402" },
-    "컨설??진행�?:                { bg: "#FAEEDA", text: "#412402" },
-    "컨설??최종 ?�료":             { bg: "#EAF3DE", text: "#27500A" },
-    "?�인 ?�청???�출 ?�료":        { bg: "#EAF3DE", text: "#173404" },
-    "?�산 ?�진?�로 컨설?�트 보류":  { bg: "#FAC775", text: "#412402" },
-    "?�산 ?�진?�로 ?�금 ?�청 보류": { bg: "#FAC775", text: "#412402" },
-    "?�업?�환 ?�인":                { bg: "#1D9E75", text: "#fff" },
+    "시작전":                       { bg: "#F7F6F3", text: "#888" },
+    "서류 제출 완료":               { bg: "#E6F1FB", text: "#185FA5" },
+    "자가진단 완료":                { bg: "#E6F1FB", text: "#0C447C" },
+    "전문 위원 배정":               { bg: "#FAEEDA", text: "#633806" },
+    "전문 위원 실사 완료":          { bg: "#FAEEDA", text: "#412402" },
+    "컨설턴트 신청 완료":           { bg: "#FAEEDA", text: "#412402" },
+    "컨설팅 진행중":                { bg: "#FAEEDA", text: "#412402" },
+    "컨설팅 최종 완료":             { bg: "#EAF3DE", text: "#27500A" },
+    "승인 신청서 제출 완료":        { bg: "#EAF3DE", text: "#173404" },
+    "예산 소진으로 컨설턴트 보류":  { bg: "#FAC775", text: "#412402" },
+    "예산 소진으로 자금 신청 보류": { bg: "#FAC775", text: "#412402" },
+    "사업전환 승인":                { bg: "#1D9E75", text: "#fff" },
   };
-  var DELIVERED_DOCS_OPTIONS = ["부??기업","?�인?�청??,"?�문?�원 ?�크립트","컨설???�크립트","최종 ?�크립트"];
-  var STATUS_OPTIONS = activeGroup === "구조?�신&?�업?�환"
+  var DELIVERED_DOCS_OPTIONS = ["부의 기업","승인신청서","전문위원 스크립트","컨설팅 스크립트","최종 스크립트"];
+  var STATUS_OPTIONS = activeGroup === "구조혁신&사업전환"
     ? GUJOHYEOK_STATUS_OPTIONS
-    : ["?�작 ??,"진행 �?,"?�사�?,"?�사?��?,"최종?�출","?�선???��?","기�? 방문 ??,"기�? 방문 ???��?,"?�라???�청 ???��?,"?�태 조사 ?�정","?�태 조사 ?�료","?�인","?�정","?�료","부�?,"반려","진행불�?","?�청취소","보류"];
+    : ["시작 전","진행 중","심사중","심사대기","최종제출","우선도 평가","기관 방문 전","기관 방문 후 대기","온라인 신청 후 대기","실태 조사 예정","실태 조사 완료","승인","약정","완료","부결","반려","진행불가","신청취소","보류"];
 
   var PRIORITY_CHECKLIST = [
-    { category: "고용지??, items: ["고용창출 ?�적 보유기업","?�일채용공제 가?????�자�??��? 기업","?�재?�성??중소기업","가족친?�인증기??지??,"채용계획기업(6개월 ?�내)"] },
-    { category: "기술지???�산 ??3???�내)", items: ["?�허,?�용?�안??지?�재?�권 보유(3???�내 ?�록)","기업부?�연구소,?�구개발?�담부??보유","?�?�권 보유(3???�내 ?�록)","?�산 3???�내 ?�품 개발?�적 보유","Inno-Biz ?�증","?�기??NET,NEP) ?�증","지?�재?�경?�인증기??,"?�색기술?�증","뿌리기술?�문기업","벤처기업","매출???��??�구개발비중??5% ?�상"] },
-    { category: "경영지??, items: ["Main-Biz ?�증","명문?�수기업","매출???�업?�익률이 ?�종?�계 ?�균?�업?�익률의 2�??�상"] },
-    { category: "기업공개", items: ["5????코스??코넥???�장?�정기업","?��??�자?�치 ?�적 보유"] },
-    { category: "?�출?�적", items: ["최근 1?�간 ?�출?�적(간접?�함)보유"] },
-    { category: "그린기술", items: ["?�염물질 ?��??�비,?�?�소·?�너지 ?�율???�경?�염방�? ?�비 ???�입","?�소중립???�마?�공??지?�사???�약","?��??�재 ?�을 친환�??�재�??�환","?�소중립 경영?�신 컨설???�정","?�재?�에?��?,?�소?��???그린분야 ?�위기업 ?�는 기술 ?�업??기업","?�소중립 ?�환지?�사???�정기업"] },
-    { category: "?�마?�화", items: ["?��? ?�의 ?�마?�공??지?�사??참여기업","?�산?�율?��? ?�한 ?�동???�설 ?�입"] },
-    { category: "?�기지??, items: ["?�업?�환 계획 ?�인기업(?�인?�로부??5????","?�업?�환 계획기업(?�력 3??종업??5???�상)","구조개선?�용?�금 ?�건 ?�당기업","?�상변?��??�위?�기??지??지?�일로�???3????","?�업??개인기업 ?�는 법인기업 ?�영경험 보유(??주점???��? ?�외)","6개월 ?�내 경영?�로 ?�해 발생기업"] },
-    { category: "?�책?��?", items: ["?��???강소기업 100·?��??�업100·경쟁?�위?�회 추천기업","?�기?�니�?200","지??��???�도기업 ?�정","글로벌 강소기업","?�성기업","무명???�출?�사","?�튼???�수기업","글로벌 강소기업 1000+(강소?�상)","?�출�??��???,"?�출?��???계획보유"] },
-    { category: "창업준�?, items: ["중기부 기술창업?�성??지?�사??�?��창업?��??�교 ?? 졸업 ?�는 ?�상기업","창업진흥???�비창업?�키지 ?�업 참여기업","창업기업?�인??보유기업","?�비창업???�업?�등록번?��? ?�는 ?�태)"] },
-    { category: "?�회??경제기업", items: ["?�회?�기??,"?�비?�회?�기??,"마을기업","?�활기업","?�동조합(?�동조합기본법에 근거???�동조합�??�당)","?�셜벤처기업"] },
+    { category: "고용지표", items: ["고용창출 실적 보유기업","내일채용공제 가입 등 일자리 유지 기업","인재육성형 중소기업","가족친화인증기업 지정","채용계획기업(6개월 이내)"] },
+    { category: "기술지표(양산 후 3년 이내)", items: ["특허,실용신안등 지적재산권 보유(3년 이내 등록)","기업부설연구소,연구개발전담부서 보유","저작권 보유(3년 이내 등록)","양산 3년 이내 제품 개발실적 보유","Inno-Biz 인증","신기술(NET,NEP) 인증","지식재산경영인증기업","녹색기술인증","뿌리기술전문기업","벤처기업","매출액 대비 연구개발비중이 5% 이상"] },
+    { category: "경영지표", items: ["Main-Biz 인증","명문장수기업","매출액 영업이익률이 동종업계 평균영업이익률의 2배 이상"] },
+    { category: "기업공개", items: ["5년 내 코스닥,코넥스 상장예정기업","외부투자유치 실적 보유"] },
+    { category: "수출실적", items: ["최근 1년간 수출실적(간접포함)보유"] },
+    { category: "그린기술", items: ["오염물질 저감 설비,저탄소·에너지 효율화,환경오염방지 설비 등 도입","탄소중립형 스마트공장 지원사업 협약","원부자재 등을 친환경 소재로 전환","탄소중립 경영혁신 컨설팅 선정","신재생에너지,탄소저감 등 그린분야 영위기업 또는 기술 사업화 기업","탄소중립 전환지원사업 선정기업"] },
+    { category: "스마트화", items: ["정부 등의 스마트공장 지원사업 참여기업","생산효율화를 위한 자동화 시설 도입"] },
+    { category: "재기지원", items: ["사업전환 계획 승인기업(승인일로부터 5년 내)","사업전환 계획기업(업력 3년,종업원 5인 이상)","구조개선전용자금 요건 해당기업","통상변화대응위원기업 지정(지정일로부터 3년 내)","폐업한 개인기업 또는 법인기업 운영경험 보유(단,주점업 등은 제외)","6개월 이내 경영에로 피해 발생기업"] },
+    { category: "정책우대", items: ["소부장 강소기업 100·스타트업100·경쟁력위원회 추천기업","아기유니콘 200","지역혁신 선도기업 선정","글로벌 강소기업","여성기업","무명의 수출용사","튼튼한 내수기업","글로벌 강소기업 1000+(강소이상)","수출국 다변화","수출다변화 계획보유"] },
+    { category: "창업준비", items: ["중기부 기술창업활성화 지원사업(청년창업사관학교 등) 졸업 또는 수상기업","창업진흥원 예비창업패키지 사업 참여기업","창업기업확인서 보유기업","예비창업자(사업자등록번호가 없는 상태)"] },
+    { category: "사회적 경제기업", items: ["사회적기업","예비사회적기업","마을기업","자활기업","협동조합(협동조합기본법에 근거한 협동조합만 해당)","소셜벤처기업"] },
   ];
 
   const [showPriorityModal, setShowPriorityModal] = useState(false);
@@ -6011,47 +6063,47 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     if (!r.error) {
       setCases(function(prev) { return prev.map(function(c) { return c.id === priorityTarget.id ? Object.assign({}, c, { priority_checks: JSON.stringify(priorityChecks) }) : c; }); });
       setShowPriorityModal(false);
-      alert("체크리스?��? ?�?�됐?�요!");
+      alert("체크리스트가 저장됐어요!");
     }
   };
 
   if (loading) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", flexDirection: "column", gap: 16 }}>
       <div style={{ width: 36, height: 36, border: "3px solid #E8E5E0", borderTopColor: "#1A1917", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-      <span style={{ color: "#888", fontSize: 13 }}>기�?�??�황 불러?�는 �?..</span>
+      <span style={{ color: "#888", fontSize: 13 }}>기관별 현황 불러오는 중...</span>
     </div>
   );
 
   return (
     <div>
-      {/* ?�더 */}
+      {/* 헤더 */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>기�?�??�황</h1>
-          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>기�? · ?�별 진행건을 ?�눈??/p>
+          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>기관별 현황</h1>
+          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>기관 · 월별 진행건을 한눈에</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={openAddCase}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-            <Icon name="plus" size={14} color="#fff" /> ?�규 추�?
+            <Icon name="plus" size={14} color="#fff" /> 신규 추가
           </button>
           <button onClick={function() { setShowTrash(true); }}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
-            ?���??��???trashedCases.length > 0 ? " (" + trashedCases.length + ")" : ""}
+            🗑️ 휴지통{trashedCases.length > 0 ? " (" + trashedCases.length + ")" : ""}
           </button>
           <button onClick={function() { fetchCases(); fetchCompanies(); }}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#555", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
-            <Icon name="refresh" size={13} color="#555" /> ?�로고침
+            <Icon name="refresh" size={13} color="#555" /> 새로고침
           </button>
         </div>
       </div>
 
-      {/* 기�? ??*/}
+      {/* 기관 탭 */}
       <div style={{ display: "flex", gap: 6, marginBottom: 18, flexWrap: "wrap" }}>
         {AGENCY_GROUPS.map(function(g) {
           var isActive = activeGroup === g.id;
           return (
-            <div key={g.id} onClick={function() { setActiveGroup(g.id); setEditingId(null); setFilterAssignee("?�체"); }}
+            <div key={g.id} onClick={function() { setActiveGroup(g.id); setEditingId(null); setFilterAssignee("전체"); }}
               style={{ padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: isActive ? 700 : 400,
                 background: isActive ? g.color : "#fff", color: isActive ? "#fff" : "#555",
                 border: isActive ? "none" : "1px solid #E8E5E0", transition: "all 0.15s" }}>
@@ -6061,41 +6113,41 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         })}
       </div>
 
-      {/* ????*/}
+      {/* 월 탭 */}
       <div style={{ display: "flex", gap: 4, marginBottom: 18, flexWrap: "wrap" }}>
         {[1,2,3,4,5,6,7,8,9,10,11,12].map(function(m) {
           var hasData = monthsWithData.has(m);
           var isActive = Number(activeMonth) === m;
           return (
-            <div key={m} onClick={function() { setActiveMonth(m); setEditingId(null); setFilterAssignee("?�체"); }}
+            <div key={m} onClick={function() { setActiveMonth(m); setEditingId(null); setFilterAssignee("전체"); }}
               style={{ padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: isActive ? 700 : 400,
                 background: isActive ? groupColor : hasData ? "#fff" : "#F7F6F3",
                 color: isActive ? "#fff" : hasData ? "#333" : "#CCC",
                 border: isActive ? "none" : hasData ? "1px solid #E8E5E0" : "1px solid #EDEBE8" }}>
-              {m}??hasData && !isActive ? " ?? : ""}
+              {m}월{hasData && !isActive ? " ●" : ""}
             </div>
           );
         })}
       </div>
 
-      {/* ?�약 카드 */}
+      {/* 요약 카드 */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
         {[
-          { label: "�?진행", value: summary.total, color: "#1A1917" },
-          { label: "?�인/?�정", value: summary.approved, color: "#047857" },
-          { label: "진행�?, value: summary.inProgress, color: "#4338CA" },
-          { label: "부�?반려", value: summary.rejected, color: "#DC2626" },
+          { label: "총 진행", value: summary.total, color: "#1A1917" },
+          { label: "승인/약정", value: summary.approved, color: "#047857" },
+          { label: "진행중", value: summary.inProgress, color: "#4338CA" },
+          { label: "부결/반려", value: summary.rejected, color: "#DC2626" },
         ].map(function(s) {
           return (
             <div key={s.label} style={{ background: "#fff", borderRadius: 10, padding: "16px 20px", border: "1px solid #E8E5E0" }}>
               <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>{s.label}</div>
-              <div style={{ fontSize: 28, fontWeight: 800, color: s.color }}>{s.value}�?/div>
+              <div style={{ fontSize: 28, fontWeight: 800, color: s.color }}>{s.value}건</div>
             </div>
           );
         })}
       </div>
 
-      {/* ?�당???�터 */}
+      {/* 담당자 필터 */}
       {assigneesInGroup.length > 1 && (
         <div style={{ display: "flex", gap: 5, marginBottom: 14, flexWrap: "wrap" }}>
           {assigneesInGroup.map(function(a) {
@@ -6111,12 +6163,12 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         </div>
       )}
 
-      {/* ?�이�?*/}
+      {/* 테이블 */}
       {filtered.length === 0 ? (
         <div style={{ background: "#fff", borderRadius: 10, padding: "60px 20px", textAlign: "center", color: "#AAA", fontSize: 14, border: "1px solid #E8E5E0" }}>
-          <div style={{ fontSize: 36, marginBottom: 12 }}>?��</div>
-          {activeGroup} {activeMonth}???�이?��? ?�습?�다<br />
-          <span style={{ fontSize: 12 }}>기업 목록?�서 기�?�??�청?�을 ?�정?�고 "기�?별현?�에 ?�록" 버튼???�러주세??/span>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>📋</div>
+          {activeGroup} {activeMonth}월 데이터가 없습니다<br />
+          <span style={{ fontSize: 12 }}>기업 목록에서 기관과 신청월을 설정하고 "기관별현황에 등록" 버튼을 눌러주세요</span>
         </div>
       ) : (
         <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #E8E5E0", overflow: "hidden" }}>
@@ -6124,22 +6176,22 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
             <thead>
               <tr style={{ background: "#F7F6F3", borderBottom: "2px solid #E8E5E0" }}>
                 <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, width: 30 }}>#</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>?�업?�명</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>?�?�자</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>?�당??/th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>사업자명</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>대표자</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>담당자</th>
                 <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>금액</th>
-                {(activeGroup === "중소벤처기업진흥공단" || activeGroup === "?�상공인?�장진흥공단") && (
-                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>?�청?�품</th>
+                {(activeGroup === "중소벤처기업진흥공단" || activeGroup === "소상공인시장진흥공단") && (
+                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>신청상품</th>
                 )}
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>?�종</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>지??/th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: activeGroup === "구조?�신&?�업?�환" ? "#BE123C" : "#888", fontSize: 11 }}>?�태</th>
-                {activeGroup === "구조?�신&?�업?�환" && (
-                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#0F6E56", fontSize: 11, background: "#E1F5EE" }}>?�달 �??�료 ?�류</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>업종</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>지역</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: activeGroup === "구조혁신&사업전환" ? "#BE123C" : "#888", fontSize: 11 }}>상태</th>
+                {activeGroup === "구조혁신&사업전환" && (
+                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#0F6E56", fontSize: 11, background: "#E1F5EE" }}>전달 및 완료 서류</th>
                 )}
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>?�용?�수</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>신용점수</th>
                 <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>비고</th>
-                <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 600, color: "#888", fontSize: 11, width: 80 }}>?�업</th>
+                <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 600, color: "#888", fontSize: 11, width: 80 }}>작업</th>
               </tr>
             </thead>
             <tbody>
@@ -6159,7 +6211,8 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                             {activeGroup === "중소벤처기업진흥공단" && (
                               <button onClick={function(e) { e.stopPropagation(); openPriority(row); }}
                                 style={{ fontSize: 10, padding: "2px 7px", background: "#F3F0FF", color: "#7C3AED", border: "1px solid #DDD6FE", borderRadius: 4, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>
-                                ?�� ?�선??                              </button>
+                                📋 우선도
+                              </button>
                             )}
                           </div>
                         )}
@@ -6174,7 +6227,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                       {isEditing
                         ? <select value={editData.assignee || ""} onChange={function(e) { var v = e.target.value; setEditData(function(p) { return Object.assign({}, p, { assignee: v }); }); }}
                             style={{ padding: "4px 6px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12 }}>
-                            <option value="">?�택</option>
+                            <option value="">선택</option>
                             {ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
                           </select>
                         : <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#EEF2FF", color: "#4338CA", fontWeight: 600 }}>{row.assignee || "-"}</span>}
@@ -6185,16 +6238,16 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                             style={{ padding: "4px 8px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, width: 70, boxSizing: "border-box" }} />
                         : <span style={{ fontSize: 12, color: "#555" }}>{row.request_amount || "-"}</span>}
                     </td>
-                    {(activeGroup === "중소벤처기업진흥공단" || activeGroup === "?�상공인?�장진흥공단") && (
+                    {(activeGroup === "중소벤처기업진흥공단" || activeGroup === "소상공인시장진흥공단") && (
                       <td style={{ padding: "10px 12px" }}>
                         {isEditing ? (
                           <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                             <select value={editData.fund_product || ""} onChange={function(e) { var v = e.target.value; setEditData(function(p) { return Object.assign({}, p, { fund_product: v }); }); }}
                               style={{ padding: "4px 6px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 11, maxWidth: 160 }}>
-                              <option value="">?�품 ?�택</option>
+                              <option value="">상품 선택</option>
                               {(activeGroup === "중소벤처기업진흥공단" ? JUNGINGONG_PRODUCTS : SOJINGONG_PRODUCTS).map(function(p) { return <option key={p} value={p}>{p}</option>; })}
                             </select>
-                            <input value={editData.fund_product || ""} placeholder="직접 ?�력" onChange={function(e) { var v = e.target.value; setEditData(function(p) { return Object.assign({}, p, { fund_product: v }); }); }}
+                            <input value={editData.fund_product || ""} placeholder="직접 입력" onChange={function(e) { var v = e.target.value; setEditData(function(p) { return Object.assign({}, p, { fund_product: v }); }); }}
                               style={{ padding: "4px 6px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 11, maxWidth: 160, boxSizing: "border-box" }} />
                           </div>
                         ) : (
@@ -6216,7 +6269,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                         : (
                           <div>
                             <div style={{ fontSize: 12, color: "#555" }}>{row.region || "-"}</div>
-                            {(activeGroup === "중소벤처기업진흥공단" || activeGroup === "구조?�신&?�업?�환") && row.region && findJungingongBranch(row.region) && (
+                            {(activeGroup === "중소벤처기업진흥공단" || activeGroup === "구조혁신&사업전환") && row.region && findJungingongBranch(row.region) && (
                               <div style={{ fontSize: 10, color: "#7C3AED", marginTop: 2, fontWeight: 600 }}>{findJungingongBranch(row.region)}</div>
                             )}
                           </div>
@@ -6229,18 +6282,18 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                             {STATUS_OPTIONS.map(function(s) { return <option key={s} value={s}>{s}</option>; })}
                           </select>
                         : (function() {
-                            var gsc = activeGroup === "구조?�신&?�업?�환"
+                            var gsc = activeGroup === "구조혁신&사업전환"
                               ? (GUJOHYEOK_STATUS_COLORS[row.status] || { bg: "#F7F6F3", text: "#888" })
                               : sc;
-                            var isApproved = row.status === "?�업?�환 ?�인";
+                            var isApproved = row.status === "사업전환 승인";
                             return (
                               <span style={{ fontSize: 11, padding: isApproved ? "4px 10px" : "3px 8px", borderRadius: 99, background: gsc.bg, color: gsc.text, fontWeight: 600, border: isApproved ? "1.5px solid #0F6E56" : "none", display: "inline-flex", alignItems: "center", gap: 3 }}>
-                                {isApproved && "??"}{row.status || "-"}
+                                {isApproved && "✓ "}{row.status || "-"}
                               </span>
                             );
                           })()}
                     </td>
-                    {activeGroup === "구조?�신&?�업?�환" && (
+                    {activeGroup === "구조혁신&사업전환" && (
                       <td style={{ padding: "10px 12px" }}>
                         {isEditing ? (
                           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -6286,7 +6339,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                     <td style={{ padding: "10px 12px", textAlign: "center" }}>
                       {isEditing ? (
                         <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
-                          <button onClick={saveEdit} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 6, padding: "5px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>?�??/button>
+                          <button onClick={saveEdit} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 6, padding: "5px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>저장</button>
                           <button onClick={function() { setEditingId(null); setEditData({}); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 6, padding: "5px 8px", fontSize: 11, cursor: "pointer" }}>취소</button>
                         </div>
                       ) : (
@@ -6306,19 +6359,19 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         </div>
       )}
 
-      {/* ?�선??체크리스??모달 */}
+      {/* 우선도 체크리스트 모달 */}
       {showPriorityModal && priorityTarget && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center" }}
           onClick={function(e) { if (e.target === e.currentTarget) setShowPriorityModal(false); }}>
           <div style={{ background: "#fff", borderRadius: 16, width: 720, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.25)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <div>
-                <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700 }}>?�� ?�책?�선??체크리스??/h2>
+                <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700 }}>📋 정책우선도 체크리스트</h2>
                 <div style={{ fontSize: 12, color: "#888", marginTop: 3 }}>{priorityTarget.business_name} · 중소벤처기업진흥공단</div>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={savePriorityChecks} style={{ background: "#7C3AED", color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>?�??/button>
-                <button onClick={function() { setShowPriorityModal(false); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#888" }}>??/button>
+                <button onClick={savePriorityChecks} style={{ background: "#7C3AED", color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
+                <button onClick={function() { setShowPriorityModal(false); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#888" }}>✕</button>
               </div>
             </div>
             <div style={{ padding: "20px 24px" }}>
@@ -6328,7 +6381,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                 PRIORITY_CHECKLIST.forEach(function(cat) { cat.items.forEach(function(item) { totalItems++; if (priorityChecks[item]) checkedItems++; }); });
                 return (
                   <div style={{ background: "#F3F0FF", borderRadius: 10, padding: "12px 16px", marginBottom: 20, display: "flex", gap: 20, alignItems: "center" }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: "#7C3AED" }}>�?{totalItems}�???�� �?<span style={{ fontSize: 18 }}>{checkedItems}</span>�??�당</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#7C3AED" }}>총 {totalItems}개 항목 중 <span style={{ fontSize: 18 }}>{checkedItems}</span>개 해당</div>
                     <div style={{ flex: 1, background: "#DDD6FE", borderRadius: 99, height: 8, overflow: "hidden" }}>
                       <div style={{ width: (checkedItems / totalItems * 100) + "%", background: "#7C3AED", height: "100%", borderRadius: 99, transition: "width 0.3s" }} />
                     </div>
@@ -6362,31 +6415,31 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         </div>
       )}
 
-      {/* ?��???모달 */}
+      {/* 휴지통 모달 */}
       {showTrash && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
           onClick={function(e) { if (e.target === e.currentTarget) setShowTrash(false); }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 600, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
-              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>?���??��???({trashedCases.length}�?</h2>
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ 휴지통 ({trashedCases.length}건)</h2>
               <button onClick={function() { setShowTrash(false); }} style={{ background: "none", border: "none", cursor: "pointer" }}><Icon name="x" size={18} color="#888" /></button>
             </div>
             <div style={{ padding: "16px 24px" }}>
               {trashedCases.length === 0 ? (
-                <div style={{ padding: "40px 0", textAlign: "center", color: "#CCC", fontSize: 13 }}>?��??�이 비어 ?�습?�다</div>
+                <div style={{ padding: "40px 0", textAlign: "center", color: "#CCC", fontSize: 13 }}>휴지통이 비어 있습니다</div>
               ) : (
                 trashedCases.map(function(row) {
                   return (
                     <div key={row.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderBottom: "1px solid #F0EDE8" }}>
                       <div>
                         <div style={{ fontSize: 13, fontWeight: 700 }}>{row.business_name}</div>
-                        <div style={{ fontSize: 11, color: "#AAA", marginTop: 2 }}>{row.agency_group} · {row.month}??· {row.assignee}</div>
+                        <div style={{ fontSize: 11, color: "#AAA", marginTop: 2 }}>{row.agency_group} · {row.month}월 · {row.assignee}</div>
                       </div>
                       <div style={{ display: "flex", gap: 6 }}>
                         <button onClick={function() { restoreCase(row.id); }}
                           style={{ background: "#EEF2FF", color: "#4338CA", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>복구</button>
                         <button onClick={function() { permanentDelete(row.id); }}
-                          style={{ background: "#FEF2F2", color: "#DC2626", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>?�구??��</button>
+                          style={{ background: "#FEF2F2", color: "#DC2626", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>영구삭제</button>
                       </div>
                     </div>
                   );
@@ -6397,24 +6450,24 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         </div>
       )}
 
-      {/* ?�규 진행�?추�? 모달 (?�동?�성 ?�함) */}
+      {/* 신규 진행건 추가 모달 (자동완성 포함) */}
       {showAddCase && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
           onClick={function(e) { if (e.target === e.currentTarget) { setShowAddCase(false); setCompanySuggestions([]); } }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 520, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>?�규 진행�?추�? ({activeGroup} {activeMonth}??</h2>
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>신규 진행건 추가 ({activeGroup} {activeMonth}월)</h2>
               <button onClick={function() { setShowAddCase(false); setCompanySuggestions([]); }} style={{ background: "none", border: "none", cursor: "pointer" }}>
                 <Icon name="x" size={18} color="#888" />
               </button>
             </div>
             <div style={{ padding: "20px 24px" }}>
-              {/* ?�업?�명 + ?�동?�성 */}
+              {/* 사업자명 + 자동완성 */}
               <div style={{ marginBottom: 13, position: "relative" }}>
                 <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>
-                  ?�업?�명 * <span style={{ color: "#4338CA", fontWeight: 400, marginLeft: 6 }}>(기업 목록 {companiesList.length}�?로드?????�력 ???�동?�성)</span>
+                  사업자명 * <span style={{ color: "#4338CA", fontWeight: 400, marginLeft: 6 }}>(기업 목록 {companiesList.length}개 로드됨 — 입력 시 자동완성)</span>
                 </label>
-                <input value={newCase.business_name || ""} placeholder="?�업?�명 ?�력"
+                <input value={newCase.business_name || ""} placeholder="사업자명 입력"
                   onChange={function(e) { onBusinessNameChange(e.target.value); }}
                   style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
                 {companySuggestions.length > 0 && (
@@ -6427,9 +6480,9 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                           onMouseLeave={function(e) { e.currentTarget.style.background = "#fff"; }}>
                           <div style={{ fontWeight: 700 }}>{co.name}</div>
                           <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
-                            {co.representative ? "?�?? " + co.representative : ""}
+                            {co.representative ? "대표: " + co.representative : ""}
                             {co.region ? " · " + co.region : ""}
-                            {co.assignee ? " · ?�당: " + co.assignee : ""}
+                            {co.assignee ? " · 담당: " + co.assignee : ""}
                           </div>
                         </div>
                       );
@@ -6438,27 +6491,27 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                 )}
               </div>
               <div style={{ marginBottom: 13 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>?�?�자�?/label>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>대표자명</label>
                 <input value={newCase.representative || ""} onChange={function(e) { var v = e.target.value; setNewCase(function(p) { return Object.assign({}, p, { representative: v }); }); }}
                   style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
               </div>
               <div style={{ marginBottom: 13 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>?�업?�등록번??/label>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>사업자등록번호</label>
                 <input value={newCase.business_number || ""} onChange={function(e) { var v = e.target.value; setNewCase(function(p) { return Object.assign({}, p, { business_number: v }); }); }}
                   style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 13 }}>
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>?�당??/label>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>담당자</label>
                   <select value={newCase.assignee || ""} onChange={function(e) { var v = e.target.value; setNewCase(function(p) { return Object.assign({}, p, { assignee: v }); }); }}
                     style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>
-                    <option value="">?�택</option>
+                    <option value="">선택</option>
                     {ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
                   </select>
                 </div>
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>?�태</label>
-                  <select value={newCase.status || "?�작 ??} onChange={function(e) { var v = e.target.value; setNewCase(function(p) { return Object.assign({}, p, { status: v }); }); }}
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>상태</label>
+                  <select value={newCase.status || "시작 전"} onChange={function(e) { var v = e.target.value; setNewCase(function(p) { return Object.assign({}, p, { status: v }); }); }}
                     style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>
                     {STATUS_OPTIONS.map(function(s) { return <option key={s} value={s}>{s}</option>; })}
                   </select>
@@ -6466,13 +6519,13 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 13 }}>
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>?�청금액</label>
-                  <input value={newCase.request_amount || ""} placeholder="?? 1?? 5천만" onChange={function(e) { var v = e.target.value; setNewCase(function(p) { return Object.assign({}, p, { request_amount: v }); }); }}
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>신청금액</label>
+                  <input value={newCase.request_amount || ""} placeholder="예: 1억, 5천만" onChange={function(e) { var v = e.target.value; setNewCase(function(p) { return Object.assign({}, p, { request_amount: v }); }); }}
                     style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
                 </div>
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>지??/label>
-                  <input value={newCase.region || ""} placeholder="?? ?�울_강남" onChange={function(e) { var v = e.target.value; setNewCase(function(p) { return Object.assign({}, p, { region: v }); }); }}
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>지역</label>
+                  <input value={newCase.region || ""} placeholder="예: 서울_강남" onChange={function(e) { var v = e.target.value; setNewCase(function(p) { return Object.assign({}, p, { region: v }); }); }}
                     style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
                 </div>
               </div>
@@ -6483,14 +6536,14 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
               </div>
               <button onClick={saveNewCase}
                 style={{ width: "100%", padding: "13px", background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer", marginTop: 6 }}>
-                ?�록?�기
+                등록하기
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* 기�?별현???�이?�패??*/}
+      {/* 기관별현황 사이드패널 */}
       {selectedCase && (
         <div style={{ position: "fixed", inset: 0, zIndex: 900 }} onClick={function() { setSelectedCase(null); }}>
           <div style={{ position: "absolute", top: 0, right: 0, width: 460, height: "100%", background: "#fff", boxShadow: "-4px 0 30px rgba(0,0,0,0.15)", overflowY: "auto" }}
@@ -6500,19 +6553,19 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                 <div style={{ fontSize: 16, fontWeight: 800 }}>{selectedCase.business_name}</div>
                 <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{activeGroup} · {selectedCase.assignee || "-"}</div>
               </div>
-              <button onClick={function() { setSelectedCase(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: "#888" }}>??/button>
+              <button onClick={function() { setSelectedCase(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: "#888" }}>✕</button>
             </div>
             <div style={{ padding: "20px 24px" }}>
-              {/* ?�태 변�?*/}
+              {/* 상태 변경 */}
               <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>?�태</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>상태</div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {(activeGroup === "구조?�신&?�업?�환" ? GUJOHYEOK_STATUS_OPTIONS : ["?�작 ??,"진행 �?,"보류","부�?,"?�인","?�료"]).map(function(s) {
-                    var sc = activeGroup === "구조?�신&?�업?�환"
+                  {(activeGroup === "구조혁신&사업전환" ? GUJOHYEOK_STATUS_OPTIONS : ["시작 전","진행 중","보류","부결","승인","완료"]).map(function(s) {
+                    var sc = activeGroup === "구조혁신&사업전환"
                       ? (GUJOHYEOK_STATUS_COLORS[s] || { bg: "#F7F6F3", text: "#888" })
                       : (STATUS_COLORS_MAP[s] || { bg: "#F7F6F3", text: "#888" });
                     var isActive = selectedCase.status === s;
-                    var isApproved = s === "?�업?�환 ?�인";
+                    var isApproved = s === "사업전환 승인";
                     return (
                       <button key={s} onClick={async function() {
                         var r = await supabase.from("agency_cases").update({ status: s, updated_at: new Date().toISOString() }).eq("id", selectedCase.id);
@@ -6520,13 +6573,13 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                           setCases(function(prev) { return prev.map(function(c) { return c.id === selectedCase.id ? Object.assign({}, c, { status: s }) : c; }); });
                           setSelectedCase(function(p) { return Object.assign({}, p, { status: s }); });
                         }
-                      }} style={{ padding: "5px 12px", borderRadius: 99, border: isActive ? (isApproved ? "2px solid #0F6E56" : "2px solid " + sc.text) : "1px solid #E8E5E0", background: isActive ? sc.bg : "#fff", color: isActive ? sc.text : "#888", fontSize: 12, fontWeight: isActive ? 700 : 400, cursor: "pointer" }}>{isApproved ? "??" + s : s}</button>
+                      }} style={{ padding: "5px 12px", borderRadius: 99, border: isActive ? (isApproved ? "2px solid #0F6E56" : "2px solid " + sc.text) : "1px solid #E8E5E0", background: isActive ? sc.bg : "#fff", color: isActive ? sc.text : "#888", fontSize: 12, fontWeight: isActive ? 700 : 400, cursor: "pointer" }}>{isApproved ? "✓ " + s : s}</button>
                     );
                   })}
                 </div>
-                {activeGroup === "구조?�신&?�업?�환" && (
+                {activeGroup === "구조혁신&사업전환" && (
                   <div style={{ marginTop: 16 }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: "#0F6E56", marginBottom: 8 }}>?�달 �??�료 ?�류</div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#0F6E56", marginBottom: 8 }}>전달 및 완료 서류</div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                       {DELIVERED_DOCS_OPTIONS.map(function(doc) {
                         var docs = Array.isArray(selectedCase.delivered_docs) ? selectedCase.delivered_docs : [];
@@ -6542,7 +6595,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                               }
                             }} style={{ margin: 0, width: 15, height: 15, cursor: "pointer" }} />
                             <span style={{ color: checked ? "#0F6E56" : "#555", fontWeight: checked ? 600 : 400 }}>{doc}</span>
-                            {checked && <span style={{ fontSize: 10, color: "#0F6E56" }}>??/span>}
+                            {checked && <span style={{ fontSize: 10, color: "#0F6E56" }}>✓</span>}
                           </label>
                         );
                       })}
@@ -6550,20 +6603,20 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                   </div>
                 )}
               </div>
-              {/* 기본 ?�보 */}
+              {/* 기본 정보 */}
               <div style={{ marginBottom: 20, background: "#F7F6F3", borderRadius: 8, padding: "14px 16px" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 10 }}>기본 ?�보</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 10 }}>기본 정보</div>
                 {(function() {
                   var matchedCo = companiesList.find(function(c) { return c.name === selectedCase.business_name; });
                   var indVal = matchedCo ? matchedCo.industry : null;
                   var items = [
-                    { label: "?�?�자", value: selectedCase.representative },
-                    { label: "?�업?�등록번??, value: selectedCase.business_number },
-                    { label: "?�종", value: indVal },
-                    { label: "?�청금액", value: selectedCase.request_amount },
-                    { label: "?�인금액", value: selectedCase.approved_amount },
-                    { label: "지??, value: selectedCase.region },
-                    { label: "?�청?�품", value: selectedCase.fund_product },
+                    { label: "대표자", value: selectedCase.representative },
+                    { label: "사업자등록번호", value: selectedCase.business_number },
+                    { label: "업종", value: indVal },
+                    { label: "신청금액", value: selectedCase.request_amount },
+                    { label: "승인금액", value: selectedCase.approved_amount },
+                    { label: "지역", value: selectedCase.region },
+                    { label: "신청상품", value: selectedCase.fund_product },
                   ];
                   return items;
                 })().map(function(item) {
@@ -6575,12 +6628,12 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                   ) : null;
                 })}
                 {!selectedCase.representative && !selectedCase.business_number && !selectedCase.request_amount && (
-                  <div style={{ fontSize: 12, color: "#AAA" }}>기본 ?�보가 ?�력?��? ?�았?�니??</div>
+                  <div style={{ fontSize: 12, color: "#AAA" }}>기본 정보가 입력되지 않았습니다.</div>
                 )}
               </div>
-              {/* ?�슈 메모 */}
+              {/* 이슈 메모 */}
               <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>?�� ?�슈 메모</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>📝 이슈 메모</div>
                 <textarea value={selectedCase.notes || ""}
                   onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { notes: e.target.value }); }); }}
                   onBlur={async function() {
@@ -6589,24 +6642,25 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                       setCases(function(prev) { return prev.map(function(c) { return c.id === selectedCase.id ? Object.assign({}, c, { notes: selectedCase.notes }) : c; }); });
                     }
                   }}
-                  placeholder="?�슈 ?�용???�력?�세??.."
+                  placeholder="이슈 내용을 입력하세요..."
                   rows={4} style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.6, resize: "vertical", boxSizing: "border-box", outline: "none", fontFamily: "inherit" }} />
-                <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>?�력 ??�?�??�릭 ???�동 ?�??/div>
+                <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>입력 후 칸 밖 클릭 시 자동 저장</div>
               </div>
 
-              {/* ?�� 추�? ?�보 (?�이?�, 공단계정, ?�증???? */}
+              {/* 🆕 추가 정보 (아이핀, 공단계정, 인증서 등) */}
               <div style={{ marginBottom: 20, padding: "14px", background: "#F7F6F3", borderRadius: 10, border: "1px solid #E8E5E0" }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: "#1A1917", marginBottom: 12 }}>?�� 추�? ?�보</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#1A1917", marginBottom: 12 }}>🔐 추가 정보</div>
                 {(function() {
-                  // ?�업?�번???�동 가?�오�?(기업 목록?�서 매칭)
+                  // 사업자번호 자동 가져오기 (기업 목록에서 매칭)
                   var matchedCo = companiesList.find(function(c) { return c.name === selectedCase.business_name; });
                   var autoBizNum = matchedCo ? matchedCo.business_number : null;
 
-                  // 공통 input ?��???                  var inputStyle = { width: "100%", padding: "8px 10px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 12, background: "#fff", outline: "none", boxSizing: "border-box", fontFamily: "inherit" };
+                  // 공통 input 스타일
+                  var inputStyle = { width: "100%", padding: "8px 10px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 12, background: "#fff", outline: "none", boxSizing: "border-box", fontFamily: "inherit" };
                   var labelStyle = { fontSize: 10, fontWeight: 700, color: "#888", marginBottom: 4, display: "block" };
                   var rowStyle = { marginBottom: 10 };
 
-                  // ?�드 ?�동 ?�???�퍼
+                  // 필드 자동 저장 헬퍼
                   var saveField = async function(fieldName, value) {
                     var updateObj = {};
                     updateObj[fieldName] = value;
@@ -6619,24 +6673,24 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
 
                   return (
                     <>
-                      {/* ?�업?�번??(?�동) */}
+                      {/* 사업자번호 (자동) */}
                       <div style={rowStyle}>
-                        <label style={labelStyle}>?�업?�번??(기업 목록?�서 ?�동)</label>
-                        <input type="text" value={autoBizNum || "기업 목록???�록?��? ?�음"} readOnly
+                        <label style={labelStyle}>사업자번호 (기업 목록에서 자동)</label>
+                        <input type="text" value={autoBizNum || "기업 목록에 등록되지 않음"} readOnly
                           style={Object.assign({}, inputStyle, { background: "#F0EDE8", color: autoBizNum ? "#1A1917" : "#AAA", cursor: "not-allowed" })} />
                       </div>
 
-                      {/* ?�이?� 계정 + 비번 */}
+                      {/* 아이핀 계정 + 비번 */}
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
                         <div>
-                          <label style={labelStyle}>?�이?� 계정</label>
+                          <label style={labelStyle}>아이핀 계정</label>
                           <input type="text" value={selectedCase.ipin_account || ""}
                             onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { ipin_account: e.target.value }); }); }}
                             onBlur={function() { saveField("ipin_account", selectedCase.ipin_account || ""); }}
                             placeholder="ID" style={inputStyle} />
                         </div>
                         <div>
-                          <label style={labelStyle}>?�이?� 비�?번호</label>
+                          <label style={labelStyle}>아이핀 비밀번호</label>
                           <input type="text" value={selectedCase.ipin_password || ""}
                             onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { ipin_password: e.target.value }); }); }}
                             onBlur={function() { saveField("ipin_password", selectedCase.ipin_password || ""); }}
@@ -6644,26 +6698,26 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                         </div>
                       </div>
 
-                      {/* 주�??�록번호 */}
+                      {/* 주민등록번호 */}
                       <div style={rowStyle}>
-                        <label style={labelStyle}>주�??�록번호</label>
+                        <label style={labelStyle}>주민등록번호</label>
                         <input type="text" value={selectedCase.resident_number || ""}
                           onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { resident_number: e.target.value }); }); }}
                           onBlur={function() { saveField("resident_number", selectedCase.resident_number || ""); }}
                           placeholder="000000-0000000" style={inputStyle} />
                       </div>
 
-                      {/* 공단 ?�이??+ 비번 */}
+                      {/* 공단 아이디 + 비번 */}
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
                         <div>
-                          <label style={labelStyle}>공단 ?�이??/label>
+                          <label style={labelStyle}>공단 아이디</label>
                           <input type="text" value={selectedCase.agency_login_id || ""}
                             onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { agency_login_id: e.target.value }); }); }}
                             onBlur={function() { saveField("agency_login_id", selectedCase.agency_login_id || ""); }}
                             placeholder="ID" style={inputStyle} />
                         </div>
                         <div>
-                          <label style={labelStyle}>공단 비�?번호</label>
+                          <label style={labelStyle}>공단 비밀번호</label>
                           <input type="text" value={selectedCase.agency_login_password || ""}
                             onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { agency_login_password: e.target.value }); }); }}
                             onBlur={function() { saveField("agency_login_password", selectedCase.agency_login_password || ""); }}
@@ -6671,21 +6725,21 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                         </div>
                       </div>
 
-                      {/* 개인 ?�증??+ ?�업???�증??비�?번호 */}
+                      {/* 개인 인증서 + 사업자 인증서 비밀번호 */}
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
                         <div>
-                          <label style={labelStyle}>개인 ?�증??비번</label>
+                          <label style={labelStyle}>개인 인증서 비번</label>
                           <input type="text" value={selectedCase.personal_cert_password || ""}
                             onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { personal_cert_password: e.target.value }); }); }}
                             onBlur={function() { saveField("personal_cert_password", selectedCase.personal_cert_password || ""); }}
-                            placeholder="개인 ?�증??PW" style={inputStyle} />
+                            placeholder="개인 인증서 PW" style={inputStyle} />
                         </div>
                         <div>
-                          <label style={labelStyle}>?�업???�증??비번</label>
+                          <label style={labelStyle}>사업자 인증서 비번</label>
                           <input type="text" value={selectedCase.business_cert_password || ""}
                             onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { business_cert_password: e.target.value }); }); }}
                             onBlur={function() { saveField("business_cert_password", selectedCase.business_cert_password || ""); }}
-                            placeholder="?�업???�증??PW" style={inputStyle} />
+                            placeholder="사업자 인증서 PW" style={inputStyle} />
                         </div>
                       </div>
 
@@ -6696,34 +6750,34 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                             onChange={function(e) { var v = e.target.checked; setSelectedCase(function(p) { return Object.assign({}, p, { final_confirm: v }); }); saveField("final_confirm", v); }}
                             style={{ width: 16, height: 16, cursor: "pointer" }} />
                           <span style={{ fontSize: 12, fontWeight: 700, color: selectedCase.final_confirm ? "#047857" : "#888" }}>
-                            {selectedCase.final_confirm ? "??최종 컨펌 ?�료" : "최종 컨펌"}
+                            {selectedCase.final_confirm ? "✅ 최종 컨펌 완료" : "최종 컨펌"}
                           </span>
                         </label>
                       </div>
 
-                      {/* 추�? 메모 */}
+                      {/* 추가 메모 */}
                       <div style={{ marginBottom: 4 }}>
-                        <label style={labelStyle}>추�? 메모</label>
+                        <label style={labelStyle}>추가 메모</label>
                         <textarea value={selectedCase.extra_notes || ""}
                           onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { extra_notes: e.target.value }); }); }}
                           onBlur={function() { saveField("extra_notes", selectedCase.extra_notes || ""); }}
-                          placeholder="추�?�?기록???�용..."
+                          placeholder="추가로 기록할 내용..."
                           rows={3} style={Object.assign({}, inputStyle, { resize: "vertical", lineHeight: 1.5 })} />
                       </div>
 
-                      <div style={{ fontSize: 10, color: "#AAA", marginTop: 6 }}>�??�력 ??�?�??�릭 ???�동 ?�??/div>
+                      <div style={{ fontSize: 10, color: "#AAA", marginTop: 6 }}>각 입력 후 칸 밖 클릭 시 자동 저장</div>
                     </>
                   );
                 })()}
               </div>
 
-              {/* ?�체 ?�보 ?�정 버튼 */}
+              {/* 전체 정보 수정 버튼 */}
               <button onClick={function() {
                 setEditingId(selectedCase.id);
                 setEditData(Object.assign({}, selectedCase));
                 setSelectedCase(null);
               }} style={{ width: "100%", padding: "11px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                ?�️ ?�체 ?�보 ?�정
+                ✏️ 전체 정보 수정
               </button>
             </div>
           </div>
@@ -6733,15 +6787,15 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   );
 }
 
-// ?�?� DB리스??(?�규 고객 ?�담) ?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�
-const LEAD_STATUSES = ["미연??,"?�결","부??,"미팅","거절","보류","계약"];
+// ── DB리스트 (신규 고객 상담) ───────────────────────────────────────────────────
+const LEAD_STATUSES = ["미연락","연결","부재","미팅","거절","보류","계약"];
 const LEAD_STATUS_COLORS = {
-  "?�결": { bg: "#EEF2FF", text: "#4338CA" },
-  "부??: { bg: "#FFF7ED", text: "#C2410C" },
+  "연결": { bg: "#EEF2FF", text: "#4338CA" },
+  "부재": { bg: "#FFF7ED", text: "#C2410C" },
   "미팅": { bg: "#ECFDF5", text: "#047857" },
   "거절": { bg: "#FEF2F2", text: "#DC2626" },
   "보류": { bg: "#F5F3FF", text: "#7C3AED" },
-  "미연??: { bg: "#F7F6F3", text: "#888" },
+  "미연락": { bg: "#F7F6F3", text: "#888" },
   "계약": { bg: "#ECFDF5", text: "#047857" },
 };
 
@@ -6749,8 +6803,8 @@ function DBLeadsView() {
   const [leads, setLeads] = useState([]);
   const [leadsLoading, setLeadsLoading] = useState(true);
   const [activeMonth, setActiveMonth] = useState(new Date().getMonth() + 1);
-  const [filterStatus, setFilterStatus] = useState("?�체");
-  const [filterWeek, setFilterWeek] = useState("?�체");
+  const [filterStatus, setFilterStatus] = useState("전체");
+  const [filterWeek, setFilterWeek] = useState("전체");
   const [editingId, setEditingId] = useState(null);
   const [editData, setEditData] = useState({});
   const [showAddLead, setShowAddLead] = useState(false);
@@ -6781,16 +6835,16 @@ function DBLeadsView() {
     }
   };
   var permanentDeleteLead = async function(id) {
-    if (!window.confirm("?�구 ??��?�니?? 복구?????�습?�다.")) return;
+    if (!window.confirm("영구 삭제합니다. 복구할 수 없습니다.")) return;
     var r = await supabase.from("db_leads").delete().eq("id", id);
     if (!r.error) setTrashedLeads(function(prev) { return prev.filter(function(l) { return l.id !== id; }); });
   };
 
-  // 1차콜 ?�짜?�서 주차 계산
+  // 1차콜 날짜에서 주차 계산
   var getWeek = function(lead) {
     var d = lead.call_1_date;
     if (!d) {
-      // 기존 call_1 ?�스?�에???�짜 추출 ?�도
+      // 기존 call_1 텍스트에서 날짜 추출 시도
       var txt = lead.call_1 || "";
       var m = txt.match(/(\d{1,2})\/(\d{1,2})/);
       if (m) {
@@ -6806,8 +6860,8 @@ function DBLeadsView() {
   var filtered = useMemo(function() {
     return leads.filter(function(l) {
       if (l.month !== activeMonth || l.year !== 2026 || l.deleted_at) return false;
-      if (filterStatus !== "?�체" && l.status !== filterStatus) return false;
-      if (filterWeek !== "?�체") {
+      if (filterStatus !== "전체" && l.status !== filterStatus) return false;
+      if (filterWeek !== "전체") {
         var w = getWeek(l);
         if (w !== parseInt(filterWeek)) return false;
       }
@@ -6840,11 +6894,11 @@ function DBLeadsView() {
     var all = leads.filter(function(l) { return l.month === activeMonth && l.year === 2026 && !l.deleted_at; });
     return {
       total: all.length,
-      connected: all.filter(function(l) { return l.status === "?�결"; }).length,
-      absent: all.filter(function(l) { return l.status === "부??; }).length,
+      connected: all.filter(function(l) { return l.status === "연결"; }).length,
+      absent: all.filter(function(l) { return l.status === "부재"; }).length,
       meeting: all.filter(function(l) { return l.status === "미팅"; }).length,
       rejected: all.filter(function(l) { return l.status === "거절"; }).length,
-      notCalled: all.filter(function(l) { return l.status === "미연??; }).length,
+      notCalled: all.filter(function(l) { return l.status === "미연락"; }).length,
     };
   }, [leads, activeMonth]);
 
@@ -6856,97 +6910,97 @@ function DBLeadsView() {
     if (!result.error) {
       setLeads(function(prev) { return prev.map(function(l) { return l.id === editData.id ? Object.assign({}, l, updates) : l; }); });
       setEditingId(null); setEditData({});
-      // 계약 ?�태�?변�???기업 목록 ?�동 ?�록 ?�안
+      // 계약 상태로 변경 시 기업 목록 자동 등록 제안
       if (editData.status === "계약") {
         var existCheck = await supabase.from("companies").select("id").eq("name", editData.business_name).single();
         if (existCheck.error) {
-          var doAdd = window.confirm("\"" + editData.business_name + "\"??계약?�어??\n기업 목록???�동?�로 추�??�까??");
+          var doAdd = window.confirm("\"" + editData.business_name + "\"이 계약됐어요!\n기업 목록에 자동으로 추가할까요?");
           if (doAdd) {
             await supabase.from("companies").insert({
               name: editData.business_name,
               phone: editData.contact || "",
               assignee: editData.assignee || "",
-              stage: "?�담/진단?�료",
+              stage: "상담/진단완료",
               type: "법인",
               fee: 5,
             });
-            alert("기업 목록??추�??�어?? 기업 목록?�서 추�? ?�보�??�력?�주?�요.");
+            alert("기업 목록에 추가됐어요! 기업 목록에서 추가 정보를 입력해주세요.");
           }
         }
       }
     }
   };
   var deleteLead = async function(id) {
-    if (!window.confirm("?��??�으�??�동?�시겠습?�까?")) return;
+    if (!window.confirm("휴지통으로 이동하시겠습니까?")) return;
     var now = new Date().toISOString();
     var result = await supabase.from("db_leads").update({ deleted_at: now }).eq("id", id);
     if (!result.error) { setLeads(function(prev) { return prev.map(function(l) { return l.id === id ? Object.assign({}, l, { deleted_at: now }) : l; }); }); }
   };
   var openAddLead = function() {
-    setNewLead({ year: 2026, month: activeMonth, business_name: "", contact: "", assignee: "", assigned_by: "", status: "미연??, call_1: "", call_2: "", call_3: "", call_4: "", call_5: "", etc: "" });
+    setNewLead({ year: 2026, month: activeMonth, business_name: "", contact: "", assignee: "", assigned_by: "", status: "미연락", call_1: "", call_2: "", call_3: "", call_4: "", call_5: "", etc: "" });
     setShowAddLead(true);
   };
   var saveNewLead = async function() {
-    if (!newLead.business_name) { alert("?�업?�명?� ?�수?�니??"); return; }
+    if (!newLead.business_name) { alert("사업자명은 필수입니다."); return; }
     var leadData = Object.assign({}, newLead, { contact: formatPhone(newLead.contact || "") });
     var result = await supabase.from("db_leads").insert(leadData).select().single();
     if (!result.error && result.data) { setLeads(function(prev) { return prev.concat([result.data]); }); setShowAddLead(false); }
   };
 
-  if (leadsLoading) return (<div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", flexDirection: "column", gap: 16 }}><div style={{ width: 36, height: 36, border: "3px solid #E8E5E0", borderTopColor: "#1A1917", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} /><span style={{ color: "#888", fontSize: 13 }}>DB리스??불러?�는 �?..</span></div>);
+  if (leadsLoading) return (<div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", flexDirection: "column", gap: 16 }}><div style={{ width: 36, height: 36, border: "3px solid #E8E5E0", borderTopColor: "#1A1917", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} /><span style={{ color: "#888", fontSize: 13 }}>DB리스트 불러오는 중...</span></div>);
 
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
-        <div><h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>DB리스??/h1><p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>?�규 고객 ?�담 · �?관�?/p></div>
+        <div><h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>DB리스트</h1><p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>신규 고객 상담 · 콜 관리</p></div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={openAddLead} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}><Icon name="plus" size={15} color="#F7F6F3" /> ?�규 ?�록</button>
-          <button onClick={function() { fetchTrashedLeads(); setShowLeadTrash(true); }} style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>?���??��???trashedLeads.length > 0 ? " (" + trashedLeads.length + ")" : ""}</button>
-          <button onClick={fetchLeads} style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#555", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}><Icon name="refresh" size={13} color="#555" /> ?�로고침</button>
+          <button onClick={openAddLead} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}><Icon name="plus" size={15} color="#F7F6F3" /> 신규 등록</button>
+          <button onClick={function() { fetchTrashedLeads(); setShowLeadTrash(true); }} style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>🗑️ 휴지통{trashedLeads.length > 0 ? " (" + trashedLeads.length + ")" : ""}</button>
+          <button onClick={fetchLeads} style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#555", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}><Icon name="refresh" size={13} color="#555" /> 새로고침</button>
         </div>
       </div>
 
-      {/* 검?�창 */}
+      {/* 검색창 */}
       <div style={{ marginBottom: 16, position: "relative" }}>
         <input value={dbSearch} onChange={function(e) { setDbSearch(e.target.value); }}
-          placeholder="?�� ?�체�? ?�락�? ?�당??검??.."
+          placeholder="🔍 업체명, 연락처, 담당자 검색..."
           style={{ width: "100%", padding: "10px 40px 10px 14px", border: "1px solid #E8E5E0", borderRadius: 10, fontSize: 13, boxSizing: "border-box", outline: "none", background: "#fff" }} />
-        {dbSearch && <button onClick={function() { setDbSearch(""); }} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#888" }}>??/button>}
+        {dbSearch && <button onClick={function() { setDbSearch(""); }} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#888" }}>✕</button>}
       </div>
 
       <div style={{ display: "flex", gap: 4, marginBottom: 18, flexWrap: "wrap" }}>
-        {MONTHS_LIST.map(function(m) { var hasData = monthsWithData.has(m); var isActive = activeMonth === m; return (<div key={m} onClick={function() { setActiveMonth(m); setFilterStatus("?�체"); }} style={{ padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: isActive ? 700 : 400, background: isActive ? "#1A1917" : hasData ? "#fff" : "#F7F6F3", color: isActive ? "#fff" : hasData ? "#333" : "#CCC", border: isActive ? "none" : hasData ? "1px solid #E8E5E0" : "1px solid #EDEBE8" }}>{m}??hasData && !isActive ? " ?? : ""}</div>); })}
+        {MONTHS_LIST.map(function(m) { var hasData = monthsWithData.has(m); var isActive = activeMonth === m; return (<div key={m} onClick={function() { setActiveMonth(m); setFilterStatus("전체"); }} style={{ padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: isActive ? 700 : 400, background: isActive ? "#1A1917" : hasData ? "#fff" : "#F7F6F3", color: isActive ? "#fff" : hasData ? "#333" : "#CCC", border: isActive ? "none" : hasData ? "1px solid #E8E5E0" : "1px solid #EDEBE8" }}>{m}월{hasData && !isActive ? " ●" : ""}</div>); })}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10, marginBottom: 18 }}>
-        {[{ label: "?�체", value: summary.total, color: "#1A1917" },{ label: "?�결", value: summary.connected, color: "#4338CA" },{ label: "부??, value: summary.absent, color: "#C2410C" },{ label: "미팅", value: summary.meeting, color: "#047857" },{ label: "거절", value: summary.rejected, color: "#DC2626" },{ label: "미연??, value: summary.notCalled, color: "#888" }].map(function(k, i) {
-          var isOn = filterStatus === k.label || (filterStatus === "?�체" && k.label === "?�체");
-          return (<div key={i} onClick={function() { setFilterStatus(k.label === "?�체" ? "?�체" : k.label); }} style={{ background: isOn ? "#1A1917" : "#fff", borderRadius: 10, padding: "12px 14px", border: "1px solid #E8E5E0", cursor: "pointer", textAlign: "center" }}><div style={{ fontSize: 10, color: isOn ? "#999" : "#888", marginBottom: 3 }}>{k.label}</div><div style={{ fontSize: 20, fontWeight: 700, color: isOn ? "#F7F6F3" : k.color }}>{k.value}�?/div></div>);
+        {[{ label: "전체", value: summary.total, color: "#1A1917" },{ label: "연결", value: summary.connected, color: "#4338CA" },{ label: "부재", value: summary.absent, color: "#C2410C" },{ label: "미팅", value: summary.meeting, color: "#047857" },{ label: "거절", value: summary.rejected, color: "#DC2626" },{ label: "미연락", value: summary.notCalled, color: "#888" }].map(function(k, i) {
+          var isOn = filterStatus === k.label || (filterStatus === "전체" && k.label === "전체");
+          return (<div key={i} onClick={function() { setFilterStatus(k.label === "전체" ? "전체" : k.label); }} style={{ background: isOn ? "#1A1917" : "#fff", borderRadius: 10, padding: "12px 14px", border: "1px solid #E8E5E0", cursor: "pointer", textAlign: "center" }}><div style={{ fontSize: 10, color: isOn ? "#999" : "#888", marginBottom: 3 }}>{k.label}</div><div style={{ fontSize: 20, fontWeight: 700, color: isOn ? "#F7F6F3" : k.color }}>{k.value}건</div></div>);
         })}
       </div>
 
       <div style={{ display: "flex", gap: 6, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
-        <span style={{ fontSize: 12, color: "#888", marginRight: 4 }}>주차�?</span>
-        {["?�체","1","2","3","4","5"].map(function(w) {
-          var label = w === "?�체" ? "?�체" : w + "주차";
-          var count = w === "?�체" ? "" : (weeksWithData[parseInt(w)] > 0 ? " (" + weeksWithData[parseInt(w)] + ")" : "");
+        <span style={{ fontSize: 12, color: "#888", marginRight: 4 }}>주차별:</span>
+        {["전체","1","2","3","4","5"].map(function(w) {
+          var label = w === "전체" ? "전체" : w + "주차";
+          var count = w === "전체" ? "" : (weeksWithData[parseInt(w)] > 0 ? " (" + weeksWithData[parseInt(w)] + ")" : "");
           return (<div key={w} onClick={function() { setFilterWeek(w); }} style={{ padding: "4px 12px", borderRadius: 99, cursor: "pointer", fontSize: 12, background: filterWeek === w ? "#1A1917" : "#fff", color: filterWeek === w ? "#F7F6F3" : "#666", border: filterWeek === w ? "none" : "1px solid #E8E5E0" }}>{label}{count}</div>);
         })}
       </div>
 
       <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
-        {filtered.length === 0 ? (<div style={{ padding: "60px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>{activeMonth}??DB리스???�이?��? ?�습?�다</div>) : (
+        {filtered.length === 0 ? (<div style={{ padding: "60px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>{activeMonth}월 DB리스트 데이터가 없습니다</div>) : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead><tr style={{ borderBottom: "2px solid #E8E5E0" }}>
                 <th style={{ textAlign: "center", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, width: 36 }}>#</th>
-                <th style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 120 }}>?�업?�명</th>
-                <th style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 100 }}>?�락�?/th>
-                <th style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 55 }}>?�당??/th>
+                <th style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 120 }}>사업자명</th>
+                <th style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 100 }}>연락처</th>
+                <th style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 55 }}>담당자</th>
                 <th style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 55 }}>배정</th>
-                <th style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 70 }}>?�태</th>
-                <th style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 200 }}>최근 �?/th>
-                <th style={{ textAlign: "center", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, width: 70 }}>?�업</th>
+                <th style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 70 }}>상태</th>
+                <th style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 200 }}>최근 콜</th>
+                <th style={{ textAlign: "center", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, width: 70 }}>작업</th>
               </tr></thead>
               <tbody>
                 {filtered.map(function(row, idx) {
@@ -6961,7 +7015,7 @@ function DBLeadsView() {
                     if (row["call_" + ci]) { lastCall = row["call_" + ci]; break; }
                   }
                   var sc = LEAD_STATUS_COLORS[row.status] || { bg: "#F7F6F3", text: "#888" };
-                  var CALL_STATUSES = ["?�화?�료","부??,"거절","문자발송","카톡발송","콜백?�청","미팅?�약","?�담?�료","?�신거�?"];
+                  var CALL_STATUSES = ["통화완료","부재","거절","문자발송","카톡발송","콜백요청","미팅예약","상담완료","수신거부"];
                   return [
                     <tr key={row.id} style={{ borderBottom: isExpanded ? "none" : "1px solid #F0EDE8", background: selectedLead && selectedLead.id === row.id ? "#F0FDF4" : isEditing ? "#FEFCE8" : idx % 2 === 0 ? "#fff" : "#FAFAF8", cursor: "pointer" }} onClick={function() { setSelectedLead(row); }}>
                       <td style={{ textAlign: "center", padding: "9px 8px", color: "#AAA", fontSize: 11 }}>{idx + 1}</td>
@@ -6994,7 +7048,7 @@ function DBLeadsView() {
                       <td style={{ textAlign: "center", padding: "9px 8px" }} onClick={function(e) { e.stopPropagation(); }}>
                         <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
                           {isEditing ? <>
-                            <button onClick={function(e) { e.stopPropagation(); saveEdit(); }} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 4, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>?�??/button>
+                            <button onClick={function(e) { e.stopPropagation(); saveEdit(); }} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 4, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>저장</button>
                             <button onClick={function(e) { e.stopPropagation(); cancelEdit(); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 4, padding: "3px 6px", fontSize: 11, cursor: "pointer" }}>취소</button>
                           </> : <>
                             <button onClick={function() { startEdit(row); setExpandedId(row.id); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Icon name="edit" size={14} color="#888" /></button>
@@ -7025,11 +7079,11 @@ function DBLeadsView() {
                                 onClick={function(e) { e.stopPropagation(); }}
                                 onChange={function(e) { e.stopPropagation(); var k = statusKey; var v = e.target.value; if (!isEditing) { startEdit(row); } setEditData(function(p) { var o = Object.assign({}, p); o[k] = v; return o; }); }}
                                 style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, flex: 1 }}>
-                                <option value="">?�태 ?�택</option>
+                                <option value="">상태 선택</option>
                                 {CALL_STATUSES.map(function(s) { return <option key={s} value={s}>{s}</option>; })}
                               </select>
                             </div>
-                            <input value={memoVal} placeholder="메모 ?�력"
+                            <input value={memoVal} placeholder="메모 입력"
                               onClick={function(e) { e.stopPropagation(); }}
                               onChange={function(e) { e.stopPropagation(); var k = memoKey; var v = e.target.value; if (!isEditing) { startEdit(row); } setEditData(function(p) { var o = Object.assign({}, p); o[k] = v; return o; }); }}
                               style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, width: "100%", boxSizing: "border-box" }} />
@@ -7037,15 +7091,15 @@ function DBLeadsView() {
                           </div>);
                         })}
                         <div style={{ background: "#fff", borderRadius: 8, padding: "8px 12px", border: "1px solid #E8E5E0" }}>
-                          <div style={{ fontSize: 10, color: "#888", fontWeight: 600, marginBottom: 3 }}>기�?</div>
-                          <input value={isEditing ? (editData.etc || "") : (row.etc || "")} placeholder="기�? 메모"
+                          <div style={{ fontSize: 10, color: "#888", fontWeight: 600, marginBottom: 3 }}>기타</div>
+                          <input value={isEditing ? (editData.etc || "") : (row.etc || "")} placeholder="기타 메모"
                             onChange={function(e) { var v = e.target.value; if (!isEditing) { startEdit(row); } setEditData(function(p) { return Object.assign({}, p, { etc: v }); }); }}
                             onClick={function(e) { e.stopPropagation(); }}
                             style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, width: "100%", boxSizing: "border-box" }} />
                         </div>
                         {isEditing && (
                           <div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, marginTop: 4 }}>
-                            <button onClick={function(e) { e.stopPropagation(); saveEdit(); }} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 6, padding: "8px 20px", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>?�??/button>
+                            <button onClick={function(e) { e.stopPropagation(); saveEdit(); }} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 6, padding: "8px 20px", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>저장</button>
                             <button onClick={function(e) { e.stopPropagation(); cancelEdit(); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 6, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>취소</button>
                           </div>
                         )}
@@ -7061,54 +7115,54 @@ function DBLeadsView() {
 
       {showAddLead && (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={function(e) { if (e.target === e.currentTarget) setShowAddLead(false); }}>
         <div style={{ background: "#fff", borderRadius: 14, width: 520, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
-          <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center" }}><h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>?�규 DB ?�록 ({activeMonth}??</h2><button onClick={function() { setShowAddLead(false); }} style={{ background: "none", border: "none", cursor: "pointer" }}><Icon name="x" size={18} color="#888" /></button></div>
+          <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center" }}><h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>신규 DB 등록 ({activeMonth}월)</h2><button onClick={function() { setShowAddLead(false); }} style={{ background: "none", border: "none", cursor: "pointer" }}><Icon name="x" size={18} color="#888" /></button></div>
           <div style={{ padding: "20px 24px" }}>
-            <div style={{ marginBottom: 13 }}><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>?�업?�명 *</label><input value={newLead.business_name || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { business_name: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} /></div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 13 }}><div><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>?�락�?/label><input value={newLead.contact || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { contact: e.target.value }); }); }} placeholder="010-0000-0000" style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} /></div><div><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>?�태</label><select value={newLead.status || "미연??} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { status: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>{LEAD_STATUSES.map(function(s) { return <option key={s} value={s}>{s}</option>; })}</select></div></div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 13 }}><div><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>?�당??/label><select value={newLead.assignee || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { assignee: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}><option value="">?�택</option>{DB_ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}</select></div><div><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>배정 ?�당</label><select value={newLead.assigned_by || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { assigned_by: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}><option value="">?�택</option>{DB_MANAGERS.map(function(a) { return <option key={a} value={a}>{a}</option>; })}</select></div></div>
+            <div style={{ marginBottom: 13 }}><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>사업자명 *</label><input value={newLead.business_name || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { business_name: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} /></div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 13 }}><div><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>연락처</label><input value={newLead.contact || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { contact: e.target.value }); }); }} placeholder="010-0000-0000" style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} /></div><div><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>상태</label><select value={newLead.status || "미연락"} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { status: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>{LEAD_STATUSES.map(function(s) { return <option key={s} value={s}>{s}</option>; })}</select></div></div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 13 }}><div><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>담당자</label><select value={newLead.assignee || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { assignee: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}><option value="">선택</option>{DB_ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}</select></div><div><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>배정 담당</label><select value={newLead.assigned_by || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { assigned_by: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}><option value="">선택</option>{DB_MANAGERS.map(function(a) { return <option key={a} value={a}>{a}</option>; })}</select></div></div>
             <div style={{ marginBottom: 13 }}><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>1차콜</label>
               <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
                 <input type="date" value={newLead.call_1_date || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { call_1_date: e.target.value }); }); }} style={{ flex: 1, padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13 }} />
                 <select value={newLead.call_1_status || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { call_1_status: e.target.value }); }); }} style={{ flex: 1, padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>
-                  <option value="">?�태 ?�택</option>
-                  <option value="?�화?�료">?�화?�료</option><option value="부??>부??/option><option value="거절">거절</option><option value="문자발송">문자발송</option><option value="카톡발송">카톡발송</option><option value="콜백?�청">콜백?�청</option><option value="미팅?�약">미팅?�약</option><option value="?�담?�료">?�담?�료</option><option value="?�신거�?">?�신거�?</option>
+                  <option value="">상태 선택</option>
+                  <option value="통화완료">통화완료</option><option value="부재">부재</option><option value="거절">거절</option><option value="문자발송">문자발송</option><option value="카톡발송">카톡발송</option><option value="콜백요청">콜백요청</option><option value="미팅예약">미팅예약</option><option value="상담완료">상담완료</option><option value="수신거부">수신거부</option>
                 </select>
               </div>
-              <input value={newLead.call_1_memo || ""} placeholder="1차콜 메모 (?�택)" onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { call_1_memo: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+              <input value={newLead.call_1_memo || ""} placeholder="1차콜 메모 (선택)" onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { call_1_memo: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
             </div>
             <div style={{ marginBottom: 13 }}><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>2차콜</label>
               <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
                 <input type="date" value={newLead.call_2_date || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { call_2_date: e.target.value }); }); }} style={{ flex: 1, padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13 }} />
                 <select value={newLead.call_2_status || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { call_2_status: e.target.value }); }); }} style={{ flex: 1, padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>
-                  <option value="">?�태 ?�택</option>
-                  <option value="?�화?�료">?�화?�료</option><option value="부??>부??/option><option value="거절">거절</option><option value="문자발송">문자발송</option><option value="카톡발송">카톡발송</option><option value="콜백?�청">콜백?�청</option><option value="미팅?�약">미팅?�약</option><option value="?�담?�료">?�담?�료</option><option value="?�신거�?">?�신거�?</option>
+                  <option value="">상태 선택</option>
+                  <option value="통화완료">통화완료</option><option value="부재">부재</option><option value="거절">거절</option><option value="문자발송">문자발송</option><option value="카톡발송">카톡발송</option><option value="콜백요청">콜백요청</option><option value="미팅예약">미팅예약</option><option value="상담완료">상담완료</option><option value="수신거부">수신거부</option>
                 </select>
               </div>
-              <input value={newLead.call_2_memo || ""} placeholder="2차콜 메모 (?�택)" onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { call_2_memo: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+              <input value={newLead.call_2_memo || ""} placeholder="2차콜 메모 (선택)" onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { call_2_memo: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
             </div>
-            <button onClick={saveNewLead} style={{ width: "100%", padding: "13px", background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer", marginTop: 6 }}>?�록?�기</button>
+            <button onClick={saveNewLead} style={{ width: "100%", padding: "13px", background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer", marginTop: 6 }}>등록하기</button>
           </div>
         </div>
       </div>)}
 
-      {/* DB리스???�이?�패??*/}
+      {/* DB리스트 사이드패널 */}
       {selectedLead && (
         <div style={{ position: "fixed", inset: 0, zIndex: 900 }} onClick={function() { setSelectedLead(null); }}>
           <div style={{ position: "absolute", top: 0, right: 0, width: 480, height: "100%", background: "#fff", boxShadow: "-4px 0 30px rgba(0,0,0,0.15)", overflowY: "auto" }}
             onClick={function(e) { e.stopPropagation(); }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: "#1A1917" }}>{selectedLead.business_name || "(미입??"}</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: "#1A1917" }}>{selectedLead.business_name || "(미입력)"}</div>
                 <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{selectedLead.contact || "-"} · {selectedLead.assignee || "-"}</div>
               </div>
-              <button onClick={function() { setSelectedLead(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: "#888" }}>??/button>
+              <button onClick={function() { setSelectedLead(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: "#888" }}>✕</button>
             </div>
             <div style={{ padding: "20px 24px" }}>
-              {/* 기본 ?�보 ?�정 */}
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 10, letterSpacing: "0.05em" }}>기본 ?�보</div>
+              {/* 기본 정보 수정 */}
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 10, letterSpacing: "0.05em" }}>기본 정보</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>?�업?�명</div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>사업자명</div>
                   <input value={selectedLead.business_name || ""}
                     onChange={function(e) { setSelectedLead(function(p) { return Object.assign({}, p, { business_name: e.target.value }); }); }}
                     onBlur={async function() {
@@ -7118,7 +7172,7 @@ function DBLeadsView() {
                     style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>?�락�?/div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>연락처</div>
                   <input value={selectedLead.contact || ""}
                     onChange={function(e) { setSelectedLead(function(p) { return Object.assign({}, p, { contact: formatPhone(e.target.value) }); }); }}
                     onBlur={async function() {
@@ -7129,7 +7183,7 @@ function DBLeadsView() {
                     style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>?�당??/div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>담당자</div>
                   <select value={selectedLead.assignee || ""}
                     onChange={async function(e) {
                       var v = e.target.value;
@@ -7140,12 +7194,12 @@ function DBLeadsView() {
                       }
                     }}
                     style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none", cursor: "pointer" }}>
-                    <option value="">?�택</option>
+                    <option value="">선택</option>
                     {DB_ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
                   </select>
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>배정??/div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>배정자</div>
                   <select value={selectedLead.assigned_by || ""}
                     onChange={async function(e) {
                       var v = e.target.value;
@@ -7156,15 +7210,15 @@ function DBLeadsView() {
                       }
                     }}
                     style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none", cursor: "pointer" }}>
-                    <option value="">?�택</option>
+                    <option value="">선택</option>
                     {DB_MANAGERS.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
                   </select>
                 </div>
               </div>
 
-              {/* ?�태 */}
+              {/* 상태 */}
               <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8, letterSpacing: "0.05em" }}>?�태</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8, letterSpacing: "0.05em" }}>상태</div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {LEAD_STATUSES.map(function(s) {
                     var sc = LEAD_STATUS_COLORS[s] || { bg: "#F7F6F3", text: "#888" };
@@ -7184,7 +7238,7 @@ function DBLeadsView() {
 
               {/* 1~5차콜 */}
               <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 10, letterSpacing: "0.05em" }}>�?기록</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 10, letterSpacing: "0.05em" }}>콜 기록</div>
                 {[1,2,3,4,5].map(function(ci) {
                   var dateKey = "call_" + ci + "_date";
                   var statusKey = "call_" + ci + "_status";
@@ -7212,13 +7266,13 @@ function DBLeadsView() {
                             }
                           }}
                           style={{ flex: 1, padding: "6px 8px", border: "1px solid #fff", borderRadius: 6, fontSize: 12, background: "#fff" }}>
-                          <option value="">?�태 ?�택</option>
-                          <option value="?�화?�료">?�화?�료</option><option value="부??>부??/option><option value="거절">거절</option>
-                          <option value="문자발송">문자발송</option><option value="카톡발송">카톡발송</option><option value="콜백?�청">콜백?�청</option>
-                          <option value="미팅?�약">미팅?�약</option><option value="?�담?�료">?�담?�료</option><option value="?�신거�?">?�신거�?</option>
+                          <option value="">상태 선택</option>
+                          <option value="통화완료">통화완료</option><option value="부재">부재</option><option value="거절">거절</option>
+                          <option value="문자발송">문자발송</option><option value="카톡발송">카톡발송</option><option value="콜백요청">콜백요청</option>
+                          <option value="미팅예약">미팅예약</option><option value="상담완료">상담완료</option><option value="수신거부">수신거부</option>
                         </select>
                       </div>
-                      <input value={selectedLead[memoKey] || ""} placeholder={ci + "차콜 메모 (?�택)"}
+                      <input value={selectedLead[memoKey] || ""} placeholder={ci + "차콜 메모 (선택)"}
                         onChange={function(e) { setSelectedLead(function(p) { return Object.assign({}, p, { [memoKey]: e.target.value }); }); }}
                         onBlur={async function() {
                           var u = {}; u[memoKey] = selectedLead[memoKey] || null; u.updated_at = new Date().toISOString();
@@ -7231,35 +7285,35 @@ function DBLeadsView() {
                 })}
               </div>
 
-              {/* ?�슈 메모 */}
+              {/* 이슈 메모 */}
               <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>?�� ?�슈 메모</div>
-                <textarea value={selectedLead.etc || ""} placeholder="?�슈 ?�용???�력?�세??.."
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>📝 이슈 메모</div>
+                <textarea value={selectedLead.etc || ""} placeholder="이슈 내용을 입력하세요..."
                   onChange={function(e) { setSelectedLead(function(p) { return Object.assign({}, p, { etc: e.target.value }); }); }}
                   onBlur={async function() {
                     var r = await supabase.from("db_leads").update({ etc: selectedLead.etc, updated_at: new Date().toISOString() }).eq("id", selectedLead.id);
                     if (!r.error) setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, { etc: selectedLead.etc }) : l; }); });
                   }}
                   rows={4} style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.6, resize: "vertical", boxSizing: "border-box", outline: "none", fontFamily: "inherit" }} />
-                <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>?�력 ??�?�??�릭 ???�동 ?�??/div>
+                <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>입력 후 칸 밖 클릭 시 자동 저장</div>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* DB리스???��???모달 */}
+      {/* DB리스트 휴지통 모달 */}
       {showLeadTrash && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
           onClick={function(e) { if (e.target === e.currentTarget) setShowLeadTrash(false); }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 600, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
-              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>?���?DB리스???��???({trashedLeads.length}�?</h2>
-              <button onClick={function() { setShowLeadTrash(false); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#888" }}>??/button>
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ DB리스트 휴지통 ({trashedLeads.length}건)</h2>
+              <button onClick={function() { setShowLeadTrash(false); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#888" }}>✕</button>
             </div>
             <div style={{ padding: "16px 24px" }}>
               {trashedLeads.length === 0 ? (
-                <div style={{ padding: "40px 0", textAlign: "center", color: "#CCC", fontSize: 13 }}>?��??�이 비어 ?�습?�다</div>
+                <div style={{ padding: "40px 0", textAlign: "center", color: "#CCC", fontSize: 13 }}>휴지통이 비어 있습니다</div>
               ) : (
                 trashedLeads.map(function(lead) {
                   var deletedAt = lead.deleted_at ? new Date(lead.deleted_at).toLocaleDateString("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
@@ -7267,11 +7321,11 @@ function DBLeadsView() {
                     <div key={lead.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderBottom: "1px solid #F0EDE8" }}>
                       <div>
                         <div style={{ fontWeight: 600, fontSize: 14 }}>{lead.business_name}</div>
-                        <div style={{ fontSize: 11, color: "#AAA", marginTop: 2 }}>??��?? {deletedAt} · {lead.assignee || "-"}</div>
+                        <div style={{ fontSize: 11, color: "#AAA", marginTop: 2 }}>삭제일: {deletedAt} · {lead.assignee || "-"}</div>
                       </div>
                       <div style={{ display: "flex", gap: 6 }}>
                         <button onClick={function() { restoreLead(lead.id); }} style={{ background: "#EEF2FF", color: "#4338CA", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>복구</button>
-                        <button onClick={function() { permanentDeleteLead(lead.id); }} style={{ background: "#FEE2E2", color: "#DC2626", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>?�구??��</button>
+                        <button onClick={function() { permanentDeleteLead(lead.id); }} style={{ background: "#FEE2E2", color: "#DC2626", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>영구삭제</button>
                       </div>
                     </div>
                   );
