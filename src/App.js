@@ -5036,7 +5036,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
   // - calSheet 변수에 따라 적절한 토큰 조회 (yangho → '양호', director → '이사님')
   // - refresh_token으로 자동 갱신 (영구 연동)
   // ─────────────────────────────────────────────────────────
-  const GCAL_REDIRECT_URI = window.location.origin + "/oauth-callback";
+  const GCAL_REDIRECT_URI = window.location.origin + "/";
   const sheetToUserLabel = function(sheet) {
     return sheet === "director" ? "이사님" : "양호";
   };
@@ -5046,7 +5046,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
     var userLabel = sheetToUserLabel(calSheet);
     var scope = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email";
     // state에 user_label 포함시켜 콜백 시 어떤 캘린더 연동인지 식별
-    var state = encodeURIComponent(JSON.stringify({ user_label: userLabel, sheet: calSheet }));
+    var state = encodeURIComponent(JSON.stringify({ sheet: calSheet }));
     var authUrl = "https://accounts.google.com/o/oauth2/v2/auth"
       + "?client_id=" + GOOGLE_CLIENT_ID
       + "&redirect_uri=" + encodeURIComponent(GCAL_REDIRECT_URI)
