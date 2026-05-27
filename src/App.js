@@ -5136,7 +5136,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
     if (code && stateParam) {
       var stateData = null;
       try { stateData = JSON.parse(decodeURIComponent(stateParam)); } catch (e) {}
-      if (!stateData || !stateData.user_label) {
+      if (!stateData || !stateData.sheet) {
         window.history.replaceState(null, "", window.location.pathname);
         return;
       }
@@ -5151,14 +5151,14 @@ function CalendarView({ companies, onSelectCompany, profile }) {
         },
         body: JSON.stringify({
           code: code,
-          user_label: stateData.user_label,
+          user_label: stateData.sheet,
           redirect_uri: GCAL_REDIRECT_URI,
         }),
       })
       .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
       .then(function(result) {
         if (result.ok) {
-          alert("✅ " + stateData.user_label + " 캘린더가 영구 연동되었습니다!\n(" + (result.data.google_email || "") + ")");
+          alert("✅ " + sheetToUserLabel(stateData.sheet) + " 캘린더가 영구 연동되었습니다!\n(" + (result.data.google_email || "") + ")");
           if (stateData.sheet) setCalSheet(stateData.sheet);
         } else {
           alert("❌ 연동 실패: " + (result.data.error || "알 수 없는 오류"));
