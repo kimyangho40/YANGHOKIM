@@ -1,4 +1,4 @@
-﻿/* eslint-disable no-unused-vars, react-hooks/exhaustive-deps, no-redeclare */
+/* eslint-disable no-unused-vars, react-hooks/exhaustive-deps, no-redeclare */
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
@@ -5036,7 +5036,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
   // - calSheet 변수에 따라 적절한 토큰 조회 (yangho → '양호', director → '이사님')
   // - refresh_token으로 자동 갱신 (영구 연동)
   // ─────────────────────────────────────────────────────────
-  const GCAL_REDIRECT_URI = window.location.origin + "/";
+  const GCAL_REDIRECT_URI = window.location.origin + "/oauth-callback";
   const sheetToUserLabel = function(sheet) {
     return sheet === "director" ? "이사님" : "양호";
   };
@@ -5046,7 +5046,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
     var userLabel = sheetToUserLabel(calSheet);
     var scope = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email";
     // state에 user_label 포함시켜 콜백 시 어떤 캘린더 연동인지 식별
-    var state = encodeURIComponent(JSON.stringify({ sheet: calSheet }));
+    var state = encodeURIComponent(JSON.stringify({ user_label: userLabel, sheet: calSheet }));
     var authUrl = "https://accounts.google.com/o/oauth2/v2/auth"
       + "?client_id=" + GOOGLE_CLIENT_ID
       + "&redirect_uri=" + encodeURIComponent(GCAL_REDIRECT_URI)
@@ -5084,7 +5084,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
 
   // [3] 구글 캘린더에서 일정 가져오기
   var fetchGoogleEventsForSheet = async function(sheet) {
-    var userLabel = sheet;
+    var userLabel = sheetToUserLabel(sheet);
     var tokenResult = await getValidAccessToken(userLabel);
     if (!tokenResult.ok) {
       setGConnected(false);
@@ -5136,7 +5136,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
     if (code && stateParam) {
       var stateData = null;
       try { stateData = JSON.parse(decodeURIComponent(stateParam)); } catch (e) {}
-      if (!stateData || !stateData.sheet) {
+      if (!stateData || !stateData.user_label) {
         window.history.replaceState(null, "", window.location.pathname);
         return;
       }
@@ -5151,14 +5151,14 @@ function CalendarView({ companies, onSelectCompany, profile }) {
         },
         body: JSON.stringify({
           code: code,
-          user_label: stateData.sheet,
+          user_label: stateData.user_label,
           redirect_uri: GCAL_REDIRECT_URI,
         }),
       })
       .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
       .then(function(result) {
         if (result.ok) {
-          alert("✅ " + sheetToUserLabel(stateData.sheet) + " 캘린더가 영구 연동되었습니다!\n(" + (result.data.google_email || "") + ")");
+          alert("✅ " + stateData.user_label + " 캘린더가 영구 연동되었습니다!\n(" + (result.data.google_email || "") + ")");
           if (stateData.sheet) setCalSheet(stateData.sheet);
         } else {
           alert("❌ 연동 실패: " + (result.data.error || "알 수 없는 오류"));
