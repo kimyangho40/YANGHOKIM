@@ -1,4 +1,4 @@
-/* eslint-disable no-unused-vars, react-hooks/exhaustive-deps, no-redeclare */
+﻿/* eslint-disable no-unused-vars, react-hooks/exhaustive-deps, no-redeclare */
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
@@ -5084,7 +5084,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
 
   // [3] 구글 캘린더에서 일정 가져오기
   var fetchGoogleEventsForSheet = async function(sheet) {
-    var userLabel = sheetToUserLabel(sheet);
+    var userLabel = sheet;
     var tokenResult = await getValidAccessToken(userLabel);
     if (!tokenResult.ok) {
       setGConnected(false);
