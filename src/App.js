@@ -1,4 +1,4 @@
-﻿/* eslint-disable no-unused-vars, react-hooks/exhaustive-deps, no-redeclare */
+/* eslint-disable no-unused-vars, react-hooks/exhaustive-deps, no-redeclare */
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
@@ -5036,7 +5036,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
   // - calSheet 변수에 따라 적절한 토큰 조회 (yangho → '양호', director → '이사님')
   // - refresh_token으로 자동 갱신 (영구 연동)
   // ─────────────────────────────────────────────────────────
-  const GCAL_REDIRECT_URI = window.location.origin + "/";
+  const GCAL_REDIRECT_URI = window.location.origin + "/oauth-callback";
   const sheetToUserLabel = function(sheet) {
     return sheet === "director" ? "이사님" : "양호";
   };
