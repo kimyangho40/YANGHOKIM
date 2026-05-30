@@ -5894,6 +5894,71 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   const [companiesList, setCompaniesList] = useState([]);
   const [selectedCase, setSelectedCase] = useState(null);
 
+  // 컬럼 너비 - 기관 그룹별로 localStorage에 저장
+  const DEFAULT_COL_WIDTHS = {
+    num: 40, business_name: 160, representative: 80, assignee: 80, amount: 110,
+    product: 140, industry: 100, region: 80, status: 110, docs: 200,
+    credit: 80, notes: 140, action: 80
+  };
+  const [colWidths, setColWidths] = useState(function() {
+    try {
+      var saved = localStorage.getItem("agencyColWidths_" + (jumpToGroup || "소상공인시장진흥공단"));
+      return saved ? Object.assign({}, DEFAULT_COL_WIDTHS, JSON.parse(saved)) : DEFAULT_COL_WIDTHS;
+    } catch (e) { return DEFAULT_COL_WIDTHS; }
+  });
+  // 그룹 바뀔 때 너비도 그 그룹 거로 복원
+  useEffect(function() {
+    try {
+      var saved = localStorage.getItem("agencyColWidths_" + activeGroup);
+      setColWidths(saved ? Object.assign({}, DEFAULT_COL_WIDTHS, JSON.parse(saved)) : DEFAULT_COL_WIDTHS);
+    } catch (e) { setColWidths(DEFAULT_COL_WIDTHS); }
+  }, [activeGroup]);
+
+  // 드래그 시작 - 헤더 핸들에서 호출
+  var startColResize = function(colKey, e) {
+    e.stopPropagation();
+    e.preventDefault();
+    var startX = e.clientX;
+    var startW = colWidths[colKey] || 100;
+    var onMove = function(ev) {
+      var newW = Math.max(40, startW + (ev.clientX - startX));
+      setColWidths(function(prev) {
+        var next = Object.assign({}, prev);
+        next[colKey] = newW;
+        return next;
+      });
+    };
+    var onUp = function() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      // 저장은 onUp에서 한 번만 (드래그 끝났을 때)
+      setColWidths(function(prev) {
+        try { localStorage.setItem("agencyColWidths_" + activeGroup, JSON.stringify(prev)); } catch (e) {}
+        return prev;
+      });
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
+
+  // 헤더 셀 공통 스타일 생성기
+  var headerCellStyle = function(colKey, extra) {
+    return Object.assign({
+      padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3",
+      width: colWidths[colKey], minWidth: colWidths[colKey], maxWidth: colWidths[colKey],
+      position: "relative", boxSizing: "border-box", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis"
+    }, extra || {});
+  };
+  // 드래그 핸들 컴포넌트 (헤더 오른쪽에 붙임)
+  var ResizeHandle = function(props) {
+    return (
+      <span onMouseDown={function(e) { startColResize(props.colKey, e); }}
+        style={{ position: "absolute", right: 0, top: 0, height: "100%", width: 6, cursor: "col-resize", userSelect: "none", zIndex: 3 }}
+        onClick={function(e) { e.stopPropagation(); }}
+        title="드래그해서 열 너비 조절" />
+    );
+  };
+
   var fetchCases = async function() {
     setLoading(true);
     // Supabase 1000건 기본 limit 우회: range로 페이징
@@ -6266,26 +6331,26 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       ) : (
         <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #E8E5E0", overflow: "hidden" }}>
           <div style={{ maxHeight: "calc(100vh - 280px)", overflowY: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
             <thead>
               <tr style={{ background: "#F7F6F3", borderBottom: "2px solid #E8E5E0", position: "sticky", top: 0, zIndex: 2 }}>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, width: 30, background: "#F7F6F3" }}>#</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3" }}>사업자명</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3" }}>대표자</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3" }}>담당자</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3" }}>금액</th>
+                <th style={headerCellStyle("num", { width: colWidths.num })}>#<ResizeHandle colKey="num" /></th>
+                <th style={headerCellStyle("business_name")}>사업자명<ResizeHandle colKey="business_name" /></th>
+                <th style={headerCellStyle("representative")}>대표자<ResizeHandle colKey="representative" /></th>
+                <th style={headerCellStyle("assignee")}>담당자<ResizeHandle colKey="assignee" /></th>
+                <th style={headerCellStyle("amount")}>금액<ResizeHandle colKey="amount" /></th>
                 {(activeGroup === "중소벤처기업진흥공단" || activeGroup === "소상공인시장진흥공단") && (
-                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3" }}>신청상품</th>
+                  <th style={headerCellStyle("product")}>신청상품<ResizeHandle colKey="product" /></th>
                 )}
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3" }}>업종</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3" }}>지역</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: activeGroup === "구조혁신&사업전환" ? "#BE123C" : "#888", fontSize: 11, background: "#F7F6F3" }}>상태</th>
+                <th style={headerCellStyle("industry")}>업종<ResizeHandle colKey="industry" /></th>
+                <th style={headerCellStyle("region")}>지역<ResizeHandle colKey="region" /></th>
+                <th style={headerCellStyle("status", { color: activeGroup === "구조혁신&사업전환" ? "#BE123C" : "#888" })}>상태<ResizeHandle colKey="status" /></th>
                 {activeGroup === "구조혁신&사업전환" && (
-                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#0F6E56", fontSize: 11, background: "#E1F5EE" }}>전달 및 완료 서류</th>
+                  <th style={headerCellStyle("docs", { color: "#0F6E56", background: "#E1F5EE" })}>전달 및 완료 서류<ResizeHandle colKey="docs" /></th>
                 )}
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3" }}>신용점수</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3" }}>비고</th>
-                <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 600, color: "#888", fontSize: 11, width: 80, background: "#F7F6F3" }}>작업</th>
+                <th style={headerCellStyle("credit")}>신용점수<ResizeHandle colKey="credit" /></th>
+                <th style={headerCellStyle("notes")}>비고<ResizeHandle colKey="notes" /></th>
+                <th style={headerCellStyle("action", { textAlign: "center" })}>작업<ResizeHandle colKey="action" /></th>
               </tr>
             </thead>
             <tbody>
