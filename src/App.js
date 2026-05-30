@@ -543,6 +543,24 @@ function CRMApp({ profile, session }) {
   const [notifications, setNotifications] = useState([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifRef = useRef(null);
+  const [sessionRemain, setSessionRemain] = useState(30 * 60); // 30분 = 1800초
+
+  // 세션 남은 시간 표시 + 활동 감지로 자동 연장
+  useEffect(function() {
+    var lastActivity = Date.now();
+    var resetActivity = function() { lastActivity = Date.now(); };
+    var events = ["mousedown", "keydown", "touchstart", "scroll"];
+    events.forEach(function(e) { window.addEventListener(e, resetActivity); });
+    var interval = setInterval(function() {
+      var elapsed = Math.floor((Date.now() - lastActivity) / 1000);
+      var remain = Math.max(0, 30 * 60 - elapsed);
+      setSessionRemain(remain);
+    }, 1000);
+    return function() {
+      clearInterval(interval);
+      events.forEach(function(e) { window.removeEventListener(e, resetActivity); });
+    };
+  }, []);
 
   // 알림 폴링 - 내 담당 새 노트 확인 (30초마다)
   useEffect(function() {
@@ -1095,9 +1113,12 @@ function CRMApp({ profile, session }) {
         <div style={{ padding: "12px 16px 20px", borderTop: "1px solid #2E2C29" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
             <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#2E2C29", display: "flex", alignItems: "center", justifyContent: "center", color: "#F7F6F3", fontSize: 13, fontWeight: 700 }}>{profile.name?.[0]}</div>
-            <div>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ color: "#F7F6F3", fontSize: 13, fontWeight: 600 }}>{profile.name}</div>
               <div style={{ color: "#555", fontSize: 11 }}>{profile.team} · {profile.role === "admin" ? "관리자" : "팀원"}</div>
+            </div>
+            <div title="세션 남은 시간 (활동 시 자동 연장)" style={{ fontSize: 10, color: sessionRemain < 300 ? "#FCA5A5" : "#888", fontFamily: "monospace", fontWeight: 600, whiteSpace: "nowrap" }}>
+              ⏱ {Math.floor(sessionRemain / 60)}:{String(sessionRemain % 60).padStart(2, "0")}
             </div>
           </div>
           <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
@@ -2207,7 +2228,9 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
           <thead>
             <tr style={{ background: "#F7F6F3", borderBottom: "1px solid #E8E5E0", position: "sticky", top: 0, zIndex: 2 }}>
               {["업체명","유형","지역","업종","대표자","담당","진행단계","정체일수","신청예정/자금","계약일","진행기관","23년~25년 매출","신용점수","기타","작업"].map(h => (
-                <th key={h} style={{ padding: "10px 8px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left", letterSpacing: "0.03em", whiteSpace: "nowrap", background: "#F7F6F3", maxWidth: h === "지역" ? 90 : h === "대표자" ? 70 : undefined }}>{h}</th>
+                <th key={h} style={Object.assign({ padding: "10px 8px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left", letterSpacing: "0.03em", whiteSpace: "nowrap", background: "#F7F6F3", maxWidth: h === "지역" ? 90 : h === "대표자" ? 70 : undefined },
+                  h === "업체명" ? { position: "sticky", left: 0, zIndex: 3, boxShadow: "2px 0 4px -2px rgba(0,0,0,0.08)" } : {}
+                )}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -2219,7 +2242,7 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
                   style={{ borderBottom: "1px solid #F0EDE8", cursor: editNameId === co.id ? "default" : "pointer", background: i % 2 === 0 ? "#fff" : "#FAFAF8" }}
                   onMouseOver={e => { if (editNameId !== co.id) e.currentTarget.style.background = "#F0F0EC"; }}
                   onMouseOut={e => e.currentTarget.style.background = i % 2 === 0 ? "#fff" : "#FAFAF8"}>
-                  <td style={{ padding: "11px 13px", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }} onClick={e => e.stopPropagation()}>
+                  <td style={{ padding: "11px 13px", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", position: "sticky", left: 0, background: i % 2 === 0 ? "#fff" : "#FAFAF8", zIndex: 1, boxShadow: "2px 0 4px -2px rgba(0,0,0,0.08)" }} onClick={e => e.stopPropagation()}>
                     {editNameId === co.id ? (
                       <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
                         <input value={editNameVal} onChange={function(e) { var v = e.target.value; setEditNameVal(v); }} autoFocus
@@ -5329,7 +5352,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
                 const hasFollowup = companies.some(c => FOLLOWUP_STAGES.includes(c.stage) && c.next_contact === dateStr);
                 return (
                   <div key={d} onClick={() => setSelectedDate(d)}
-                    style={{ minHeight: 80, borderBottom: "1px solid #F0EDE8", borderRight: "1px solid #F0EDE8", padding: "5px", cursor: "pointer", background: isSelected ? "#EEF2FF" : "transparent" }}
+                    style={{ minHeight: 100, borderBottom: "1px solid #F0EDE8", borderRight: "1px solid #F0EDE8", padding: "5px", cursor: "pointer", background: isSelected ? "#EEF2FF" : "transparent" }}
                     onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = "#F7F6F3"; }}
                     onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
@@ -5338,22 +5361,21 @@ function CalendarView({ companies, onSelectCompany, profile }) {
                       </div>
                       {hasFollowup && <span style={{ fontSize: 8, background: "#FEF3C7", color: "#B45309", borderRadius: 3, padding: "1px 3px", fontWeight: 700 }}>팔로업</span>}
                     </div>
-                    {crmEvs.slice(0, 2).map((ev, ei) => (
+                    {crmEvs.map((ev, ei) => (
                       <div key={ei} style={{ fontSize: 9, background: "#4338CA", color: "#fff", borderRadius: 3, padding: "1px 4px", marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.name}</div>
                     ))}
-                    {gEvs.slice(0, 1).map((ev, ei) => {
+                    {gEvs.map((ev, ei) => {
                       var gcol = getColorById(ev.color || "9");
                       return (
                         <div key={ei} style={{ fontSize: 9, background: gcol.bg, color: "#fff", borderRadius: 3, padding: "1px 4px", marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📅 {ev.title}</div>
                       );
                     })}
-                    {cEvs.slice(0, 2).map((ev, ei) => {
+                    {cEvs.map((ev, ei) => {
                       var col = getColorById(ev.color || "blue");
                       return (
                         <div key={`c-${ei}`} style={{ fontSize: 9, background: col.bg, color: "#fff", borderRadius: 3, padding: "1px 4px", marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.title}</div>
                       );
                     })}
-                    {(crmEvs.length + gEvs.length + cEvs.length) > 3 && <div style={{ fontSize: 9, color: "#888" }}>+{crmEvs.length + gEvs.length + cEvs.length - 3}</div>}
                   </div>
                 );
               })}
@@ -6243,26 +6265,27 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         </div>
       ) : (
         <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #E8E5E0", overflow: "hidden" }}>
+          <div style={{ maxHeight: "calc(100vh - 280px)", overflowY: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
-              <tr style={{ background: "#F7F6F3", borderBottom: "2px solid #E8E5E0" }}>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, width: 30 }}>#</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>사업자명</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>대표자</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>담당자</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>금액</th>
+              <tr style={{ background: "#F7F6F3", borderBottom: "2px solid #E8E5E0", position: "sticky", top: 0, zIndex: 2 }}>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, width: 30, background: "#F7F6F3" }}>#</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3" }}>사업자명</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3" }}>대표자</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3" }}>담당자</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3" }}>금액</th>
                 {(activeGroup === "중소벤처기업진흥공단" || activeGroup === "소상공인시장진흥공단") && (
-                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>신청상품</th>
+                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3" }}>신청상품</th>
                 )}
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>업종</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>지역</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: activeGroup === "구조혁신&사업전환" ? "#BE123C" : "#888", fontSize: 11 }}>상태</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3" }}>업종</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3" }}>지역</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: activeGroup === "구조혁신&사업전환" ? "#BE123C" : "#888", fontSize: 11, background: "#F7F6F3" }}>상태</th>
                 {activeGroup === "구조혁신&사업전환" && (
                   <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#0F6E56", fontSize: 11, background: "#E1F5EE" }}>전달 및 완료 서류</th>
                 )}
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>신용점수</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11 }}>비고</th>
-                <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 600, color: "#888", fontSize: 11, width: 80 }}>작업</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3" }}>신용점수</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600, color: "#888", fontSize: 11, background: "#F7F6F3" }}>비고</th>
+                <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 600, color: "#888", fontSize: 11, width: 80, background: "#F7F6F3" }}>작업</th>
               </tr>
             </thead>
             <tbody>
@@ -6432,10 +6455,9 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
-
-      {/* 우선도 체크리스트 모달 */}
       {showPriorityModal && priorityTarget && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center" }}
           onClick={function(e) { if (e.target === e.currentTarget) setShowPriorityModal(false); }}>
@@ -6621,9 +6643,12 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
 
       {/* 기관별현황 사이드패널 */}
       {selectedCase && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 900 }} onClick={function() { setSelectedCase(null); }}>
+        <div style={{ position: "fixed", inset: 0, zIndex: 900 }}
+          onMouseDown={function(e) { window.__panelMouseDownTarget = e.target; }}
+          onClick={function(e) { if (window.__panelMouseDownTarget === e.target) setSelectedCase(null); window.__panelMouseDownTarget = null; }}>
           <div style={{ position: "absolute", top: 0, right: 0, width: 460, height: "100%", background: "#fff", boxShadow: "-4px 0 30px rgba(0,0,0,0.15)", overflowY: "auto" }}
-            onClick={function(e) { e.stopPropagation(); }}>
+            onClick={function(e) { e.stopPropagation(); }}
+            onMouseDown={function(e) { e.stopPropagation(); }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 800 }}>{selectedCase.business_name}</div>
@@ -7227,9 +7252,12 @@ function DBLeadsView() {
 
       {/* DB리스트 사이드패널 */}
       {selectedLead && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 900 }} onClick={function() { setSelectedLead(null); }}>
+        <div style={{ position: "fixed", inset: 0, zIndex: 900 }}
+          onMouseDown={function(e) { window.__panelMouseDownTarget = e.target; }}
+          onClick={function(e) { if (window.__panelMouseDownTarget === e.target) setSelectedLead(null); window.__panelMouseDownTarget = null; }}>
           <div style={{ position: "absolute", top: 0, right: 0, width: 480, height: "100%", background: "#fff", boxShadow: "-4px 0 30px rgba(0,0,0,0.15)", overflowY: "auto" }}
-            onClick={function(e) { e.stopPropagation(); }}>
+            onClick={function(e) { e.stopPropagation(); }}
+            onMouseDown={function(e) { e.stopPropagation(); }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 800, color: "#1A1917" }}>{selectedLead.business_name || "(미입력)"}</div>
