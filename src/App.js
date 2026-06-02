@@ -5,7 +5,15 @@ import { createClient } from "@supabase/supabase-js";
 // ── Supabase 설정 ─────────────────────────────────────────────────────────────
 const SUPABASE_URL = "https://ujdrjvnihxjvbkezjvwc.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVqZHJqdm5paHhqdmJrZXpqdndjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzOTgzODIsImV4cCI6MjA5Mzk3NDM4Mn0.K0zbRGT8SrDBeZoDyc_VM61xAHZye8V0p0m2PemNUWM";
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+    storage: typeof window !== "undefined" ? window.localStorage : undefined,
+    storageKey: "sb-yanghokim-auth",
+  },
+});
 
 // ── 상수 ─────────────────────────────────────────────────────────────────────
 const STAGES = ["상담/진단완료", "필수서류 및 인증서요청", "기관신청대기/방문예정", "스크립트 전달 완료", "기관신청완료/방문완료", "심사중/실태조사대기", "실태조사완료/약정완료", "자금집행완료", "수수료대기 및 입금요청", "입금완료/사후관리", "추가 진행 예정", "추가 진행 중", "기타"];
@@ -683,24 +691,34 @@ function CRMApp({ profile, session }) {
 
   const logout = () => supabase.auth.signOut();
 
-  // Supabase 세션 자동 갱신 - 5분마다 토큰 refresh로 만료 방지
+  // 슬립/탭 전환 후 깨어나면 즉시 세션 복구
   useEffect(() => {
-    var refreshInterval = setInterval(async function() {
-      try {
-        var result = await supabase.auth.refreshSession();
-        if (result.error) console.warn("세션 갱신 실패:", result.error.message);
-      } catch (e) { console.warn("세션 갱신 예외:", e); }
-    }, 5 * 60 * 1000); // 5분마다
-    // 페이지 다시 보일 때(visibility) 즉시 갱신 - 슬립/탭전환 후 만료 방지
-    var onVisible = function() {
+    var onVisible = async function() {
       if (document.visibilityState === "visible") {
-        supabase.auth.refreshSession().catch(function() {});
+        try {
+          // 현재 세션 확인. 만료됐으면 자동 갱신
+          var { data: { session: cur } } = await supabase.auth.getSession();
+          if (!cur) {
+            // 세션 자체가 없으면 (이미 로그아웃됨) - 그냥 둠
+            return;
+          }
+          // 만료 시간 체크: expires_at은 초 단위 Unix timestamp
+          var now = Math.floor(Date.now() / 1000);
+          var expiresAt = cur.expires_at || 0;
+          if (expiresAt - now < 60) {
+            // 1분 이내 만료 예정이면 강제 갱신
+            await supabase.auth.refreshSession();
+          }
+        } catch (e) {
+          console.warn("세션 복구 실패:", e);
+        }
       }
     };
     document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
     return () => {
-      clearInterval(refreshInterval);
       document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
     };
   }, []);
 
@@ -2457,7 +2475,6 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   const [commLogs, setCommLogs] = useState([]);
   const [commInput, setCommInput] = useState("");
   const [loadingExtra, setLoadingExtra] = useState(false);
-  const [kakaoText, setKakaoText] = useState("");
   const sc = STAGE_COLORS[data.stage] || {};
 
   useEffect(function() {
@@ -2788,34 +2805,23 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
 
           {tab === "history" && (
             <>
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 12, color: "#888", marginBottom: 6, fontWeight: 600 }}>현재 이슈</div>
-                <textarea value={data.issue || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return { ...p, issue: v }; }); }}
-                  style={{ width: "100%", padding: "11px 13px", border: "1px solid #FED7AA", borderRadius: 8, fontSize: 13, resize: "vertical", minHeight: 80, background: "#FFF7ED", color: "#92400E", boxSizing: "border-box", outline: "none" }} />
-              </div>
-              <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 12, color: "#888", marginBottom: 6, fontWeight: 600 }}>차기 업무 / 다음 액션</div>
-                <textarea value={data.next_action || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return { ...p, next_action: v }; }); }}
-                  style={{ width: "100%", padding: "11px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, resize: "vertical", minHeight: 80, boxSizing: "border-box", outline: "none" }} />
-              </div>
-              <div style={{ background: "#F7F6F3", border: "1px solid #E8E5E0", borderRadius: 8, padding: "13px 15px" }}>
-                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10, color: "#555" }}>📋 카톡 공유용 소통 양식</div>
-                <textarea
-                  value={kakaoText}
-                  onChange={function(e) { setKakaoText(e.target.value); }}
-                  placeholder={"예시)\n[" + (data.name||"업체명") + "] / " + (data.representative||"대표자") + " 대표\n현재단계: " + (data.stage||"") + "\n이슈: \n다음액션: \n기한: \n담당: " + (data.assignee||"")}
-                  style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 12, lineHeight: 1.9, fontFamily: "monospace", resize: "vertical", minHeight: 130, background: "#fff", boxSizing: "border-box", outline: "none" }}
-                />
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <button onClick={function() {
-                    var defaultTxt = "[" + data.name + "] / " + data.representative + " 대표\n현재단계: " + data.stage + "\n이슈: " + (data.issue||"") + "\n다음액션: " + (data.next_action||"") + "\n기한: " + (data.next_contact||"") + "\n담당: " + (data.assignee||"");
-                    setKakaoText(defaultTxt);
-                  }} style={{ fontSize: 12, color: "#888", background: "none", border: "1px solid #E8E5E0", borderRadius: 6, padding: "5px 12px", cursor: "pointer" }}>기본값 불러오기</button>
-                  <button onClick={function() { navigator.clipboard?.writeText(kakaoText).then(function() {}); }}
-                    style={{ fontSize: 12, color: "#4338CA", background: "none", border: "1px solid #C7D2FE", borderRadius: 6, padding: "5px 12px", cursor: "pointer", fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}>
-                    <Icon name="copy" size={13} color="#4338CA" /> 복사하기
-                  </button>
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <div style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>현재 이슈</div>
+                  <div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 자유 형식</div>
                 </div>
+                <textarea value={data.issue || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return { ...p, issue: v }; }); }}
+                  placeholder={"예시:\n- 신용점수 부족 (685점)\n- 매출 감소 추세\n- 5/30까지 보완서류 제출 필요"}
+                  style={{ width: "100%", padding: "13px 15px", border: "1px solid #FED7AA", borderRadius: 8, fontSize: 13, lineHeight: 1.8, resize: "vertical", minHeight: 160, background: "#FFF7ED", color: "#92400E", boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <div style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>차기 업무 / 다음 액션</div>
+                  <div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 자유 형식</div>
+                </div>
+                <textarea value={data.next_action || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return { ...p, next_action: v }; }); }}
+                  placeholder={"예시:\n1. 5/28 화요일 14시 - 추가서류 안내\n2. 5/30 금요일 - 기관 방문 동행\n3. 6/3 - 결과 확인 및 다음 단계 안내"}
+                  style={{ width: "100%", padding: "13px 15px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.8, resize: "vertical", minHeight: 160, boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
               </div>
             </>
           )}
@@ -2924,10 +2930,13 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
             <div>
               {/* 소통 입력 */}
               <div style={{ background: "#F7F6F3", borderRadius: 10, padding: "14px", marginBottom: 16, border: "1px solid #E8E5E0" }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 8 }}>소통 내용 기록</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#555" }}>소통 내용 기록</div>
+                  <div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 여러 줄 OK</div>
+                </div>
                 <textarea value={commInput} onChange={function(e) { var v = e.target.value; setCommInput(v); }}
-                  placeholder="통화 결과, 방문 내용, 메모 등 자유롭게 입력하세요..."
-                  rows={3} style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, resize: "none", boxSizing: "border-box", outline: "none", lineHeight: 1.6 }} />
+                  placeholder={"예시:\n- 10:30 통화 - 대표 부재중\n- 11:15 다시 통화\n- 다음 주 월요일 방문 예약"}
+                  rows={6} style={{ width: "100%", padding: "12px 14px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, resize: "vertical", boxSizing: "border-box", outline: "none", lineHeight: 1.8, minHeight: 130, fontFamily: "inherit", whiteSpace: "pre-wrap" }} />
                 <button onClick={saveCommLog} disabled={!commInput.trim()}
                   style={{ width: "100%", marginTop: 8, padding: "10px", background: commInput.trim() ? "#1A1917" : "#E8E5E0", color: commInput.trim() ? "#F7F6F3" : "#AAA", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: commInput.trim() ? "pointer" : "not-allowed" }}>
                   저장
@@ -2953,7 +2962,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                             <span style={{ fontSize: 12, fontWeight: 600 }}>{log.assignee || log.logged_by || "-"}</span>
                             <span style={{ fontSize: 11, color: "#AAA" }}>{ts}</span>
                           </div>
-                          <div style={{ fontSize: 13, color: "#333", lineHeight: 1.6, background: "#F7F6F3", borderRadius: 8, padding: "9px 12px" }}>
+                          <div style={{ fontSize: 13, color: "#333", lineHeight: 1.7, background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", whiteSpace: "pre-wrap" }}>
                             {log.memo || log.note || "-"}
                           </div>
                         </div>
@@ -4091,10 +4100,10 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   var unpinned = filtered.filter(function(n) { return !n.pinned; });
 
   var saveNew = async function() {
-    // checkItems가 있으면 content로 변환해서 합치기 (마감일 [YYYY-MM-DD] 포함)
+    // checkItems가 있으면 content로 변환해서 합치기 (마감일 [YYYY-MM-DD] 포함, 체크 상태도 반영)
     var checkContent = (newNote.checkItems && newNote.checkItems.length > 0)
       ? newNote.checkItems.filter(function(i) { return i.text.trim(); }).map(function(i) {
-          var line = "- [ ] " + i.text.trim();
+          var line = "- [" + (i.checked ? "x" : " ") + "] " + i.text.trim();
           if (i.dueDate) line += " [" + i.dueDate + "]";
           return line;
         }).join("\n")
@@ -5909,7 +5918,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   const DEFAULT_COL_WIDTHS = {
     num: 40, business_name: 160, representative: 80, assignee: 80, amount: 110,
     product: 140, industry: 100, region: 80, status: 110, docs: 200,
-    credit: 80, notes: 140, action: 80
+    credit: 80, notes: 140, action: 120
   };
   const [colWidths, setColWidths] = useState(function() {
     try {
@@ -6000,6 +6009,37 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     if (!result.error) setCompaniesList(result.data || []);
   };
 
+  // 순서 이동 함수 - dir: -1(위) 또는 +1(아래)
+  var moveCaseOrder = async function(caseId, dir) {
+    // 현재 filtered 기준 같은 그룹/월의 항목들만 대상
+    var siblings = filtered;
+    var idx = siblings.findIndex(function(c) { return c.id === caseId; });
+    if (idx < 0) return;
+    var targetIdx = idx + dir;
+    if (targetIdx < 0 || targetIdx >= siblings.length) return;
+    var me = siblings[idx];
+    var other = siblings[targetIdx];
+    // 두 항목의 sort_order 값 교환
+    var myOrder = me.sort_order != null ? me.sort_order : (idx + 1) * 1000;
+    var otherOrder = other.sort_order != null ? other.sort_order : (targetIdx + 1) * 1000;
+    // 즉시 UI 반영 (낙관적 업데이트)
+    setCases(function(prev) {
+      return prev.map(function(c) {
+        if (c.id === me.id) return Object.assign({}, c, { sort_order: otherOrder });
+        if (c.id === other.id) return Object.assign({}, c, { sort_order: myOrder });
+        return c;
+      });
+    });
+    // DB 업데이트
+    try {
+      await supabase.from("agency_cases").update({ sort_order: otherOrder }).eq("id", me.id);
+      await supabase.from("agency_cases").update({ sort_order: myOrder }).eq("id", other.id);
+    } catch (e) {
+      console.warn("순서 변경 저장 실패:", e);
+      fetchCases(); // 실패 시 새로고침
+    }
+  };
+
   useEffect(function() { fetchCases(); fetchCompanies(); }, []);
 
   useEffect(function() {
@@ -6023,6 +6063,14 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         && !c.deleted_at
         && (filterAssignee === "전체" || c.assignee === filterAssignee)
         && matchStatus;
+    }).sort(function(a, b) {
+      // sort_order 우선, 없으면 created_at 순
+      var aOrder = a.sort_order != null ? a.sort_order : null;
+      var bOrder = b.sort_order != null ? b.sort_order : null;
+      if (aOrder != null && bOrder != null) return aOrder - bOrder;
+      if (aOrder != null) return -1;
+      if (bOrder != null) return 1;
+      return (a.created_at || "").localeCompare(b.created_at || "");
     });
   }, [cases, activeGroup, activeMonth, filterAssignee, currentYear, statusFilter]);
 
@@ -6549,10 +6597,14 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                           <button onClick={function() { setEditingId(null); setEditData({}); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 6, padding: "5px 8px", fontSize: 11, cursor: "pointer" }}>취소</button>
                         </div>
                       ) : (
-                        <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
-                          <button onClick={function() { setEditingId(row.id); setEditData(Object.assign({}, row)); }}
+                        <div style={{ display: "flex", gap: 2, justifyContent: "center", alignItems: "center" }}>
+                          <button onClick={function(e) { e.stopPropagation(); moveCaseOrder(row.id, -1); }} title="위로 이동"
+                            style={{ background: "none", border: "1px solid #E8E5E0", borderRadius: 4, cursor: "pointer", padding: "2px 5px", fontSize: 10, color: "#888", lineHeight: 1 }}>▲</button>
+                          <button onClick={function(e) { e.stopPropagation(); moveCaseOrder(row.id, +1); }} title="아래로 이동"
+                            style={{ background: "none", border: "1px solid #E8E5E0", borderRadius: 4, cursor: "pointer", padding: "2px 5px", fontSize: 10, color: "#888", lineHeight: 1 }}>▼</button>
+                          <button onClick={function(e) { e.stopPropagation(); setEditingId(row.id); setEditData(Object.assign({}, row)); }} title="수정"
                             style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Icon name="edit" size={14} color="#888" /></button>
-                          <button onClick={function() { deleteCase(row.id); }}
+                          <button onClick={function(e) { e.stopPropagation(); deleteCase(row.id); }} title="삭제"
                             style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Icon name="x" size={14} color="#CCC" /></button>
                         </div>
                       )}
