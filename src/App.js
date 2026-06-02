@@ -2812,7 +2812,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 </div>
                 <textarea value={data.issue || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return { ...p, issue: v }; }); }}
                   placeholder={"예시:\n- 신용점수 부족 (685점)\n- 매출 감소 추세\n- 5/30까지 보완서류 제출 필요"}
-                  style={{ width: "100%", padding: "13px 15px", border: "1px solid #FED7AA", borderRadius: 8, fontSize: 13, lineHeight: 1.8, resize: "vertical", minHeight: 160, background: "#FFF7ED", color: "#92400E", boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+                  style={{ width: "100%", padding: "13px 15px", border: "1px solid #FED7AA", borderRadius: 8, fontSize: 13, lineHeight: 1.8, resize: "vertical", minHeight: 320, background: "#FFF7ED", color: "#92400E", boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
               </div>
               <div style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
@@ -2821,7 +2821,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 </div>
                 <textarea value={data.next_action || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return { ...p, next_action: v }; }); }}
                   placeholder={"예시:\n1. 5/28 화요일 14시 - 추가서류 안내\n2. 5/30 금요일 - 기관 방문 동행\n3. 6/3 - 결과 확인 및 다음 단계 안내"}
-                  style={{ width: "100%", padding: "13px 15px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.8, resize: "vertical", minHeight: 160, boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+                  style={{ width: "100%", padding: "13px 15px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.8, resize: "vertical", minHeight: 320, boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
               </div>
             </>
           )}
@@ -2936,7 +2936,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 </div>
                 <textarea value={commInput} onChange={function(e) { var v = e.target.value; setCommInput(v); }}
                   placeholder={"예시:\n- 10:30 통화 - 대표 부재중\n- 11:15 다시 통화\n- 다음 주 월요일 방문 예약"}
-                  rows={6} style={{ width: "100%", padding: "12px 14px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, resize: "vertical", boxSizing: "border-box", outline: "none", lineHeight: 1.8, minHeight: 130, fontFamily: "inherit", whiteSpace: "pre-wrap" }} />
+                  rows={12} style={{ width: "100%", padding: "12px 14px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, resize: "vertical", boxSizing: "border-box", outline: "none", lineHeight: 1.8, minHeight: 260, fontFamily: "inherit", whiteSpace: "pre-wrap" }} />
                 <button onClick={saveCommLog} disabled={!commInput.trim()}
                   style={{ width: "100%", marginTop: 8, padding: "10px", background: commInput.trim() ? "#1A1917" : "#E8E5E0", color: commInput.trim() ? "#F7F6F3" : "#AAA", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: commInput.trim() ? "pointer" : "not-allowed" }}>
                   저장
