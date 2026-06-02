@@ -543,24 +543,6 @@ function CRMApp({ profile, session }) {
   const [notifications, setNotifications] = useState([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifRef = useRef(null);
-  const [sessionRemain, setSessionRemain] = useState(30 * 60); // 30분 = 1800초
-
-  // 세션 남은 시간 표시 + 활동 감지로 자동 연장
-  useEffect(function() {
-    var lastActivity = Date.now();
-    var resetActivity = function() { lastActivity = Date.now(); };
-    var events = ["mousedown", "keydown", "touchstart", "scroll"];
-    events.forEach(function(e) { window.addEventListener(e, resetActivity); });
-    var interval = setInterval(function() {
-      var elapsed = Math.floor((Date.now() - lastActivity) / 1000);
-      var remain = Math.max(0, 30 * 60 - elapsed);
-      setSessionRemain(remain);
-    }, 1000);
-    return function() {
-      clearInterval(interval);
-      events.forEach(function(e) { window.removeEventListener(e, resetActivity); });
-    };
-  }, []);
 
   // 알림 폴링 - 내 담당 새 노트 확인 (30초마다)
   useEffect(function() {
@@ -701,17 +683,25 @@ function CRMApp({ profile, session }) {
 
   const logout = () => supabase.auth.signOut();
 
-  // 30분 자동 로그아웃
+  // Supabase 세션 자동 갱신 - 5분마다 토큰 refresh로 만료 방지
   useEffect(() => {
-    let timer;
-    const reset = () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => { supabase.auth.signOut(); }, 30 * 60 * 1000);
+    var refreshInterval = setInterval(async function() {
+      try {
+        var result = await supabase.auth.refreshSession();
+        if (result.error) console.warn("세션 갱신 실패:", result.error.message);
+      } catch (e) { console.warn("세션 갱신 예외:", e); }
+    }, 5 * 60 * 1000); // 5분마다
+    // 페이지 다시 보일 때(visibility) 즉시 갱신 - 슬립/탭전환 후 만료 방지
+    var onVisible = function() {
+      if (document.visibilityState === "visible") {
+        supabase.auth.refreshSession().catch(function() {});
+      }
     };
-    const events = ["mousedown", "keydown", "touchstart", "scroll"];
-    events.forEach(e => window.addEventListener(e, reset));
-    reset();
-    return () => { clearTimeout(timer); events.forEach(e => window.removeEventListener(e, reset)); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(refreshInterval);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   // 회사 저장
@@ -1116,9 +1106,6 @@ function CRMApp({ profile, session }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ color: "#F7F6F3", fontSize: 13, fontWeight: 600 }}>{profile.name}</div>
               <div style={{ color: "#555", fontSize: 11 }}>{profile.team} · {profile.role === "admin" ? "관리자" : "팀원"}</div>
-            </div>
-            <div title="세션 남은 시간 (활동 시 자동 연장)" style={{ fontSize: 10, color: sessionRemain < 300 ? "#FCA5A5" : "#888", fontFamily: "monospace", fontWeight: 600, whiteSpace: "nowrap" }}>
-              ⏱ {Math.floor(sessionRemain / 60)}:{String(sessionRemain % 60).padStart(2, "0")}
             </div>
           </div>
           <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
@@ -3766,7 +3753,25 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
           {checkItems.map(function(item, idx) {
             return (
               <div key={idx} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-                <input type="checkbox" checked={item.checked || false} onChange={function(e) { var ck = e.target.checked; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { checked: ck }); return Object.assign({}, p, { checkItems: items }); }); }} style={{ width: 15, height: 15, flexShrink: 0, cursor: "pointer" }} />
+                <input type="checkbox" checked={item.checked || false} onChange={function(e) {
+                  var ck = e.target.checked;
+                  // state 업데이트
+                  var newItems = checkItems.slice();
+                  newItems[idx] = Object.assign({}, newItems[idx], { checked: ck });
+                  setEditNote(function(p) { return Object.assign({}, p, { checkItems: newItems }); });
+                  // 즉시 DB 저장 (저장 안 누르고 이탈해도 체크 상태 유지)
+                  var lines = newItems.filter(function(i) { return (i.text || "").trim(); }).map(function(i) {
+                    var line = "- [" + (i.checked ? "x" : " ") + "] " + i.text.trim();
+                    if (i.dueDate) line += " [" + i.dueDate + "]";
+                    return line;
+                  });
+                  var ft = (editNote.freeContent || "").trim();
+                  var parts = [];
+                  if (lines.length > 0) parts.push(lines.join("\n"));
+                  if (ft) parts.push(ft);
+                  var newContent = parts.join("\n");
+                  supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", editNote.id);
+                }} style={{ width: 15, height: 15, flexShrink: 0, cursor: "pointer" }} />
                 <input type="text" value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성)"}
                   onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); }}
                   style={{ flex: 1, border: "none", outline: "none", fontSize: 13, background: "transparent", textDecoration: item.checked ? "line-through" : "none", color: item.checked ? "#AAA" : "#333" }} />
@@ -5893,6 +5898,12 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   const [companySuggestions, setCompanySuggestions] = useState([]);
   const [companiesList, setCompaniesList] = useState([]);
   const [selectedCase, setSelectedCase] = useState(null);
+  const [clipboardCase, setClipboardCase] = useState(function() {
+    try {
+      var saved = sessionStorage.getItem("agencyClipboard");
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) { return null; }
+  });
 
   // 컬럼 너비 - 기관 그룹별로 localStorage에 저장
   const DEFAULT_COL_WIDTHS = {
@@ -6225,6 +6236,37 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
             <Icon name="plus" size={14} color="#fff" /> 신규 추가
           </button>
+          {clipboardCase && (
+            <button onClick={async function() {
+              if (!confirm("'" + clipboardCase.business_name + "'을(를) " + activeGroup + " " + activeMonth + "월에 추가할까요?")) return;
+              var insertData = {
+                agency_group: activeGroup,
+                year: currentYear,
+                month: Number(activeMonth) || (new Date().getMonth() + 1),
+                business_name: clipboardCase.business_name,
+                representative: clipboardCase.representative || null,
+                business_number: clipboardCase.business_number || null,
+                assignee: clipboardCase.assignee || null,
+                status: "시작 전",
+                request_amount: clipboardCase.request_amount || null,
+                region: clipboardCase.region || null,
+                industry: clipboardCase.industry || null,
+                notes: clipboardCase.notes || null,
+                credit_score: clipboardCase.credit_score || null,
+                product: clipboardCase.product || null,
+              };
+              var r = await supabase.from("agency_cases").insert(insertData).select();
+              if (r.error) { alert("추가 실패: " + r.error.message); return; }
+              fetchCases();
+              alert("✅ '" + clipboardCase.business_name + "' 추가 완료");
+            }} title={"클립보드: " + clipboardCase.business_name + " (" + clipboardCase.sourceGroup + " " + clipboardCase.sourceMonth + "월)"}
+              style={{ display: "flex", alignItems: "center", gap: 6, background: "#FEF3C7", color: "#92400E", border: "1px solid #FCD34D", borderRadius: 8, padding: "10px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+              📋 붙여넣기
+              <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.8 }}>({clipboardCase.business_name.length > 8 ? clipboardCase.business_name.slice(0, 8) + "…" : clipboardCase.business_name})</span>
+              <span onClick={function(e) { e.stopPropagation(); setClipboardCase(null); try { sessionStorage.removeItem("agencyClipboard"); } catch (err) {} }}
+                style={{ marginLeft: 4, color: "#92400E", opacity: 0.6, fontSize: 14, lineHeight: 1 }} title="클립보드 비우기">×</span>
+            </button>
+          )}
           <button onClick={function() { setShowTrash(true); }}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
             🗑️ 휴지통{trashedCases.length > 0 ? " (" + trashedCases.length + ")" : ""}
@@ -6719,7 +6761,31 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                 <div style={{ fontSize: 16, fontWeight: 800 }}>{selectedCase.business_name}</div>
                 <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{activeGroup} · {selectedCase.assignee || "-"}</div>
               </div>
-              <button onClick={function() { setSelectedCase(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: "#888" }}>✕</button>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button onClick={function() {
+                  var copyData = {
+                    business_name: selectedCase.business_name,
+                    representative: selectedCase.representative,
+                    business_number: selectedCase.business_number,
+                    assignee: selectedCase.assignee,
+                    request_amount: selectedCase.request_amount,
+                    region: selectedCase.region,
+                    industry: selectedCase.industry,
+                    notes: selectedCase.notes,
+                    credit_score: selectedCase.credit_score,
+                    product: selectedCase.product,
+                    sourceGroup: selectedCase.agency_group,
+                    sourceMonth: selectedCase.month,
+                  };
+                  setClipboardCase(copyData);
+                  try { sessionStorage.setItem("agencyClipboard", JSON.stringify(copyData)); } catch (e) {}
+                  alert("'" + selectedCase.business_name + "' 복사 완료\n다른 기관/월 탭에서 '📋 붙여넣기' 버튼을 누르세요.");
+                }} title="이 업체를 복사 (다른 기관/월에 붙여넣기 가능)"
+                  style={{ padding: "6px 12px", background: "#fff", border: "1px solid #1A1917", borderRadius: 6, fontSize: 12, fontWeight: 600, color: "#1A1917", cursor: "pointer" }}>
+                  📋 복사
+                </button>
+                <button onClick={function() { setSelectedCase(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: "#888" }}>✕</button>
+              </div>
             </div>
             <div style={{ padding: "20px 24px" }}>
               {/* 상태 변경 */}
