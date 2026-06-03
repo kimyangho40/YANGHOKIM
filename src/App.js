@@ -2475,6 +2475,8 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   const [commLogs, setCommLogs] = useState([]);
   const [commInput, setCommInput] = useState("");
   const [loadingExtra, setLoadingExtra] = useState(false);
+  const [editingLogId, setEditingLogId] = useState(null);
+  const [editingLogText, setEditingLogText] = useState("");
   const sc = STAGE_COLORS[data.stage] || {};
 
   useEffect(function() {
@@ -2527,6 +2529,44 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
     setCommInput("");
     var r2 = await supabase.from("activity_logs").select("*").eq("company_id", company.id).order("created_at", { ascending: false });
     if (!r2.error) { setCommLogs(r2.data || []); }
+  };
+
+  // 수정 시작
+  var startEditLog = function(log) {
+    setEditingLogId(log.id);
+    setEditingLogText(log.memo || log.note || "");
+  };
+  // 수정 저장
+  var saveEditLog = async function() {
+    if (!editingLogText.trim()) return;
+    var r = await supabase.from("activity_logs").update({ memo: editingLogText.trim() }).eq("id", editingLogId);
+    if (r.error) { alert("수정 실패: " + r.error.message); return; }
+    setEditingLogId(null);
+    setEditingLogText("");
+    // 목록 새로고침
+    var r2 = await supabase.from("activity_logs").select("*").eq("company_id", company.id).order("created_at", { ascending: false });
+    if (!r2.error) { setCommLogs(r2.data || []); }
+  };
+  // 수정 취소
+  var cancelEditLog = function() {
+    setEditingLogId(null);
+    setEditingLogText("");
+  };
+  // 삭제
+  var deleteCommLog = async function(logId) {
+    if (!confirm("이 소통 내역을 삭제할까요? 되돌릴 수 없습니다.")) return;
+    var r = await supabase.from("activity_logs").delete().eq("id", logId);
+    if (r.error) { alert("삭제 실패: " + r.error.message); return; }
+    // 즉시 UI 반영
+    setCommLogs(function(prev) { return prev.filter(function(l) { return l.id !== logId; }); });
+  };
+  // 권한 체크 - 본인이 작성한 거 또는 관리자(role==admin 또는 이름이 양호)
+  var canEditLog = function(log) {
+    if (!currentUser) return false;
+    if (currentUser.role === "admin") return true;
+    if (currentUser.name === "양호") return true;
+    var author = log.assignee || log.logged_by || "";
+    return author === currentUser.name;
   };
 
   const copyComm = () => {
@@ -2975,19 +3015,43 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   {commLogs.map(function(log, i) {
                     var d = new Date(log.created_at);
                     var ts = d.toLocaleDateString("ko-KR", { month: "short", day: "numeric" }) + " " + d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+                    var isEditing = editingLogId === log.id;
+                    var canEdit = canEditLog(log);
                     return (
                       <div key={log.id} style={{ display: "flex", gap: 10 }}>
                         <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#1A1917", color: "#F7F6F3", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
                           {(log.assignee || log.logged_by || "?")[0]}
                         </div>
                         <div style={{ flex: 1 }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, alignItems: "center" }}>
                             <span style={{ fontSize: 12, fontWeight: 600 }}>{log.assignee || log.logged_by || "-"}</span>
-                            <span style={{ fontSize: 11, color: "#AAA" }}>{ts}</span>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <span style={{ fontSize: 11, color: "#AAA" }}>{ts}</span>
+                              {canEdit && !isEditing && (
+                                <>
+                                  <button onClick={function() { startEditLog(log); }} title="수정"
+                                    style={{ background: "none", border: "none", cursor: "pointer", padding: 2, fontSize: 11, color: "#888" }}>✏️</button>
+                                  <button onClick={function() { deleteCommLog(log.id); }} title="삭제"
+                                    style={{ background: "none", border: "none", cursor: "pointer", padding: 2, fontSize: 11, color: "#CC4444" }}>🗑</button>
+                                </>
+                              )}
+                            </div>
                           </div>
-                          <div style={{ fontSize: 13, color: "#333", lineHeight: 1.7, background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", whiteSpace: "pre-wrap" }}>
-                            {log.memo || log.note || "-"}
-                          </div>
+                          {isEditing ? (
+                            <div>
+                              <textarea value={editingLogText} onChange={function(e) { setEditingLogText(e.target.value); }}
+                                style={{ width: "100%", padding: "10px 13px", border: "1px solid #4338CA", borderRadius: 8, fontSize: 13, lineHeight: 1.7, resize: "vertical", minHeight: 80, boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+                              <div style={{ display: "flex", gap: 6, marginTop: 6, justifyContent: "flex-end" }}>
+                                <button onClick={cancelEditLog} style={{ padding: "5px 12px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 11, color: "#666", cursor: "pointer" }}>취소</button>
+                                <button onClick={saveEditLog} disabled={!editingLogText.trim()}
+                                  style={{ padding: "5px 12px", background: editingLogText.trim() ? "#1A1917" : "#E8E5E0", color: editingLogText.trim() ? "#fff" : "#AAA", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: editingLogText.trim() ? "pointer" : "not-allowed" }}>저장</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: 13, color: "#333", lineHeight: 1.7, background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", whiteSpace: "pre-wrap" }}>
+                              {log.memo || log.note || "-"}
+                            </div>
+                          )}
                         </div>
                       </div>
                     );
