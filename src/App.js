@@ -2494,16 +2494,39 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
 
   var saveCommLog = async function() {
     if (!commInput.trim()) return;
-    var r = await supabase.from("activity_logs").insert({
-      company_id: company.id, business_name: company.name,
-      assignee: currentUser?.name || "", log_type: "manual_memo",
-      memo: commInput.trim(), logged_by: currentUser?.name || "",
-    });
-    if (!r.error) {
-      setCommInput("");
-      var r2 = await supabase.from("activity_logs").select("*").eq("company_id", company.id).order("created_at", { ascending: false });
-      if (!r2.error) { setCommLogs(r2.data || []); }
+    // 1차 시도: 가능한 한 많은 정보 포함
+    var payload = {
+      company_id: company.id,
+      business_name: company.name,
+      assignee: currentUser?.name || null,
+      log_type: "manual_memo",
+      memo: commInput.trim(),
+      logged_by: currentUser?.name || null,
+    };
+    var r = await supabase.from("activity_logs").insert(payload);
+    // 1차 실패하면 최소 컬럼만으로 재시도 (스키마 컬럼 불일치 대비)
+    if (r.error) {
+      console.warn("activity_logs 1차 insert 실패:", r.error.message);
+      var minimal = {
+        company_id: company.id,
+        memo: commInput.trim(),
+      };
+      // 추가로 log_type만 시도
+      minimal.log_type = "manual_memo";
+      r = await supabase.from("activity_logs").insert(minimal);
+      if (r.error) {
+        // 2차 실패: log_type 빼고 메모만
+        delete minimal.log_type;
+        r = await supabase.from("activity_logs").insert(minimal);
+      }
     }
+    if (r.error) {
+      alert("저장 실패: " + r.error.message + "\n\n관리자에게 이 메시지를 알려주세요.");
+      return;
+    }
+    setCommInput("");
+    var r2 = await supabase.from("activity_logs").select("*").eq("company_id", company.id).order("created_at", { ascending: false });
+    if (!r2.error) { setCommLogs(r2.data || []); }
   };
 
   const copyComm = () => {
@@ -6287,7 +6310,8 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
           {clipboardCase && (
             <button onClick={async function() {
               if (!confirm("'" + clipboardCase.business_name + "'을(를) " + activeGroup + " " + activeMonth + "월에 추가할까요?")) return;
-              var insertData = {
+              // 핵심 필수 컬럼만 먼저 시도
+              var baseData = {
                 agency_group: activeGroup,
                 year: currentYear,
                 month: Number(activeMonth) || (new Date().getMonth() + 1),
@@ -6298,12 +6322,18 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                 status: "시작 전",
                 request_amount: clipboardCase.request_amount || null,
                 region: clipboardCase.region || null,
-                industry: clipboardCase.industry || null,
                 notes: clipboardCase.notes || null,
-                credit_score: clipboardCase.credit_score || null,
-                product: clipboardCase.product || null,
               };
-              var r = await supabase.from("agency_cases").insert(insertData).select();
+              // 1차: 전체 데이터로 시도 (선택 컬럼 포함)
+              var fullData = Object.assign({}, baseData);
+              if (clipboardCase.credit_score != null) fullData.credit_score = clipboardCase.credit_score;
+              if (clipboardCase.product) fullData.product = clipboardCase.product;
+              var r = await supabase.from("agency_cases").insert(fullData).select();
+              if (r.error) {
+                console.warn("agency_cases 1차 insert 실패, 핵심 컬럼만 재시도:", r.error.message);
+                // 2차: 핵심 컬럼만으로 재시도
+                r = await supabase.from("agency_cases").insert(baseData).select();
+              }
               if (r.error) { alert("추가 실패: " + r.error.message); return; }
               fetchCases();
               alert("✅ '" + clipboardCase.business_name + "' 추가 완료");
