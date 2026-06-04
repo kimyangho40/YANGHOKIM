@@ -551,6 +551,23 @@ function CRMApp({ profile, session }) {
   const [notifications, setNotifications] = useState([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifRef = useRef(null);
+  const [showGlobalSearch, setShowGlobalSearch] = useState(false);
+  const [globalSearchQ, setGlobalSearchQ] = useState("");
+
+  // 전역 단축키 Ctrl+K (또는 Cmd+K)
+  useEffect(function() {
+    var onKey = function(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setShowGlobalSearch(true);
+      }
+      if (e.key === "Escape") {
+        setShowGlobalSearch(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return function() { window.removeEventListener("keydown", onKey); };
+  }, []);
 
   // 알림 폴링 - 내 담당 새 노트 확인 (30초마다)
   useEffect(function() {
@@ -1048,6 +1065,13 @@ function CRMApp({ profile, session }) {
         )}
 
         <nav style={{ padding: "6px 12px", flex: 1, overflowY: "auto", minHeight: 0 }}>
+          {/* 통합 검색 버튼 */}
+          <div onClick={function() { setShowGlobalSearch(true); }}
+            style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 8, cursor: "pointer", marginBottom: 8, background: "#2E2C29", color: "#999", fontSize: 12, border: "1px solid #3A3835" }}>
+            <span>🔍</span>
+            <span style={{ flex: 1 }}>통합 검색</span>
+            <span style={{ fontSize: 10, background: "#1A1917", padding: "2px 6px", borderRadius: 4, color: "#888" }}>Ctrl+K</span>
+          </div>
           {/* 자주 쓰는 메뉴 */}
           <div style={{ fontSize: 10, color: "#444", letterSpacing: "0.08em", padding: "4px 12px 6px", fontWeight: 600 }}>주요 메뉴</div>
           {[
@@ -1057,6 +1081,7 @@ function CRMApp({ profile, session }) {
             { id: "worknotes",  label: "업무 노트",   icon: "edit" },
             { id: "list",       label: "기업 목록",   icon: "list" },
             { id: "pipeline",   label: "파이프라인",  icon: "pipeline" },
+            { id: "cases",      label: "사례집",      icon: "folder" },
           ].map(({ id, label, icon }) => (
             <div key={id} onClick={() => setView(id)}
               style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 8, cursor: "pointer", marginBottom: 2, background: view === id ? "#2E2C29" : "transparent", color: view === id ? "#F7F6F3" : "#666", fontSize: 13, fontWeight: view === id ? 600 : 400 }}>
@@ -1218,6 +1243,7 @@ function CRMApp({ profile, session }) {
             {view === "calendar" && <CalendarView companies={companies} onSelectCompany={setSelectedCompany} profile={profile} />}
             {view === "manual" && <ManualView />}
             {view === "pipeline" && <PipelineView filtered={filtered} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} />}
+            {view === "cases" && <ApprovalCasesView profile={profile} />}
             {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={profile?.role === "admin" || profile?.name === "양호"} onSelectCompany={setSelectedCompany} setView={setView} />}
             {view === "list" && <ListView filtered={filtered} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} />}
             {view === "stagnant" && <StagnantView stagnant={stagnant} onSelect={setSelectedCompany} />}
@@ -1225,6 +1251,18 @@ function CRMApp({ profile, session }) {
           </>
         )}
       </div>
+
+      {/* 통합 검색 모달 (Ctrl+K) */}
+      {showGlobalSearch && (
+        <GlobalSearchModal
+          companies={companies}
+          query={globalSearchQ}
+          setQuery={setGlobalSearchQ}
+          onClose={function() { setShowGlobalSearch(false); setGlobalSearchQ(""); }}
+          onSelectCompany={function(c) { setSelectedCompany(c); setShowGlobalSearch(false); setGlobalSearchQ(""); }}
+          onNavigate={function(v) { setView(v); setShowGlobalSearch(false); setGlobalSearchQ(""); }}
+        />
+      )}
 
       {selectedCompany && (
         <CompanyModal
@@ -1351,6 +1389,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
           </div>
         ))}
       </div>
+
+      {/* 👥 팀 활동 위젯 */}
+      <TeamActivityWidget profiles={profiles} />
 
       <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
         <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>파이프라인 단계별 현황</div>
@@ -7727,6 +7768,707 @@ function DBLeadsView() {
               )}
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ========== 📚 사례집 (자금 승인 사례 관리) ==========
+function ApprovalCasesView({ profile }) {
+  const [cases, setCases] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [filterAgency, setFilterAgency] = useState("전체");
+  const [filterResult, setFilterResult] = useState("전체");
+  const [filterIndustry, setFilterIndustry] = useState("전체");
+  const [editingCase, setEditingCase] = useState(null); // 추가/수정 중인 사례
+  const [showForm, setShowForm] = useState(false);
+
+  useEffect(function() { fetchCases(); }, []);
+
+  var fetchCases = async function() {
+    setLoading(true);
+    var r = await supabase.from("approval_cases").select("*").is("deleted_at", null).order("created_at", { ascending: false });
+    if (!r.error) setCases(r.data || []);
+    setLoading(false);
+  };
+
+  // 필터링
+  var filtered = useMemo(function() {
+    return cases.filter(function(c) {
+      if (filterAgency !== "전체" && c.agency_group !== filterAgency) return false;
+      if (filterResult !== "전체" && c.result !== filterResult) return false;
+      if (filterIndustry !== "전체" && c.industry !== filterIndustry) return false;
+      if (search.trim()) {
+        var s = search.toLowerCase();
+        var hay = [c.business_name, c.product, c.initial_issue, c.resolution, c.key_point, c.result_reason, (c.tags||[]).join(" ")].join(" ").toLowerCase();
+        if (hay.indexOf(s) < 0) return false;
+      }
+      return true;
+    });
+  }, [cases, search, filterAgency, filterResult, filterIndustry]);
+
+  // 통계
+  var stats = useMemo(function() {
+    var total = cases.length;
+    var approved = cases.filter(function(c) { return ["승인","약정","완료"].indexOf(c.result) >= 0; }).length;
+    var rejected = cases.filter(function(c) { return ["부결","반려"].indexOf(c.result) >= 0; }).length;
+    var rate = total > 0 ? Math.round((approved / total) * 100) : 0;
+    return { total: total, approved: approved, rejected: rejected, rate: rate };
+  }, [cases]);
+
+  // 산업 옵션 추출
+  var industryOpts = useMemo(function() {
+    var s = new Set();
+    cases.forEach(function(c) { if (c.industry) s.add(c.industry); });
+    return ["전체"].concat(Array.from(s).sort());
+  }, [cases]);
+
+  var agencyOpts = ["전체","소상공인시장진흥공단","신용보증기금","기술보증기금","신용보증재단","중소벤처기업진흥공단","구조혁신&사업전환","경정청구","기타"];
+  var resultOpts = ["전체","승인","약정","완료","부결","반려","진행중","신청전"];
+
+  var openNew = function() {
+    setEditingCase({
+      business_name: "", agency_group: "", product: "", result: "",
+      applied_amount: "", approved_amount: "", applied_at: "", result_at: "",
+      industry: "", region: "", business_type: "법인", business_years: "", revenue_range: "", credit_score_range: "",
+      initial_issue: "", resolution: "", key_point: "", result_reason: "",
+      tags: [], blog_memo: "",
+    });
+    setShowForm(true);
+  };
+
+  var openEdit = function(c) {
+    setEditingCase(Object.assign({}, c, { tags: c.tags || [] }));
+    setShowForm(true);
+  };
+
+  var saveCase = async function() {
+    if (!editingCase.business_name?.trim()) { alert("회사명은 필수입니다."); return; }
+    var payload = Object.assign({}, editingCase);
+    // 숫자 변환
+    payload.applied_amount = payload.applied_amount ? Number(String(payload.applied_amount).replace(/[^0-9]/g, "")) || null : null;
+    payload.approved_amount = payload.approved_amount ? Number(String(payload.approved_amount).replace(/[^0-9]/g, "")) || null : null;
+    payload.business_years = payload.business_years ? Number(payload.business_years) || null : null;
+    payload.applied_at = payload.applied_at || null;
+    payload.result_at = payload.result_at || null;
+    // 빈 문자열 -> null
+    ["agency_group","product","result","industry","region","business_type","revenue_range","credit_score_range","initial_issue","resolution","key_point","result_reason","blog_memo"].forEach(function(k) {
+      if (!payload[k]) payload[k] = null;
+    });
+    payload.updated_at = new Date().toISOString();
+
+    var r;
+    if (payload.id) {
+      var id = payload.id;
+      delete payload.id;
+      delete payload.created_at;
+      r = await supabase.from("approval_cases").update(payload).eq("id", id);
+    } else {
+      payload.created_by = profile?.name || null;
+      r = await supabase.from("approval_cases").insert(payload);
+    }
+    if (r.error) { alert("저장 실패: " + r.error.message); return; }
+    setShowForm(false);
+    setEditingCase(null);
+    fetchCases();
+  };
+
+  var deleteCase = async function(id) {
+    if (!confirm("이 사례를 삭제할까요?")) return;
+    var r = await supabase.from("approval_cases").update({ deleted_at: new Date().toISOString() }).eq("id", id);
+    if (r.error) { alert("삭제 실패: " + r.error.message); return; }
+    fetchCases();
+  };
+
+  var resultColor = function(result) {
+    if (["승인","약정","완료"].indexOf(result) >= 0) return { bg: "#DCFCE7", color: "#15803D" };
+    if (["부결","반려"].indexOf(result) >= 0) return { bg: "#FEE2E2", color: "#B91C1C" };
+    return { bg: "#F3F4F6", color: "#555" };
+  };
+
+  var formatAmt = function(n) {
+    if (!n) return "-";
+    n = Number(n);
+    if (n >= 100000000) return Math.round(n / 10000000) / 10 + "억";
+    if (n >= 10000) return Math.round(n / 10000) + "만";
+    return n.toLocaleString();
+  };
+
+  return (
+    <div style={{ maxWidth: 1400 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0 }}>📚 사례집</h1>
+          <div style={{ fontSize: 13, color: "#888", marginTop: 4 }}>자금 신청 사례를 누적·검색·재활용</div>
+        </div>
+        <button onClick={openNew}
+          style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+          <Icon name="plus" size={14} color="#fff" /> 사례 추가
+        </button>
+      </div>
+
+      {/* 통계 카드 */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 18 }}>
+        <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 10, padding: "14px 18px" }}>
+          <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>전체 사례</div>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>{stats.total}건</div>
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 10, padding: "14px 18px" }}>
+          <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>승인</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#15803D" }}>{stats.approved}건</div>
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 10, padding: "14px 18px" }}>
+          <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>부결/반려</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#B91C1C" }}>{stats.rejected}건</div>
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 10, padding: "14px 18px" }}>
+          <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>승인율</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#4338CA" }}>{stats.rate}%</div>
+        </div>
+      </div>
+
+      {/* 검색 + 필터 */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        <input type="text" value={search} onChange={function(e) { setSearch(e.target.value); }} placeholder="🔍 회사명, 이슈, 해결방법, 태그..."
+          style={{ flex: 1, minWidth: 220, padding: "10px 14px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, outline: "none" }} />
+        <select value={filterAgency} onChange={function(e) { setFilterAgency(e.target.value); }} style={{ padding: "10px 14px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>
+          {agencyOpts.map(function(o) { return <option key={o} value={o}>기관: {o}</option>; })}
+        </select>
+        <select value={filterResult} onChange={function(e) { setFilterResult(e.target.value); }} style={{ padding: "10px 14px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>
+          {resultOpts.map(function(o) { return <option key={o} value={o}>결과: {o}</option>; })}
+        </select>
+        <select value={filterIndustry} onChange={function(e) { setFilterIndustry(e.target.value); }} style={{ padding: "10px 14px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>
+          {industryOpts.map(function(o) { return <option key={o} value={o}>업종: {o}</option>; })}
+        </select>
+      </div>
+
+      {/* 사례 카드 목록 */}
+      {loading ? (
+        <div style={{ textAlign: "center", padding: 60, color: "#AAA" }}>불러오는 중...</div>
+      ) : filtered.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 60, color: "#AAA", background: "#fff", borderRadius: 10, border: "1px solid #E8E5E0" }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>📚</div>
+          {cases.length === 0 ? "아직 등록된 사례가 없어요. 우측 상단 [사례 추가] 버튼을 눌러보세요." : "검색 결과가 없어요."}
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 12 }}>
+          {filtered.map(function(c) {
+            var rc = resultColor(c.result);
+            return (
+              <div key={c.id} onClick={function() { openEdit(c); }}
+                style={{ background: "#fff", borderRadius: 10, border: "1px solid #E8E5E0", padding: "16px 18px", cursor: "pointer", transition: "all 0.15s" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>{c.business_name}</div>
+                    <div style={{ fontSize: 11, color: "#888" }}>{c.agency_group || "-"} · {c.product || "-"}</div>
+                  </div>
+                  {c.result && (
+                    <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 99, background: rc.bg, color: rc.color, whiteSpace: "nowrap" }}>{c.result}</span>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 14, fontSize: 11, color: "#666", marginBottom: 10, flexWrap: "wrap" }}>
+                  {c.industry && <span>🏭 {c.industry}</span>}
+                  {c.region && <span>📍 {c.region}</span>}
+                  {c.applied_amount && <span>💰 신청 {formatAmt(c.applied_amount)}</span>}
+                  {c.approved_amount && <span style={{ color: "#15803D", fontWeight: 600 }}>승인 {formatAmt(c.approved_amount)}</span>}
+                </div>
+                {c.initial_issue && (
+                  <div style={{ fontSize: 12, color: "#92400E", background: "#FFF7ED", borderRadius: 6, padding: "8px 12px", marginBottom: 6, lineHeight: 1.5 }}>
+                    <strong>이슈:</strong> {c.initial_issue.length > 80 ? c.initial_issue.slice(0, 80) + "..." : c.initial_issue}
+                  </div>
+                )}
+                {c.key_point && (
+                  <div style={{ fontSize: 12, color: "#15803D", background: "#DCFCE7", borderRadius: 6, padding: "8px 12px", marginBottom: 6, lineHeight: 1.5 }}>
+                    <strong>포인트:</strong> {c.key_point.length > 80 ? c.key_point.slice(0, 80) + "..." : c.key_point}
+                  </div>
+                )}
+                {c.tags && c.tags.length > 0 && (
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 8 }}>
+                    {c.tags.map(function(t, i) {
+                      return <span key={i} style={{ fontSize: 10, color: "#666", background: "#F3F4F6", padding: "2px 8px", borderRadius: 99 }}>#{t}</span>;
+                    })}
+                  </div>
+                )}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, paddingTop: 8, borderTop: "1px solid #F3F4F6" }}>
+                  <span style={{ fontSize: 10, color: "#AAA" }}>{c.created_by || "-"} · {c.created_at ? new Date(c.created_at).toLocaleDateString("ko-KR") : ""}</span>
+                  <button onClick={function(e) { e.stopPropagation(); deleteCase(c.id); }} title="삭제"
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "#CC4444", fontSize: 12 }}>🗑</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 사례 추가/수정 폼 모달 */}
+      {showForm && editingCase && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={function() { setShowForm(false); }}>
+          <div onClick={function(e) { e.stopPropagation(); }}
+            style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 700, maxHeight: "90vh", overflowY: "auto", padding: 24 }}>
+            <h2 style={{ margin: 0, marginBottom: 20, fontSize: 18, fontWeight: 700 }}>{editingCase.id ? "사례 수정" : "사례 추가"}</h2>
+            
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+              <div>
+                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>회사명 *</label>
+                <input type="text" value={editingCase.business_name || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { business_name: v }); }); }}
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>기관</label>
+                <select value={editingCase.agency_group || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { agency_group: v }); }); }}
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", background: "#fff" }}>
+                  <option value="">선택...</option>
+                  {agencyOpts.slice(1).map(function(o) { return <option key={o} value={o}>{o}</option>; })}
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>신청 상품</label>
+                <input type="text" value={editingCase.product || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { product: v }); }); }}
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>결과</label>
+                <select value={editingCase.result || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { result: v }); }); }}
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", background: "#fff" }}>
+                  <option value="">선택...</option>
+                  {resultOpts.slice(1).map(function(o) { return <option key={o} value={o}>{o}</option>; })}
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>신청금 (원)</label>
+                <input type="text" value={editingCase.applied_amount || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { applied_amount: v }); }); }} placeholder="예: 50000000"
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>승인금 (원)</label>
+                <input type="text" value={editingCase.approved_amount || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { approved_amount: v }); }); }} placeholder="예: 30000000"
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>업종</label>
+                <input type="text" value={editingCase.industry || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { industry: v }); }); }} placeholder="예: 제조업, 서비스업"
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>지역</label>
+                <input type="text" value={editingCase.region || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { region: v }); }); }} placeholder="예: 서울, 경기"
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>법인/개인</label>
+                <select value={editingCase.business_type || "법인"} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { business_type: v }); }); }}
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", background: "#fff" }}>
+                  <option value="법인">법인</option>
+                  <option value="개인">개인사업자</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>업력 (년)</label>
+                <input type="number" value={editingCase.business_years || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { business_years: v }); }); }} placeholder="예: 5"
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>매출 구간</label>
+                <select value={editingCase.revenue_range || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { revenue_range: v }); }); }}
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", background: "#fff" }}>
+                  <option value="">선택...</option>
+                  <option>1억 이하</option>
+                  <option>1~5억</option>
+                  <option>5~10억</option>
+                  <option>10~30억</option>
+                  <option>30~50억</option>
+                  <option>50~100억</option>
+                  <option>100억 이상</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>신용점수 구간</label>
+                <select value={editingCase.credit_score_range || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { credit_score_range: v }); }); }}
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", background: "#fff" }}>
+                  <option value="">선택...</option>
+                  <option>600 이하</option>
+                  <option>600~650</option>
+                  <option>650~700</option>
+                  <option>700~750</option>
+                  <option>750~800</option>
+                  <option>800 이상</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>신청일</label>
+                <input type="date" value={editingCase.applied_at || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { applied_at: v }); }); }}
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>결과일</label>
+                <input type="date" value={editingCase.result_at || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { result_at: v }); }); }}
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>📍 처음 진단했던 이슈</label>
+              <textarea value={editingCase.initial_issue || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { initial_issue: v }); }); }} placeholder="예) 신용점수 685점, 매출 감소 추세, 부채비율 높음..."
+                style={{ width: "100%", padding: "10px 12px", border: "1px solid #FED7AA", borderRadius: 6, fontSize: 13, lineHeight: 1.7, resize: "vertical", minHeight: 80, background: "#FFF7ED", boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>🔧 어떻게 해결/대응했는지</label>
+              <textarea value={editingCase.resolution || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { resolution: v }); }); }} placeholder="예) 재무제표 재정리, 보완서류 추가 제출, 대표자 신용 개선 안내..."
+                style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, lineHeight: 1.7, resize: "vertical", minHeight: 80, boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>⭐ 결정적 포인트 (승인/거절의 핵심)</label>
+              <textarea value={editingCase.key_point || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { key_point: v }); }); }} placeholder="예) 현장방문에서 사업장 평가 좋음 / 추가 매출 자료 제출이 결정적..."
+                style={{ width: "100%", padding: "10px 12px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 13, lineHeight: 1.7, resize: "vertical", minHeight: 80, background: "#F0FDF4", boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>결과 사유 (한 줄)</label>
+              <input type="text" value={editingCase.result_reason || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { result_reason: v }); }); }} placeholder="예) 매출 안정성 및 사업 계획 우수"
+                style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>태그 (쉼표로 구분)</label>
+              <input type="text" value={(editingCase.tags || []).join(", ")} onChange={function(e) { var v = e.target.value; var arr = v.split(",").map(function(s) { return s.trim().replace(/^#/, ""); }).filter(function(s) { return s; }); setEditingCase(function(p) { return Object.assign({}, p, { tags: arr }); }); }} placeholder="예: 매출감소, 신용보완, 재신청"
+                style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>📝 블로그용 메모 (나중에 활용)</label>
+              <textarea value={editingCase.blog_memo || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { blog_memo: v }); }); }} placeholder="블로그 글로 쓸 만한 포인트, 익명화한 스토리 등..."
+                style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, lineHeight: 1.7, resize: "vertical", minHeight: 80, boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+            </div>
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={function() { setShowForm(false); }}
+                style={{ padding: "10px 18px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>취소</button>
+              <button onClick={saveCase}
+                style={{ padding: "10px 18px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ========== 🔍 통합 검색 (Ctrl+K) ==========
+function GlobalSearchModal({ companies, query, setQuery, onClose, onSelectCompany, onNavigate }) {
+  const [notes, setNotes] = useState([]);
+  const [cases, setCases] = useState([]);
+  const [approvalCases, setApprovalCases] = useState([]);
+  const [agencyCases, setAgencyCases] = useState([]);
+  const inputRef = useRef(null);
+
+  // 최초 진입 시 포커스 + 데이터 로딩
+  useEffect(function() {
+    if (inputRef.current) inputRef.current.focus();
+    (async function() {
+      var nRes = await supabase.from("work_notes").select("id,title,content,assignee").is("deleted_at", null).limit(200);
+      if (!nRes.error) setNotes(nRes.data || []);
+      var aRes = await supabase.from("agency_cases").select("id,business_name,representative,agency_group,assignee,month,year,status,notes").is("deleted_at", null).limit(500);
+      if (!aRes.error) setAgencyCases(aRes.data || []);
+      var pRes = await supabase.from("approval_cases").select("id,business_name,agency_group,product,result,initial_issue,resolution,key_point,tags").is("deleted_at", null).limit(200);
+      if (!pRes.error) setApprovalCases(pRes.data || []);
+    })();
+  }, []);
+
+  var q = (query || "").toLowerCase().trim();
+
+  // 회사 매칭
+  var matchedCompanies = useMemo(function() {
+    if (!q) return [];
+    return (companies || []).filter(function(c) {
+      var hay = [c.name, c.representative, c.business_number, c.assignee, c.issue, c.next_action, c.region, c.industry, c.stage].join(" ").toLowerCase();
+      return hay.indexOf(q) >= 0;
+    }).slice(0, 8);
+  }, [companies, q]);
+
+  // 노트 매칭
+  var matchedNotes = useMemo(function() {
+    if (!q) return [];
+    return notes.filter(function(n) {
+      var hay = [n.title || "", n.content || "", n.assignee || ""].join(" ").toLowerCase();
+      return hay.indexOf(q) >= 0;
+    }).slice(0, 5);
+  }, [notes, q]);
+
+  // 기관별 매칭
+  var matchedAgency = useMemo(function() {
+    if (!q) return [];
+    return agencyCases.filter(function(c) {
+      var hay = [c.business_name || "", c.representative || "", c.agency_group || "", c.assignee || "", c.notes || ""].join(" ").toLowerCase();
+      return hay.indexOf(q) >= 0;
+    }).slice(0, 5);
+  }, [agencyCases, q]);
+
+  // 사례집 매칭
+  var matchedApprovalCases = useMemo(function() {
+    if (!q) return [];
+    return approvalCases.filter(function(c) {
+      var hay = [c.business_name || "", c.agency_group || "", c.product || "", c.result || "", c.initial_issue || "", c.resolution || "", c.key_point || "", (c.tags || []).join(" ")].join(" ").toLowerCase();
+      return hay.indexOf(q) >= 0;
+    }).slice(0, 5);
+  }, [approvalCases, q]);
+
+  var totalCount = matchedCompanies.length + matchedNotes.length + matchedAgency.length + matchedApprovalCases.length;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 2000, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: 80 }} onClick={onClose}>
+      <div onClick={function(e) { e.stopPropagation(); }}
+        style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 640, maxHeight: "70vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        {/* 검색창 */}
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid #E8E5E0", display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 18, color: "#888" }}>🔍</span>
+          <input ref={inputRef} type="text" value={query} onChange={function(e) { setQuery(e.target.value); }} placeholder="회사명, 이슈, 메모, 사례... 통합 검색"
+            style={{ flex: 1, border: "none", fontSize: 15, outline: "none", padding: "4px 0" }} />
+          <span style={{ fontSize: 11, color: "#AAA", border: "1px solid #E8E5E0", borderRadius: 4, padding: "2px 6px" }}>ESC</span>
+        </div>
+
+        {/* 결과 영역 */}
+        <div style={{ overflowY: "auto", flex: 1, padding: q ? "8px 0" : "20px" }}>
+          {!q ? (
+            <div style={{ color: "#888", fontSize: 13 }}>
+              <div style={{ marginBottom: 14 }}>💡 검색 가능한 항목</div>
+              <ul style={{ paddingLeft: 18, lineHeight: 1.9, fontSize: 12 }}>
+                <li>회사명, 대표자명, 사업자번호</li>
+                <li>현재 이슈, 차기 업무</li>
+                <li>업무 노트 (제목, 내용)</li>
+                <li>기관별 진행건</li>
+                <li>사례집 (이슈, 해결방법, 태그)</li>
+              </ul>
+              <div style={{ marginTop: 14, fontSize: 11, color: "#AAA" }}>⌨️ 단축키 <strong>Ctrl + K</strong> 로 언제든 검색 가능</div>
+            </div>
+          ) : totalCount === 0 ? (
+            <div style={{ textAlign: "center", padding: 40, color: "#AAA", fontSize: 13 }}>
+              '{query}' 에 대한 결과가 없어요.
+            </div>
+          ) : (
+            <>
+              {matchedCompanies.length > 0 && (
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ padding: "6px 20px", fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.5 }}>기업 ({matchedCompanies.length})</div>
+                  {matchedCompanies.map(function(c) {
+                    return (
+                      <div key={c.id} onClick={function() { onSelectCompany(c); }}
+                        style={{ padding: "10px 20px", cursor: "pointer", borderBottom: "1px solid #F7F6F3" }}
+                        onMouseEnter={function(e) { e.currentTarget.style.background = "#F7F6F3"; }}
+                        onMouseLeave={function(e) { e.currentTarget.style.background = "transparent"; }}>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{c.name} <span style={{ color: "#888", fontWeight: 400 }}>· {c.representative || "-"}</span></div>
+                        <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{c.stage || "-"} · {c.assignee || "-"} · {c.region || "-"}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {matchedAgency.length > 0 && (
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ padding: "6px 20px", fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.5 }}>기관별 진행 ({matchedAgency.length})</div>
+                  {matchedAgency.map(function(c) {
+                    return (
+                      <div key={c.id} onClick={function() { onNavigate("agency"); }}
+                        style={{ padding: "10px 20px", cursor: "pointer", borderBottom: "1px solid #F7F6F3" }}
+                        onMouseEnter={function(e) { e.currentTarget.style.background = "#F7F6F3"; }}
+                        onMouseLeave={function(e) { e.currentTarget.style.background = "transparent"; }}>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{c.business_name}</div>
+                        <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{c.agency_group} · {c.year}년 {c.month}월 · {c.status || "-"} · {c.assignee || "-"}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {matchedNotes.length > 0 && (
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ padding: "6px 20px", fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.5 }}>업무 노트 ({matchedNotes.length})</div>
+                  {matchedNotes.map(function(n) {
+                    return (
+                      <div key={n.id} onClick={function() { onNavigate("worknotes"); }}
+                        style={{ padding: "10px 20px", cursor: "pointer", borderBottom: "1px solid #F7F6F3" }}
+                        onMouseEnter={function(e) { e.currentTarget.style.background = "#F7F6F3"; }}
+                        onMouseLeave={function(e) { e.currentTarget.style.background = "transparent"; }}>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{n.title || "(제목 없음)"}</div>
+                        <div style={{ fontSize: 11, color: "#888", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{(n.content || "").slice(0, 80)} · {n.assignee || "-"}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {matchedApprovalCases.length > 0 && (
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ padding: "6px 20px", fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.5 }}>사례집 ({matchedApprovalCases.length})</div>
+                  {matchedApprovalCases.map(function(c) {
+                    return (
+                      <div key={c.id} onClick={function() { onNavigate("cases"); }}
+                        style={{ padding: "10px 20px", cursor: "pointer", borderBottom: "1px solid #F7F6F3" }}
+                        onMouseEnter={function(e) { e.currentTarget.style.background = "#F7F6F3"; }}
+                        onMouseLeave={function(e) { e.currentTarget.style.background = "transparent"; }}>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{c.business_name} <span style={{ color: "#888", fontWeight: 400 }}>· {c.result || "-"}</span></div>
+                        <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{c.agency_group || "-"} · {c.product || "-"}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== 👥 직원 활동 위젯 (Dashboard용) ==========
+function TeamActivityWidget({ profiles }) {
+  const [activity, setActivity] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [range, setRange] = useState("week"); // "week" | "month"
+
+  useEffect(function() {
+    fetchActivity();
+  }, [range]);
+
+  var fetchActivity = async function() {
+    setLoading(true);
+    var now = new Date();
+    var since;
+    if (range === "week") {
+      since = new Date(now.getTime() - 7 * 86400000);
+    } else {
+      since = new Date(now.getFullYear(), now.getMonth(), 1);
+    }
+    var sinceStr = since.toISOString();
+
+    // 병렬 fetch
+    var [notesRes, agencyRes, logsRes, approvalRes] = await Promise.all([
+      supabase.from("work_notes").select("assignee,created_at,updated_at").is("deleted_at", null).gte("updated_at", sinceStr),
+      supabase.from("agency_cases").select("assignee,status,updated_at").is("deleted_at", null).gte("updated_at", sinceStr),
+      supabase.from("activity_logs").select("assignee,logged_by,created_at").gte("created_at", sinceStr),
+      supabase.from("approval_cases").select("created_by,created_at,result").is("deleted_at", null).gte("created_at", sinceStr),
+    ]);
+
+    var data = {};
+    var ensure = function(name) {
+      if (!data[name]) data[name] = { notes: 0, agencyUpdates: 0, agencyApproved: 0, logs: 0, cases: 0, lastActive: null };
+      return data[name];
+    };
+
+    if (!notesRes.error && notesRes.data) {
+      notesRes.data.forEach(function(n) {
+        if (!n.assignee) return;
+        var d = ensure(n.assignee);
+        d.notes++;
+        if (!d.lastActive || n.updated_at > d.lastActive) d.lastActive = n.updated_at;
+      });
+    }
+    if (!agencyRes.error && agencyRes.data) {
+      agencyRes.data.forEach(function(c) {
+        if (!c.assignee) return;
+        var d = ensure(c.assignee);
+        d.agencyUpdates++;
+        if (["승인","약정","완료"].indexOf(c.status) >= 0) d.agencyApproved++;
+        if (!d.lastActive || c.updated_at > d.lastActive) d.lastActive = c.updated_at;
+      });
+    }
+    if (!logsRes.error && logsRes.data) {
+      logsRes.data.forEach(function(l) {
+        var name = l.assignee || l.logged_by;
+        if (!name) return;
+        var d = ensure(name);
+        d.logs++;
+        if (!d.lastActive || l.created_at > d.lastActive) d.lastActive = l.created_at;
+      });
+    }
+    if (!approvalRes.error && approvalRes.data) {
+      approvalRes.data.forEach(function(c) {
+        if (!c.created_by) return;
+        var d = ensure(c.created_by);
+        d.cases++;
+        if (!d.lastActive || c.created_at > d.lastActive) d.lastActive = c.created_at;
+      });
+    }
+
+    setActivity(data);
+    setLoading(false);
+  };
+
+  // 정렬: 합산 활동 많은 순
+  var sorted = useMemo(function() {
+    var entries = Object.keys(activity).map(function(name) {
+      var d = activity[name];
+      var total = d.notes + d.agencyUpdates + d.logs + d.cases;
+      return { name: name, ...d, total: total };
+    });
+    return entries.sort(function(a, b) { return b.total - a.total; });
+  }, [activity]);
+
+  // 활동 없는 직원도 표시
+  var allNames = useMemo(function() {
+    var fromProfiles = (profiles || []).map(function(p) { return p.name; }).filter(Boolean);
+    var fromActivity = sorted.map(function(s) { return s.name; });
+    var set = new Set([].concat(fromProfiles, fromActivity));
+    return Array.from(set);
+  }, [profiles, sorted]);
+
+  var displayList = useMemo(function() {
+    return allNames.map(function(name) {
+      var found = sorted.find(function(s) { return s.name === name; });
+      if (found) return found;
+      return { name: name, notes: 0, agencyUpdates: 0, agencyApproved: 0, logs: 0, cases: 0, lastActive: null, total: 0 };
+    }).sort(function(a, b) { return b.total - a.total; });
+  }, [allNames, sorted]);
+
+  var relativeTime = function(iso) {
+    if (!iso) return "활동 없음";
+    var diff = Date.now() - new Date(iso).getTime();
+    var mins = Math.floor(diff / 60000);
+    if (mins < 1) return "방금";
+    if (mins < 60) return mins + "분 전";
+    var hrs = Math.floor(mins / 60);
+    if (hrs < 24) return hrs + "시간 전";
+    var days = Math.floor(hrs / 24);
+    if (days < 30) return days + "일 전";
+    return new Date(iso).toLocaleDateString("ko-KR");
+  };
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", padding: "20px 24px", marginBottom: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 16 }}>👥</span>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>팀 활동 현황</div>
+        </div>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button onClick={function() { setRange("week"); }}
+            style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, borderRadius: 6, cursor: "pointer", background: range === "week" ? "#1A1917" : "#fff", color: range === "week" ? "#fff" : "#666", border: "1px solid #E8E5E0" }}>이번 주</button>
+          <button onClick={function() { setRange("month"); }}
+            style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, borderRadius: 6, cursor: "pointer", background: range === "month" ? "#1A1917" : "#fff", color: range === "month" ? "#fff" : "#666", border: "1px solid #E8E5E0" }}>이번 달</button>
+        </div>
+      </div>
+      {loading ? (
+        <div style={{ textAlign: "center", padding: 30, color: "#AAA", fontSize: 12 }}>불러오는 중...</div>
+      ) : displayList.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 30, color: "#AAA", fontSize: 12 }}>활동 데이터가 없어요</div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+          {displayList.map(function(d, i) {
+            var isActive = d.total > 0;
+            return (
+              <div key={d.name} style={{ padding: "10px 12px", background: isActive ? "#F7F6F3" : "#FAFAF8", borderRadius: 8, border: "1px solid " + (isActive ? "#E8E5E0" : "#EDEBE8"), opacity: isActive ? 1 : 0.6 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700 }}>{d.name}</div>
+                  {i < 3 && isActive && <span style={{ fontSize: 10 }}>{["🥇","🥈","🥉"][i]}</span>}
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, fontSize: 10, color: "#666", marginBottom: 4 }}>
+                  {d.notes > 0 && <span title="업무 노트">📝 {d.notes}</span>}
+                  {d.agencyUpdates > 0 && <span title="기관별 진행건">🏛 {d.agencyUpdates}</span>}
+                  {d.agencyApproved > 0 && <span title="승인 건" style={{ color: "#15803D", fontWeight: 600 }}>✓ {d.agencyApproved}</span>}
+                  {d.logs > 0 && <span title="소통 기록">💬 {d.logs}</span>}
+                  {d.cases > 0 && <span title="사례 등록">📚 {d.cases}</span>}
+                </div>
+                <div style={{ fontSize: 10, color: "#AAA" }}>최근: {relativeTime(d.lastActive)}</div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
