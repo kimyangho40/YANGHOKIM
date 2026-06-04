@@ -7784,8 +7784,16 @@ function ApprovalCasesView({ profile }) {
   const [filterIndustry, setFilterIndustry] = useState("전체");
   const [editingCase, setEditingCase] = useState(null); // 추가/수정 중인 사례
   const [showForm, setShowForm] = useState(false);
+  const [companiesList, setCompaniesList] = useState([]); // 기업목록 (자동완성용)
+  const [companySuggestions, setCompanySuggestions] = useState([]);
 
-  useEffect(function() { fetchCases(); }, []);
+  useEffect(function() {
+    fetchCases();
+    // 기업목록 자동완성용 데이터 로딩
+    supabase.from("companies").select("name,representative,business_number,region,industry,assignee").is("deleted_at", null).then(function(r) {
+      if (!r.error) setCompaniesList(r.data || []);
+    });
+  }, []);
 
   var fetchCases = async function() {
     setLoading(true);
@@ -7828,6 +7836,35 @@ function ApprovalCasesView({ profile }) {
   var agencyOpts = ["전체","소상공인시장진흥공단","신용보증기금","기술보증기금","신용보증재단","중소벤처기업진흥공단","구조혁신&사업전환","경정청구","기타"];
   var resultOpts = ["전체","승인","약정","완료","부결","반려","진행중","신청전"];
 
+  // 기관별 신청상품 옵션 매핑
+  var getProductOptions = function(agencyGroup) {
+    if (agencyGroup === "중소벤처기업진흥공단") return JUNGINGONG_PRODUCTS;
+    if (agencyGroup === "소상공인시장진흥공단") return SOJINGONG_PRODUCTS;
+    return null; // 그 외 기관은 자유입력만
+  };
+
+  // 회사명 자동완성
+  var onBusinessNameChange = function(value) {
+    setEditingCase(function(p) { return Object.assign({}, p, { business_name: value }); });
+    if (!value || value.length < 1) { setCompanySuggestions([]); return; }
+    var matches = companiesList.filter(function(co) {
+      return (co.name || "").toLowerCase().indexOf(value.toLowerCase()) >= 0;
+    }).slice(0, 8);
+    setCompanySuggestions(matches);
+  };
+
+  // 자동완성 선택 - 회사 정보 자동 채우기
+  var selectCompany = function(co) {
+    setEditingCase(function(p) {
+      return Object.assign({}, p, {
+        business_name: co.name || "",
+        industry: co.industry || p.industry || "",
+        region: co.region || p.region || "",
+      });
+    });
+    setCompanySuggestions([]);
+  };
+
   var openNew = function() {
     setEditingCase({
       business_name: "", agency_group: "", product: "", result: "",
@@ -7836,11 +7873,13 @@ function ApprovalCasesView({ profile }) {
       initial_issue: "", resolution: "", key_point: "", result_reason: "",
       tags: [], blog_memo: "",
     });
+    setCompanySuggestions([]);
     setShowForm(true);
   };
 
   var openEdit = function(c) {
     setEditingCase(Object.assign({}, c, { tags: c.tags || [] }));
+    setCompanySuggestions([]);
     setShowForm(true);
   };
 
@@ -8010,23 +8049,65 @@ function ApprovalCasesView({ profile }) {
             <h2 style={{ margin: 0, marginBottom: 20, fontSize: 18, fontWeight: 700 }}>{editingCase.id ? "사례 수정" : "사례 추가"}</h2>
             
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-              <div>
-                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>회사명 *</label>
-                <input type="text" value={editingCase.business_name || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { business_name: v }); }); }}
+              <div style={{ position: "relative" }}>
+                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>
+                  회사명 * <span style={{ color: "#4338CA", fontWeight: 400, marginLeft: 4, fontSize: 10 }}>(기업목록 {companiesList.length}개 자동완성)</span>
+                </label>
+                <input type="text" value={editingCase.business_name || ""}
+                  onChange={function(e) { onBusinessNameChange(e.target.value); }}
+                  onBlur={function() { setTimeout(function() { setCompanySuggestions([]); }, 200); }}
+                  placeholder="회사명 입력 (목록에 없어도 직접 입력 가능)"
                   style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+                {companySuggestions.length > 0 && (
+                  <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #E8E5E0", borderRadius: 6, marginTop: 2, maxHeight: 200, overflowY: "auto", zIndex: 10, boxShadow: "0 4px 12px rgba(0,0,0,0.08)" }}>
+                    {companySuggestions.map(function(co, i) {
+                      return (
+                        <div key={i} onMouseDown={function(e) { e.preventDefault(); selectCompany(co); }}
+                          style={{ padding: "8px 12px", cursor: "pointer", borderBottom: i < companySuggestions.length - 1 ? "1px solid #F7F6F3" : "none", fontSize: 12 }}
+                          onMouseEnter={function(e) { e.currentTarget.style.background = "#F7F6F3"; }}
+                          onMouseLeave={function(e) { e.currentTarget.style.background = "#fff"; }}>
+                          <div style={{ fontWeight: 600 }}>{co.name}</div>
+                          <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>{co.representative || "-"} · {co.industry || "-"} · {co.region || "-"}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
               <div>
                 <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>기관</label>
-                <select value={editingCase.agency_group || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { agency_group: v }); }); }}
+                <select value={editingCase.agency_group || ""} onChange={function(e) {
+                  var v = e.target.value;
+                  setEditingCase(function(p) {
+                    // 기관 바뀌면 상품 초기화 (다른 기관 상품이 남아있으면 안 되므로)
+                    return Object.assign({}, p, { agency_group: v, product: "" });
+                  });
+                }}
                   style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", background: "#fff" }}>
                   <option value="">선택...</option>
                   {agencyOpts.slice(1).map(function(o) { return <option key={o} value={o}>{o}</option>; })}
                 </select>
               </div>
               <div>
-                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>신청 상품</label>
-                <input type="text" value={editingCase.product || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { product: v }); }); }}
-                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>
+                  신청 상품
+                  {getProductOptions(editingCase.agency_group) && <span style={{ color: "#4338CA", fontWeight: 400, marginLeft: 4, fontSize: 10 }}>(목록에서 선택 또는 직접 입력)</span>}
+                </label>
+                {getProductOptions(editingCase.agency_group) ? (
+                  <>
+                    <select value={getProductOptions(editingCase.agency_group).indexOf(editingCase.product) >= 0 ? editingCase.product : ""}
+                      onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { product: v }); }); }}
+                      style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", background: "#fff", marginBottom: 4 }}>
+                      <option value="">선택...</option>
+                      {getProductOptions(editingCase.agency_group).map(function(o) { return <option key={o} value={o}>{o}</option>; })}
+                    </select>
+                    <input type="text" value={editingCase.product || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { product: v }); }); }} placeholder="또는 직접 입력"
+                      style={{ width: "100%", padding: "6px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 12, boxSizing: "border-box", outline: "none", color: "#666" }} />
+                  </>
+                ) : (
+                  <input type="text" value={editingCase.product || ""} onChange={function(e) { var v = e.target.value; setEditingCase(function(p) { return Object.assign({}, p, { product: v }); }); }} placeholder="상품명 직접 입력"
+                    style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+                )}
               </div>
               <div>
                 <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>결과</label>
@@ -8401,21 +8482,60 @@ function TeamActivityWidget({ profiles }) {
     return entries.sort(function(a, b) { return b.total - a.total; });
   }, [activity]);
 
-  // 활동 없는 직원도 표시
-  var allNames = useMemo(function() {
-    var fromProfiles = (profiles || []).map(function(p) { return p.name; }).filter(Boolean);
-    var fromActivity = sorted.map(function(s) { return s.name; });
-    var set = new Set([].concat(fromProfiles, fromActivity));
-    return Array.from(set);
-  }, [profiles, sorted]);
+  // 직원 9명만 표시 (양호님 회사 직원 목록)
+  var TEAM_MEMBERS = ["유진", "미현", "정원", "관호", "인선", "현애", "지혜", "동일", "양호"];
+
+  // 이름 별칭 - 다양하게 입력된 표기를 표준 이름으로 매핑
+  // (예: "최지혜" → "지혜", "김동일이사" → "동일", "김현애" → "현애")
+  var resolveTeamMember = function(rawName) {
+    if (!rawName) return [];
+    var s = String(rawName);
+    var matched = [];
+    // 콤마/슬래시/공백으로 분리해서 조합 이름 처리 (예: "양호, 관호" → ["양호", "관호"])
+    var parts = s.split(/[,/\s]+/).map(function(p) { return p.trim(); }).filter(function(p) { return p; });
+    parts.forEach(function(part) {
+      TEAM_MEMBERS.forEach(function(member) {
+        // 정확 일치 또는 포함 (예: "김동일이사"에는 "동일" 포함)
+        if (part === member || part.indexOf(member) >= 0) {
+          if (matched.indexOf(member) < 0) matched.push(member);
+        }
+      });
+    });
+    return matched;
+  };
+
+  // 활동 집계를 9명 표준 이름 기준으로 다시 합산
+  var consolidated = useMemo(function() {
+    var data = {};
+    TEAM_MEMBERS.forEach(function(m) {
+      data[m] = { name: m, notes: 0, agencyUpdates: 0, agencyApproved: 0, logs: 0, cases: 0, lastActive: null };
+    });
+    Object.keys(activity).forEach(function(rawName) {
+      var members = resolveTeamMember(rawName);
+      var src = activity[rawName];
+      members.forEach(function(m) {
+        var d = data[m];
+        d.notes += src.notes;
+        d.agencyUpdates += src.agencyUpdates;
+        d.agencyApproved += src.agencyApproved;
+        d.logs += src.logs;
+        d.cases += src.cases;
+        if (src.lastActive && (!d.lastActive || src.lastActive > d.lastActive)) {
+          d.lastActive = src.lastActive;
+        }
+      });
+    });
+    return data;
+  }, [activity]);
 
   var displayList = useMemo(function() {
-    return allNames.map(function(name) {
-      var found = sorted.find(function(s) { return s.name === name; });
-      if (found) return found;
-      return { name: name, notes: 0, agencyUpdates: 0, agencyApproved: 0, logs: 0, cases: 0, lastActive: null, total: 0 };
-    }).sort(function(a, b) { return b.total - a.total; });
-  }, [allNames, sorted]);
+    var list = TEAM_MEMBERS.map(function(name) {
+      var d = consolidated[name];
+      var total = d.notes + d.agencyUpdates + d.logs + d.cases;
+      return Object.assign({}, d, { total: total });
+    });
+    return list.sort(function(a, b) { return b.total - a.total; });
+  }, [consolidated]);
 
   var relativeTime = function(iso) {
     if (!iso) return "활동 없음";
