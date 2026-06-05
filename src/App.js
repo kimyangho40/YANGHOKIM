@@ -4110,13 +4110,17 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   const [filterAssignee, setFilterAssignee] = useState("전체");
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [newNote, setNewNote] = useState({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "" });
+  const [newNote, setNewNote] = useState({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "", note_date: "" });
   const [editNote, setEditNote] = useState({});
   const [filterType, setFilterType] = useState("전체"); // 전체 / 메모 / 할일
   const [replyId, setReplyId] = useState(null);
   const [replyText, setReplyText] = useState("");
   const [showTrash, setShowTrash] = useState(false);
   const [trashedNotes, setTrashedNotes] = useState([]);
+  // 📅 캘린더 뷰 관련 state
+  const [viewMode, setViewMode] = useState("calendar"); // "calendar" | "list"
+  const [selectedDate, setSelectedDate] = useState(null); // YYYY-MM-DD or null (캘린더 보기 중)
+  const [calendarMonth, setCalendarMonth] = useState(function() { var d = new Date(); return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0"); });
 
   const [companiesList, setCompaniesList] = useState([]);
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -4224,6 +4228,116 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     });
   }, [notes, filterAssignee, filterType]);
 
+  // 노트의 날짜 추출 (note_date 우선, 없으면 created_at에서)
+  var getNoteDate = function(n) {
+    if (n.note_date) return n.note_date;
+    if (n.created_at) {
+      var d = new Date(n.created_at);
+      return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+    }
+    return null;
+  };
+
+  // 날짜별 노트 인덱싱
+  var notesByDate = useMemo(function() {
+    var m = {};
+    filtered.forEach(function(n) {
+      var d = getNoteDate(n);
+      if (!d) return;
+      if (!m[d]) m[d] = [];
+      m[d].push(n);
+    });
+    return m;
+  }, [filtered]);
+
+  // 선택된 날짜의 노트
+  var notesForSelectedDate = useMemo(function() {
+    if (!selectedDate) return [];
+    return notesByDate[selectedDate] || [];
+  }, [selectedDate, notesByDate]);
+
+  // 미완료 체크박스 추출 - 모든 노트 content에서 - [ ] 추출
+  var unfinishedItems = useMemo(function() {
+    var items = [];
+    filtered.forEach(function(n) {
+      if (!n.content) return;
+      var lines = n.content.split("\n");
+      lines.forEach(function(line, idx) {
+        var match = line.match(/^(\s*)- \[ \]\s*(.+)$/);
+        if (match) {
+          var text = match[2].trim();
+          // 마감일 추출 [YYYY-MM-DD]
+          var dueDateMatch = text.match(/\[(\d{4}-\d{2}-\d{2})\]/);
+          var dueDate = dueDateMatch ? dueDateMatch[1] : null;
+          var cleanText = text.replace(/\[\d{4}-\d{2}-\d{2}\]/, "").trim();
+          items.push({
+            noteId: n.id,
+            noteTitle: n.title || "(제목 없음)",
+            noteDate: getNoteDate(n),
+            assignee: n.assignee,
+            lineIdx: idx,
+            text: cleanText,
+            dueDate: dueDate,
+          });
+        }
+      });
+    });
+    // 마감일 임박 순 → 마감일 없는 것 → 노트 날짜 최신 순
+    items.sort(function(a, b) {
+      if (a.dueDate && !b.dueDate) return -1;
+      if (!a.dueDate && b.dueDate) return 1;
+      if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate);
+      return (b.noteDate || "").localeCompare(a.noteDate || "");
+    });
+    return items;
+  }, [filtered]);
+
+  // 캘린더 현재 월 정보
+  var calMonthInfo = useMemo(function() {
+    var parts = calendarMonth.split("-");
+    var y = parseInt(parts[0], 10);
+    var m = parseInt(parts[1], 10) - 1; // 0-indexed
+    var firstDay = new Date(y, m, 1);
+    var lastDay = new Date(y, m + 1, 0);
+    var startWeekday = firstDay.getDay(); // 0=일
+    var daysInMonth = lastDay.getDate();
+    // 이전 달 마지막 며칠 (캘린더 채우기용)
+    var prevLastDay = new Date(y, m, 0).getDate();
+    return { y: y, m: m, startWeekday: startWeekday, daysInMonth: daysInMonth, prevLastDay: prevLastDay };
+  }, [calendarMonth]);
+
+  // 캘린더 셀 만들기 (42칸 = 6주)
+  var calendarCells = useMemo(function() {
+    var info = calMonthInfo;
+    var cells = [];
+    // 이전 달
+    for (var i = info.startWeekday - 1; i >= 0; i--) {
+      cells.push({ day: info.prevLastDay - i, currentMonth: false, dateStr: null });
+    }
+    // 이번 달
+    for (var d = 1; d <= info.daysInMonth; d++) {
+      var ds = info.y + "-" + String(info.m + 1).padStart(2,"0") + "-" + String(d).padStart(2,"0");
+      cells.push({ day: d, currentMonth: true, dateStr: ds });
+    }
+    // 다음 달 (총 42칸 채우기)
+    var nextDay = 1;
+    while (cells.length < 42) {
+      cells.push({ day: nextDay++, currentMonth: false, dateStr: null });
+    }
+    return cells;
+  }, [calMonthInfo]);
+
+  var changeMonth = function(delta) {
+    var info = calMonthInfo;
+    var newM = info.m + delta;
+    var newY = info.y;
+    if (newM < 0) { newM = 11; newY--; }
+    if (newM > 11) { newM = 0; newY++; }
+    setCalendarMonth(newY + "-" + String(newM + 1).padStart(2,"0"));
+  };
+
+  var todayStr = (function() { var d = new Date(); return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0"); })();
+
   var pinned = filtered.filter(function(n) { return n.pinned; });
   var unpinned = filtered.filter(function(n) { return !n.pinned; });
 
@@ -4247,6 +4361,8 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       is_todo: newNote.is_todo,
       pinned: newNote.pinned,
       created_by: profile?.name || assigneeName,
+      // 노트 날짜 - 선택값 없으면 오늘
+      note_date: newNote.note_date || new Date().toISOString().slice(0, 10),
     };
     if (newNote.due_date) insertObj.due_date = newNote.due_date;
     var r = await supabase.from("work_notes").insert(insertObj).select().single();
@@ -4267,7 +4383,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       for (var i = 0; i < detected.length; i++) {
         await logToActivity(detected[i], "📝 업무노트: " + (newNote.title || newNote.content.split("\n")[0]));
       }
-      setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "" });
+      setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "", note_date: "" });
       // 사이드바 뱃지 업데이트
       if (onBadgeUpdate) onBadgeUpdate();
     } else if (r.error) {
@@ -4399,8 +4515,15 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
           <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>업무 노트</h1>
           <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>메모 · 할 일 · 업무일지</p>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={function() { setShowAdd(true); setNewNote({ title: "", content: "", is_todo: false, pinned: false, checkItems: [] }); }}
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {/* 📅/📋 토글 */}
+          <div style={{ display: "flex", gap: 2, padding: 3, background: "#F7F6F3", borderRadius: 8 }}>
+            <button onClick={function() { setViewMode("calendar"); }}
+              style={{ padding: "6px 12px", fontSize: 12, fontWeight: 600, background: viewMode === "calendar" ? "#fff" : "transparent", border: "1px solid " + (viewMode === "calendar" ? "#E8E5E0" : "transparent"), borderRadius: 6, color: viewMode === "calendar" ? "#1A1917" : "#888", cursor: "pointer" }}>📅 캘린더</button>
+            <button onClick={function() { setViewMode("list"); }}
+              style={{ padding: "6px 12px", fontSize: 12, fontWeight: 600, background: viewMode === "list" ? "#fff" : "transparent", border: "1px solid " + (viewMode === "list" ? "#E8E5E0" : "transparent"), borderRadius: 6, color: viewMode === "list" ? "#1A1917" : "#888", cursor: "pointer" }}>📋 목록</button>
+          </div>
+          <button onClick={function() { setShowAdd(true); setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "", note_date: selectedDate || todayStr }); }}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             <Icon name="plus" size={15} color="#F7F6F3" /> 새 노트
           </button>
@@ -4530,8 +4653,139 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
         </div>
       )}
 
-      {/* 노트 목록 */}
-      {filtered.length === 0 ? (
+      {/* 노트 목록 - 캘린더 모드 또는 리스트 모드 */}
+      {viewMode === "calendar" ? (
+        selectedDate === null ? (
+          // ── 캘린더만 크게 보여줌 (날짜 선택 전) ──
+          <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, padding: 24, maxWidth: 720, margin: "0 auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+              <button onClick={function() { changeMonth(-1); }} style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 14, cursor: "pointer" }}>◀ 이전 달</button>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>{calMonthInfo.y}년 {calMonthInfo.m + 1}월</div>
+              <button onClick={function() { changeMonth(1); }} style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 14, cursor: "pointer" }}>다음 달 ▶</button>
+            </div>
+            {/* 요일 헤더 */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6, marginBottom: 8 }}>
+              {["일","월","화","수","목","금","토"].map(function(w, i) {
+                return <div key={w} style={{ textAlign: "center", fontSize: 12, fontWeight: 600, color: i === 0 ? "#DC2626" : i === 6 ? "#2563EB" : "#888", padding: "6px 0" }}>{w}</div>;
+              })}
+            </div>
+            {/* 날짜 셀 */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
+              {calendarCells.map(function(cell, i) {
+                if (!cell.currentMonth) {
+                  return <div key={i} style={{ aspectRatio: "1", display: "flex", alignItems: "center", justifyContent: "center", color: "#CCC", fontSize: 14 }}>{cell.day}</div>;
+                }
+                var noteCount = (notesByDate[cell.dateStr] || []).length;
+                var isToday = cell.dateStr === todayStr;
+                var weekday = i % 7;
+                return (
+                  <div key={i} onClick={function() { setSelectedDate(cell.dateStr); }}
+                    style={{ aspectRatio: "1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", borderRadius: 10, cursor: "pointer", background: isToday ? "#1A1917" : (noteCount > 0 ? "#FEF3C7" : "#fff"), color: isToday ? "#fff" : (weekday === 0 ? "#DC2626" : weekday === 6 ? "#2563EB" : "#1A1917"), border: "1px solid " + (noteCount > 0 ? "#FCD34D" : "#F0EDE8"), position: "relative", fontWeight: noteCount > 0 || isToday ? 700 : 500, fontSize: 16, transition: "transform 0.1s" }}
+                    onMouseEnter={function(e) { e.currentTarget.style.transform = "scale(1.03)"; }}
+                    onMouseLeave={function(e) { e.currentTarget.style.transform = "scale(1)"; }}>
+                    <span>{cell.day}</span>
+                    {noteCount > 0 && !isToday && (
+                      <span style={{ fontSize: 10, color: "#92400E", fontWeight: 600, marginTop: 2 }}>{noteCount}개</span>
+                    )}
+                    {noteCount > 0 && isToday && (
+                      <span style={{ fontSize: 10, color: "#fff", marginTop: 2 }}>{noteCount}개</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ marginTop: 18, padding: 14, background: "#F7F6F3", borderRadius: 8, fontSize: 12, color: "#666", textAlign: "center" }}>
+              💡 어느 날짜든 클릭하면 그 날의 업무노트를 보거나 작성할 수 있어요. 미래 날짜도 가능합니다.
+            </div>
+          </div>
+        ) : (
+          // ── 선택된 날짜의 노트 + 미완료 사이드 (날짜 선택 후) ──
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 16, alignItems: "flex-start" }}>
+            {/* 좌: 선택 날짜의 노트들 */}
+            <div>
+              {/* 날짜 헤더 + 캘린더로 돌아가기 */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, padding: "14px 18px", background: "#fff", borderRadius: 10, border: "1px solid #E8E5E0" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <button onClick={function() { setSelectedDate(null); }} title="캘린더로 돌아가기"
+                    style={{ background: "#F7F6F3", border: "1px solid #E8E5E0", borderRadius: 8, padding: "6px 12px", fontSize: 12, cursor: "pointer", color: "#666" }}>📅 캘린더</button>
+                  <div>
+                    <div style={{ fontSize: 16, fontWeight: 700 }}>
+                      {(function() {
+                        var d = new Date(selectedDate);
+                        var w = ["일","월","화","수","목","금","토"][d.getDay()];
+                        return d.getFullYear() + "년 " + (d.getMonth()+1) + "월 " + d.getDate() + "일 (" + w + ")";
+                      })()}
+                      {selectedDate === todayStr && <span style={{ marginLeft: 8, fontSize: 11, padding: "2px 8px", background: "#DCFCE7", color: "#15803D", borderRadius: 99, fontWeight: 600 }}>오늘</span>}
+                      {selectedDate > todayStr && <span style={{ marginLeft: 8, fontSize: 11, padding: "2px 8px", background: "#DBEAFE", color: "#1E40AF", borderRadius: 99, fontWeight: 600 }}>예정</span>}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
+                      {filterAssignee === "전체" ? "전체 직원" : filterAssignee} · 노트 {notesForSelectedDate.length}개
+                    </div>
+                  </div>
+                </div>
+                <button onClick={function() { setShowAdd(true); setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "", note_date: selectedDate }); }}
+                  style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ 이 날짜에 노트 추가</button>
+              </div>
+              {/* 노트 카드들 */}
+              {notesForSelectedDate.length === 0 ? (
+                <div style={{ textAlign: "center", color: "#AAA", fontSize: 14, padding: "60px 0", background: "#fff", borderRadius: 10, border: "1px dashed #E8E5E0" }}>
+                  <div style={{ fontSize: 36, marginBottom: 10 }}>📝</div>
+                  이 날짜에 작성된 노트가 없어요.<br />
+                  <span style={{ fontSize: 12 }}>"+ 이 날짜에 노트 추가" 버튼으로 작성하세요.</span>
+                </div>
+              ) : (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
+                  {notesForSelectedDate.map(function(note) {
+                    return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} />;
+                  })}
+                </div>
+              )}
+            </div>
+            {/* 우: 미완료 체크박스 사이드 */}
+            <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 10, padding: "14px 16px", position: "sticky", top: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12, paddingBottom: 10, borderBottom: "1px solid #F0EDE8" }}>
+                <span style={{ fontSize: 14 }}>📌</span>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>미완료 업무</div>
+                <span style={{ marginLeft: "auto", fontSize: 11, color: "#888", background: "#F7F6F3", padding: "2px 8px", borderRadius: 99 }}>{unfinishedItems.length}건</span>
+              </div>
+              {unfinishedItems.length === 0 ? (
+                <div style={{ textAlign: "center", color: "#AAA", fontSize: 12, padding: "30px 0" }}>
+                  🎉 모든 업무 완료!
+                </div>
+              ) : (
+                <div style={{ maxHeight: "calc(100vh - 200px)", overflowY: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
+                  {unfinishedItems.slice(0, 50).map(function(item, i) {
+                    var isDueToday = item.dueDate === todayStr;
+                    var isOverdue = item.dueDate && item.dueDate < todayStr;
+                    return (
+                      <div key={i} onClick={function() { if (item.noteDate) setSelectedDate(item.noteDate); }}
+                        style={{ padding: "8px 10px", borderRadius: 6, background: isOverdue ? "#FEE2E2" : isDueToday ? "#FEF3C7" : "#F7F6F3", cursor: "pointer", border: "1px solid " + (isOverdue ? "#FCA5A5" : isDueToday ? "#FCD34D" : "transparent") }}>
+                        <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+                          <span style={{ fontSize: 11, marginTop: 1 }}>☐</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 12, color: "#1A1917", lineHeight: 1.4, wordBreak: "break-word" }}>{item.text}</div>
+                            <div style={{ display: "flex", gap: 6, marginTop: 4, fontSize: 10, color: "#888", flexWrap: "wrap" }}>
+                              {item.assignee && <span>👤 {item.assignee}</span>}
+                              {item.dueDate && (
+                                <span style={{ color: isOverdue ? "#B91C1C" : isDueToday ? "#92400E" : "#888", fontWeight: 600 }}>
+                                  📅 {item.dueDate}{isOverdue ? " (지남)" : isDueToday ? " (오늘)" : ""}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {unfinishedItems.length > 50 && (
+                    <div style={{ textAlign: "center", fontSize: 11, color: "#888", padding: 6 }}>... 외 {unfinishedItems.length - 50}건</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      ) : filtered.length === 0 ? (
         <div style={{ textAlign: "center", color: "#CCC", fontSize: 14, padding: "80px 0" }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>📝</div>
           아직 작성된 노트가 없어요.<br />
