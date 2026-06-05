@@ -4121,6 +4121,9 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   const [viewMode, setViewMode] = useState("calendar"); // "calendar" | "list"
   const [selectedDate, setSelectedDate] = useState(null); // YYYY-MM-DD or null (캘린더 보기 중)
   const [calendarMonth, setCalendarMonth] = useState(function() { var d = new Date(); return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0"); });
+  // 🔍 노트 검색 state
+  const [noteSearchQ, setNoteSearchQ] = useState("");
+  const [noteSearchOpen, setNoteSearchOpen] = useState(false);
 
   const [companiesList, setCompaniesList] = useState([]);
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -4337,6 +4340,16 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   };
 
   var todayStr = (function() { var d = new Date(); return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0"); })();
+
+  // 🔍 노트 검색 결과 (제목/내용/담당자 매칭)
+  var noteSearchResults = useMemo(function() {
+    var q = (noteSearchQ || "").toLowerCase().trim();
+    if (!q) return [];
+    return filtered.filter(function(n) {
+      var hay = ((n.title || "") + " " + (n.content || "") + " " + (n.assignee || "")).toLowerCase();
+      return hay.indexOf(q) >= 0;
+    }).slice(0, 10);
+  }, [noteSearchQ, filtered]);
 
   var pinned = filtered.filter(function(n) { return n.pinned; });
   var unpinned = filtered.filter(function(n) { return !n.pinned; });
@@ -4652,6 +4665,93 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
           </div>
         </div>
       )}
+
+      {/* 🔍 노트 검색 (양식 재활용용) */}
+      <div style={{ position: "relative", marginBottom: 16, maxWidth: 600 }}>
+        <div style={{ position: "relative" }}>
+          <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", fontSize: 14, color: "#888" }}>🔍</span>
+          <input type="text" value={noteSearchQ}
+            onChange={function(e) { setNoteSearchQ(e.target.value); setNoteSearchOpen(true); }}
+            onFocus={function() { if (noteSearchQ) setNoteSearchOpen(true); }}
+            onBlur={function() { setTimeout(function() { setNoteSearchOpen(false); }, 200); }}
+            onKeyDown={function(e) { if (e.key === "Escape") { setNoteSearchOpen(false); setNoteSearchQ(""); } }}
+            placeholder="노트 내용·제목 검색 (양식 찾기, 비슷한 메모 참고용)"
+            style={{ width: "100%", padding: "10px 14px 10px 38px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, outline: "none", boxSizing: "border-box", background: "#fff" }} />
+          {noteSearchQ && (
+            <button onClick={function() { setNoteSearchQ(""); setNoteSearchOpen(false); }}
+              style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#AAA", padding: 4 }}>✕</button>
+          )}
+        </div>
+        {/* 드롭다운 결과 */}
+        {noteSearchOpen && noteSearchQ && (
+          <div style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,0.08)", zIndex: 100, maxHeight: 400, overflowY: "auto" }}>
+            {noteSearchResults.length === 0 ? (
+              <div style={{ padding: "20px 16px", textAlign: "center", color: "#AAA", fontSize: 13 }}>
+                '{noteSearchQ}' 에 대한 노트가 없어요.
+              </div>
+            ) : (
+              <>
+                <div style={{ padding: "8px 14px", fontSize: 11, color: "#888", background: "#F7F6F3", borderBottom: "1px solid #E8E5E0" }}>
+                  {noteSearchResults.length}건 매칭 · 클릭하면 그 날짜로 이동 · 📋 클릭하면 양식 복사
+                </div>
+                {noteSearchResults.map(function(n) {
+                  var nd = getNoteDate(n);
+                  // 검색어 매칭 부분 미리보기 (앞뒤 50자)
+                  var content = n.content || "";
+                  var q = noteSearchQ.toLowerCase();
+                  var idx = content.toLowerCase().indexOf(q);
+                  var preview;
+                  if (idx >= 0) {
+                    var s = Math.max(0, idx - 30);
+                    var e = Math.min(content.length, idx + q.length + 50);
+                    preview = (s > 0 ? "..." : "") + content.slice(s, e) + (e < content.length ? "..." : "");
+                  } else {
+                    preview = content.slice(0, 80) + (content.length > 80 ? "..." : "");
+                  }
+                  return (
+                    <div key={n.id}
+                      style={{ padding: "10px 14px", borderBottom: "1px solid #F7F6F3", display: "flex", gap: 10, alignItems: "flex-start" }}>
+                      <div onMouseDown={function(e) {
+                        e.preventDefault();
+                        if (nd) {
+                          setSelectedDate(nd);
+                          // 캘린더 모드인데 다른 직원의 노트면 필터도 맞춤
+                          if (n.assignee && filterAssignee !== "전체" && n.assignee !== filterAssignee) {
+                            setFilterAssignee(n.assignee);
+                          }
+                        }
+                        setNoteSearchOpen(false);
+                        setNoteSearchQ("");
+                      }} style={{ flex: 1, cursor: "pointer", minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: "#1A1917" }}>
+                            {n.title || "(제목 없음)"}
+                          </span>
+                          <span style={{ fontSize: 10, color: "#888" }}>· {n.assignee || "-"}</span>
+                          {nd && <span style={{ fontSize: 10, color: "#4338CA", background: "#EEF2FF", padding: "1px 6px", borderRadius: 99 }}>{nd}</span>}
+                        </div>
+                        <div style={{ fontSize: 12, color: "#666", lineHeight: 1.5, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+                          {preview}
+                        </div>
+                      </div>
+                      <button onMouseDown={function(e) {
+                        e.preventDefault();
+                        var txt = (n.title ? n.title + "\n\n" : "") + (n.content || "");
+                        navigator.clipboard?.writeText(txt).then(function() {
+                          alert("📋 양식이 복사됐어요. 새 노트에서 붙여넣기(Ctrl+V) 하세요.");
+                        }).catch(function() {
+                          alert("복사 실패. 브라우저에서 클립보드 권한을 허용해주세요.");
+                        });
+                      }} title="양식 복사 (클립보드)"
+                        style={{ background: "#F7F6F3", border: "1px solid #E8E5E0", borderRadius: 6, padding: "5px 9px", fontSize: 11, cursor: "pointer", color: "#666", flexShrink: 0, fontWeight: 600 }}>📋 복사</button>
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* 노트 목록 - 캘린더 모드 또는 리스트 모드 */}
       {viewMode === "calendar" ? (
