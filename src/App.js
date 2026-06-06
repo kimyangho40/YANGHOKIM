@@ -90,6 +90,24 @@ const DOC_LIST = ["사업자등록증","최근 3년치 재무제표 (23년~25년
 const TEAMS = ["법인전담","개인전담","관리자"];
 const ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일","양호"];
 const INDUSTRY_OPTIONS = ["제조업","농업·어업","숙박업","음식점업","전자상거래업","정보통신업","도소매업","서비스업","창고업","자동차임대업"];
+
+// 기본 업종 + companies에서 추출한 커스텀 업종 통합 옵션
+// 사용자가 수동 입력한 업종도 다음 선택부터 옵션에 나타나도록 함
+function getMergedIndustryOptions(companies) {
+  var fromCompanies = new Set();
+  (companies || []).forEach(function(co) {
+    if (!co || !co.industry) return;
+    co.industry.split(",").forEach(function(part) {
+      var t = (part || "").trim();
+      if (t) fromCompanies.add(t);
+    });
+  });
+  // 기본 옵션 먼저, 그 뒤에 커스텀 (가나다순)
+  var custom = Array.from(fromCompanies).filter(function(x) {
+    return INDUSTRY_OPTIONS.indexOf(x) < 0;
+  }).sort(function(a, b) { return a.localeCompare(b, "ko"); });
+  return INDUSTRY_OPTIONS.concat(custom);
+}
 const DB_ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일"];
 const DB_MANAGERS = ["양호","동일","관호"];
 
@@ -1245,7 +1263,7 @@ function CRMApp({ profile, session }) {
             {view === "pipeline" && <PipelineView filtered={filtered} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} />}
             {view === "cases" && <ApprovalCasesView profile={profile} />}
             {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={profile?.role === "admin" || profile?.name === "양호"} onSelectCompany={setSelectedCompany} setView={setView} />}
-            {view === "list" && <ListView filtered={filtered} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} />}
+            {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} />}
             {view === "stagnant" && <StagnantView stagnant={stagnant} onSelect={setSelectedCompany} />}
             {view === "members" && profile.role === "admin" && <MembersView profiles={profiles} onRefresh={fetchAll} showToast={showToast} />}
           </>
@@ -1272,9 +1290,10 @@ function CRMApp({ profile, session }) {
           onToggleDoc={toggleDoc}
           currentUser={profile}
           onAgencyRegistered={function() {}}
+          companies={companies}
         />
       )}
-      {showAdd && <AddModal onClose={() => setShowAdd(false)} onAdd={addCompany} assignees={assignees.filter(a => a !== "전체")} />}
+      {showAdd && <AddModal onClose={() => setShowAdd(false)} onAdd={addCompany} assignees={assignees.filter(a => a !== "전체")} companies={companies} />}
 
       {/* 모바일 하단 네비게이션 */}
       <div className="crm-mobile-nav">
@@ -2073,10 +2092,13 @@ function MyTodoWidget({ setView }) {
 }
 
 // ── 업종 셀 컴포넌트 (인라인 편집 + 자동완성 드롭다운) ──────────────────────
-function IndustryCell({ co, setCompanies }) {
+function IndustryCell({ co, setCompanies, companies }) {
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState("");
   const ref = useRef(null);
+
+  // 기본 옵션 + 다른 기업이 사용 중인 업종을 통합
+  var mergedOptions = useMemo(function() { return getMergedIndustryOptions(companies); }, [companies]);
 
   // industry는 "제조업, 도소매업" 같은 쉼표 구분 문자열
   var selectedList = (co.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
@@ -2130,22 +2152,24 @@ function IndustryCell({ co, setCompanies }) {
       <div style={{ position: "absolute", top: 0, left: 0, zIndex: 999, background: "#fff", border: "1px solid #4338CA", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.12)", minWidth: 260, padding: 10 }}>
         <div style={{ fontSize: 10, color: "#888", marginBottom: 6, fontWeight: 700 }}>업종 선택 (복수 가능)</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
-          {INDUSTRY_OPTIONS.map(function(opt) {
+          {mergedOptions.map(function(opt) {
             var sel = selectedList.indexOf(opt) >= 0;
+            var isCustom = INDUSTRY_OPTIONS.indexOf(opt) < 0;
             return (
               <button key={opt} onClick={function() { toggleItem(opt); }}
+                title={isCustom ? "다른 기업에서 사용 중인 업종" : ""}
                 style={{ padding: "3px 9px", borderRadius: 99, fontSize: 10, fontWeight: sel ? 700 : 400,
-                  background: sel ? "#4338CA" : "#fff", color: sel ? "#fff" : "#666",
-                  border: sel ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
+                  background: sel ? "#4338CA" : (isCustom ? "#FEF3C7" : "#fff"), color: sel ? "#fff" : (isCustom ? "#92400E" : "#666"),
+                  border: sel ? "none" : "1px solid " + (isCustom ? "#FDE68A" : "#E8E5E0"), cursor: "pointer" }}>
                 {sel ? "✓ " : ""}{opt}
               </button>
             );
           })}
         </div>
-        {/* 직접 입력한 커스텀 업종 표시 */}
-        {selectedList.filter(function(s) { return INDUSTRY_OPTIONS.indexOf(s) < 0; }).length > 0 && (
+        {/* 이 기업이 사용 중이지만 통합 옵션에 없는 항목 (예외적 케이스) */}
+        {selectedList.filter(function(s) { return mergedOptions.indexOf(s) < 0; }).length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
-            {selectedList.filter(function(s) { return INDUSTRY_OPTIONS.indexOf(s) < 0; }).map(function(s) {
+            {selectedList.filter(function(s) { return mergedOptions.indexOf(s) < 0; }).map(function(s) {
               return (
                 <span key={s} style={{ background: "#0F6E56", color: "#fff", padding: "3px 9px", borderRadius: 99, fontSize: 10, fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 4 }}>
                   ✓ {s}
@@ -2168,7 +2192,7 @@ function IndustryCell({ co, setCompanies }) {
   );
 }
 
-function ListView({ filtered, search, setSearch, filterStage, setFilterStage, filterAssignee, setFilterAssignee, filterType, setFilterType, assignees, onSelect, onAdd, setCompanies, showToast, dashboardFilter, setDashboardFilter }) {
+function ListView({ filtered, companies, search, setSearch, filterStage, setFilterStage, filterAssignee, setFilterAssignee, filterType, setFilterType, assignees, onSelect, onAdd, setCompanies, showToast, dashboardFilter, setDashboardFilter }) {
   const [showCompanyTrash, setShowCompanyTrash] = useState(false);
   const [trashedCompanies, setTrashedCompanies] = useState([]);
 
@@ -2335,7 +2359,7 @@ function ListView({ filtered, search, setSearch, filterStage, setFilterStage, fi
                     )}
                   </td>
                   <td style={{ padding: "6px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 80 }} onClick={function(e) { e.stopPropagation(); }}>
-                    <IndustryCell co={co} setCompanies={setCompanies} />
+                    <IndustryCell co={co} setCompanies={setCompanies} companies={companies} />
                   </td>
                   <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis" }}>{co.representative || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 12, whiteSpace: "nowrap" }}>{co.assignee || "-"}</td>
@@ -2506,7 +2530,7 @@ function MembersView({ profiles, onRefresh, showToast }) {
 }
 
 // ── 기업 상세 모달 ─────────────────────────────────────────────────────────────
-function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAgencyRegistered }) {
+function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAgencyRegistered, companies }) {
   const [tab, setTab] = useState("info");
   const [data, setData] = useState({ ...company });
   const [editingName, setEditingName] = useState(false);
@@ -2758,9 +2782,10 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   </div>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>업종 (복수 선택 가능)</div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
-                    {INDUSTRY_OPTIONS.map(function(ind) {
+                    {getMergedIndustryOptions(companies).map(function(ind) {
                       var cur = (data.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
                       var sel = cur.indexOf(ind) >= 0;
+                      var isCustom = INDUSTRY_OPTIONS.indexOf(ind) < 0;
                       return (
                         <button key={ind} onClick={function() {
                           var arr = (data.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
@@ -2770,18 +2795,20 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                           var newVal = arr.length > 0 ? arr.join(", ") : "";
                           setData(function(p) { return Object.assign({}, p, { industry: newVal }); });
                         }}
+                          title={isCustom ? "다른 기업에서 사용 중인 업종" : ""}
                           style={{ padding: "4px 9px", borderRadius: 99, fontSize: 11, fontWeight: sel ? 700 : 400,
-                            background: sel ? "#4338CA" : "#fff", color: sel ? "#fff" : "#666",
-                            border: sel ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
+                            background: sel ? "#4338CA" : (isCustom ? "#FEF3C7" : "#fff"), color: sel ? "#fff" : (isCustom ? "#92400E" : "#666"),
+                            border: sel ? "none" : "1px solid " + (isCustom ? "#FDE68A" : "#E8E5E0"), cursor: "pointer" }}>
                           {sel ? "✓ " : ""}{ind}
                         </button>
                       );
                     })}
                   </div>
-                  {/* 직접 입력한 커스텀 업종 표시 */}
+                  {/* 통합 옵션에도 없는 항목 (예외) */}
                   {(function() {
                     var cur = (data.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
-                    var custom = cur.filter(function(s) { return INDUSTRY_OPTIONS.indexOf(s) < 0; });
+                    var allOpts = getMergedIndustryOptions(companies);
+                    var custom = cur.filter(function(s) { return allOpts.indexOf(s) < 0; });
                     if (custom.length === 0) return null;
                     return (
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
@@ -3235,7 +3262,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
 }
 
 // ── 신규 등록 모달 ─────────────────────────────────────────────────────────────
-function AddModal({ onClose, onAdd, assignees }) {
+function AddModal({ onClose, onAdd, assignees, companies }) {
   // 빠른 등록 모달 - 필수 정보만 받고, 나머지는 상세 화면에서 입력
   const [form, setForm] = useState({
     name: "", type: "법인", representative: "", phone: "",
@@ -3312,9 +3339,10 @@ function AddModal({ onClose, onAdd, assignees }) {
           <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
             <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>업종 (복수 선택 가능)</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
-              {INDUSTRY_OPTIONS.map(function(ind) {
+              {getMergedIndustryOptions(companies).map(function(ind) {
                 var cur = (form.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
                 var sel = cur.indexOf(ind) >= 0;
+                var isCustom = INDUSTRY_OPTIONS.indexOf(ind) < 0;
                 return (
                   <button key={ind} onClick={function() {
                     var arr = (form.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
@@ -3323,8 +3351,9 @@ function AddModal({ onClose, onAdd, assignees }) {
                     else arr.push(ind);
                     set("industry", arr.length > 0 ? arr.join(", ") : "");
                   }}
-                    style={{ padding: "4px 9px", borderRadius: 99, fontSize: 11, fontWeight: sel ? 700 : 400, border: sel ? "none" : "1px solid #E8E5E0", cursor: "pointer",
-                      background: sel ? "#4338CA" : "#fff", color: sel ? "#fff" : "#666" }}>
+                    title={isCustom ? "다른 기업에서 사용 중인 업종" : ""}
+                    style={{ padding: "4px 9px", borderRadius: 99, fontSize: 11, fontWeight: sel ? 700 : 400, border: sel ? "none" : "1px solid " + (isCustom ? "#FDE68A" : "#E8E5E0"), cursor: "pointer",
+                      background: sel ? "#4338CA" : (isCustom ? "#FEF3C7" : "#fff"), color: sel ? "#fff" : (isCustom ? "#92400E" : "#666") }}>
                     {sel ? "✓ " : ""}{ind}
                   </button>
                 );
@@ -3332,7 +3361,8 @@ function AddModal({ onClose, onAdd, assignees }) {
             </div>
             {(function() {
               var cur = (form.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
-              var custom = cur.filter(function(s) { return INDUSTRY_OPTIONS.indexOf(s) < 0; });
+              var allOpts = getMergedIndustryOptions(companies);
+              var custom = cur.filter(function(s) { return allOpts.indexOf(s) < 0; });
               if (custom.length === 0) return null;
               return (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
