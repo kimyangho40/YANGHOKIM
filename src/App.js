@@ -8994,6 +8994,8 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
   const [showDone, setShowDone] = useState(false); // 가져간/완료된 것도 볼지
   const [newNote, setNewNote] = useState({ title: "", content: "", priority: "normal", due_date: "", tags: [], checklist: [] });
   const [collapsed, setCollapsed] = useState(false); // 섹션 전체 접기
+  const [editingNoteId, setEditingNoteId] = useState(null); // 수정 중인 팀 노트 ID
+  const [editingDraft, setEditingDraft] = useState(null); // 수정 작업 중인 임시 데이터
 
   useEffect(function() { fetchTeamNotes(); }, []);
 
@@ -9177,6 +9179,55 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
     });
   };
 
+  // 팀 노트 수정 시작
+  var startEditNote = function(note) {
+    setEditingNoteId(note.id);
+    setEditingDraft({
+      title: note.title || "",
+      content: note.content || "",
+      priority: note.priority || "normal",
+      due_date: note.due_date || "",
+      checklist: (note.checklist || []).map(function(it) { return Object.assign({}, it); }),
+    });
+  };
+
+  // 팀 노트 수정 취소
+  var cancelEditNote = function() {
+    setEditingNoteId(null);
+    setEditingDraft(null);
+  };
+
+  // 팀 노트 수정 저장
+  var saveEditNote = async function(noteId) {
+    if (!editingDraft) return;
+    // 빈 항목 제거 + 신규 항목은 ID 부여
+    var cleanChecklist = (editingDraft.checklist || []).filter(function(it) { return it && it.text && it.text.trim(); }).map(function(it) {
+      return {
+        id: it.id || ("ck_" + Math.random().toString(36).slice(2, 11)),
+        text: it.text.trim(),
+        taken_by: it.taken_by || null,
+        taken_at: it.taken_at || null,
+        taken_work_note_id: it.taken_work_note_id || null,
+        done: !!it.done,
+      };
+    });
+    var payload = {
+      title: editingDraft.title.trim() || null,
+      content: editingDraft.content.trim() || null,
+      priority: editingDraft.priority || "normal",
+      due_date: editingDraft.due_date || null,
+      checklist: cleanChecklist,
+      updated_at: new Date().toISOString(),
+    };
+    var r = await supabase.from("team_notes").update(payload).eq("id", noteId);
+    if (r.error) { alert("수정 실패: " + r.error.message); return; }
+    setAllTeamNotes(function(prev) {
+      return prev.map(function(n) { return n.id === noteId ? Object.assign({}, n, payload) : n; });
+    });
+    setEditingNoteId(null);
+    setEditingDraft(null);
+  };
+
   // 팀 노트 삭제 (양호님 또는 등록자만)
   var deleteTeamNote = async function(id, postedBy) {
     var canDelete = profile?.name === "양호" || profile?.role === "admin" || profile?.name === postedBy;
@@ -9266,6 +9317,110 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
                 var ss = statusStyle(note.status);
                 var isOpen = note.status === "open";
                 var isMine = note.taken_by === profile?.name;
+                var isEditing = editingNoteId === note.id;
+
+                // ── 편집 모드 ──
+                if (isEditing && editingDraft) {
+                  return (
+                    <div key={note.id} style={{ background: "#fff", border: "2px solid #4338CA", borderRadius: 8, padding: "12px" }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#4338CA", marginBottom: 8 }}>✏️ 수정 중</div>
+                      <div style={{ marginBottom: 8 }}>
+                        <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 2 }}>제목</label>
+                        <input type="text" value={editingDraft.title}
+                          onChange={function(e) { var v = e.target.value; setEditingDraft(function(p) { return Object.assign({}, p, { title: v }); }); }}
+                          style={{ width: "100%", padding: "6px 10px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 12, boxSizing: "border-box", outline: "none" }} />
+                      </div>
+                      <div style={{ marginBottom: 8 }}>
+                        <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 2 }}>업무 내용</label>
+                        <textarea value={editingDraft.content}
+                          onChange={function(e) { var v = e.target.value; setEditingDraft(function(p) { return Object.assign({}, p, { content: v }); }); }}
+                          style={{ width: "100%", padding: "6px 10px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 12, lineHeight: 1.6, resize: "vertical", minHeight: 60, boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 }}>
+                        <div>
+                          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 2 }}>우선순위</label>
+                          <select value={editingDraft.priority}
+                            onChange={function(e) { var v = e.target.value; setEditingDraft(function(p) { return Object.assign({}, p, { priority: v }); }); }}
+                            style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, boxSizing: "border-box", background: "#fff" }}>
+                            <option value="normal">일반</option>
+                            <option value="high">⭐ 중요</option>
+                            <option value="urgent">🚨 긴급</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 2 }}>마감일</label>
+                          <input type="date" value={editingDraft.due_date}
+                            onChange={function(e) { var v = e.target.value; setEditingDraft(function(p) { return Object.assign({}, p, { due_date: v }); }); }}
+                            style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, boxSizing: "border-box", outline: "none" }} />
+                        </div>
+                      </div>
+                      {/* 체크리스트 편집 */}
+                      <div style={{ marginBottom: 8, background: "#F7F6F3", border: "1px solid #E8E5E0", borderRadius: 6, padding: "8px 10px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                          <label style={{ fontSize: 10, color: "#666", fontWeight: 600 }}>📋 체크리스트</label>
+                          <button onClick={function() {
+                            setEditingDraft(function(p) {
+                              var arr = (p.checklist || []).slice();
+                              arr.push({ id: "tmp_" + Math.random().toString(36).slice(2, 11), text: "" });
+                              return Object.assign({}, p, { checklist: arr });
+                            });
+                          }}
+                            style={{ background: "#fff", border: "1px solid #E8E5E0", color: "#666", padding: "2px 8px", fontSize: 10, borderRadius: 4, cursor: "pointer", fontWeight: 600 }}>+ 추가</button>
+                        </div>
+                        {(editingDraft.checklist || []).length === 0 ? (
+                          <div style={{ fontSize: 10, color: "#AAA", padding: "4px 0", textAlign: "center" }}>항목 없음</div>
+                        ) : (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                            {editingDraft.checklist.map(function(item, idx) {
+                              var locked = !!item.taken_by; // 이미 가져간 항목은 수정/삭제 불가
+                              return (
+                                <div key={item.id || idx} style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                                  <span style={{ color: locked ? "#AAA" : "#CCC", fontSize: 11 }}>☐</span>
+                                  <input type="text" value={item.text} disabled={locked}
+                                    onChange={function(e) {
+                                      var v = e.target.value;
+                                      setEditingDraft(function(p) {
+                                        var arr = (p.checklist || []).slice();
+                                        arr[idx] = Object.assign({}, arr[idx], { text: v });
+                                        return Object.assign({}, p, { checklist: arr });
+                                      });
+                                    }}
+                                    placeholder="항목 내용"
+                                    title={locked ? item.taken_by + "님이 가져간 항목은 수정 불가" : ""}
+                                    style={{ flex: 1, padding: "4px 8px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, boxSizing: "border-box", outline: "none", background: locked ? "#F0EDE8" : "#fff", color: locked ? "#888" : "#1A1917", textDecoration: locked ? "line-through" : "none" }} />
+                                  {locked ? (
+                                    <span style={{ fontSize: 9, color: "#1E40AF", fontWeight: 700, padding: "2px 5px", background: "#DBEAFE", borderRadius: 3, whiteSpace: "nowrap" }}>👤 {item.taken_by}</span>
+                                  ) : (
+                                    <button onClick={function() {
+                                      setEditingDraft(function(p) {
+                                        var arr = (p.checklist || []).filter(function(_, i) { return i !== idx; });
+                                        return Object.assign({}, p, { checklist: arr });
+                                      });
+                                    }}
+                                      title="삭제"
+                                      style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 11, padding: "2px 4px" }}>✕</button>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                        {(editingDraft.checklist || []).some(function(it) { return !!it.taken_by; }) && (
+                          <div style={{ marginTop: 6, fontSize: 9, color: "#92400E" }}>🔒 이미 가져간 항목은 수정·삭제할 수 없습니다.</div>
+                        )}
+                      </div>
+                      {/* 저장/취소 */}
+                      <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                        <button onClick={cancelEditNote}
+                          style={{ background: "#fff", border: "1px solid #E8E5E0", color: "#666", padding: "6px 14px", fontSize: 11, borderRadius: 6, cursor: "pointer" }}>취소</button>
+                        <button onClick={function() { saveEditNote(note.id); }}
+                          style={{ background: "#4338CA", color: "#fff", border: "none", padding: "6px 14px", fontSize: 11, borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>💾 저장</button>
+                      </div>
+                    </div>
+                  );
+                }
+
+                // ── 일반 보기 모드 ──
                 return (
                   <div key={note.id} style={{ background: isOpen ? "#FFFEF7" : "#F7F6F3", border: "1px solid " + (isOpen ? "#FEF3C7" : "#E8E5E0"), borderRadius: 8, padding: "10px 12px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
@@ -9351,6 +9506,9 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
                         <button onClick={function() { markDone(note.id); }}
                           style={{ flex: 1, background: "#fff", color: "#15803D", border: "1px solid #86EFAC", borderRadius: 6, padding: "6px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>✅ 완료처리</button>
                       )}
+                      {/* 수정 버튼 (누구나 가능) */}
+                      <button onClick={function() { startEditNote(note); }} title="수정"
+                        style={{ background: "#fff", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 6, padding: "6px 8px", fontSize: 11, cursor: "pointer" }}>✏️</button>
                       {(profile?.name === "양호" || profile?.role === "admin" || profile?.name === note.posted_by) && (
                         <button onClick={function() { deleteTeamNote(note.id, note.posted_by); }} title="삭제"
                           style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 6, padding: "6px 8px", fontSize: 11, cursor: "pointer" }}>🗑</button>
