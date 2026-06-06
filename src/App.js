@@ -8992,7 +8992,7 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
   const [activeTab, setActiveTab] = useState("corporate"); // "corporate" | "individual"
   const [showAdd, setShowAdd] = useState(false);
   const [showDone, setShowDone] = useState(false); // 가져간/완료된 것도 볼지
-  const [newNote, setNewNote] = useState({ title: "", content: "", priority: "normal", due_date: "", tags: [] });
+  const [newNote, setNewNote] = useState({ title: "", content: "", priority: "normal", due_date: "", tags: [], checklist: [] });
   const [collapsed, setCollapsed] = useState(false); // 섹션 전체 접기
 
   useEffect(function() { fetchTeamNotes(); }, []);
@@ -9022,10 +9022,21 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
 
   // 팀 노트 새로 추가
   var addTeamNote = async function() {
-    if (!newNote.title.trim() && !newNote.content.trim()) {
-      alert("제목 또는 내용을 입력해주세요.");
+    if (!newNote.title.trim() && !newNote.content.trim() && (!newNote.checklist || newNote.checklist.length === 0)) {
+      alert("제목, 내용 또는 체크리스트 중 하나는 입력해주세요.");
       return;
     }
+    // 체크리스트 필터: 빈 항목 제거 + 각 항목에 ID 부여
+    var cleanChecklist = (newNote.checklist || []).filter(function(it) { return it && it.text && it.text.trim(); }).map(function(it) {
+      return {
+        id: it.id || ("ck_" + Math.random().toString(36).slice(2, 11)),
+        text: it.text.trim(),
+        taken_by: null,
+        taken_at: null,
+        taken_work_note_id: null,
+        done: false,
+      };
+    });
     var payload = {
       team: activeTab,
       title: newNote.title.trim() || null,
@@ -9035,11 +9046,12 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
       tags: newNote.tags && newNote.tags.length > 0 ? newNote.tags : null,
       posted_by: profile?.name || "익명",
       status: "open",
+      checklist: cleanChecklist,
     };
     var r = await supabase.from("team_notes").insert(payload).select().single();
     if (r.error) { alert("등록 실패: " + r.error.message); return; }
     setAllTeamNotes(function(prev) { return [r.data].concat(prev); });
-    setNewNote({ title: "", content: "", priority: "normal", due_date: "", tags: [] });
+    setNewNote({ title: "", content: "", priority: "normal", due_date: "", tags: [], checklist: [] });
     setShowAdd(false);
   };
 
@@ -9079,6 +9091,90 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
     });
     if (onTakenToMyNote) onTakenToMyNote(wr.data);
     alert("✅ '" + (teamNote.title || "팀 노트") + "'을(를) 내 노트로 가져왔습니다.\n업무노트에서 확인하세요.");
+  };
+
+  // 체크리스트 항목 하나 가져가기
+  var takeChecklistItem = async function(teamNote, itemId) {
+    if (!profile?.name) { alert("로그인 정보가 없습니다."); return; }
+    var assigneeName = profile.name;
+    var item = (teamNote.checklist || []).find(function(it) { return it.id === itemId; });
+    if (!item) return;
+    if (item.taken_by) { alert("이미 " + item.taken_by + "님이 가져간 항목입니다."); return; }
+
+    var teamLabel = teamNote.team === "corporate" ? "[법인팀]" : "[개인팀]";
+    var todayStr = new Date().toISOString().slice(0, 10);
+    var noteTitle = teamLabel + " " + (teamNote.title || "팀 노트");
+
+    // 1) 같은 팀 노트에서 이미 가져온 항목이 있는지 - 같은 사용자가 같은 team_note에서 가져온 work_note 찾기
+    var existingWorkNoteId = null;
+    if (teamNote.checklist) {
+      var alreadyTaken = teamNote.checklist.find(function(it) { return it.taken_by === assigneeName && it.taken_work_note_id; });
+      if (alreadyTaken) existingWorkNoteId = alreadyTaken.taken_work_note_id;
+    }
+
+    var workNoteId;
+    if (existingWorkNoteId) {
+      // 기존 노트에 항목 추가
+      var fetchRes = await supabase.from("work_notes").select("content").eq("id", existingWorkNoteId).maybeSingle();
+      if (fetchRes.error || !fetchRes.data) {
+        // 기존 노트가 사라졌으면 새로 만듦
+        existingWorkNoteId = null;
+      } else {
+        var existingContent = fetchRes.data.content || "";
+        var newContent = existingContent + (existingContent ? "\n" : "") + "- [ ] " + item.text;
+        var upd = await supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", existingWorkNoteId);
+        if (upd.error) { alert("기존 노트 갱신 실패: " + upd.error.message); return; }
+        workNoteId = existingWorkNoteId;
+      }
+    }
+
+    if (!existingWorkNoteId) {
+      // 새 work_notes 생성
+      var workNotePayload = {
+        assignee: assigneeName,
+        title: noteTitle,
+        content: "- [ ] " + item.text,
+        is_todo: true,
+        pinned: false,
+        created_by: assigneeName,
+        note_date: todayStr,
+      };
+      if (teamNote.due_date) workNotePayload.due_date = teamNote.due_date;
+      var wr = await supabase.from("work_notes").insert(workNotePayload).select().single();
+      if (wr.error) { alert("내 노트로 가져오기 실패: " + wr.error.message); return; }
+      workNoteId = wr.data.id;
+      if (onTakenToMyNote) onTakenToMyNote(wr.data);
+    }
+
+    // 2) team_notes checklist 업데이트
+    var newChecklist = (teamNote.checklist || []).map(function(it) {
+      if (it.id === itemId) {
+        return Object.assign({}, it, {
+          taken_by: assigneeName,
+          taken_at: new Date().toISOString(),
+          taken_work_note_id: workNoteId,
+        });
+      }
+      return it;
+    });
+
+    // 모두 가져갔으면 상태를 taken으로
+    var allTaken = newChecklist.every(function(it) { return it.taken_by; });
+    var updatePayload = { checklist: newChecklist };
+    if (allTaken && teamNote.status === "open") {
+      updatePayload.status = "taken";
+      updatePayload.taken_at = new Date().toISOString();
+    }
+
+    var tr = await supabase.from("team_notes").update(updatePayload).eq("id", teamNote.id);
+    if (tr.error) { alert("팀 노트 업데이트 실패: " + tr.error.message); return; }
+
+    setAllTeamNotes(function(prev) {
+      return prev.map(function(n) {
+        if (n.id === teamNote.id) return Object.assign({}, n, updatePayload);
+        return n;
+      });
+    });
   };
 
   // 팀 노트 삭제 (양호님 또는 등록자만)
@@ -9187,6 +9283,51 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
                     {note.content && (
                       <div style={{ fontSize: 12, color: "#444", lineHeight: 1.5, whiteSpace: "pre-wrap", marginBottom: 8, maxHeight: 100, overflowY: "auto" }}>{note.content}</div>
                     )}
+                    {/* 체크리스트 (있을 때만) */}
+                    {(function() {
+                      var cl = note.checklist || [];
+                      if (cl.length === 0) return null;
+                      var takenCount = cl.filter(function(it) { return it.taken_by; }).length;
+                      var pct = Math.round((takenCount / cl.length) * 100);
+                      return (
+                        <div style={{ marginBottom: 8 }}>
+                          {/* 진행률 */}
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, padding: "6px 10px", background: "#fff", borderRadius: 6 }}>
+                            <span style={{ fontSize: 10, color: "#888" }}>📋 항목별 진행</span>
+                            <div style={{ flex: 1, height: 5, background: "#F7F6F3", borderRadius: 99, overflow: "hidden" }}>
+                              <div style={{ width: pct + "%", height: "100%", background: "#4338CA", transition: "width 0.2s" }}></div>
+                            </div>
+                            <span style={{ fontSize: 10, fontWeight: 700, color: "#1A1917" }}>{takenCount}/{cl.length} 가져감</span>
+                          </div>
+                          {/* 항목들 */}
+                          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                            {cl.map(function(item) {
+                              var taken = !!item.taken_by;
+                              var mine = item.taken_by === profile?.name;
+                              return (
+                                <div key={item.id}
+                                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", background: taken ? "#F7F6F3" : "#fff", borderRadius: 6, border: "0.5px solid " + (taken ? "transparent" : "#E8E5E0") }}>
+                                  <span style={{ fontSize: 11, color: taken ? "#888" : "#CCC" }}>☐</span>
+                                  <span style={{ flex: 1, fontSize: 11, color: taken ? "#888" : "#1A1917", textDecoration: taken ? "line-through" : "none", lineHeight: 1.4 }}>
+                                    {item.text}
+                                  </span>
+                                  {taken ? (
+                                    <span style={{ fontSize: 9, padding: "2px 7px", background: mine ? "#DCFCE7" : "#DBEAFE", color: mine ? "#15803D" : "#1E40AF", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap" }}>
+                                      👤 {item.taken_by}{mine ? " (나)" : ""}
+                                    </span>
+                                  ) : (
+                                    <button onClick={function() { takeChecklistItem(note, item.id); }}
+                                      style={{ fontSize: 9, padding: "3px 8px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}>
+                                      📥 내가 하기
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 10, color: "#888", paddingTop: 6, borderTop: "1px solid " + (isOpen ? "#FEF3C7" : "#E8E5E0") }}>
                       <div>
                         <span>등록: {note.posted_by || "-"}</span>
@@ -9202,7 +9343,9 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
                     <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
                       {isOpen && (
                         <button onClick={function() { takeToMyNote(note); }}
-                          style={{ flex: 1, background: "#1A1917", color: "#fff", border: "none", borderRadius: 6, padding: "6px 8px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>📥 가져가기</button>
+                          style={{ flex: 1, background: "#1A1917", color: "#fff", border: "none", borderRadius: 6, padding: "6px 8px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                          📥 {(note.checklist && note.checklist.length > 0) ? "통째로 가져가기" : "가져가기"}
+                        </button>
                       )}
                       {note.status === "taken" && isMine && (
                         <button onClick={function() { markDone(note.id); }}
@@ -9246,7 +9389,68 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
               <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>업무 내용 *</label>
               <textarea value={newNote.content} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { content: v }); }); }}
                 placeholder="어떤 업무를 누가 가져가야 하는지 상세하게 적어주세요"
-                style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, lineHeight: 1.7, resize: "vertical", minHeight: 120, boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+                style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, lineHeight: 1.7, resize: "vertical", minHeight: 100, boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+            </div>
+
+            {/* 체크리스트 입력 영역 */}
+            <div style={{ marginBottom: 12, background: "#F7F6F3", border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 12px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <label style={{ fontSize: 11, color: "#666", fontWeight: 600 }}>
+                  📋 체크리스트 (선택) <span style={{ color: "#888", fontWeight: 400 }}>· 항목별로 가져갈 수 있어요</span>
+                </label>
+                <button onClick={function() {
+                  setNewNote(function(p) {
+                    var arr = (p.checklist || []).slice();
+                    arr.push({ id: "tmp_" + Math.random().toString(36).slice(2, 11), text: "" });
+                    return Object.assign({}, p, { checklist: arr });
+                  });
+                }}
+                  style={{ background: "#fff", border: "1px solid #E8E5E0", color: "#666", padding: "3px 10px", fontSize: 11, borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>+ 항목 추가</button>
+              </div>
+              {(newNote.checklist || []).length === 0 ? (
+                <div style={{ fontSize: 11, color: "#AAA", padding: "8px 0", textAlign: "center" }}>
+                  항목을 추가하면 분담 가능 (안 추가하면 통째로 가져가기만 가능)
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {newNote.checklist.map(function(item, idx) {
+                    return (
+                      <div key={item.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <span style={{ color: "#CCC", fontSize: 12 }}>☐</span>
+                        <input type="text" value={item.text}
+                          onChange={function(e) {
+                            var v = e.target.value;
+                            setNewNote(function(p) {
+                              var arr = (p.checklist || []).slice();
+                              arr[idx] = Object.assign({}, arr[idx], { text: v });
+                              return Object.assign({}, p, { checklist: arr });
+                            });
+                          }}
+                          placeholder="예: 사업자등록증 받기"
+                          onKeyDown={function(e) {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              setNewNote(function(p) {
+                                var arr = (p.checklist || []).slice();
+                                arr.splice(idx + 1, 0, { id: "tmp_" + Math.random().toString(36).slice(2, 11), text: "" });
+                                return Object.assign({}, p, { checklist: arr });
+                              });
+                            }
+                          }}
+                          style={{ flex: 1, padding: "5px 10px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 12, boxSizing: "border-box", outline: "none", background: "#fff" }} />
+                        <button onClick={function() {
+                          setNewNote(function(p) {
+                            var arr = (p.checklist || []).filter(function(_, i) { return i !== idx; });
+                            return Object.assign({}, p, { checklist: arr });
+                          });
+                        }}
+                          title="삭제"
+                          style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 13, padding: "2px 6px" }}>✕</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
               <div>
