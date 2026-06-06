@@ -4666,6 +4666,12 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
         </div>
       )}
 
+      {/* 📋 팀 업무 공간 (법인팀/개인팀) */}
+      <TeamNotesSection profile={profile} onTakenToMyNote={function(newNote) {
+        setNotes(function(prev) { return [newNote].concat(prev); });
+        if (onBadgeUpdate) onBadgeUpdate();
+      }} />
+
       {/* 🔍 노트 검색 (양식 재활용용) */}
       <div style={{ position: "relative", marginBottom: 16, maxWidth: 600 }}>
         <div style={{ position: "relative" }}>
@@ -8943,6 +8949,298 @@ function TeamActivityWidget({ profiles }) {
               </div>
             );
           })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ========== 📋 팀 노트 섹션 (법인팀/개인팀 공유 작업공간) ==========
+function TeamNotesSection({ profile, onTakenToMyNote }) {
+  const [allTeamNotes, setAllTeamNotes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState("corporate"); // "corporate" | "individual"
+  const [showAdd, setShowAdd] = useState(false);
+  const [showDone, setShowDone] = useState(false); // 가져간/완료된 것도 볼지
+  const [newNote, setNewNote] = useState({ title: "", content: "", priority: "normal", due_date: "", tags: [] });
+  const [collapsed, setCollapsed] = useState(false); // 섹션 전체 접기
+
+  useEffect(function() { fetchTeamNotes(); }, []);
+
+  var fetchTeamNotes = async function() {
+    setLoading(true);
+    var r = await supabase.from("team_notes").select("*").is("deleted_at", null).order("created_at", { ascending: false });
+    if (!r.error) setAllTeamNotes(r.data || []);
+    setLoading(false);
+  };
+
+  // 탭별 노트 (열린 것 우선, 가져간 것은 토글에 따라)
+  var displayNotes = useMemo(function() {
+    return allTeamNotes.filter(function(n) {
+      if (n.team !== activeTab) return false;
+      if (!showDone && n.status !== "open") return false;
+      return true;
+    });
+  }, [allTeamNotes, activeTab, showDone]);
+
+  var openCount = useMemo(function() {
+    return {
+      corporate: allTeamNotes.filter(function(n) { return n.team === "corporate" && n.status === "open"; }).length,
+      individual: allTeamNotes.filter(function(n) { return n.team === "individual" && n.status === "open"; }).length,
+    };
+  }, [allTeamNotes]);
+
+  // 팀 노트 새로 추가
+  var addTeamNote = async function() {
+    if (!newNote.title.trim() && !newNote.content.trim()) {
+      alert("제목 또는 내용을 입력해주세요.");
+      return;
+    }
+    var payload = {
+      team: activeTab,
+      title: newNote.title.trim() || null,
+      content: newNote.content.trim() || null,
+      priority: newNote.priority || "normal",
+      due_date: newNote.due_date || null,
+      tags: newNote.tags && newNote.tags.length > 0 ? newNote.tags : null,
+      posted_by: profile?.name || "익명",
+      status: "open",
+    };
+    var r = await supabase.from("team_notes").insert(payload).select().single();
+    if (r.error) { alert("등록 실패: " + r.error.message); return; }
+    setAllTeamNotes(function(prev) { return [r.data].concat(prev); });
+    setNewNote({ title: "", content: "", priority: "normal", due_date: "", tags: [] });
+    setShowAdd(false);
+  };
+
+  // "가져가기" - 본인 work_notes로 복제 + team_notes 상태 업데이트
+  var takeToMyNote = async function(teamNote) {
+    if (!profile?.name) { alert("로그인 정보가 없습니다."); return; }
+    var assigneeName = profile.name;
+    // work_notes에 새 노트 생성
+    var todayStr = new Date().toISOString().slice(0, 10);
+    var teamLabel = teamNote.team === "corporate" ? "[법인팀]" : "[개인팀]";
+    var workNotePayload = {
+      assignee: assigneeName,
+      title: teamLabel + " " + (teamNote.title || "팀 노트에서 가져온 업무"),
+      content: teamNote.content || "",
+      is_todo: true,
+      pinned: false,
+      created_by: assigneeName,
+      note_date: todayStr,
+    };
+    if (teamNote.due_date) workNotePayload.due_date = teamNote.due_date;
+    var wr = await supabase.from("work_notes").insert(workNotePayload).select().single();
+    if (wr.error) { alert("내 노트로 가져오기 실패: " + wr.error.message); return; }
+    // team_notes 상태 업데이트
+    var tr = await supabase.from("team_notes").update({
+      status: "taken",
+      taken_by: assigneeName,
+      taken_at: new Date().toISOString(),
+      taken_work_note_id: wr.data.id,
+    }).eq("id", teamNote.id);
+    if (tr.error) { alert("팀 노트 상태 업데이트 실패: " + tr.error.message); return; }
+    // 로컬 상태 업데이트
+    setAllTeamNotes(function(prev) {
+      return prev.map(function(n) {
+        if (n.id === teamNote.id) return Object.assign({}, n, { status: "taken", taken_by: assigneeName, taken_at: new Date().toISOString(), taken_work_note_id: wr.data.id });
+        return n;
+      });
+    });
+    if (onTakenToMyNote) onTakenToMyNote(wr.data);
+    alert("✅ '" + (teamNote.title || "팀 노트") + "'을(를) 내 노트로 가져왔습니다.\n업무노트에서 확인하세요.");
+  };
+
+  // 팀 노트 삭제 (양호님 또는 등록자만)
+  var deleteTeamNote = async function(id, postedBy) {
+    var canDelete = profile?.name === "양호" || profile?.role === "admin" || profile?.name === postedBy;
+    if (!canDelete) { alert("본인이 등록한 노트 또는 관리자만 삭제할 수 있습니다."); return; }
+    if (!confirm("이 팀 노트를 삭제하시겠습니까?")) return;
+    var r = await supabase.from("team_notes").update({ deleted_at: new Date().toISOString() }).eq("id", id);
+    if (r.error) { alert("삭제 실패: " + r.error.message); return; }
+    setAllTeamNotes(function(prev) { return prev.filter(function(n) { return n.id !== id; }); });
+  };
+
+  // 완료 처리 (가져간 사람이 완료 표시)
+  var markDone = async function(id) {
+    var r = await supabase.from("team_notes").update({ status: "done" }).eq("id", id);
+    if (r.error) { alert("완료 처리 실패: " + r.error.message); return; }
+    setAllTeamNotes(function(prev) {
+      return prev.map(function(n) { return n.id === id ? Object.assign({}, n, { status: "done" }) : n; });
+    });
+  };
+
+  var priorityStyle = function(p) {
+    if (p === "urgent") return { bg: "#FEE2E2", color: "#B91C1C", label: "🚨 긴급" };
+    if (p === "high") return { bg: "#FEF3C7", color: "#92400E", label: "⭐ 중요" };
+    return { bg: "#F3F4F6", color: "#666", label: "일반" };
+  };
+
+  var statusStyle = function(s) {
+    if (s === "open") return { bg: "#DCFCE7", color: "#15803D", label: "🟢 대기중" };
+    if (s === "taken") return { bg: "#DBEAFE", color: "#1E40AF", label: "🔵 진행중" };
+    if (s === "done") return { bg: "#F3F4F6", color: "#666", label: "✅ 완료" };
+    return { bg: "#F3F4F6", color: "#666", label: s };
+  };
+
+  return (
+    <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, padding: "16px 20px", marginBottom: 18 }}>
+      {/* 헤더 */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: collapsed ? 0 : 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button onClick={function() { setCollapsed(!collapsed); }} title={collapsed ? "펼치기" : "접기"}
+            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#666", padding: 2 }}>{collapsed ? "▶" : "▼"}</button>
+          <span style={{ fontSize: 15, fontWeight: 700 }}>📋 팀 업무 공간</span>
+          <span style={{ fontSize: 11, color: "#888" }}>· 누구든 가져갈 수 있어요</span>
+          {openCount.corporate + openCount.individual > 0 && (
+            <span style={{ fontSize: 11, fontWeight: 700, background: "#15803D", color: "#fff", padding: "2px 8px", borderRadius: 99 }}>
+              대기 {openCount.corporate + openCount.individual}건
+            </span>
+          )}
+        </div>
+        {!collapsed && (
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#666", cursor: "pointer" }}>
+              <input type="checkbox" checked={showDone} onChange={function(e) { setShowDone(e.target.checked); }} />
+              가져간 것도 보기
+            </label>
+            <button onClick={function() { setShowAdd(true); }}
+              style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ 새 업무</button>
+          </div>
+        )}
+      </div>
+
+      {!collapsed && (
+        <>
+          {/* 탭 */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 12, borderBottom: "1px solid #E8E5E0" }}>
+            <button onClick={function() { setActiveTab("corporate"); }}
+              style={{ background: "none", border: "none", padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", color: activeTab === "corporate" ? "#1A1917" : "#888", borderBottom: "2px solid " + (activeTab === "corporate" ? "#1A1917" : "transparent"), marginBottom: -1 }}>
+              🏢 법인팀
+              {openCount.corporate > 0 && <span style={{ marginLeft: 6, fontSize: 10, background: "#15803D", color: "#fff", padding: "1px 6px", borderRadius: 99 }}>{openCount.corporate}</span>}
+            </button>
+            <button onClick={function() { setActiveTab("individual"); }}
+              style={{ background: "none", border: "none", padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", color: activeTab === "individual" ? "#1A1917" : "#888", borderBottom: "2px solid " + (activeTab === "individual" ? "#1A1917" : "transparent"), marginBottom: -1 }}>
+              👤 개인팀
+              {openCount.individual > 0 && <span style={{ marginLeft: 6, fontSize: 10, background: "#15803D", color: "#fff", padding: "1px 6px", borderRadius: 99 }}>{openCount.individual}</span>}
+            </button>
+          </div>
+
+          {/* 노트 목록 */}
+          {loading ? (
+            <div style={{ textAlign: "center", padding: 30, color: "#AAA", fontSize: 12 }}>불러오는 중...</div>
+          ) : displayNotes.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 30, color: "#AAA", fontSize: 13, background: "#F7F6F3", borderRadius: 8 }}>
+              {showDone ? "이 팀에 노트가 없어요" : "대기중인 업무가 없어요. 새 업무를 등록해보세요."}
+            </div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
+              {displayNotes.map(function(note) {
+                var ps = priorityStyle(note.priority);
+                var ss = statusStyle(note.status);
+                var isOpen = note.status === "open";
+                var isMine = note.taken_by === profile?.name;
+                return (
+                  <div key={note.id} style={{ background: isOpen ? "#FFFEF7" : "#F7F6F3", border: "1px solid " + (isOpen ? "#FEF3C7" : "#E8E5E0"), borderRadius: 8, padding: "10px 12px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: ss.bg, color: ss.color }}>{ss.label}</span>
+                        {note.priority !== "normal" && (
+                          <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: ps.bg, color: ps.color }}>{ps.label}</span>
+                        )}
+                      </div>
+                      <span style={{ fontSize: 9, color: "#AAA" }}>
+                        {note.created_at ? new Date(note.created_at).toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" }) : ""}
+                      </span>
+                    </div>
+                    {note.title && <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, lineHeight: 1.4 }}>{note.title}</div>}
+                    {note.content && (
+                      <div style={{ fontSize: 12, color: "#444", lineHeight: 1.5, whiteSpace: "pre-wrap", marginBottom: 8, maxHeight: 100, overflowY: "auto" }}>{note.content}</div>
+                    )}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 10, color: "#888", paddingTop: 6, borderTop: "1px solid " + (isOpen ? "#FEF3C7" : "#E8E5E0") }}>
+                      <div>
+                        <span>등록: {note.posted_by || "-"}</span>
+                        {note.due_date && <span style={{ marginLeft: 8, color: "#B91C1C" }}>📅 {note.due_date}</span>}
+                      </div>
+                      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                        {note.taken_by && (
+                          <span style={{ fontSize: 10, color: "#1E40AF", fontWeight: 600 }}>👤 {note.taken_by}</span>
+                        )}
+                      </div>
+                    </div>
+                    {/* 액션 버튼 */}
+                    <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                      {isOpen && (
+                        <button onClick={function() { takeToMyNote(note); }}
+                          style={{ flex: 1, background: "#1A1917", color: "#fff", border: "none", borderRadius: 6, padding: "6px 8px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>📥 가져가기</button>
+                      )}
+                      {note.status === "taken" && isMine && (
+                        <button onClick={function() { markDone(note.id); }}
+                          style={{ flex: 1, background: "#fff", color: "#15803D", border: "1px solid #86EFAC", borderRadius: 6, padding: "6px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>✅ 완료처리</button>
+                      )}
+                      {(profile?.name === "양호" || profile?.role === "admin" || profile?.name === note.posted_by) && (
+                        <button onClick={function() { deleteTeamNote(note.id, note.posted_by); }} title="삭제"
+                          style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 6, padding: "6px 8px", fontSize: 11, cursor: "pointer" }}>🗑</button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* 새 팀 노트 추가 모달 */}
+      {showAdd && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={function() { setShowAdd(false); }}>
+          <div onClick={function(e) { e.stopPropagation(); }}
+            style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 500, padding: 24 }}>
+            <h2 style={{ margin: 0, marginBottom: 16, fontSize: 16, fontWeight: 700 }}>📋 팀 업무 등록</h2>
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>대상 팀</label>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={function() { setActiveTab("corporate"); }}
+                  style={{ flex: 1, padding: "8px", background: activeTab === "corporate" ? "#1A1917" : "#fff", color: activeTab === "corporate" ? "#fff" : "#666", border: "1px solid " + (activeTab === "corporate" ? "#1A1917" : "#E8E5E0"), borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🏢 법인팀</button>
+                <button onClick={function() { setActiveTab("individual"); }}
+                  style={{ flex: 1, padding: "8px", background: activeTab === "individual" ? "#1A1917" : "#fff", color: activeTab === "individual" ? "#fff" : "#666", border: "1px solid " + (activeTab === "individual" ? "#1A1917" : "#E8E5E0"), borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>👤 개인팀</button>
+              </div>
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>제목 (선택)</label>
+              <input type="text" value={newNote.title} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
+                placeholder="예: (주)메이크올 7월 신청 준비"
+                style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>업무 내용 *</label>
+              <textarea value={newNote.content} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { content: v }); }); }}
+                placeholder="어떤 업무를 누가 가져가야 하는지 상세하게 적어주세요"
+                style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, lineHeight: 1.7, resize: "vertical", minHeight: 120, boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+              <div>
+                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>우선순위</label>
+                <select value={newNote.priority} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { priority: v }); }); }}
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", background: "#fff" }}>
+                  <option value="normal">일반</option>
+                  <option value="high">⭐ 중요</option>
+                  <option value="urgent">🚨 긴급</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>마감일 (선택)</label>
+                <input type="date" value={newNote.due_date} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { due_date: v }); }); }}
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={function() { setShowAdd(false); }}
+                style={{ padding: "10px 18px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>취소</button>
+              <button onClick={addTeamNote}
+                style={{ padding: "10px 18px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>등록</button>
+            </div>
+          </div>
         </div>
       )}
     </div>
