@@ -4697,8 +4697,15 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       )}
 
       {/* 📋 팀 업무 공간 (법인팀/개인팀) */}
-      <TeamNotesSection profile={profile} onTakenToMyNote={function(newNote) {
-        setNotes(function(prev) { return [newNote].concat(prev); });
+      <TeamNotesSection profile={profile} onTakenToMyNote={function(noteData) {
+        // 같은 id가 이미 notes에 있으면 교체, 없으면 새로 추가
+        setNotes(function(prev) {
+          var exists = prev.find(function(n) { return n.id === noteData.id; });
+          if (exists) {
+            return prev.map(function(n) { return n.id === noteData.id ? noteData : n; });
+          }
+          return [noteData].concat(prev);
+        });
         if (onBadgeUpdate) onBadgeUpdate();
       }} />
 
@@ -9058,9 +9065,20 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
   };
 
   // "가져가기" - 본인 work_notes로 복제 + team_notes 상태 업데이트
+  // 이름 정규화 - 별칭/직책을 본명으로 변환
+  var normalizeName = function(rawName) {
+    if (!rawName) return rawName;
+    var s = String(rawName).trim();
+    if (s === "총무" || s === "총무(유진)") return "유진";
+    if (s === "김동일이사" || s === "김이사") return "동일";
+    if (s === "김현애") return "현애";
+    if (s === "최지혜") return "지혜";
+    return s;
+  };
+
   var takeToMyNote = async function(teamNote) {
     if (!profile?.name) { alert("로그인 정보가 없습니다."); return; }
-    var assigneeName = profile.name;
+    var assigneeName = normalizeName(profile.name);
     // work_notes에 새 노트 생성
     var todayStr = new Date().toISOString().slice(0, 10);
     var teamLabel = teamNote.team === "corporate" ? "[법인팀]" : "[개인팀]";
@@ -9098,7 +9116,7 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
   // 체크리스트 항목 하나 가져가기
   var takeChecklistItem = async function(teamNote, itemId) {
     if (!profile?.name) { alert("로그인 정보가 없습니다."); return; }
-    var assigneeName = profile.name;
+    var assigneeName = normalizeName(profile.name);
     var item = (teamNote.checklist || []).find(function(it) { return it.id === itemId; });
     if (!item) return;
     if (item.taken_by) { alert("이미 " + item.taken_by + "님이 가져간 항목입니다."); return; }
@@ -9117,16 +9135,18 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
     var workNoteId;
     if (existingWorkNoteId) {
       // 기존 노트에 항목 추가
-      var fetchRes = await supabase.from("work_notes").select("content").eq("id", existingWorkNoteId).maybeSingle();
+      var fetchRes = await supabase.from("work_notes").select("*").eq("id", existingWorkNoteId).maybeSingle();
       if (fetchRes.error || !fetchRes.data) {
         // 기존 노트가 사라졌으면 새로 만듦
         existingWorkNoteId = null;
       } else {
         var existingContent = fetchRes.data.content || "";
         var newContent = existingContent + (existingContent ? "\n" : "") + "- [ ] " + item.text;
-        var upd = await supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", existingWorkNoteId);
+        var upd = await supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", existingWorkNoteId).select().single();
         if (upd.error) { alert("기존 노트 갱신 실패: " + upd.error.message); return; }
         workNoteId = existingWorkNoteId;
+        // 부모 컴포넌트에 갱신된 노트 알림 (화면 즉시 반영)
+        if (onTakenToMyNote && upd.data) onTakenToMyNote(upd.data);
       }
     }
 
