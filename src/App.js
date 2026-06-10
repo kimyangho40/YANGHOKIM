@@ -9199,6 +9199,82 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
     });
   };
 
+  // 체크리스트 항목 원위치 (가져간 것 취소)
+  var untakeChecklistItem = async function(teamNote, itemId) {
+    if (!profile?.name) { alert("로그인 정보가 없습니다."); return; }
+    var currentUser = normalizeName(profile.name);
+    var item = (teamNote.checklist || []).find(function(it) { return it.id === itemId; });
+    if (!item) return;
+    if (!item.taken_by) { alert("아직 가져가지 않은 항목입니다."); return; }
+    // 권한: 본인이 가져간 항목 + 관리자만 (양호 또는 admin)
+    var canUntake = item.taken_by === currentUser || currentUser === "양호" || profile?.role === "admin";
+    if (!canUntake) {
+      alert("본인이 가져간 항목만 원위치할 수 있습니다.\n(가져간 사람: " + item.taken_by + ")");
+      return;
+    }
+    if (!confirm("'" + item.text + "'\n\n이 항목을 원위치(대기중)로 돌릴까요?\n내 업무노트에서도 해당 줄이 삭제됩니다.")) return;
+
+    var workNoteId = item.taken_work_note_id;
+
+    // 1) 내 work_notes에서 해당 줄 삭제
+    if (workNoteId) {
+      var fetchRes = await supabase.from("work_notes").select("*").eq("id", workNoteId).maybeSingle();
+      if (!fetchRes.error && fetchRes.data) {
+        var oldContent = fetchRes.data.content || "";
+        // 정확히 "- [ ] {item.text}" 또는 "- [x] {item.text}" 줄을 제거
+        var lines = oldContent.split("\n");
+        var newLines = lines.filter(function(line) {
+          var trimmed = line.trim();
+          var matchUnchecked = "- [ ] " + item.text;
+          var matchChecked = "- [x] " + item.text;
+          // 마감일 [YYYY-MM-DD] 포함된 형태도 매칭
+          return trimmed !== matchUnchecked && trimmed !== matchChecked &&
+                 !trimmed.startsWith(matchUnchecked + " [") && !trimmed.startsWith(matchChecked + " [");
+        });
+        var newContent = newLines.join("\n").replace(/\n\n+/g, "\n\n").trim();
+        if (newContent === "") {
+          // 노트에 줄이 하나도 안 남으면 휴지통으로 (deleted_at 설정)
+          var del = await supabase.from("work_notes").update({ deleted_at: new Date().toISOString() }).eq("id", workNoteId);
+          if (del.error) console.warn("노트 휴지통 이동 실패:", del.error.message);
+        } else {
+          var upd = await supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", workNoteId).select().single();
+          if (upd.error) { alert("노트 갱신 실패: " + upd.error.message); return; }
+          // 부모 노트 목록 갱신
+          if (onTakenToMyNote && upd.data) onTakenToMyNote(upd.data);
+        }
+      }
+    }
+
+    // 2) team_notes checklist 업데이트 (taken 정보 비우기)
+    var newChecklist = (teamNote.checklist || []).map(function(it) {
+      if (it.id === itemId) {
+        return Object.assign({}, it, {
+          taken_by: null,
+          taken_at: null,
+          taken_work_note_id: null,
+        });
+      }
+      return it;
+    });
+    // 모두 대기 상태가 되었으면 status를 open으로 (auto-revert)
+    var updatePayload2 = { checklist: newChecklist };
+    if (teamNote.status === "taken") {
+      // 하나라도 안 가져간 게 생기면 다시 open
+      var allStillTaken = newChecklist.every(function(it) { return it.taken_by; });
+      if (!allStillTaken) updatePayload2.status = "open";
+    }
+
+    var tr = await supabase.from("team_notes").update(updatePayload2).eq("id", teamNote.id);
+    if (tr.error) { alert("팀 노트 업데이트 실패: " + tr.error.message); return; }
+
+    setAllTeamNotes(function(prev) {
+      return prev.map(function(n) {
+        if (n.id === teamNote.id) return Object.assign({}, n, updatePayload2);
+        return n;
+      });
+    });
+  };
+
   // 팀 노트 수정 시작
   var startEditNote = function(note) {
     setEditingNoteId(note.id);
@@ -9487,8 +9563,15 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
                                     {item.text}
                                   </span>
                                   {taken ? (
-                                    <span style={{ fontSize: 9, padding: "2px 7px", background: mine ? "#DCFCE7" : "#DBEAFE", color: mine ? "#15803D" : "#1E40AF", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap" }}>
-                                      👤 {item.taken_by}{mine ? " (나)" : ""}
+                                    <span style={{ display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
+                                      <span style={{ fontSize: 9, padding: "2px 7px", background: mine ? "#DCFCE7" : "#DBEAFE", color: mine ? "#15803D" : "#1E40AF", borderRadius: 99, fontWeight: 700 }}>
+                                        👤 {item.taken_by}{mine ? " (나)" : ""}
+                                      </span>
+                                      {(mine || normalizeName(profile?.name) === "양호" || profile?.role === "admin") && (
+                                        <button onClick={function() { untakeChecklistItem(note, item.id); }}
+                                          title="원위치 (대기중으로 돌리기)"
+                                          style={{ background: "none", border: "none", cursor: "pointer", padding: 2, fontSize: 11, color: "#888", lineHeight: 1 }}>↩️</button>
+                                      )}
                                     </span>
                                   ) : (
                                     <button onClick={function() { takeChecklistItem(note, item.id); }}
