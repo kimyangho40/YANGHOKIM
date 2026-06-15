@@ -1260,7 +1260,7 @@ function CRMApp({ profile, session }) {
             {view === "worknotes" && <WorkNotesView profile={profile} onBadgeUpdate={function() { fetchWorkNotesBadge(profile?.name); }} />}
             {view === "calendar" && <CalendarView companies={companies} onSelectCompany={setSelectedCompany} profile={profile} />}
             {view === "manual" && <ManualView />}
-            {view === "pipeline" && <PipelineView filtered={filtered} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} />}
+            {view === "pipeline" && <PipelineView filtered={filtered} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setCompanies={setCompanies} />}
             {view === "cases" && <ApprovalCasesView profile={profile} />}
             {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={profile?.role === "admin" || profile?.name === "양호"} onSelectCompany={setSelectedCompany} setView={setView} />}
             {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} />}
@@ -1672,13 +1672,74 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
 }
 
 // ── 파이프라인 ────────────────────────────────────────────────────────────────
-function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, onSelect }) {
+function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, onSelect, setCompanies }) {
+  const [draggingId, setDraggingId] = useState(null); // 현재 드래그 중인 회사 id
+  const [draggingFrom, setDraggingFrom] = useState(null); // 출발 stage
+  const [dragOverStage, setDragOverStage] = useState(null); // 드롭 대상 stage (하이라이트)
+  const [selectedId, setSelectedId] = useState(null); // 클릭으로 선택한 카드 (색상 표시)
+
+  // 카드 드래그 시작
+  var handleDragStart = function(e, co) {
+    setDraggingId(co.id);
+    setDraggingFrom(co.stage);
+    setSelectedId(co.id);
+    // 드래그 효과
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      try { e.dataTransfer.setData("text/plain", co.id); } catch (err) {}
+    }
+  };
+
+  var handleDragEnd = function() {
+    setDraggingId(null);
+    setDraggingFrom(null);
+    setDragOverStage(null);
+  };
+
+  // 컬럼 위로 드래그 (drop 허용)
+  var handleDragOver = function(e, stage) {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    if (dragOverStage !== stage) setDragOverStage(stage);
+  };
+
+  var handleDragLeave = function(stage) {
+    if (dragOverStage === stage) setDragOverStage(null);
+  };
+
+  // 컬럼에 drop
+  var handleDrop = async function(e, newStage) {
+    e.preventDefault();
+    var droppedId = draggingId;
+    var oldStage = draggingFrom;
+    setDraggingId(null);
+    setDraggingFrom(null);
+    setDragOverStage(null);
+    if (!droppedId || oldStage === newStage) return;
+    // 확인
+    var co = filtered.find(function(x) { return x.id === droppedId; });
+    if (!co) return;
+    if (!confirm("'" + co.name + "' 단계를 '" + oldStage + "' → '" + newStage + "'(으)로 변경할까요?")) return;
+    // Supabase 업데이트
+    var r = await supabase.from("companies").update({ stage: newStage, stagnant_days: 0, updated_at: new Date().toISOString() }).eq("id", droppedId);
+    if (r.error) { alert("단계 변경 실패: " + r.error.message); return; }
+    // 로컬 상태 업데이트
+    if (setCompanies) {
+      setCompanies(function(prev) {
+        return prev.map(function(x) {
+          if (x.id === droppedId) return Object.assign({}, x, { stage: newStage, stagnant_days: 0 });
+          return x;
+        });
+      });
+    }
+  };
+
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 22 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>파이프라인</h1>
-          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>단계별 업체 현황</p>
+          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>단계별 업체 현황 · <span style={{ color: "#4338CA", fontWeight: 600 }}>카드를 드래그해서 단계 변경</span></p>
         </div>
         <select value={filterAssignee} onChange={e => setFilterAssignee(e.target.value)}
           style={{ padding: "7px 12px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 13, background: "#fff", cursor: "pointer" }}>
@@ -1699,8 +1760,13 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
           var nextStages = STAGES.slice(si + 1);
           var afterCount = filtered.filter(function(co) { return nextStages.includes(co.stage); }).length;
           var conversionPct = items.length + afterCount > 0 ? Math.round(afterCount / (items.length + afterCount) * 100) : 0;
+          var isDropTarget = dragOverStage === stage && draggingFrom !== stage;
           return (
-            <div key={stage} style={{ background: "#fff", borderRadius: 14, border: "1px solid #E8E5E0", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+            <div key={stage}
+              onDragOver={function(e) { handleDragOver(e, stage); }}
+              onDragLeave={function() { handleDragLeave(stage); }}
+              onDrop={function(e) { handleDrop(e, stage); }}
+              style={{ background: "#fff", borderRadius: 14, border: isDropTarget ? "2px dashed #4338CA" : "1px solid #E8E5E0", overflow: "hidden", boxShadow: isDropTarget ? "0 0 0 3px rgba(67,56,202,0.1)" : "0 1px 4px rgba(0,0,0,0.04)", transition: "border 0.15s, box-shadow 0.15s" }}>
               <div style={{ background: c.bg, borderBottom: `2px solid ${c.border}`, padding: "12px 14px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                   <span style={{ fontSize: 10, fontWeight: 700, color: c.text, letterSpacing: "0.06em" }}>STEP {si+1}</span>
@@ -1715,11 +1781,30 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
               <div style={{ padding: "8px", display: "flex", flexDirection: "column", gap: 6, height: "calc(100vh - 280px)", overflowY: "auto", minHeight: 400 }}>
                 {items.map(co => {
                   const docPct = docRate(co.documents);
+                  var isSelected = selectedId === co.id;
+                  var isDragging = draggingId === co.id;
                   return (
-                    <div key={co.id} onClick={() => onSelect(co)}
-                      style={{ background: co.stagnant_days >= 7 ? "#FEF2F2" : "#F7F6F3", borderRadius: 10, padding: "10px 12px", cursor: "pointer", border: co.stagnant_days >= 7 ? "1px solid #FECACA" : "1px solid transparent", transition: "all 0.15s" }}
-                      onMouseEnter={e => e.currentTarget.style.background = co.stagnant_days >= 7 ? "#FEE2E2" : "#EDEDE9"}
-                      onMouseLeave={e => e.currentTarget.style.background = co.stagnant_days >= 7 ? "#FEF2F2" : "#F7F6F3"}>
+                    <div key={co.id}
+                      draggable={true}
+                      onDragStart={function(e) { handleDragStart(e, co); }}
+                      onDragEnd={handleDragEnd}
+                      onClick={function(e) {
+                        // 드래그 직후 onClick 무시
+                        if (draggingId === co.id) return;
+                        setSelectedId(co.id);
+                        onSelect(co);
+                      }}
+                      style={{
+                        background: isSelected ? "#EEF2FF" : (co.stagnant_days >= 7 ? "#FEF2F2" : "#F7F6F3"),
+                        borderRadius: 10, padding: "10px 12px", cursor: isDragging ? "grabbing" : "grab",
+                        border: isSelected ? "2px solid #4338CA" : (co.stagnant_days >= 7 ? "1px solid #FECACA" : "1px solid transparent"),
+                        opacity: isDragging ? 0.4 : 1,
+                        transform: isDragging ? "scale(0.96)" : "scale(1)",
+                        transition: "opacity 0.15s, transform 0.15s, border 0.15s, background 0.15s",
+                        userSelect: "none",
+                      }}
+                      onMouseEnter={e => { if (!isSelected && !isDragging) e.currentTarget.style.background = co.stagnant_days >= 7 ? "#FEE2E2" : "#EDEDE9"; }}
+                      onMouseLeave={e => { if (!isSelected && !isDragging) e.currentTarget.style.background = co.stagnant_days >= 7 ? "#FEF2F2" : "#F7F6F3"; }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
                         <span style={{ fontSize: 12, fontWeight: 700, color: "#1A1917", lineHeight: 1.3 }}>{co.name}</span>
                         {co.stagnant_days >= 7 && <span style={{ fontSize: 9, color: "#DC2626", fontWeight: 800, background: "#FEE2E2", padding: "2px 5px", borderRadius: 4, flexShrink: 0, marginLeft: 4 }}>⚠{co.stagnant_days}일</span>}
@@ -1737,7 +1822,7 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
                     </div>
                   );
                 })}
-                {items.length === 0 && <div style={{ fontSize: 12, color: "#DDD", textAlign: "center", padding: "24px 0" }}>없음</div>}
+                {items.length === 0 && <div style={{ fontSize: 12, color: "#DDD", textAlign: "center", padding: "24px 0" }}>{isDropTarget ? "여기에 놓으세요" : "없음"}</div>}
               </div>
             </div>
           );
@@ -3562,7 +3647,7 @@ function ActivityLogView() {
       groups[d].items.push(l);
     });
     return Object.values(groups);
-  }, [cases, activeGroup, activeMonth, currentYear, filterAssignee]);
+  }, [filtered]);
 
   // KPI
   var today = new Date().toDateString();
