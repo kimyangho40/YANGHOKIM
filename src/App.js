@@ -429,23 +429,69 @@ function AuthScreen() {
   return (
     <div style={{ height: "100vh", display: "flex", background: "#1A1917" }}>
       {/* 왼쪽 브랜딩 */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", padding: "60px 80px" }}>
-        <div style={{ fontSize: 11, letterSpacing: "0.14em", color: "#555", marginBottom: 12, textTransform: "uppercase" }}>Policy Fund</div>
-        <h1 style={{ fontSize: 42, fontWeight: 800, color: "#F7F6F3", letterSpacing: "-0.04em", lineHeight: 1.15, margin: "0 0 20px" }}>
-          정책자금<br />컨설팅 CRM
-        </h1>
-        <p style={{ color: "#666", fontSize: 15, lineHeight: 1.7, maxWidth: 360 }}>
-          200개 업체, 15명 팀원의 업무를<br />하나의 화면에서 관리하세요.
-        </p>
-        <div style={{ marginTop: 48, display: "flex", flexDirection: "column", gap: 14 }}>
-          {["5단계 파이프라인 추적","서류 체크리스트 자동화","정체 업체 실시간 알림","팀원별 업무 대시보드"].map(f => (
-            <div key={f} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ width: 20, height: 20, borderRadius: "50%", background: "#2E2C29", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <Icon name="check" size={11} color="#4ADE80" />
-              </div>
-              <span style={{ color: "#888", fontSize: 13 }}>{f}</span>
-            </div>
-          ))}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", padding: "60px 80px", position: "relative", overflow: "hidden" }}>
+        {/* 배경 액센트 (그라데이션) */}
+        <div style={{ position: "absolute", top: -120, right: -120, width: 400, height: 400, borderRadius: "50%", background: "radial-gradient(circle, rgba(245,158,11,0.08) 0%, transparent 70%)", pointerEvents: "none" }}></div>
+        <div style={{ position: "absolute", bottom: -100, left: -100, width: 320, height: 320, borderRadius: "50%", background: "radial-gradient(circle, rgba(245,158,11,0.05) 0%, transparent 70%)", pointerEvents: "none" }}></div>
+
+        <div style={{ position: "relative", zIndex: 1 }}>
+          {/* 상단 라벨 */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+            <div style={{ width: 28, height: 1, background: "#F59E0B" }}></div>
+            <div style={{ fontSize: 11, letterSpacing: "0.18em", color: "#F59E0B", textTransform: "uppercase", fontWeight: 600 }}>Korea Business Consulting</div>
+          </div>
+
+          {/* 메인 헤드라인 */}
+          <div style={{ fontSize: 14, color: "#888", marginBottom: 6, letterSpacing: "0.05em", fontWeight: 500 }}>대한민국 NO.1</div>
+          <h1 style={{ fontSize: 48, fontWeight: 800, color: "#F7F6F3", letterSpacing: "-0.04em", lineHeight: 1.1, margin: "0 0 28px" }}>
+            경영컨설팅 회사
+          </h1>
+
+          {/* 슬로건 */}
+          <p style={{ color: "#BBB", fontSize: 17, lineHeight: 1.7, maxWidth: 420, fontWeight: 400, margin: "0 0 12px" }}>
+            기업에 필요한 모든 것을 자문하고 공급하는<br />
+            <span style={{ color: "#F7F6F3", fontWeight: 600 }}>전문가로 구성된 기업</span>
+          </p>
+          <p style={{ color: "#666", fontSize: 13, lineHeight: 1.6, maxWidth: 420 }}>
+            정책자금부터 사업전환·구조혁신까지,<br />
+            귀사의 지속가능한 성장을 함께합니다.
+          </p>
+
+          {/* 서비스 카테고리 */}
+          <div style={{ marginTop: 56, display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {[
+              { label: "정책자금", icon: "💼" },
+              { label: "사업전환", icon: "🔄" },
+              { label: "구조혁신", icon: "⚡" },
+              { label: "경영진단", icon: "📊" },
+              { label: "재무자문", icon: "📈" },
+            ].map(function(s) {
+              return (
+                <div key={s.label} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 99, fontSize: 12 }}>
+                  <span style={{ fontSize: 13 }}>{s.icon}</span>
+                  <span style={{ color: "#DDD", fontWeight: 500, letterSpacing: "0.02em" }}>{s.label}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* 하단 회사 강점 */}
+          <div style={{ marginTop: 56, paddingTop: 24, borderTop: "1px solid rgba(255,255,255,0.08)", display: "flex", flexDirection: "column", gap: 14 }}>
+            {[
+              { title: "현장 중심", desc: "직접 방문 컨설팅" },
+              { title: "맞춤형 전략", desc: "1:1 케이스 분석" },
+              { title: "전문가팀", desc: "시니어 컨설턴트 보유" },
+            ].map(function(it) {
+              return (
+                <div key={it.title} style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                  <div style={{ width: 4, height: 4, borderRadius: "50%", background: "#F59E0B" }}></div>
+                  <span style={{ color: "#F59E0B", fontWeight: 600, fontSize: 13, letterSpacing: "0.02em", minWidth: 80 }}>{it.title}</span>
+                  <span style={{ color: "#888", fontSize: 12, letterSpacing: "0.03em" }}>|</span>
+                  <span style={{ color: "#CCC", fontSize: 13 }}>{it.desc}</span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
 
