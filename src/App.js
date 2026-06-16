@@ -6524,11 +6524,38 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     } catch (e) { return null; }
   });
 
+  // 지역본부 → 연락처 자동 매핑 (학습형)
+  // 모든 cases의 contact_phones를 모아서 각 지역본부의 가장 흔한 연락처 추출
+  var contactMap = useMemo(function() {
+    var freq = {}; // { 지역본부: { 연락처: count } }
+    cases.forEach(function(c) {
+      var phones = c.contact_phones || {};
+      Object.keys(phones).forEach(function(branch) {
+        var phone = phones[branch];
+        if (!phone || !branch) return;
+        if (!freq[branch]) freq[branch] = {};
+        freq[branch][phone] = (freq[branch][phone] || 0) + 1;
+      });
+    });
+    // 각 지역본부의 최다 빈도 연락처 선택
+    var map = {};
+    Object.keys(freq).forEach(function(branch) {
+      var phones = freq[branch];
+      var best = null;
+      var bestCount = 0;
+      Object.keys(phones).forEach(function(p) {
+        if (phones[p] > bestCount) { best = p; bestCount = phones[p]; }
+      });
+      if (best) map[branch] = best;
+    });
+    return map;
+  }, [cases]);
+
   // 컬럼 너비 - 기관 그룹별로 localStorage에 저장
   const DEFAULT_COL_WIDTHS = {
-    num: 40, business_name: 160, representative: 80, assignee: 80, amount: 110,
-    product: 140, industry: 100, region: 80, status: 110, docs: 200,
-    credit: 80, notes: 140, action: 120
+    num: 40, business_name: 160, representative: 80, assignee: 80, amount: 70,
+    product: 140, industry: 70, region: 80, contact: 130, status: 110, docs: 200,
+    credit: 60, notes: 140, action: 120
   };
   const [colWidths, setColWidths] = useState(function() {
     try {
@@ -7051,6 +7078,9 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                 )}
                 <th style={headerCellStyle("industry")}>업종<ResizeHandle colKey="industry" /></th>
                 <th style={headerCellStyle("region")}>지역<ResizeHandle colKey="region" /></th>
+                {activeGroup === "구조혁신&사업전환" && (
+                  <th style={headerCellStyle("contact", { color: "#0369A1" })}>📞 연락처<ResizeHandle colKey="contact" /></th>
+                )}
                 <th style={headerCellStyle("status", { color: activeGroup === "구조혁신&사업전환" ? "#BE123C" : "#888" })}>상태<ResizeHandle colKey="status" /></th>
                 {activeGroup === "구조혁신&사업전환" && (
                   <th style={headerCellStyle("docs", { color: "#0F6E56", background: "#E1F5EE" })}>전달 및 완료 서류<ResizeHandle colKey="docs" /></th>
@@ -7146,6 +7176,82 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                           </div>
                         )}
                     </td>
+                    {activeGroup === "구조혁신&사업전환" && (
+                      <td style={{ padding: "10px 12px", verticalAlign: "top" }}>
+                        {(function() {
+                          // 지역본부 후보 추출 (findJungingongBranch가 쉼표로 묶어서 반환)
+                          var branchesStr = findJungingongBranch(row.region);
+                          var branches = (branchesStr || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+                          // 저장된 연락처
+                          var savedPhones = row.contact_phones || {};
+                          // 저장에는 있지만 자동 매칭에 없는 지역본부도 표시 (수동 추가된 경우)
+                          Object.keys(savedPhones).forEach(function(b) {
+                            if (branches.indexOf(b) < 0) branches.push(b);
+                          });
+                          if (branches.length === 0) {
+                            return <span style={{ fontSize: 11, color: "#CCC" }}>-</span>;
+                          }
+                          return (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                              {branches.map(function(branch) {
+                                var savedPhone = savedPhones[branch];
+                                var autoPhone = !savedPhone && contactMap[branch];
+                                var displayPhone = savedPhone || autoPhone || "";
+                                var isAuto = !savedPhone && !!autoPhone;
+                                return (
+                                  <div key={branch} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11 }}>
+                                    <span style={{ color: "#7C3AED", fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}>{branch}</span>
+                                    <input type="text" value={displayPhone}
+                                      placeholder="연락처"
+                                      onChange={function(e) {
+                                        var newVal = e.target.value;
+                                        var newPhones = Object.assign({}, savedPhones);
+                                        if (newVal) newPhones[branch] = newVal;
+                                        else delete newPhones[branch];
+                                        // 로컬 상태 즉시 업데이트
+                                        setCases(function(prev) {
+                                          return prev.map(function(r) { return r.id === row.id ? Object.assign({}, r, { contact_phones: newPhones }) : r; });
+                                        });
+                                      }}
+                                      onBlur={async function(e) {
+                                        // 포커스 빠지면 DB 저장
+                                        var newVal = e.target.value;
+                                        var newPhones = Object.assign({}, savedPhones);
+                                        if (newVal) newPhones[branch] = newVal;
+                                        else delete newPhones[branch];
+                                        var r = await supabase.from("agency_cases").update({ contact_phones: newPhones, updated_at: new Date().toISOString() }).eq("id", row.id);
+                                        if (r.error) console.warn("연락처 저장 실패:", r.error.message);
+                                      }}
+                                      style={{ flex: 1, minWidth: 0, padding: "2px 6px", border: "1px solid " + (isAuto ? "#E5E7EB" : "#86EFAC"), borderRadius: 4, fontSize: 11, background: isAuto ? "#F9FAFB" : "#fff", color: isAuto ? "#888" : "#1A1917", fontStyle: isAuto ? "italic" : "normal" }} />
+                                    <button onClick={async function() {
+                                      // X 클릭 → 이 지역본부 항목 제거
+                                      if (!confirm("'" + branch + "' 지역본부를 제거할까요?")) return;
+                                      var newPhones = Object.assign({}, savedPhones);
+                                      delete newPhones[branch];
+                                      // 자동 매칭으로 나온 거면 region에서도 빼야 안 다시 뜸
+                                      // → region에는 손대지 말고 contact_phones만 '_excluded'에 기록
+                                      newPhones["_excluded_" + branch] = "1";
+                                      var r = await supabase.from("agency_cases").update({ contact_phones: newPhones, updated_at: new Date().toISOString() }).eq("id", row.id);
+                                      if (r.error) { alert("저장 실패: " + r.error.message); return; }
+                                      setCases(function(prev) {
+                                        return prev.map(function(rr) { return rr.id === row.id ? Object.assign({}, rr, { contact_phones: newPhones }) : rr; });
+                                      });
+                                    }}
+                                      title="이 지역본부 제거"
+                                      style={{ background: "none", border: "none", cursor: "pointer", color: "#AAA", fontSize: 12, padding: "0 4px", flexShrink: 0 }}>✕</button>
+                                  </div>
+                                );
+                              }).filter(function(el) {
+                                // _excluded 처리된 지역본부는 표시 안 함
+                                if (!el) return false;
+                                var branch = el.key;
+                                return !savedPhones["_excluded_" + branch];
+                              })}
+                            </div>
+                          );
+                        })()}
+                      </td>
+                    )}
                     <td style={{ padding: "10px 12px" }}>
                       {isEditing
                         ? <select value={editData.status || ""} onChange={function(e) { var v = e.target.value; setEditData(function(p) { return Object.assign({}, p, { status: v }); }); }}
