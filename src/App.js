@@ -6570,32 +6570,41 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     } catch (e) { return null; }
   });
 
-  // 지역본부 → 연락처 자동 매핑 (학습형)
-  // 모든 cases의 contact_phones를 모아서 각 지역본부의 가장 흔한 연락처 추출
-  var contactMap = useMemo(function() {
-    var freq = {}; // { 지역본부: { 연락처: count } }
-    cases.forEach(function(c) {
-      var phones = c.contact_phones || {};
-      Object.keys(phones).forEach(function(branch) {
-        var phone = phones[branch];
-        if (!phone || !branch) return;
-        if (!freq[branch]) freq[branch] = {};
-        freq[branch][phone] = (freq[branch][phone] || 0) + 1;
+  // 지역본부 → 연락처 중앙 매핑 (branch_contacts 테이블)
+  const [contactMap, setContactMap] = useState({});
+
+  // branch_contacts 테이블에서 매핑 가져오기
+  var fetchContactMap = async function() {
+    var r = await supabase.from("branch_contacts").select("*");
+    if (!r.error && r.data) {
+      var map = {};
+      r.data.forEach(function(row) {
+        if (row.branch_name) map[row.branch_name] = row.phone || "";
       });
-    });
-    // 각 지역본부의 최다 빈도 연락처 선택
-    var map = {};
-    Object.keys(freq).forEach(function(branch) {
-      var phones = freq[branch];
-      var best = null;
-      var bestCount = 0;
-      Object.keys(phones).forEach(function(p) {
-        if (phones[p] > bestCount) { best = p; bestCount = phones[p]; }
-      });
-      if (best) map[branch] = best;
-    });
-    return map;
-  }, [cases]);
+      setContactMap(map);
+    }
+  };
+
+  useEffect(function() { fetchContactMap(); }, []);
+
+  // 연락처 업데이트 - 중앙 매핑 변경 (모든 업체에 즉시 반영됨)
+  var updateBranchContact = async function(branchName, newPhone) {
+    if (!branchName) return;
+    // UI 즉시 반영
+    setContactMap(function(prev) { return Object.assign({}, prev, { [branchName]: newPhone }); });
+    // DB 업데이트 (upsert)
+    var r = await supabase.from("branch_contacts").upsert({
+      branch_name: branchName,
+      phone: newPhone,
+      updated_at: new Date().toISOString(),
+      updated_by: "양호",
+    }, { onConflict: "branch_name" });
+    if (r.error) {
+      alert("연락처 저장 실패: " + r.error.message);
+      // 실패 시 다시 가져오기
+      fetchContactMap();
+    }
+  };
 
   // 컬럼 너비 - 기관 그룹별로 localStorage에 저장
   const DEFAULT_COL_WIDTHS = {
@@ -7228,54 +7237,37 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                           // 지역본부 후보 추출 (findJungingongBranch가 쉼표로 묶어서 반환)
                           var branchesStr = findJungingongBranch(row.region);
                           var branches = (branchesStr || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
-                          // 저장된 연락처
-                          var savedPhones = row.contact_phones || {};
-                          // 저장에는 있지만 자동 매칭에 없는 지역본부도 표시 (수동 추가된 경우)
-                          Object.keys(savedPhones).forEach(function(b) {
-                            if (branches.indexOf(b) < 0) branches.push(b);
-                          });
+                          // 이 업체에서 제외된 지역본부 처리
+                          var excluded = row.contact_phones || {};
+                          branches = branches.filter(function(b) { return !excluded["_excluded_" + b]; });
                           if (branches.length === 0) {
                             return <span style={{ fontSize: 11, color: "#CCC" }}>-</span>;
                           }
                           return (
                             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                               {branches.map(function(branch) {
-                                var savedPhone = savedPhones[branch];
-                                var autoPhone = !savedPhone && contactMap[branch];
-                                var displayPhone = savedPhone || autoPhone || "";
-                                var isAuto = !savedPhone && !!autoPhone;
+                                // 중앙 매핑(contactMap)에서 연락처 가져옴
+                                var phoneVal = contactMap[branch] !== undefined ? contactMap[branch] : "";
                                 return (
                                   <div key={branch} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11 }}>
                                     <span style={{ color: "#7C3AED", fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}>{branch}</span>
-                                    <input type="text" value={displayPhone}
+                                    <input type="text"
+                                      value={phoneVal}
                                       placeholder="연락처"
                                       onChange={function(e) {
-                                        var newVal = e.target.value;
-                                        var newPhones = Object.assign({}, savedPhones);
-                                        if (newVal) newPhones[branch] = newVal;
-                                        else delete newPhones[branch];
-                                        // 로컬 상태 즉시 업데이트
-                                        setCases(function(prev) {
-                                          return prev.map(function(r) { return r.id === row.id ? Object.assign({}, r, { contact_phones: newPhones }) : r; });
-                                        });
+                                        // 입력 즉시 contactMap 업데이트 (UI 반영)
+                                        var v = e.target.value;
+                                        setContactMap(function(prev) { return Object.assign({}, prev, { [branch]: v }); });
                                       }}
-                                      onBlur={async function(e) {
-                                        // 포커스 빠지면 DB 저장
-                                        var newVal = e.target.value;
-                                        var newPhones = Object.assign({}, savedPhones);
-                                        if (newVal) newPhones[branch] = newVal;
-                                        else delete newPhones[branch];
-                                        var r = await supabase.from("agency_cases").update({ contact_phones: newPhones, updated_at: new Date().toISOString() }).eq("id", row.id);
-                                        if (r.error) console.warn("연락처 저장 실패:", r.error.message);
+                                      onBlur={function(e) {
+                                        // 포커스 빠지면 DB 저장 (모든 업체에 자동 반영)
+                                        updateBranchContact(branch, e.target.value);
                                       }}
-                                      style={{ flex: 1, minWidth: 0, padding: "2px 6px", border: "1px solid " + (isAuto ? "#E5E7EB" : "#86EFAC"), borderRadius: 4, fontSize: 11, background: isAuto ? "#F9FAFB" : "#fff", color: isAuto ? "#888" : "#1A1917", fontStyle: isAuto ? "italic" : "normal" }} />
+                                      style={{ flex: 1, minWidth: 0, padding: "2px 6px", border: "1px solid #86EFAC", borderRadius: 4, fontSize: 11, background: "#fff", color: "#1A1917" }} />
                                     <button onClick={async function() {
-                                      // X 클릭 → 이 지역본부 항목 제거
-                                      if (!confirm("'" + branch + "' 지역본부를 제거할까요?")) return;
-                                      var newPhones = Object.assign({}, savedPhones);
-                                      delete newPhones[branch];
-                                      // 자동 매칭으로 나온 거면 region에서도 빼야 안 다시 뜸
-                                      // → region에는 손대지 말고 contact_phones만 '_excluded'에 기록
+                                      // X 클릭 → 이 업체에서만 이 지역본부 제거 (중앙 매핑은 그대로)
+                                      if (!confirm("'" + branch + "' 지역본부를 이 업체에서 제거할까요?\n(다른 업체에는 영향 없음)")) return;
+                                      var newPhones = Object.assign({}, excluded);
                                       newPhones["_excluded_" + branch] = "1";
                                       var r = await supabase.from("agency_cases").update({ contact_phones: newPhones, updated_at: new Date().toISOString() }).eq("id", row.id);
                                       if (r.error) { alert("저장 실패: " + r.error.message); return; }
@@ -7283,15 +7275,10 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                                         return prev.map(function(rr) { return rr.id === row.id ? Object.assign({}, rr, { contact_phones: newPhones }) : rr; });
                                       });
                                     }}
-                                      title="이 지역본부 제거"
+                                      title="이 업체에서 이 지역본부 제거"
                                       style={{ background: "none", border: "none", cursor: "pointer", color: "#AAA", fontSize: 12, padding: "0 4px", flexShrink: 0 }}>✕</button>
                                   </div>
                                 );
-                              }).filter(function(el) {
-                                // _excluded 처리된 지역본부는 표시 안 함
-                                if (!el) return false;
-                                var branch = el.key;
-                                return !savedPhones["_excluded_" + branch];
                               })}
                             </div>
                           );
