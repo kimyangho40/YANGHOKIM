@@ -3600,12 +3600,218 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
             <span style={{ fontSize: 11, color: "#888", flex: 1 }}>{attachedFile || "기업현황표.xlsx 파일 선택"}</span>
             <span style={{ fontSize: 10, padding: "3px 10px", background: "#B45309", color: "#fff", borderRadius: 4, fontWeight: 700 }}>파일 선택</span>
             <input type="file" accept=".xlsx,.xls" style={{ display: "none" }}
-              onChange={function(e) {
+              onChange={async function(e) {
                 var file = e.target.files && e.target.files[0];
                 if (!file) return;
                 setAttachedFile(file.name);
-                // 2단계에서 실제 파싱 로직 추가 예정
-                alert("📄 기업현황표 자동 입력 기능은 다음 업데이트에서 활성화됩니다.\n현재는 파일 첨부만 됩니다.\n수동 입력으로 진행해주세요.");
+                try {
+                  // SheetJS 동적 로딩 (한 번만)
+                  if (typeof window.XLSX === "undefined") {
+                    await new Promise(function(resolve, reject) {
+                      var script = document.createElement("script");
+                      script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+                      script.onload = resolve;
+                      script.onerror = function() { reject(new Error("SheetJS 라이브러리 로드 실패. 인터넷 연결을 확인해주세요.")); };
+                      document.head.appendChild(script);
+                    });
+                  }
+                  var XLSX = window.XLSX;
+                  // 파일 읽기
+                  var data = await file.arrayBuffer();
+                  var wb = XLSX.read(data, { type: "array", cellDates: true });
+                  var sheetName = wb.SheetNames.find(function(n) { return n.indexOf("기업개요") >= 0; }) || wb.SheetNames[0];
+                  var ws = wb.Sheets[sheetName];
+                  var rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+
+                  // 셀 값 추출 헬퍼
+                  var getCell = function(r, c) {
+                    if (!rows[r]) return "";
+                    var v = rows[r][c];
+                    if (v === null || v === undefined) return "";
+                    if (v instanceof Date) {
+                      return v.getFullYear() + "-" + String(v.getMonth() + 1).padStart(2, "0") + "-" + String(v.getDate()).padStart(2, "0");
+                    }
+                    return String(v).trim();
+                  };
+
+                  // 매출 파싱 ("55백만원" → 55000000)
+                  var parseRevenue = function(s) {
+                    if (!s) return "";
+                    var str = String(s).replace(/\s/g, "");
+                    var match = str.match(/([0-9.,]+)(억|천만|백만|만)?/);
+                    if (!match) return "";
+                    var num = parseFloat(match[1].replace(/,/g, ""));
+                    if (isNaN(num)) return "";
+                    var unit = match[2] || "";
+                    if (unit === "억") return Math.round(num * 100000000);
+                    if (unit === "천만") return Math.round(num * 10000000);
+                    if (unit === "백만") return Math.round(num * 1000000);
+                    if (unit === "만") return Math.round(num * 10000);
+                    return Math.round(num); // 단위 없으면 원
+                  };
+
+                  // 신용점수 파싱 ("KCB 595점/ NICE 685점(5/28일 현재)")
+                  var parseCredit = function(s) {
+                    if (!s) return { kcb: "", nice: "" };
+                    var kcbMatch = String(s).match(/KCB\s*([0-9]+)/i);
+                    var niceMatch = String(s).match(/NICE\s*([0-9]+)/i);
+                    return {
+                      kcb: kcbMatch ? kcbMatch[1] : "",
+                      nice: niceMatch ? niceMatch[1] : "",
+                    };
+                  };
+
+                  // 대표자/연락처 분리 ("박옥란대표 / 010-2337-6699")
+                  var parseRepAndPhone = function(s) {
+                    if (!s) return { rep: "", phone: "" };
+                    var parts = String(s).split("/").map(function(x) { return x.trim(); });
+                    var rep = parts[0] || "";
+                    var phone = parts[1] || "";
+                    // "대표" 단어 제거
+                    rep = rep.replace(/대표(이사)?$/, "").trim();
+                    // 전화번호 정규화
+                    phone = phone.replace(/[^0-9-]/g, "");
+                    return { rep: rep, phone: phone };
+                  };
+
+                  // 설립일 파싱 (날짜 객체 또는 "2015-09-23" → year, month)
+                  var parseFoundedDate = function(s) {
+                    if (!s) return { year: "", month: "" };
+                    var str = String(s);
+                    var match = str.match(/(\d{4})[-/.년\s]*(\d{1,2})/);
+                    if (match) return { year: match[1], month: parseInt(match[2]) };
+                    return { year: "", month: "" };
+                  };
+
+                  // 지역 추출 ("인천광역시 서구 서달로221번길 14" → "인천_서구")
+                  var parseRegion = function(addr) {
+                    if (!addr) return "";
+                    var s = String(addr);
+                    var doMap = { "서울특별시": "서울", "서울": "서울", "부산광역시": "부산", "부산": "부산", "대구광역시": "대구", "대구": "대구", "인천광역시": "인천", "인천": "인천", "광주광역시": "광주", "광주": "광주", "대전광역시": "대전", "대전": "대전", "울산광역시": "울산", "울산": "울산", "세종특별자치시": "세종", "세종": "세종", "경기도": "경기", "강원도": "강원", "강원특별자치도": "강원", "충청북도": "충북", "충북": "충북", "충청남도": "충남", "충남": "충남", "전라북도": "전북", "전북": "전북", "전북특별자치도": "전북", "전라남도": "전남", "전남": "전남", "경상북도": "경북", "경북": "경북", "경상남도": "경남", "경남": "경남", "제주특별자치도": "제주", "제주도": "제주", "제주": "제주" };
+                    var firstWord = s.split(/\s+/)[0];
+                    var doName = doMap[firstWord] || firstWord;
+                    var secondWord = s.split(/\s+/)[1] || "";
+                    var siGuGun = secondWord.replace(/시$|군$|구$/, "");
+                    return doName + (siGuGun ? "_" + siGuGun : "");
+                  };
+
+                  // ▼ 매핑 시작
+                  var updates = {};
+                  var auto = {};
+
+                  // 회사명
+                  var name = getCell(2, 2);
+                  if (name) { updates.name = name; auto.name = true; }
+
+                  // 사업자번호
+                  var bizNum = getCell(2, 8);
+                  if (bizNum) { updates.business_number = bizNum; auto.business_number = true; }
+
+                  // 대표자/연락처
+                  var repPhone = parseRepAndPhone(getCell(3, 2));
+                  if (repPhone.rep) { updates.representative = repPhone.rep; auto.representative = true; }
+                  if (repPhone.phone) { updates.phone = repPhone.phone; auto.phone = true; }
+
+                  // 지역 (사업장 주소에서 추출)
+                  var addr = getCell(4, 2);
+                  var region = parseRegion(addr);
+                  if (region) { updates.region = region; auto.region = true; }
+
+                  // 업태/종목
+                  var industry = getCell(5, 2);
+                  if (industry) { updates.industry = industry; auto.industry = true; }
+
+                  // 직원수
+                  var emp = getCell(5, 8);
+                  if (emp && emp !== "없음" && emp !== "추후") {
+                    var empNum = String(emp).replace(/[^0-9]/g, "");
+                    if (empNum) { updates.employee_count = empNum; auto.employee_count = true; }
+                  } else if (emp === "없음") {
+                    updates.employee_count = "0"; auto.employee_count = true;
+                  }
+
+                  // 신용점수
+                  var credit = parseCredit(getCell(6, 2));
+                  if (credit.kcb) { updates.credit_score_kcb = credit.kcb; auto.credit_score_kcb = true; }
+                  if (credit.nice) { updates.credit_score_nice = credit.nice; auto.credit_score_nice = true; }
+
+                  // 설립일
+                  var founded = parseFoundedDate(getCell(6, 8));
+                  if (founded.year) { updates.founded_year = founded.year; auto.founded_year = true; }
+                  if (founded.month) { updates.founded_month = founded.month; auto.founded_month = true; }
+
+                  // 매출 3개년: 2025=[12,2], 2024=[12,6], 2023=[12,10]
+                  var rev2025 = parseRevenue(getCell(12, 2));
+                  var rev2024 = parseRevenue(getCell(12, 6));
+                  var rev2023 = parseRevenue(getCell(12, 10));
+                  if (rev2025) { updates.revenue_2025 = rev2025; auto.revenue_2025 = true; }
+                  if (rev2024) { updates.revenue_2024 = rev2024; auto.revenue_2024 = true; }
+                  if (rev2023) { updates.revenue_2023 = rev2023; auto.revenue_2023 = true; }
+
+                  // 사업자 유형: 회사명이 "(주)"로 시작하거나 법인 키워드면 법인
+                  if (name && (/^\(주\)|^㈜|주식회사/.test(name))) {
+                    updates.business_type = "법인사업자";
+                    updates.type = "법인";
+                  } else if (name) {
+                    updates.business_type = "개인사업자";
+                    updates.type = "개인";
+                  }
+
+                  // 나머지 정보 → 이슈 칸에 자동 정리
+                  var extras = [];
+                  extras.push("[기업현황표 자동 추출 - " + new Date().toISOString().slice(0,10) + "]");
+                  extras.push("");
+                  var addExtra = function(label, val) { if (val) extras.push("▸ " + label + ": " + val); };
+                  addExtra("사업장 주소", getCell(4, 2));
+                  addExtra("세무사 연락처", getCell(4, 8));
+                  addExtra("주요취급품목", getCell(7, 2));
+                  addExtra("대표 결혼 유/무", getCell(7, 8));
+                  addExtra("추가 사업자 여부", getCell(8, 2));
+                  addExtra("회생 및 파산 이력", getCell(8, 8));
+                  addExtra("대표자 거주지", getCell(9, 2));
+                  addExtra("사업장 부동산 유무", getCell(9, 8));
+                  addExtra("대표이사 자산", getCell(10, 2));
+                  addExtra("사업장 부동산 현황", getCell(10, 8));
+                  addExtra("올해 매출/예상", getCell(11, 2));
+                  addExtra("법인 자본금", getCell(11, 8));
+                  addExtra("수출실적", getCell(13, 2));
+                  addExtra("세금/금융 연체", getCell(13, 6));
+                  addExtra("기업인증", [getCell(14, 8), getCell(15, 8)].filter(Boolean).join(", "));
+                  addExtra("연구소/전담부서", getCell(14, 2));
+                  addExtra("특허/상표/디자인", getCell(14, 6));
+                  addExtra("폐업 이력", getCell(15, 2));
+                  // 기대출 (17행)
+                  var loanInst = getCell(17, 2);
+                  var loanAmt = getCell(17, 5);
+                  var loanRate = getCell(17, 8);
+                  if (loanInst || loanAmt) {
+                    extras.push("▸ 기존 대출: " + [loanInst, loanAmt, loanRate ? "(금리 " + loanRate + ")" : ""].filter(Boolean).join(" "));
+                  }
+                  addExtra("카드론/현금서비스", getCell(24, 5));
+                  addExtra("필요자금 사용용도", getCell(26, 2));
+                  // 비고 (29행 또는 그 아래 텍스트)
+                  var bigo = getCell(29, 2) || getCell(30, 2) || getCell(31, 2);
+                  if (bigo) {
+                    extras.push("");
+                    extras.push("▸ 비고:");
+                    extras.push(bigo);
+                  }
+                  if (extras.length > 2) {
+                    updates.issue = extras.join("\n");
+                    auto.issue = true;
+                  }
+
+                  // 한 번에 적용
+                  setMulti(updates);
+                  setAutoFilled(function(p) { return Object.assign({}, p, auto); });
+
+                  var filledCount = Object.keys(auto).length;
+                  alert("📄 자동 입력 " + filledCount + "개 완료!\n확인 후 빈 칸 보완해서 등록하세요.");
+                } catch (err) {
+                  console.error("기업현황표 파싱 오류:", err);
+                  alert("❌ 엑셀 읽기 실패: " + err.message + "\n\n양식이 표준 기업현황표인지 확인해주세요.");
+                  setAttachedFile(null);
+                }
               }} />
           </label>
           <div style={{ fontSize: 10, color: "#888", marginTop: 5, lineHeight: 1.5 }}>엑셀 첨부하면 회사명·대표자·매출·신용점수 등이 자동 채워집니다. 첨부 안 해도 직접 입력 가능.</div>
