@@ -825,6 +825,7 @@ function CRMApp({ profile, session }) {
       industry: rest.industry || null,
       region: rest.region || null,
       contract_date: rest.contract_date || null,
+      kakao_link: rest.kakao_link || null,
     }).eq("id", rest.id);
     if (!error) {
       // 🆕 stage가 "부결/반려"로 새로 바뀌면 → 사례집 자동 초안 생성
@@ -1526,6 +1527,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
 
       {/* 👥 팀 활동 위젯 */}
       <TeamActivityWidget profiles={profiles} />
+
+      {/* 📊 담당자별 업체 수 막대그래프 */}
+      <AssigneeWorkloadChart companies={companies} setView={setView} setDashboardFilter={setDashboardFilter} />
 
       <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
         <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>파이프라인 단계별 현황</div>
@@ -2870,7 +2874,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   </button>
                 </div>
               )}
-              <div style={{ fontSize: 13, color: "#666", marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
+              <div style={{ fontSize: 13, color: "#666", marginTop: 4, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                 <span onClick={function() {
                   var v = prompt("대표자명 수정:", data.representative || "");
                   if (v !== null) setData(function(p) { return Object.assign({}, p, { representative: v }); });
@@ -2882,6 +2886,19 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   if (v !== null) setData(function(p) { return Object.assign({}, p, { phone: v }); });
                 }} style={{ cursor: "pointer", borderBottom: "1px dashed #CCC" }}
                   title="클릭하여 수정">{data.phone || "전화번호 입력"}</span>
+                {data.kakao_link ? (
+                  <a href={data.kakao_link} target="_blank" rel="noopener noreferrer"
+                    title="카톡방 열기"
+                    style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "3px 10px", background: "#FEE500", color: "#3C1E1E", borderRadius: 99, textDecoration: "none", fontSize: 11, fontWeight: 700, marginLeft: 4 }}>
+                    💬 카톡방
+                  </a>
+                ) : (
+                  <span onClick={function() {
+                    var v = prompt("카톡방 링크 입력:\n(open.kakao.com 또는 카카오톡 채팅방 공유 링크)", "");
+                    if (v !== null && v.trim()) setData(function(p) { return Object.assign({}, p, { kakao_link: v.trim() }); });
+                  }} style={{ cursor: "pointer", color: "#888", fontSize: 11, padding: "3px 10px", border: "1px dashed #DDD", borderRadius: 99, marginLeft: 4 }}
+                    title="카톡방 링크 등록">💬 카톡방 등록</span>
+                )}
               </div>
             </div>
             <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#888" }}><Icon name="x" size={20} color="#888" /></button>
@@ -2939,6 +2956,18 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>연락처</div>
                   <input type="text" value={data.phone || ""} placeholder="01012345678" onChange={function(e) { var v = formatPhone(e.target.value); setData(function(p) { return Object.assign({}, p, { phone: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+                </div>
+                <div style={{ background: data.kakao_link ? "#FEF3C7" : "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+                    <span style={{ fontSize: 11, color: data.kakao_link ? "#92400E" : "#888", fontWeight: data.kakao_link ? 700 : 400 }}>💬 카톡방 링크</span>
+                    {data.kakao_link && (
+                      <a href={data.kakao_link} target="_blank" rel="noopener noreferrer"
+                        style={{ fontSize: 10, padding: "2px 8px", background: "#FEE500", color: "#3C1E1E", borderRadius: 99, textDecoration: "none", fontWeight: 700 }}>열기 →</a>
+                    )}
+                  </div>
+                  <input type="text" value={data.kakao_link || ""} placeholder="https://open.kakao.com/..." 
+                    onChange={function(e) { var v = e.target.value.trim(); setData(function(p) { return Object.assign({}, p, { kakao_link: v }); }); }} 
+                    style={{ width: "100%", fontSize: 12, fontWeight: 500, background: "transparent", border: "none", outline: "none", color: data.kakao_link ? "#92400E" : "#1A1917" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>종업원 수</div>
@@ -9332,6 +9361,110 @@ function TeamActivityWidget({ profiles }) {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ========== 📊 담당자별 업체 수 막대그래프 (대시보드) ==========
+function AssigneeWorkloadChart({ companies, setView, setDashboardFilter }) {
+  // 담당자별 업체 수 집계 (별칭 정규화)
+  var normalizeName = function(name) {
+    if (!name) return "";
+    var n = String(name).trim();
+    if (n === "총무" || n === "총무(유진)") return "유진";
+    if (n === "김동일이사" || n === "김이사" || n === "동일이사") return "동일";
+    if (n === "김현애") return "현애";
+    if (n === "최지혜") return "지혜";
+    return n;
+  };
+
+  var counts = {};
+  (companies || []).forEach(function(c) {
+    if (!c.assignee) return;
+    // 복합 담당자 (예: "유진 정원") → 첫 이름만 카운트
+    var first = String(c.assignee).split(/[ ,;\/]+/)[0].trim();
+    var nm = normalizeName(first);
+    if (!nm) return;
+    counts[nm] = (counts[nm] || 0) + 1;
+  });
+
+  // 정렬: 건수 많은 순
+  var sorted = Object.keys(counts).map(function(k) {
+    return { name: k, count: counts[k] };
+  }).sort(function(a, b) { return b.count - a.count; });
+
+  if (sorted.length === 0) {
+    return null;
+  }
+
+  var maxCount = sorted[0].count;
+  var total = sorted.reduce(function(s, x) { return s + x.count; }, 0);
+  var avg = Math.round(total / sorted.length);
+
+  // 색상 매핑 (직원별 일관성)
+  var COLOR_PALETTE = ["#4338CA", "#0891B2", "#15803D", "#CA8A04", "#DC2626", "#7C3AED", "#0369A1", "#9333EA", "#DB2777"];
+  var getColor = function(idx) { return COLOR_PALETTE[idx % COLOR_PALETTE.length]; };
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 3 }}>📊 담당자별 업체 수</div>
+          <div style={{ fontSize: 11, color: "#888" }}>업무 분담 현황 한눈에 · 클릭하면 그 담당자의 업체 목록으로 이동</div>
+        </div>
+        <div style={{ display: "flex", gap: 16, fontSize: 11, color: "#888" }}>
+          <div>전체 <span style={{ color: "#1A1917", fontWeight: 700 }}>{total}건</span></div>
+          <div>평균 <span style={{ color: "#1A1917", fontWeight: 700 }}>{avg}건</span></div>
+          <div>담당자 <span style={{ color: "#1A1917", fontWeight: 700 }}>{sorted.length}명</span></div>
+        </div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {sorted.map(function(item, i) {
+          var pct = maxCount > 0 ? (item.count / maxCount * 100) : 0;
+          var avgRatio = avg > 0 ? (item.count / avg) : 0;
+          var color = getColor(i);
+          // 평균 대비 상태
+          var statusBadge = null;
+          if (avgRatio >= 1.5) statusBadge = { text: "🔥 과다", color: "#DC2626", bg: "#FEE2E2" };
+          else if (avgRatio <= 0.5) statusBadge = { text: "💤 여유", color: "#0369A1", bg: "#DBEAFE" };
+          return (
+            <div key={item.name}
+              onClick={function() {
+                if (setView && setDashboardFilter) {
+                  setDashboardFilter({ type: "assignee", value: item.name });
+                  setView("list");
+                }
+              }}
+              style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 4px", borderRadius: 6, cursor: setView ? "pointer" : "default" }}
+              onMouseEnter={function(e) { if (setView) e.currentTarget.style.background = "#F7F6F3"; }}
+              onMouseLeave={function(e) { e.currentTarget.style.background = "transparent"; }}>
+              {/* 이름 + 배지 */}
+              <div style={{ width: 100, display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#1A1917" }}>{item.name}</span>
+                {statusBadge && (
+                  <span style={{ fontSize: 9, padding: "2px 5px", borderRadius: 4, color: statusBadge.color, background: statusBadge.bg, fontWeight: 700, whiteSpace: "nowrap" }}>
+                    {statusBadge.text}
+                  </span>
+                )}
+              </div>
+              {/* 막대그래프 */}
+              <div style={{ flex: 1, position: "relative", height: 22, background: "#F7F6F3", borderRadius: 6, overflow: "hidden" }}>
+                <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: pct + "%", background: "linear-gradient(90deg, " + color + " 0%, " + color + "DD 100%)", borderRadius: 6, transition: "width 0.4s ease" }}></div>
+                <div style={{ position: "absolute", left: 10, top: 0, height: "100%", display: "flex", alignItems: "center", fontSize: 11, fontWeight: 700, color: "#fff", textShadow: "0 1px 2px rgba(0,0,0,0.2)" }}>
+                  {pct >= 15 ? item.count + "건" : ""}
+                </div>
+              </div>
+              {/* 우측 숫자 */}
+              <div style={{ width: 60, textAlign: "right", fontSize: 12, color: "#666", fontWeight: 600, flexShrink: 0 }}>
+                {pct < 15 ? <span style={{ color: "#1A1917", fontWeight: 700 }}>{item.count}건</span> : <span>{Math.round(item.count / total * 100)}%</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #F0EDE8", fontSize: 10, color: "#AAA" }}>
+        💡 <span style={{ color: "#DC2626" }}>🔥 과다</span> = 평균의 1.5배 이상 · <span style={{ color: "#0369A1" }}>💤 여유</span> = 평균의 절반 이하
+      </div>
     </div>
   );
 }
