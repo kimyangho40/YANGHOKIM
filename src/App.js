@@ -825,7 +825,6 @@ function CRMApp({ profile, session }) {
       industry: rest.industry || null,
       region: rest.region || null,
       contract_date: rest.contract_date || null,
-      kakao_link: rest.kakao_link || null,
     }).eq("id", rest.id);
     if (!error) {
       // 🆕 stage가 "부결/반려"로 새로 바뀌면 → 사례집 자동 초안 생성
@@ -2886,19 +2885,6 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   if (v !== null) setData(function(p) { return Object.assign({}, p, { phone: v }); });
                 }} style={{ cursor: "pointer", borderBottom: "1px dashed #CCC" }}
                   title="클릭하여 수정">{data.phone || "전화번호 입력"}</span>
-                {data.kakao_link ? (
-                  <a href={data.kakao_link} target="_blank" rel="noopener noreferrer"
-                    title="카톡방 열기"
-                    style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "3px 10px", background: "#FEE500", color: "#3C1E1E", borderRadius: 99, textDecoration: "none", fontSize: 11, fontWeight: 700, marginLeft: 4 }}>
-                    💬 카톡방
-                  </a>
-                ) : (
-                  <span onClick={function() {
-                    var v = prompt("카톡방 링크 입력:\n(open.kakao.com 또는 카카오톡 채팅방 공유 링크)", "");
-                    if (v !== null && v.trim()) setData(function(p) { return Object.assign({}, p, { kakao_link: v.trim() }); });
-                  }} style={{ cursor: "pointer", color: "#888", fontSize: 11, padding: "3px 10px", border: "1px dashed #DDD", borderRadius: 99, marginLeft: 4 }}
-                    title="카톡방 링크 등록">💬 카톡방 등록</span>
-                )}
               </div>
             </div>
             <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#888" }}><Icon name="x" size={20} color="#888" /></button>
@@ -2956,18 +2942,6 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>연락처</div>
                   <input type="text" value={data.phone || ""} placeholder="01012345678" onChange={function(e) { var v = formatPhone(e.target.value); setData(function(p) { return Object.assign({}, p, { phone: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
-                </div>
-                <div style={{ background: data.kakao_link ? "#FEF3C7" : "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
-                    <span style={{ fontSize: 11, color: data.kakao_link ? "#92400E" : "#888", fontWeight: data.kakao_link ? 700 : 400 }}>💬 카톡방 링크</span>
-                    {data.kakao_link && (
-                      <a href={data.kakao_link} target="_blank" rel="noopener noreferrer"
-                        style={{ fontSize: 10, padding: "2px 8px", background: "#FEE500", color: "#3C1E1E", borderRadius: 99, textDecoration: "none", fontWeight: 700 }}>열기 →</a>
-                    )}
-                  </div>
-                  <input type="text" value={data.kakao_link || ""} placeholder="https://open.kakao.com/..." 
-                    onChange={function(e) { var v = e.target.value.trim(); setData(function(p) { return Object.assign({}, p, { kakao_link: v }); }); }} 
-                    style={{ width: "100%", fontSize: 12, fontWeight: 500, background: "transparent", border: "none", outline: "none", color: data.kakao_link ? "#92400E" : "#1A1917" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>종업원 수</div>
@@ -3543,13 +3517,40 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
 
 // ── 신규 등록 모달 ─────────────────────────────────────────────────────────────
 function AddModal({ onClose, onAdd, assignees, companies }) {
-  // 빠른 등록 모달 - 필수 정보만 받고, 나머지는 상세 화면에서 입력
+  // 신규 등록 모달 - 한 화면에 모든 필드 + 기업현황표 자동 입력
   const [form, setForm] = useState({
+    // 기본 정보
     name: "", type: "법인", representative: "", phone: "",
     stage: "상담/진단완료", assignee: "", agency_list: [],
     business_type: "법인사업자", industry: "",
+    // 추가 정보
+    business_number: "",
+    employee_count: "",
+    credit_score_kcb: "",
+    credit_score_nice: "",
+    founded_year: "",
+    founded_month: "",
+    contract_date: "",
+    region: "",
+    revenue_2023: "",
+    revenue_2024: "",
+    revenue_2025: "",
+    issue: "",
+    next_action: "",
+    application_month: "",
   });
+  // 자동 입력된 필드 추적 (초록 표시용)
+  const [autoFilled, setAutoFilled] = useState({});
+  // 첨부 파일명 표시용
+  const [attachedFile, setAttachedFile] = useState(null);
+
   const set = function(k, v) { setForm(function(p) { return Object.assign({}, p, { [k]: v }); }); };
+  const setMulti = function(obj) { setForm(function(p) { return Object.assign({}, p, obj); }); };
+  // 사용자가 수정하면 자동입력 표시 해제
+  const setManual = function(k, v) {
+    setForm(function(p) { return Object.assign({}, p, { [k]: v }); });
+    if (autoFilled[k]) setAutoFilled(function(p) { var n = Object.assign({}, p); delete n[k]; return n; });
+  };
   const toggleAgency = function(a) {
     setForm(function(p) {
       var cur = p.agency_list || [];
@@ -3565,17 +3566,51 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
     });
   };
 
+  // 자동 입력된 필드 스타일
+  const autoStyle = function(k) {
+    if (autoFilled[k]) {
+      return { background: "#ECFDF5", borderColor: "#86EFAC", borderWidth: 1, borderStyle: "solid" };
+    }
+    return { background: "#F7F6F3" };
+  };
+
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
       onClick={function(e) { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background: "#fff", borderRadius: 14, width: 460, maxHeight: "92vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+      <div style={{ background: "#fff", borderRadius: 14, width: 480, maxHeight: "92vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ padding: "20px 24px 14px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
           <div>
-            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>빠른 신규 등록</h2>
-            <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>필수 정보만 입력하면 상세 화면이 열려요</div>
+            <div style={{ display: "inline-block", padding: "2px 8px", background: "#EEF2FF", color: "#4338CA", borderRadius: 4, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>신규 등록</div>
+            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>새 업체 추가</h2>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><Icon name="x" size={18} color="#888" /></button>
         </div>
+
+        {/* 📄 기업현황표 첨부 영역 */}
+        <div style={{ padding: "12px 24px", background: "#FFFBEB", borderBottom: "1px solid #E8E5E0" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <span style={{ fontSize: 14 }}>📄</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: "#92400E" }}>기업현황표 첨부 (자동 입력)</span>
+            {attachedFile && (
+              <span style={{ fontSize: 10, color: "#15803D", fontWeight: 700, marginLeft: "auto" }}>✓ {attachedFile}</span>
+            )}
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", background: "#fff", border: "1px dashed #FDE68A", borderRadius: 7, cursor: "pointer" }}>
+            <span style={{ fontSize: 14, color: "#B45309" }}>📎</span>
+            <span style={{ fontSize: 11, color: "#888", flex: 1 }}>{attachedFile || "기업현황표.xlsx 파일 선택"}</span>
+            <span style={{ fontSize: 10, padding: "3px 10px", background: "#B45309", color: "#fff", borderRadius: 4, fontWeight: 700 }}>파일 선택</span>
+            <input type="file" accept=".xlsx,.xls" style={{ display: "none" }}
+              onChange={function(e) {
+                var file = e.target.files && e.target.files[0];
+                if (!file) return;
+                setAttachedFile(file.name);
+                // 2단계에서 실제 파싱 로직 추가 예정
+                alert("📄 기업현황표 자동 입력 기능은 다음 업데이트에서 활성화됩니다.\n현재는 파일 첨부만 됩니다.\n수동 입력으로 진행해주세요.");
+              }} />
+          </label>
+          <div style={{ fontSize: 10, color: "#888", marginTop: 5, lineHeight: 1.5 }}>엑셀 첨부하면 회사명·대표자·매출·신용점수 등이 자동 채워집니다. 첨부 안 해도 직접 입력 가능.</div>
+        </div>
+
         <div style={{ padding: "18px 24px" }}>
           {/* 업체명 */}
           <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
@@ -3596,6 +3631,77 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
               <input value={form.phone} placeholder="01012345678" onChange={function(e) { set("phone", formatPhone(e.target.value)); }}
                 style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
             </div>
+          </div>
+
+          {/* 사업자등록번호 */}
+          <div style={Object.assign({ borderRadius: 8, padding: "10px 13px", marginBottom: 10 }, autoStyle("business_number"))}>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>사업자등록번호 {autoFilled.business_number && <span style={{ color: "#15803D", fontSize: 9, fontWeight: 700 }}>✓ 자동</span>}</div>
+            <input value={form.business_number} placeholder="1234567890" onChange={function(e) { setManual("business_number", formatBizNumber(e.target.value)); }}
+              style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+          </div>
+
+          {/* KCB/NICE + 종업원수 */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+            <div style={Object.assign({ borderRadius: 8, padding: "10px 13px" }, autoStyle("credit_score"))}>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>KCB / NICE {(autoFilled.credit_score_kcb || autoFilled.credit_score_nice) && <span style={{ color: "#15803D", fontSize: 9, fontWeight: 700 }}>✓ 자동</span>}</div>
+              <input type="text" inputMode="numeric" value={(form.credit_score_kcb || "") + (form.credit_score_nice ? " / " + form.credit_score_nice : "")}
+                placeholder="KCB / NICE"
+                onChange={function(e) { var raw = e.target.value.replace(/[^0-9]/g, ""); var kcb = raw.slice(0, 3); var nice = raw.slice(3, 6); setMulti({ credit_score_kcb: kcb, credit_score_nice: nice }); setAutoFilled(function(p) { var n = Object.assign({}, p); delete n.credit_score_kcb; delete n.credit_score_nice; return n; }); }}
+                style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+            </div>
+            <div style={Object.assign({ borderRadius: 8, padding: "10px 13px" }, autoStyle("employee_count"))}>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>종업원 수 {autoFilled.employee_count && <span style={{ color: "#15803D", fontSize: 9, fontWeight: 700 }}>✓ 자동</span>}</div>
+              <input type="number" value={form.employee_count} placeholder="명" onChange={function(e) { setManual("employee_count", e.target.value); }}
+                style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+            </div>
+          </div>
+
+          {/* 설립연월 + 계약일 */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+            <div style={Object.assign({ borderRadius: 8, padding: "10px 13px" }, autoStyle("founded_year"))}>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>설립연월 {autoFilled.founded_year && <span style={{ color: "#15803D", fontSize: 9, fontWeight: 700 }}>✓ 자동</span>}</div>
+              <input type="text" inputMode="numeric"
+                value={(function() { if (!form.founded_year && !form.founded_month) return ""; var y = form.founded_year || ""; var m = form.founded_month; if (!m && m !== 0) return y; return y + "-" + String(m); })()}
+                placeholder="YYYY-MM (예: 2018-08)"
+                onChange={function(e) { var raw = e.target.value.replace(/[^0-9]/g, ""); var year = raw.slice(0, 4); var monthRaw = raw.slice(4, 6); var monthNum; if (monthRaw.length === 0) { monthNum = ""; } else { monthNum = parseInt(monthRaw); if (monthNum > 12) monthNum = 12; } setMulti({ founded_year: year, founded_month: monthNum }); setAutoFilled(function(p) { var n = Object.assign({}, p); delete n.founded_year; delete n.founded_month; return n; }); }}
+                style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+            </div>
+            <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>계약일</div>
+              <input type="date" value={form.contract_date} onChange={function(e) { set("contract_date", e.target.value); }}
+                style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+            </div>
+          </div>
+
+          {/* 지역 */}
+          <div style={Object.assign({ borderRadius: 8, padding: "10px 13px", marginBottom: 10 }, autoStyle("region"))}>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>지역 {autoFilled.region && <span style={{ color: "#15803D", fontSize: 9, fontWeight: 700 }}>✓ 자동</span>}</div>
+            <input value={form.region} placeholder="예: 서울_강남, 경기_안산" onChange={function(e) { setManual("region", e.target.value); }}
+              style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+          </div>
+
+          {/* 최근 3개년 매출액 */}
+          <div style={Object.assign({ borderRadius: 8, padding: "10px 13px", marginBottom: 10 }, (autoFilled.revenue_2023 || autoFilled.revenue_2024 || autoFilled.revenue_2025) ? { background: "#ECFDF5", borderColor: "#86EFAC", borderWidth: 1, borderStyle: "solid" } : { background: "#F7F6F3" })}>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 8, display: "flex", justifyContent: "space-between" }}>
+              <span>최근 3개년 매출액 (원)</span>
+              {(autoFilled.revenue_2023 || autoFilled.revenue_2024 || autoFilled.revenue_2025) && <span style={{ color: "#15803D", fontSize: 10, fontWeight: 700 }}>✓ 자동</span>}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+              {[2023, 2024, 2025].map(function(yr) {
+                var k = "revenue_" + yr;
+                return (
+                  <div key={yr} style={{ background: "#fff", borderRadius: 5, padding: "6px 8px" }}>
+                    <div style={{ fontSize: 10, color: "#AAA", marginBottom: 2 }}>{yr}년</div>
+                    <input type="text" value={form[k]} placeholder="0" onChange={function(e) {
+                      var v = e.target.value.replace(/[^0-9]/g, "");
+                      setManual(k, v);
+                    }}
+                      style={{ width: "100%", fontSize: 12, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: 9, color: "#888", marginTop: 5 }}>💡 백만원 단위 표시 가능 (예: 55백만 → 55000000)</div>
           </div>
 
           {/* 사업자 유형 */}
@@ -3715,8 +3821,8 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
             </div>
           </div>
 
-          <div style={{ background: "#FEF3C7", borderRadius: 8, padding: "10px 13px", marginBottom: 12, fontSize: 11, color: "#B45309", lineHeight: 1.5 }}>
-            💡 등록 후 곧바로 상세 화면이 열려요.<br />매출, 신용점수, 지역 등 나머지 정보는 거기서 입력하세요.
+          <div style={{ background: "#DBEAFE", borderRadius: 8, padding: "10px 13px", marginBottom: 12, fontSize: 11, color: "#1E40AF", lineHeight: 1.5 }}>
+            💡 등록 후 사이드패널이 열려서 추가 정보(이슈·다음액션 등) 입력 가능해요.
           </div>
 
           <button onClick={function() {
@@ -3728,7 +3834,7 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
             });
             onAdd(formToSend);
           }} style={{ width: "100%", padding: "13px", background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
-            등록하고 상세 정보 입력하기 →
+            ✓ 등록 완료
           </button>
         </div>
       </div>
