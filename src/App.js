@@ -1367,7 +1367,7 @@ function CRMApp({ profile, session }) {
           </div>
         ) : (
           <>
-            {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} />}
+            {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setFilterAssignee={setFilterAssignee} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} />}
             {view === "agency" && <AgencyView jumpToMonth={agencyJumpMonth} jumpToGroup={agencyJumpGroup} />}
             {view === "dbleads" && <DBLeadsView />}
             {view === "settlement" && <SettlementView />}
@@ -1431,7 +1431,7 @@ function CRMApp({ profile, session }) {
 }
 
 // ── 대시보드 ──────────────────────────────────────────────────────────────────
-function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, setDashboardFilter, onAdd }) {
+function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, setFilterAssignee, setDashboardFilter, onAdd }) {
   const contractDone = companies.filter(c => c.fee_status === "수수료수령완료").length;
   const contracted = companies.filter(c => c.fee_status !== "미수령").length;
   // const thisWeek = companies.filter(c => c.next_contact && c.next_contact <= "2026-05-15").length;
@@ -1528,7 +1528,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
       <TeamActivityWidget profiles={profiles} />
 
       {/* 📊 담당자별 업체 수 막대그래프 */}
-      <AssigneeWorkloadChart companies={companies} setView={setView} setDashboardFilter={setDashboardFilter} />
+      <AssigneeWorkloadChart companies={companies} setView={setView} setFilterAssignee={setFilterAssignee} />
 
       <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
         <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>파이프라인 단계별 현황</div>
@@ -3681,27 +3681,32 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
           </div>
 
           {/* 최근 3개년 매출액 */}
-          <div style={Object.assign({ borderRadius: 8, padding: "10px 13px", marginBottom: 10 }, (autoFilled.revenue_2023 || autoFilled.revenue_2024 || autoFilled.revenue_2025) ? { background: "#ECFDF5", borderColor: "#86EFAC", borderWidth: 1, borderStyle: "solid" } : { background: "#F7F6F3" })}>
-            <div style={{ fontSize: 11, color: "#888", marginBottom: 8, display: "flex", justifyContent: "space-between" }}>
-              <span>최근 3개년 매출액 (원)</span>
+          <div style={Object.assign({ borderRadius: 8, padding: "13px 15px", marginBottom: 10 }, (autoFilled.revenue_2023 || autoFilled.revenue_2024 || autoFilled.revenue_2025) ? { background: "#ECFDF5", borderColor: "#86EFAC", borderWidth: 1, borderStyle: "solid" } : { background: "#F7F6F3" })}>
+            <div style={{ fontSize: 12, color: "#888", marginBottom: 4, fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>최근 3개년 매출액</span>
               {(autoFilled.revenue_2023 || autoFilled.revenue_2024 || autoFilled.revenue_2025) && <span style={{ color: "#15803D", fontSize: 10, fontWeight: 700 }}>✓ 자동</span>}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
-              {[2023, 2024, 2025].map(function(yr) {
-                var k = "revenue_" + yr;
+            <div style={{ fontSize: 10, color: "#AAA", marginBottom: 10 }}>원 단위로 입력 (예: 790000000 → 7.9억 자동 표시)</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              {[["2023년", "revenue_2023"], ["2024년", "revenue_2024"], ["2025년", "revenue_2025"]].map(function(pair) {
+                var label = pair[0]; var key = pair[1];
                 return (
-                  <div key={yr} style={{ background: "#fff", borderRadius: 5, padding: "6px 8px" }}>
-                    <div style={{ fontSize: 10, color: "#AAA", marginBottom: 2 }}>{yr}년</div>
-                    <input type="text" value={form[k]} placeholder="0" onChange={function(e) {
-                      var v = e.target.value.replace(/[^0-9]/g, "");
-                      setManual(k, v);
-                    }}
-                      style={{ width: "100%", fontSize: 12, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+                  <div key={key} style={{ flex: 1, textAlign: "center", background: "#fff", borderRadius: 7, padding: "10px 8px" }}>
+                    <div style={{ fontSize: 11, color: "#AAA", marginBottom: 4 }}>{label}</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#4338CA", marginBottom: 4 }}>{formatRevenue(form[key])}</div>
+                    <input
+                      type="number"
+                      placeholder="원 단위 입력"
+                      value={form[key] || ""}
+                      onChange={function(e) {
+                        var v = e.target.value;
+                        setManual(key, v ? parseInt(v) || "" : "");
+                      }}
+                      style={{ width: "100%", fontSize: 11, textAlign: "center", border: "1px solid #E8E5E0", borderRadius: 5, padding: "4px", outline: "none", boxSizing: "border-box" }} />
                   </div>
                 );
               })}
             </div>
-            <div style={{ fontSize: 9, color: "#888", marginTop: 5 }}>💡 백만원 단위 표시 가능 (예: 55백만 → 55000000)</div>
           </div>
 
           {/* 사업자 유형 */}
@@ -9472,7 +9477,7 @@ function TeamActivityWidget({ profiles }) {
 }
 
 // ========== 📊 담당자별 업체 수 막대그래프 (대시보드) ==========
-function AssigneeWorkloadChart({ companies, setView, setDashboardFilter }) {
+function AssigneeWorkloadChart({ companies, setView, setFilterAssignee }) {
   // 담당자별 업체 수 집계 (별칭 정규화)
   var normalizeName = function(name) {
     if (!name) return "";
@@ -9536,8 +9541,8 @@ function AssigneeWorkloadChart({ companies, setView, setDashboardFilter }) {
           return (
             <div key={item.name}
               onClick={function() {
-                if (setView && setDashboardFilter) {
-                  setDashboardFilter({ type: "assignee", value: item.name });
+                if (setView && setFilterAssignee) {
+                  setFilterAssignee(item.name);
                   setView("list");
                 }
               }}
