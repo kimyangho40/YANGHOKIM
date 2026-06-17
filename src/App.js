@@ -86,7 +86,7 @@ const AGENCY_GROUPS = [
   { id: "경정청구", label: "경정청구", color: "#0369A1" },
   { id: "기타", label: "기타", color: "#555" },
 ];
-const DOC_LIST = ["사업자등록증","최근 3년치 재무제표 (23년~25년)","최근 3년치 부가세 증명원 (23년~25년)","법인 기업 금융거래 확인서","대표자 신용점수","4대보험 명부","월별 고용보험 가입자 명부","그 외 사업전환 필수 서류","최근 1년 수출실적 증명서","사업자 대출 금융거래 확인서","대표자 신분증","임대차 계약서","회사 소개서 또는 사업계획서"];
+const DOC_LIST = ["사업자등록증","최근 3년치 재무제표 (23년~25년)","최근 3년치 부가세 증명원 (23년~25년)","법인 기업 금융거래 확인서","대표자 신용점수","4대보험 명부","월별 고용보험 가입자 명부","그 외 사업전환 필수 서류","최근 1년 수출실적 증명서","사업자 대출 금융거래 확인서","대표자 신분증","임대차 계약서","회사 소개서 또는 사업계획서","2026년 상반기 부가세 증명원","대표자 개인 대출 금융거래 확인서","직전연도 상시근로자 수 파악","기업 인증 자료 (벤처, 이노비즈, 연구전담 부서 등)","특허 및 상표권 관련 자료"];
 const TEAMS = ["법인전담","개인전담","관리자"];
 const ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일","양호"];
 const INDUSTRY_OPTIONS = ["제조업","농업·어업","숙박업","음식점업","전자상거래업","정보통신업","도소매업","서비스업","창고업","자동차임대업"];
@@ -860,7 +860,7 @@ function CRMApp({ profile, session }) {
               representative: rest.representative || null,
               business_number: rest.business_number || null,
               region: rest.region || null,
-              notes: rest.issue || null,
+              notes: null,
               contract_date: rest.contract_date || null,
               status: "시작 전",
             });
@@ -2833,10 +2833,9 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           {[
             { id: "info", label: "기본정보" },
             { id: "docs", label: "서류현황" },
-            { id: "history", label: "이슈·액션" },
+            { id: "history", label: "이슈·액션", badge: commLogs.length },
             { id: "agency", label: "기관진행", badge: agencyCases.length },
             { id: "settlement", label: "정산현황", badge: settlements.length },
-            { id: "comm", label: "소통내역", badge: commLogs.length },
           ].map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
               style={{ flex: "0 0 auto", padding: "11px 14px", fontSize: 12, fontWeight: tab === t.id ? 700 : 400, color: tab === t.id ? "#1A1917" : "#888", background: "none", border: "none", borderBottom: `2px solid ${tab === t.id ? "#1A1917" : "transparent"}`, cursor: "pointer", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 4 }}>
@@ -3030,18 +3029,46 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
 
           {tab === "docs" && (
             <div>
-              <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "12px 14px", marginBottom: 10 }}>
-                <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>수령 완료 서류 (복수 선택 가능)</div>
+              {/* 위쪽: 요청해야 하는 서류 (아직 수령 안 된 것들 - 클릭하면 수령으로 표시) */}
+              <div style={{ background: "#FFF7ED", borderRadius: 8, padding: "12px 14px", marginBottom: 10, border: "1px solid #FED7AA" }}>
+                <div style={{ fontSize: 11, color: "#9A3412", marginBottom: 8, fontWeight: 700 }}>📋 요청해야 하는 서류 (클릭하면 수령 완료로 이동)</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  {DOC_LIST.map(function(doc) {
-                    const selected = (data.received_docs || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean).includes(doc);
+                  {DOC_LIST.filter(function(doc) {
+                    return !(data.received_docs || "").split(",").map(function(s) { return s.trim(); }).includes(doc);
+                  }).map(function(doc) {
                     return (
                       <button key={doc} onClick={function() {
                         const current = (data.received_docs || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
-                        const next = selected ? current.filter(function(a) { return a !== doc; }) : [...current, doc];
+                        const next = [...current, doc];
                         setData(function(p) { return { ...p, received_docs: next.join(", ") }; });
-                      }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: selected ? "1px solid #15803D" : "1px solid #E8E5E0", background: selected ? "#15803D" : "#fff", color: selected ? "#fff" : "#555", cursor: "pointer", fontWeight: selected ? 700 : 400 }}>
+                      }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: "1px solid #FECACA", background: "#FEF2F2", color: "#DC2626", cursor: "pointer", fontWeight: 400 }}>
                         {doc}
+                      </button>
+                    );
+                  })}
+                </div>
+                {(function() {
+                  var remaining = DOC_LIST.filter(function(doc) { return !(data.received_docs || "").split(",").map(function(s) { return s.trim(); }).includes(doc); });
+                  if (remaining.length === 0) {
+                    return <div style={{ fontSize: 11, color: "#15803D", marginTop: 10, fontWeight: 600 }}>✅ 요청할 서류 없음 (모두 수령완료)</div>;
+                  }
+                  return <div style={{ fontSize: 11, color: "#9A3412", marginTop: 10, fontWeight: 600 }}>요청 대기: {remaining.length}개</div>;
+                })()}
+              </div>
+              {/* 아래쪽: 수령 완료 서류 (이미 수령한 것들 - 클릭하면 요청 대기로 되돌림) */}
+              <div style={{ background: "#F0FDF4", borderRadius: 8, padding: "12px 14px", border: "1px solid #BBF7D0" }}>
+                <div style={{ fontSize: 11, color: "#15803D", marginBottom: 8, fontWeight: 700 }}>✅ 수령 완료 서류 (클릭하면 요청 대기로 되돌림)</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {DOC_LIST.filter(function(doc) {
+                    return (data.received_docs || "").split(",").map(function(s) { return s.trim(); }).includes(doc);
+                  }).map(function(doc) {
+                    return (
+                      <button key={doc} onClick={function() {
+                        const current = (data.received_docs || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+                        const next = current.filter(function(a) { return a !== doc; });
+                        setData(function(p) { return { ...p, received_docs: next.join(", ") }; });
+                      }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: "1px solid #15803D", background: "#15803D", color: "#fff", cursor: "pointer", fontWeight: 700 }}>
+                        ✓ {doc}
                       </button>
                     );
                   })}
@@ -3050,17 +3077,9 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   <div style={{ fontSize: 11, color: "#15803D", marginTop: 10, fontWeight: 600 }}>
                     수령완료: {data.received_docs.split(",").filter(Boolean).length}개
                   </div>
-                ) : null}
-              </div>
-              <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "12px 14px" }}>
-                <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>미수령 서류</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  {DOC_LIST.filter(function(doc) {
-                    return !(data.received_docs || "").split(",").map(function(s) { return s.trim(); }).includes(doc);
-                  }).map(function(doc) {
-                    return <span key={doc} style={{ fontSize: 11, padding: "5px 10px", borderRadius: 99, background: "#FEF2F2", color: "#DC2626", border: "1px solid #FECACA" }}>{doc}</span>;
-                  })}
-                </div>
+                ) : (
+                  <div style={{ fontSize: 11, color: "#888", marginTop: 10 }}>아직 수령된 서류가 없어요</div>
+                )}
               </div>
             </div>
           )}
@@ -3074,7 +3093,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 </div>
                 <textarea value={data.issue || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return { ...p, issue: v }; }); }}
                   placeholder={"예시:\n- 신용점수 부족 (685점)\n- 매출 감소 추세\n- 5/30까지 보완서류 제출 필요"}
-                  style={{ width: "100%", padding: "13px 15px", border: "1px solid #FED7AA", borderRadius: 8, fontSize: 13, lineHeight: 1.8, resize: "vertical", minHeight: 320, background: "#FFF7ED", color: "#92400E", boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+                  style={{ width: "100%", padding: "13px 15px", border: "1px solid #FED7AA", borderRadius: 8, fontSize: 13, lineHeight: 1.8, resize: "vertical", minHeight: 220, background: "#FFF7ED", color: "#92400E", boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
               </div>
               <div style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
@@ -3083,7 +3102,39 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 </div>
                 <textarea value={data.next_action || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return { ...p, next_action: v }; }); }}
                   placeholder={"예시:\n1. 5/28 화요일 14시 - 추가서류 안내\n2. 5/30 금요일 - 기관 방문 동행\n3. 6/3 - 결과 확인 및 다음 단계 안내"}
-                  style={{ width: "100%", padding: "13px 15px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.8, resize: "vertical", minHeight: 320, boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+                  style={{ width: "100%", padding: "13px 15px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.8, resize: "vertical", minHeight: 220, boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+              </div>
+              {/* 소통내역 박스 (이슈·액션 안에 통합) */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <div style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>💬 소통 내역</div>
+                  <div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 여러 줄 OK</div>
+                </div>
+                <textarea value={commInput} onChange={function(e) { var v = e.target.value; setCommInput(v); }}
+                  placeholder={"예시:\n- 10:30 통화 - 대표 부재중\n- 11:15 다시 통화\n- 다음 주 월요일 방문 예약"}
+                  style={{ width: "100%", padding: "13px 15px", border: "1px solid #BAE6FD", borderRadius: 8, fontSize: 13, lineHeight: 1.8, resize: "vertical", minHeight: 220, background: "#F0F9FF", color: "#075985", boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+                <button onClick={saveCommLog} disabled={!commInput.trim()}
+                  style={{ width: "100%", marginTop: 6, padding: "8px", background: commInput.trim() ? "#075985" : "#E8E5E0", color: commInput.trim() ? "#F0F9FF" : "#AAA", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: commInput.trim() ? "pointer" : "not-allowed" }}>
+                  💬 소통 내역 저장
+                </button>
+                {/* 누적 소통 내역 표시 */}
+                {commLogs.length > 0 && (
+                  <div style={{ marginTop: 10, padding: "10px 12px", background: "#FAFAF8", borderRadius: 8, border: "1px solid #E8E5E0", maxHeight: 280, overflowY: "auto" }}>
+                    <div style={{ fontSize: 11, color: "#888", fontWeight: 600, marginBottom: 8 }}>📋 누적 내역 ({commLogs.length}건)</div>
+                    {commLogs.map(function(log, i) {
+                      return (
+                        <div key={log.id || i} style={{ paddingBottom: 8, marginBottom: 8, borderBottom: i < commLogs.length - 1 ? "1px solid #F0EDE8" : "none" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                            <span style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>{log.logged_by || "-"} · {log.created_at ? new Date(log.created_at).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "numeric", minute: "numeric" }) : "-"}</span>
+                            <button onClick={function() { if (confirm("이 소통 내역을 삭제할까요?")) deleteCommLog(log.id); }}
+                              style={{ background: "none", border: "none", cursor: "pointer", color: "#CCC", fontSize: 11, padding: "0 4px" }} title="삭제">🗑</button>
+                          </div>
+                          <div style={{ fontSize: 12, color: "#444", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{log.memo}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </>
           )}
@@ -3347,7 +3398,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 representative: data.representative || null,
                 business_number: data.business_number || null,
                 region: data.region || null,
-                notes: data.issue || null,
+                notes: null,
                 contract_date: data.contract_date || null,
                 status: "시작 전",
               };
@@ -6821,7 +6872,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         business_number: co.business_number || "",
         region: co.region || "",
         assignee: co.assignee || "",
-        notes: co.issue || "",
+        notes: "",
       });
     });
     setCompanySuggestions([]);
