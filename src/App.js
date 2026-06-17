@@ -16,7 +16,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 });
 
 // ── 상수 ─────────────────────────────────────────────────────────────────────
-const STAGES = ["상담/진단완료", "필수서류 및 인증서요청", "기관신청대기/방문예정", "스크립트 전달 완료", "기관신청완료/방문완료", "심사중/실태조사대기", "실태조사완료/약정완료", "자금집행완료", "수수료대기 및 입금요청", "입금완료/사후관리", "추가 진행 예정", "추가 진행 중", "기타"];
+const STAGES = ["상담/진단완료", "필수서류 및 인증서요청", "기관신청대기/방문예정", "스크립트 전달 완료", "기관신청완료/방문완료", "심사중/실태조사대기", "실태조사완료/약정완료", "자금집행완료", "수수료대기 및 입금요청", "입금완료/사후관리", "추가 진행 예정", "추가 진행 중", "부결/반려", "기타"];
 const STAGE_COLORS = {
   "상담/진단완료":           { bg: "#EEF2FF", text: "#4338CA", border: "#C7D2FE" },
   "필수서류 및 인증서요청":  { bg: "#FFF7ED", text: "#C2410C", border: "#FED7AA" },
@@ -30,6 +30,7 @@ const STAGE_COLORS = {
   "입금완료/사후관리":       { bg: "#F0FDF4", text: "#166534", border: "#86EFAC" },
   "추가 진행 예정":          { bg: "#F5F3FF", text: "#6D28D9", border: "#C4B5FD" },
   "추가 진행 중":            { bg: "#EFF6FF", text: "#1D4ED8", border: "#93C5FD" },
+  "부결/반려":              { bg: "#FEE2E2", text: "#DC2626", border: "#FCA5A5" },
   "기타":                    { bg: "#F7F6F3", text: "#666",    border: "#D1D5DB" },
 };
 const AGENCIES = ["소상공인시장진흥공단","중소벤처기업진흥공단","신용보증기금","신용보증재단","기술보증기금","서민금융진흥원","구조혁신&사업전환","기타"];
@@ -826,6 +827,44 @@ function CRMApp({ profile, session }) {
       contract_date: rest.contract_date || null,
     }).eq("id", rest.id);
     if (!error) {
+      // 🆕 stage가 "부결/반려"로 새로 바뀌면 → 사례집 자동 초안 생성
+      if (rest.stage === "부결/반려" && prevData && prevData.stage !== "부결/반려") {
+        try {
+          // 중복 방지: 같은 회사명 + 부결 결과 사례가 24시간 안에 있으면 스킵
+          var dupCheck = await supabase.from("approval_cases")
+            .select("id")
+            .eq("business_name", rest.name || "")
+            .eq("result", "부결")
+            .is("deleted_at", null)
+            .gte("created_at", new Date(Date.now() - 24*60*60*1000).toISOString())
+            .limit(1);
+          if (!dupCheck.data || dupCheck.data.length === 0) {
+            // 회사 정보만 자동 채움. 노하우 항목(initial_issue, resolution, key_point, result_reason, blog_memo, tags)은 비워둠
+            var draftPayload = {
+              business_name: rest.name || "",
+              agency_group: rest.agency || null,
+              result: "부결",
+              industry: rest.industry || null,
+              region: rest.region || null,
+              business_type: rest.type || "법인",
+              result_at: new Date().toISOString().slice(0, 10),
+              tags: [],
+              created_by: rest.assignee || (typeof profile !== "undefined" && profile?.name) || "시스템",
+            };
+            var caseIns = await supabase.from("approval_cases").insert(draftPayload);
+            if (!caseIns.error) {
+              if (typeof showToast === "function") {
+                showToast("📚 사례집에 '" + (rest.name || "업체") + "' 부결 카드가 자동 생성됐어요. 사례집 메뉴에서 거절 사유·노하우를 채워주세요.", "success");
+              }
+            } else {
+              console.warn("사례집 자동 생성 실패:", caseIns.error.message);
+            }
+          }
+        } catch (autoErr) {
+          console.warn("사례집 자동 생성 중 오류:", autoErr);
+        }
+      }
+
       // 신청예정월 + 담당기관이 있으면 기관별 현황에 자동 반영
       if (rest.application_month && rest.agency) {
         var monthNum = parseInt(rest.application_month.split("-")[1], 10);
@@ -917,6 +956,36 @@ function CRMApp({ profile, session }) {
   const addCompany = async (form) => {
     if (!form.name || !form.name.trim()) { showToast("업체명을 입력해주세요.", "error"); return; }
     if (!form.representative || !form.representative.trim()) { showToast("대표자명을 입력해주세요.", "error"); return; }
+
+    // 🆕 사업자등록번호 중복 체크 (사업자번호가 있는 경우만)
+    if (form.business_number && form.business_number.trim()) {
+      // 사업자번호 정규화: 숫자만 추출
+      var normalizedBN = form.business_number.replace(/[^0-9]/g, "");
+      if (normalizedBN.length >= 10) {
+        var dupRes = await supabase.from("companies")
+          .select("id, name, representative, assignee, stage, business_number")
+          .is("deleted_at", null);
+        if (!dupRes.error && dupRes.data) {
+          var duplicate = dupRes.data.find(function(c) {
+            if (!c.business_number) return false;
+            return c.business_number.replace(/[^0-9]/g, "") === normalizedBN;
+          });
+          if (duplicate) {
+            var msg = "⚠️ 같은 사업자등록번호의 업체가 이미 있어요.\n\n"
+              + "기존 업체: " + duplicate.name + "\n"
+              + "대표자: " + (duplicate.representative || "-") + "\n"
+              + "담당: " + (duplicate.assignee || "-") + "\n"
+              + "진행단계: " + (duplicate.stage || "-") + "\n\n"
+              + "그래도 등록할까요?";
+            if (!confirm(msg)) {
+              showToast("등록이 취소됐어요. 기존 업체를 확인해주세요.", "info");
+              return;
+            }
+          }
+        }
+      }
+    }
+
     var insertData = {
       name: form.name.trim(),
       type: form.type || "법인",
