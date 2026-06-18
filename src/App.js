@@ -2401,7 +2401,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
 
   // 컬럼 너비 수동 조절 (헤더 경계 드래그) - 브라우저(localStorage)에 자동 저장
   const DEFAULT_LIST_COL_WIDTHS = {
-    "업체명": 180, "유형": 80, "지역": 90, "업종": 120, "대표자": 80, "담당": 60,
+    "업체명": 130, "유형": 80, "지역": 90, "업종": 120, "대표자": 80, "담당": 60,
     "진행단계": 130, "정체일수": 70, "신청예정/자금": 130, "계약일": 90, "진행기관": 140,
     "23년~25년 매출": 160, "신용점수": 90, "기타": 140, "작업": 110
   };
@@ -2531,7 +2531,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
           <thead>
             <tr style={{ background: "#F7F6F3", borderBottom: "1px solid #E8E5E0", position: "sticky", top: 0, zIndex: 2 }}>
               {["업체명","유형","지역","업종","대표자","담당","진행단계","정체일수","신청예정/자금","계약일","진행기관","23년~25년 매출","신용점수","기타","작업"].map(h => (
-                <th key={h} style={Object.assign({ padding: "10px 8px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left", letterSpacing: "0.03em", whiteSpace: "nowrap", background: "#F7F6F3", position: "relative", boxSizing: "border-box", overflow: "hidden", textOverflow: "ellipsis", width: listColWidths[h], minWidth: listColWidths[h], maxWidth: listColWidths[h] },
+                <th key={h} style={Object.assign({ padding: "10px 8px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left", letterSpacing: "0.03em", whiteSpace: "nowrap", background: "#F7F6F3", position: "relative", boxSizing: "border-box", width: listColWidths[h], minWidth: listColWidths[h], maxWidth: listColWidths[h] },
                   h === "업체명" ? { position: "sticky", left: 0, zIndex: 3, boxShadow: "2px 0 4px -2px rgba(0,0,0,0.08)" } : {}
                 )}>{h}
                   <span onMouseDown={function(e) { startListColResize(h, e); }} onClick={function(e) { e.stopPropagation(); }}
