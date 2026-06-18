@@ -2342,7 +2342,7 @@ function IndustryCell({ co, setCompanies, companies }) {
   if (!editing) return (
     <span onClick={function() { setEditing(true); }}
       style={{ cursor: "pointer", padding: "2px 6px", borderRadius: 4, fontSize: 11, display: "inline-flex", alignItems: "center", gap: 3, color: selectedList.length > 0 ? "#4338CA" : "#CCC",
-        background: selectedList.length > 0 ? "#EEF2FF" : "transparent", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+        background: selectedList.length > 0 ? "#EEF2FF" : "transparent", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
       onMouseEnter={function(e) { e.currentTarget.style.background = "#EEF2FF"; }}
       onMouseLeave={function(e) { e.currentTarget.style.background = selectedList.length > 0 ? "#EEF2FF" : "transparent"; }}
       title={selectedList.join(", ")}>
@@ -2398,6 +2398,36 @@ function IndustryCell({ co, setCompanies, companies }) {
 function ListView({ filtered, companies, search, setSearch, filterStage, setFilterStage, filterAssignee, setFilterAssignee, filterType, setFilterType, assignees, onSelect, onAdd, setCompanies, showToast, dashboardFilter, setDashboardFilter }) {
   const [showCompanyTrash, setShowCompanyTrash] = useState(false);
   const [trashedCompanies, setTrashedCompanies] = useState([]);
+
+  // 컬럼 너비 수동 조절 (헤더 경계 드래그) - 브라우저(localStorage)에 자동 저장
+  const DEFAULT_LIST_COL_WIDTHS = {
+    "업체명": 180, "유형": 80, "지역": 90, "업종": 120, "대표자": 80, "담당": 60,
+    "진행단계": 130, "정체일수": 70, "신청예정/자금": 130, "계약일": 90, "진행기관": 140,
+    "23년~25년 매출": 160, "신용점수": 90, "기타": 140, "작업": 110
+  };
+  const [listColWidths, setListColWidths] = useState(function() {
+    try {
+      var saved = localStorage.getItem("listColWidths");
+      return saved ? Object.assign({}, DEFAULT_LIST_COL_WIDTHS, JSON.parse(saved)) : DEFAULT_LIST_COL_WIDTHS;
+    } catch (e) { return DEFAULT_LIST_COL_WIDTHS; }
+  });
+  var startListColResize = function(colKey, e) {
+    e.stopPropagation();
+    e.preventDefault();
+    var startX = e.clientX;
+    var startW = listColWidths[colKey] || 100;
+    var onMove = function(ev) {
+      var newW = Math.max(40, startW + (ev.clientX - startX));
+      setListColWidths(function(prev) { var next = Object.assign({}, prev); next[colKey] = newW; return next; });
+    };
+    var onUp = function() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      setListColWidths(function(prev) { try { localStorage.setItem("listColWidths", JSON.stringify(prev)); } catch (e) {} return prev; });
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
 
   var fetchTrashedCompanies = async function() {
     var r = await supabase.from("companies").select("*").not("deleted_at", "is", null).order("deleted_at", { ascending: false });
@@ -2497,13 +2527,17 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
       </div>
       <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
         <div style={{ overflowX: "auto", maxHeight: "calc(100vh - 220px)", overflowY: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1200 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1200, tableLayout: "fixed" }}>
           <thead>
             <tr style={{ background: "#F7F6F3", borderBottom: "1px solid #E8E5E0", position: "sticky", top: 0, zIndex: 2 }}>
               {["업체명","유형","지역","업종","대표자","담당","진행단계","정체일수","신청예정/자금","계약일","진행기관","23년~25년 매출","신용점수","기타","작업"].map(h => (
-                <th key={h} style={Object.assign({ padding: "10px 8px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left", letterSpacing: "0.03em", whiteSpace: "nowrap", background: "#F7F6F3", maxWidth: h === "지역" ? 90 : h === "대표자" ? 70 : undefined },
+                <th key={h} style={Object.assign({ padding: "10px 8px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left", letterSpacing: "0.03em", whiteSpace: "nowrap", background: "#F7F6F3", position: "relative", boxSizing: "border-box", overflow: "hidden", textOverflow: "ellipsis", width: listColWidths[h], minWidth: listColWidths[h], maxWidth: listColWidths[h] },
                   h === "업체명" ? { position: "sticky", left: 0, zIndex: 3, boxShadow: "2px 0 4px -2px rgba(0,0,0,0.08)" } : {}
-                )}>{h}</th>
+                )}>{h}
+                  <span onMouseDown={function(e) { startListColResize(h, e); }} onClick={function(e) { e.stopPropagation(); }}
+                    title="드래그해서 열 너비 조절"
+                    style={{ position: "absolute", right: 0, top: 0, height: "100%", width: 6, cursor: "col-resize", userSelect: "none", zIndex: 5 }} />
+                </th>
               ))}
             </tr>
           </thead>
@@ -2515,7 +2549,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                   style={{ borderBottom: "1px solid #F0EDE8", cursor: editNameId === co.id ? "default" : "pointer", background: i % 2 === 0 ? "#fff" : "#FAFAF8" }}
                   onMouseOver={e => { if (editNameId !== co.id) e.currentTarget.style.background = "#F0F0EC"; }}
                   onMouseOut={e => e.currentTarget.style.background = i % 2 === 0 ? "#fff" : "#FAFAF8"}>
-                  <td style={{ padding: "11px 13px", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", position: "sticky", left: 0, background: i % 2 === 0 ? "#fff" : "#FAFAF8", zIndex: 1, boxShadow: "2px 0 4px -2px rgba(0,0,0,0.08)" }} onClick={e => e.stopPropagation()}>
+                  <td style={{ padding: "11px 8px", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", boxSizing: "border-box", position: "sticky", left: 0, background: i % 2 === 0 ? "#fff" : "#FAFAF8", zIndex: 1, boxShadow: "2px 0 4px -2px rgba(0,0,0,0.08)" }} onClick={e => e.stopPropagation()}>
                     {editNameId === co.id ? (
                       <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
                         <input value={editNameVal} onChange={function(e) { var v = e.target.value; setEditNameVal(v); }} autoFocus
@@ -2537,7 +2571,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                       </div>
                     )}
                   </td>
-                  <td style={{ padding: "11px 13px", whiteSpace: "nowrap" }}><span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 99, background: co.type === "법인" ? "#EEF2FF" : "#F0FDF4", color: co.type === "법인" ? "#4338CA" : "#15803D", fontWeight: 600 }}>{co.type === "법인" ? "법인사업자" : "개인사업자"}</span></td>
+                  <td style={{ padding: "11px 8px", whiteSpace: "nowrap" }}><span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 99, background: co.type === "법인" ? "#EEF2FF" : "#F0FDF4", color: co.type === "법인" ? "#4338CA" : "#15803D", fontWeight: 600 }}>{co.type === "법인" ? "법인사업자" : "개인사업자"}</span></td>
                   <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 90, overflow: "hidden", textOverflow: "ellipsis" }} onClick={e => e.stopPropagation()}>
                     {editRegionId === co.id ? (
                       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
@@ -2561,7 +2595,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                       </span>
                     )}
                   </td>
-                  <td style={{ padding: "6px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 80 }} onClick={function(e) { e.stopPropagation(); }}>
+                  <td style={{ padding: "6px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 120 }} onClick={function(e) { e.stopPropagation(); }}>
                     <IndustryCell co={co} setCompanies={setCompanies} companies={companies} />
                   </td>
                   <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis" }}>{co.representative || "-"}</td>
@@ -2571,7 +2605,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.fund_plan || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 12, color: "#555", whiteSpace: "nowrap" }}>{co.contract_date || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.agency || "-"}</td>
-                  <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap" }}>{[formatRevenue(co.revenue_2023), formatRevenue(co.revenue_2024), formatRevenue(co.revenue_2025)].filter(r=>r&&r!=="-").join(" / ") || "-"}</td>
+                  <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", boxSizing: "border-box" }}>{[formatRevenue(co.revenue_2023), formatRevenue(co.revenue_2024), formatRevenue(co.revenue_2025)].filter(r=>r&&r!=="-").join(" / ") || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap" }}>{(co.credit_score_kcb || co.credit_score_nice) ? ((co.credit_score_kcb || "-") + " / " + (co.credit_score_nice || "-")) : "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.next_action || "-"}</td>
                   <td style={{ padding: "11px 8px", whiteSpace: "nowrap" }} onClick={function(e) { e.stopPropagation(); }}>
@@ -7038,6 +7072,8 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
 
   // 지역본부 → 연락처 중앙 매핑 (branch_contacts 테이블)
   const [contactMap, setContactMap] = useState({});
+  // 연락처 인라인 편집: 현재 편집중인 칸 키 (row.id + "_" + branch), null이면 평소 텍스트 표시
+  const [editingPhoneKey, setEditingPhoneKey] = useState(null);
 
   // branch_contacts 테이블에서 매핑 가져오기
   var fetchContactMap = async function() {
@@ -7714,22 +7750,40 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                               {branches.map(function(branch) {
                                 // 중앙 매핑(contactMap)에서 연락처 가져옴
                                 var phoneVal = contactMap[branch] !== undefined ? contactMap[branch] : "";
+                                var phoneKey = row.id + "_" + branch;
+                                var isEditingPhone = editingPhoneKey === phoneKey;
                                 return (
                                   <div key={branch} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11 }}>
                                     <span style={{ color: "#7C3AED", fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}>{branch}</span>
-                                    <input type="text"
-                                      value={phoneVal}
-                                      placeholder="연락처"
-                                      onChange={function(e) {
-                                        // 입력 즉시 contactMap 업데이트 (UI 반영)
-                                        var v = e.target.value;
-                                        setContactMap(function(prev) { return Object.assign({}, prev, { [branch]: v }); });
-                                      }}
-                                      onBlur={function(e) {
-                                        // 포커스 빠지면 DB 저장 (모든 업체에 자동 반영)
-                                        updateBranchContact(branch, e.target.value);
-                                      }}
-                                      style={{ flex: 1, minWidth: 0, padding: "2px 6px", border: "1px solid #86EFAC", borderRadius: 4, fontSize: 11, background: "#fff", color: "#1A1917" }} />
+                                    {isEditingPhone ? (
+                                      <input type="text"
+                                        value={phoneVal}
+                                        placeholder="연락처"
+                                        autoFocus
+                                        onChange={function(e) {
+                                          // 입력 즉시 contactMap 업데이트 (UI 반영)
+                                          var v = e.target.value;
+                                          setContactMap(function(prev) { return Object.assign({}, prev, { [branch]: v }); });
+                                        }}
+                                        onBlur={function(e) {
+                                          // 포커스 빠지면 DB 저장 (모든 업체에 자동 반영) + 텍스트로 복귀
+                                          updateBranchContact(branch, e.target.value);
+                                          setEditingPhoneKey(null);
+                                        }}
+                                        onKeyDown={function(e) {
+                                          if (e.key === "Enter") { e.target.blur(); }
+                                          if (e.key === "Escape") { setEditingPhoneKey(null); }
+                                        }}
+                                        style={{ flex: 1, minWidth: 0, padding: "2px 6px", border: "1px solid #86EFAC", borderRadius: 4, fontSize: 11, background: "#fff", color: "#1A1917" }} />
+                                    ) : (
+                                      <span onClick={function() { setEditingPhoneKey(phoneKey); }}
+                                        title="클릭하면 연락처 수정"
+                                        style={{ flex: 1, minWidth: 0, cursor: "pointer", padding: "2px 6px", borderRadius: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: phoneVal ? "#1A1917" : "#CCC" }}
+                                        onMouseEnter={function(e) { e.currentTarget.style.background = "#F0FDF4"; }}
+                                        onMouseLeave={function(e) { e.currentTarget.style.background = "transparent"; }}>
+                                        {phoneVal || "연락처 입력"}
+                                      </span>
+                                    )}
                                     <button onClick={async function() {
                                       // X 클릭 → 이 업체에서만 이 지역본부 제거 (중앙 매핑은 그대로)
                                       if (!confirm("'" + branch + "' 지역본부를 이 업체에서 제거할까요?\n(다른 업체에는 영향 없음)")) return;
