@@ -62,6 +62,13 @@ const PRODUCT_COLORS = {
   "긴급경영 안정자금":          { bg: "#FFE4E6", text: "#9F1239" },
   "기타":                      { bg: "#F3F4F6", text: "#374151" },
 };
+// KST(한국시간) 기준 날짜 문자열 YYYY-MM-DD. UTC 사용 시 오전에 하루 밀리는 버그 방지
+function kstDate(offsetDays) {
+  var d = new Date();
+  if (offsetDays) d = new Date(d.getTime() + offsetDays * 86400000);
+  return new Date(d.getTime() + 9 * 3600000).toISOString().slice(0, 10);
+}
+
 function getProductColor(name) {
   if (!name) return null;
   return PRODUCT_COLORS[name] || { bg: "#F3F4F6", text: "#374151" };
@@ -741,7 +748,7 @@ function CRMApp({ profile, session }) {
   useEffect(() => {
     if (companies.length > 0 && !alertShownRef.current) {
       alertShownRef.current = true;
-      const todayStr = new Date().toISOString().slice(0, 10);
+      const todayStr = kstDate();
       const todayContacts = companies.filter(c => c.next_contact === todayStr);
       const stagnantList = companies.filter(c => c.stagnant_days >= 7);
       if (todayContacts.length > 0 || stagnantList.length > 0) {
@@ -847,7 +854,7 @@ function CRMApp({ profile, session }) {
               industry: rest.industry || null,
               region: rest.region || null,
               business_type: rest.type || "법인",
-              result_at: new Date().toISOString().slice(0, 10),
+              result_at: kstDate(),
               tags: [],
               created_by: rest.assignee || (typeof profile !== "undefined" && profile?.name) || "시스템",
             };
@@ -948,7 +955,7 @@ function CRMApp({ profile, session }) {
 
   // 서류 토글
   const toggleDoc = async (docId, current) => {
-    await supabase.from("documents").update({ received: !current, received_at: !current ? new Date().toISOString().slice(0,10) : null }).eq("id", docId);
+    await supabase.from("documents").update({ received: !current, received_at: !current ? kstDate() : null }).eq("id", docId);
     fetchAll();
   };
 
@@ -994,13 +1001,13 @@ function CRMApp({ profile, session }) {
       stage: form.stage || "상담/진단완료",
       assignee: form.assignee || "",
       agency: form.agency || "",
-      last_contact: new Date().toISOString().slice(0,10),
+      last_contact: kstDate(),
       issue: form.issue || "",
       next_action: form.next_action || "",
       fee: form.fee || 5,
       fee_status: "미수령",
       stagnant_days: 0,
-      stage_updated_at: new Date().toISOString().slice(0,10),
+      stage_updated_at: kstDate(),
     };
     if (form.next_contact) insertData.next_contact = form.next_contact;
     if (form.contract_date) insertData.contract_date = form.contract_date;
@@ -1067,7 +1074,7 @@ function CRMApp({ profile, session }) {
 
       {/* 오늘 할 일 알림 팝업 */}
       {showTodayAlert && (function() {
-        const todayStr = new Date().toISOString().slice(0, 10);
+        const todayStr = kstDate();
         const todayContacts = companies.filter(c => c.next_contact === todayStr);
         const stagnantList = companies.filter(c => c.stagnant_days >= 7);
         return (
@@ -1292,7 +1299,7 @@ function CRMApp({ profile, session }) {
             <button onClick={() => setShowTodayAlert(true)}
               style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "7px 10px", background: "#2E2C29", border: "none", borderRadius: 6, color: "#888", fontSize: 11, cursor: "pointer" }}>
               📋
-              {companies.filter(c => c.next_contact === new Date().toISOString().slice(0,10)).length > 0 && (
+              {companies.filter(c => c.next_contact === kstDate()).length > 0 && (
                 <span style={{ position: "absolute", top: -3, right: -3, width: 8, height: 8, background: "#DC2626", borderRadius: "50%" }} />
               )}
             </button>
@@ -1596,16 +1603,16 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
 
       {/* 🆕 미완료 업무 노트 위젯 */}
       {(function() {
-        var today = new Date().toISOString().slice(0, 10);
+        var today = kstDate();
         var myTodos = companies ? [] : []; // 실제 work_notes에서 가져와야 하므로 별도 처리
         return null; // 업무노트는 WorkNotesView에서 관리
       })()}
 
       {/* 🆕 오늘의 할 일 위젯 */}
       {(function() {
-        var today = new Date().toISOString().slice(0, 10);
-        var tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-        var weekLater = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+        var today = kstDate();
+        var tomorrow = kstDate(1);
+        var weekLater = kstDate(7);
         var todayItems = companies.filter(function(c) { return c.next_contact === today || c.contract_date === today; });
         var tomorrowItems = companies.filter(function(c) { return c.next_contact === tomorrow || c.contract_date === tomorrow; });
         var overdue = companies.filter(function(c) { return c.next_contact && c.next_contact < today; });
@@ -1769,7 +1776,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
 
         <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0" }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>오늘 이슈 · 재통화 필요</div>
-          {companies.filter(c => c.stagnant_days >= 7 || (c.next_contact && c.next_contact <= new Date().toISOString().slice(0,10))).slice(0, 6).map(c => (
+          {companies.filter(c => c.stagnant_days >= 7 || (c.next_contact && c.next_contact <= kstDate())).slice(0, 6).map(c => (
             <div key={c.id} onClick={() => onSelectCompany(c)}
               style={{ padding: "9px 12px", borderRadius: 8, border: "1px solid #E8E5E0", marginBottom: 7, cursor: "pointer", display: "flex", gap: 10, alignItems: "flex-start" }}>
               <div style={{ width: 7, height: 7, borderRadius: "50%", background: c.stagnant_days >= 7 ? "#DC2626" : "#F59E0B", marginTop: 5, flexShrink: 0 }} />
@@ -1780,7 +1787,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
               <span style={{ fontSize: 10, color: STAGE_COLORS[c.stage]?.text, background: STAGE_COLORS[c.stage]?.bg, padding: "2px 7px", borderRadius: 99, border: `1px solid ${STAGE_COLORS[c.stage]?.border}`, flexShrink: 0, fontWeight: 600 }}>{c.stage}</span>
             </div>
           ))}
-          {companies.filter(c => c.stagnant_days >= 7 || (c.next_contact && c.next_contact <= new Date().toISOString().slice(0,10))).length === 0 && (
+          {companies.filter(c => c.stagnant_days >= 7 || (c.next_contact && c.next_contact <= kstDate())).length === 0 && (
             <div style={{ textAlign: "center", color: "#CCC", fontSize: 13, padding: "30px 0" }}>오늘 이슈가 없어요 👍</div>
           )}
         </div>
@@ -2010,7 +2017,7 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
             var dd = parts[1].padStart(2, "0");
             itemDueDate = year + "-" + mm + "-" + dd;
             // 과거 날짜면 내년으로 (예: 12월에 1/5 = 다음해 1/5)
-            if (itemDueDate < new Date(Date.now() - 180 * 86400000).toISOString().slice(0, 10)) {
+            if (itemDueDate < kstDate(-180)) {
               itemDueDate = (year + 1) + "-" + mm + "-" + dd;
             }
           }
@@ -2096,9 +2103,9 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
   });
 
   // 카테고리별 분류
-  var today = new Date().toISOString().slice(0, 10);
-  var tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-  var weekEnd = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+  var today = kstDate();
+  var tomorrow = kstDate(1);
+  var weekEnd = kstDate(7);
 
   var unchecked = allItems.filter(function(i) { return !i.checked; });
   var checked = allItems.filter(function(i) { return i.checked; });
@@ -2254,7 +2261,7 @@ function MyTodoWidget({ setView }) {
         .is("deleted_at", null);
       if (res.error || !res.data) return;
       
-      var today = new Date().toISOString().slice(0, 10);
+      var today = kstDate();
       var total = 0, overdue = 0, todayCount = 0;
       
       res.data.forEach(function(note) {
@@ -3793,7 +3800,7 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
 
                   // 나머지 정보 → 이슈 칸에 자동 정리
                   var extras = [];
-                  extras.push("[기업현황표 자동 추출 - " + new Date().toISOString().slice(0,10) + "]");
+                  extras.push("[기업현황표 자동 추출 - " + kstDate() + "]");
                   extras.push("");
                   var addExtra = function(label, val) { if (val) extras.push("▸ " + label + ": " + val); };
                   addExtra("사업장 주소", getCell(4, 2));
@@ -4685,7 +4692,7 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
 
       {/* 마감일 표시 */}
       {note.due_date && (function() {
-        var today = new Date().toISOString().slice(0, 10);
+        var today = kstDate();
         var dday = Math.ceil((new Date(note.due_date) - new Date(today)) / 86400000);
         var ddayLabel = dday === 0 ? "D-Day" : dday > 0 ? "D-" + dday : "D+" + Math.abs(dday);
         var ddayColor = dday < 0 ? "#DC2626" : dday === 0 ? "#EA580C" : dday <= 3 ? "#B45309" : "#15803D";
@@ -5036,7 +5043,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       pinned: newNote.pinned,
       created_by: profile?.name || assigneeName,
       // 노트 날짜 - 선택값 없으면 오늘
-      note_date: newNote.note_date || new Date().toISOString().slice(0, 10),
+      note_date: newNote.note_date || kstDate(),
     };
     if (newNote.due_date) insertObj.due_date = newNote.due_date;
     var r = await supabase.from("work_notes").insert(insertObj).select().single();
@@ -6143,7 +6150,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
     var c = EVENT_COLORS.find(function(x) { return x.id === String(id); });
     return c || EVENT_COLORS[8]; // 기본: 블루베리
   };
-  const todayStr = today.toISOString().slice(0, 10);
+  const todayStr = kstDate();
   const MONTH_NAMES = ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"];
   const DAY_NAMES = ["일","월","화","수","목","금","토"];
   const firstDay = new Date(year, month, 1).getDay();
@@ -7499,6 +7506,10 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
               var fullData = Object.assign({}, baseData);
               if (clipboardCase.credit_score != null) fullData.credit_score = clipboardCase.credit_score;
               if (clipboardCase.product) fullData.product = clipboardCase.product;
+              // 우선도 + 추가정보 + 업종 같이 붙여넣기
+              ["industry","priority_checks","extra_notes","ipin_account","ipin_password","resident_number","agency_login_id","agency_login_password","personal_cert_password","business_cert_password","final_confirm"].forEach(function(f) {
+                if (clipboardCase[f] != null && clipboardCase[f] !== "") fullData[f] = clipboardCase[f];
+              });
               var r = await supabase.from("agency_cases").insert(fullData).select();
               if (r.error) {
                 console.warn("agency_cases 1차 insert 실패, 핵심 컬럼만 재시도:", r.error.message);
@@ -8102,6 +8113,17 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                     notes: selectedCase.notes,
                     credit_score: selectedCase.credit_score,
                     product: selectedCase.product,
+                    // 우선도 + 추가정보 같이 복사
+                    priority_checks: selectedCase.priority_checks,
+                    extra_notes: selectedCase.extra_notes,
+                    ipin_account: selectedCase.ipin_account,
+                    ipin_password: selectedCase.ipin_password,
+                    resident_number: selectedCase.resident_number,
+                    agency_login_id: selectedCase.agency_login_id,
+                    agency_login_password: selectedCase.agency_login_password,
+                    personal_cert_password: selectedCase.personal_cert_password,
+                    business_cert_password: selectedCase.business_cert_password,
+                    final_confirm: selectedCase.final_confirm,
                     sourceGroup: selectedCase.agency_group,
                     sourceMonth: selectedCase.month,
                   };
@@ -9928,7 +9950,7 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
     if (!profile?.name) { alert("로그인 정보가 없습니다."); return; }
     var assigneeName = normalizeName(profile.name);
     // work_notes에 새 노트 생성
-    var todayStr = new Date().toISOString().slice(0, 10);
+    var todayStr = kstDate();
     var teamLabel = teamNote.team === "corporate" ? "[법인팀]" : "[개인팀]";
     var workNotePayload = {
       assignee: assigneeName,
@@ -9970,7 +9992,7 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
     if (item.taken_by) { alert("이미 " + item.taken_by + "님이 가져간 항목입니다."); return; }
 
     var teamLabel = teamNote.team === "corporate" ? "[법인팀]" : "[개인팀]";
-    var todayStr = new Date().toISOString().slice(0, 10);
+    var todayStr = kstDate();
     var noteTitle = teamLabel + " " + (teamNote.title || "팀 노트");
 
     // 1) 같은 팀 노트에서 이미 가져온 항목이 있는지 - 같은 사용자가 같은 team_note에서 가져온 work_note 찾기
