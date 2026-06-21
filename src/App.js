@@ -948,7 +948,9 @@ function CRMApp({ profile, session }) {
           }
         }
       }
-      showToast("저장됐어요!"); fetchAll();
+      showToast("저장됐어요!");
+      // 전체 리로드(fetchAll) 시 목록이 재정렬되며 스크롤이 맨 위로 튀므로, 해당 회사만 로컬 갱신
+      setCompanies(function(prev) { return prev.map(function(c) { return c.id === rest.id ? Object.assign({}, c, rest) : c; }); });
     }
     else showToast("저장 실패: " + error.message, "error");
   };
