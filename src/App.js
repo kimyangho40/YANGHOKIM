@@ -2411,7 +2411,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
   // 컬럼 너비 수동 조절 (헤더 경계 드래그) - 브라우저(localStorage)에 자동 저장
   const DEFAULT_LIST_COL_WIDTHS = {
     "업체명": 130, "유형": 80, "지역": 90, "업종": 120, "대표자": 80, "담당": 60,
-    "진행단계": 130, "정체일수": 70, "신청예정/자금": 130, "계약일": 90, "진행기관": 140,
+    "진행단계": 130, "정체일수": 70, "신청기관": 150, "계약일": 90, "진행기관": 140,
     "23년~25년 매출": 160, "신용점수": 90, "기타": 140, "작업": 110
   };
   const [listColWidths, setListColWidths] = useState(function() {
@@ -2436,6 +2436,43 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
     };
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
+  };
+
+  // 기관별 현황(agency_cases) 자체 로드 → 업체명별 매핑 (기업목록 한 곳에서 신청기관 현황 표시)
+  const [agencyByName, setAgencyByName] = useState({});
+  useEffect(function() {
+    supabase.from("agency_cases").select("business_name, agency_group, status, month, year").is("deleted_at", null).limit(10000).then(function(r) {
+      if (!r.error && r.data) {
+        var map = {};
+        r.data.forEach(function(c) {
+          if (!c.business_name) return;
+          if (!map[c.business_name]) map[c.business_name] = [];
+          map[c.business_name].push(c);
+        });
+        setAgencyByName(map);
+      }
+    });
+  }, []);
+  var AGENCY_SHORT = {
+    "소상공인시장진흥공단": "소진공", "중소벤처기업진흥공단": "중진공", "신용보증기금": "신보",
+    "기술보증기금": "기보", "신용보증재단": "재단", "구조혁신&사업전환": "구조혁신",
+    "경정청구": "경정청구", "기타": "기타",
+  };
+  var agencyStatusColor = function(status) {
+    if (["부결","반려","신청취소","진행불가","신청못함","중단"].indexOf(status) >= 0) return { bg: "#FEE2E2", text: "#DC2626" };
+    if (["승인","약정","완료"].indexOf(status) >= 0) return { bg: "#DCFCE7", text: "#15803D" };
+    if (["시작 전"].indexOf(status) >= 0 || !status) return { bg: "#F3F4F6", text: "#9CA3AF" };
+    return { bg: "#EEF2FF", text: "#4338CA" };
+  };
+
+  // "기타" 칸 인라인 편집
+  const [editingEtcId, setEditingEtcId] = useState(null);
+  const [editingEtcVal, setEditingEtcVal] = useState("");
+  var saveEtc = async function(co) {
+    var v = editingEtcVal;
+    await supabase.from("companies").update({ next_action: v || null }).eq("id", co.id);
+    setCompanies(function(prev) { return prev.map(function(c) { return c.id === co.id ? Object.assign({}, c, { next_action: v }) : c; }); });
+    setEditingEtcId(null);
   };
 
   var fetchTrashedCompanies = async function() {
@@ -2539,7 +2576,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1200, tableLayout: "fixed" }}>
           <thead>
             <tr style={{ background: "#F7F6F3", borderBottom: "1px solid #E8E5E0", position: "sticky", top: 0, zIndex: 2 }}>
-              {["업체명","유형","지역","업종","대표자","담당","진행단계","정체일수","신청예정/자금","계약일","진행기관","23년~25년 매출","신용점수","기타","작업"].map(h => (
+              {["업체명","유형","지역","업종","대표자","담당","진행단계","정체일수","신청기관","계약일","진행기관","23년~25년 매출","신용점수","기타","작업"].map(h => (
                 <th key={h} style={Object.assign({ padding: "10px 8px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left", letterSpacing: "0.03em", whiteSpace: "nowrap", background: "#F7F6F3", position: "relative", boxSizing: "border-box", width: listColWidths[h], minWidth: listColWidths[h], maxWidth: listColWidths[h] },
                   h === "업체명" ? { position: "sticky", left: 0, zIndex: 3, boxShadow: "2px 0 4px -2px rgba(0,0,0,0.08)" } : {}
                 )}>{h}
@@ -2611,12 +2648,44 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                   <td style={{ padding: "11px 13px", fontSize: 12, whiteSpace: "nowrap" }}>{co.assignee || "-"}</td>
                   <td style={{ padding: "11px 13px", whiteSpace: "nowrap" }}><span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, fontWeight: 600 }}>{co.stage}</span></td>
                   <td style={{ padding: "11px 13px", whiteSpace: "nowrap", textAlign: "center" }}>{(function() { var d = co.stagnant_days || 0; if (d >= 14) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", fontWeight: 700 }}>⚠ {d}일</span>; if (d >= 7) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEF3C7", color: "#B45309", fontWeight: 700 }}>{d}일</span>; return <span style={{ fontSize: 11, color: "#AAA" }}>{d}일</span>; })()}</td>
-                  <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.fund_plan || "-"}</td>
+                  <td style={{ padding: "8px 8px", fontSize: 11, verticalAlign: "middle" }}>
+                    {(function() {
+                      var cs = agencyByName[co.name] || [];
+                      var byGroup = {};
+                      cs.forEach(function(c) {
+                        var g = c.agency_group; if (!g) return;
+                        var prev = byGroup[g];
+                        if (!prev || (c.year * 12 + c.month) > (prev.year * 12 + prev.month)) byGroup[g] = c;
+                      });
+                      var groups = Object.keys(byGroup);
+                      if (groups.length === 0) return <span style={{ color: "#CCC" }}>-</span>;
+                      return <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+                        {groups.map(function(g) {
+                          var c = byGroup[g];
+                          var col = agencyStatusColor(c.status);
+                          return <span key={g} title={g + " · " + (c.status || "시작 전") + " (" + c.month + "월)"}
+                            style={{ fontSize: 10, padding: "2px 6px", borderRadius: 99, background: col.bg, color: col.text, fontWeight: 600, whiteSpace: "nowrap" }}>
+                            {AGENCY_SHORT[g] || g}</span>;
+                        })}
+                      </div>;
+                    })()}
+                  </td>
                   <td style={{ padding: "11px 13px", fontSize: 12, color: "#555", whiteSpace: "nowrap" }}>{co.contract_date || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.agency || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", boxSizing: "border-box" }}>{[formatRevenue(co.revenue_2023), formatRevenue(co.revenue_2024), formatRevenue(co.revenue_2025)].filter(r=>r&&r!=="-").join(" / ") || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap" }}>{(co.credit_score_kcb || co.credit_score_nice) ? ((co.credit_score_kcb || "-") + " / " + (co.credit_score_nice || "-")) : "-"}</td>
-                  <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.next_action || "-"}</td>
+                  <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    onClick={function(e) { e.stopPropagation(); }}
+                    onDoubleClick={function() { setEditingEtcId(co.id); setEditingEtcVal(co.next_action || ""); }}
+                    title="더블클릭하면 수정">
+                    {editingEtcId === co.id ? (
+                      <input value={editingEtcVal} autoFocus
+                        onChange={function(e) { setEditingEtcVal(e.target.value); }}
+                        onBlur={function() { saveEtc(co); }}
+                        onKeyDown={function(e) { if (e.key === "Enter") { e.target.blur(); } if (e.key === "Escape") { setEditingEtcId(null); } }}
+                        style={{ width: "100%", padding: "3px 6px", border: "1px solid #4338CA", borderRadius: 4, fontSize: 11, boxSizing: "border-box", outline: "none" }} />
+                    ) : (co.next_action || "-")}
+                  </td>
                   <td style={{ padding: "11px 8px", whiteSpace: "nowrap" }} onClick={function(e) { e.stopPropagation(); }}>
                     <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
                       <button onClick={function() { onSelect(co); }} title="소통/상세보기"
@@ -7250,16 +7319,22 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     if (jumpToGroup) setActiveGroup(jumpToGroup);
   }, [jumpToMonth, jumpToGroup]);
 
+  var STATUS_GROUPS = {
+    approved: ["승인","약정"],
+    completed: ["완료"],
+    waiting: ["기관 방문 전","기관 방문 후 대기","온라인 신청 후 대기","심사대기"],
+    rejected: ["부결","반려","진행불가","신청취소","신청못함","중단"],
+  };
+  // 위 4그룹에 안 속하면 전부 '진행중'(inProgress)
+  var groupOf = function(status) {
+    for (var k in STATUS_GROUPS) { if (STATUS_GROUPS[k].indexOf(status) >= 0) return k; }
+    return "inProgress";
+  };
+
   var filtered = useMemo(function() {
-    var APPROVED = ["승인","약정","완료"];
-    var IN_PROGRESS = ["진행 중","심사중","심사대기","최종제출","임시저장","우선도 평가","기관 방문 전","기관 방문 후 대기","온라인 신청 후 대기","실태 조사 예정","실태 조사 완료"];
-    var REJECTED = ["부결","반려","진행불가","신청취소"];
     return cases.filter(function(c) {
       var matchMonth = activeMonth === "all" ? true : Number(c.month) === Number(activeMonth);
-      var matchStatus = true;
-      if (statusFilter === "approved") matchStatus = APPROVED.indexOf(c.status) >= 0;
-      else if (statusFilter === "inProgress") matchStatus = IN_PROGRESS.indexOf(c.status) >= 0;
-      else if (statusFilter === "rejected") matchStatus = REJECTED.indexOf(c.status) >= 0;
+      var matchStatus = statusFilter === "all" ? true : groupOf(c.status) === statusFilter;
       return c.agency_group === activeGroup
         && matchMonth
         && Number(c.year) === currentYear
@@ -7305,11 +7380,13 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       return c.agency_group === activeGroup && matchMonth && Number(c.year) === currentYear && !c.deleted_at
         && (filterAssignee === "전체" || c.assignee === filterAssignee);
     });
-    var approved = baseList.filter(function(c) { return ["승인","약정","완료"].indexOf(c.status) >= 0; }).length;
-    var inProgress = baseList.filter(function(c) { return ["진행 중","심사중","심사대기","최종제출","임시저장","우선도 평가","기관 방문 전","기관 방문 후 대기","온라인 신청 후 대기","실태 조사 예정","실태 조사 완료"].indexOf(c.status) >= 0; }).length;
-    var rejected = baseList.filter(function(c) { return ["부결","반려","진행불가","신청취소"].indexOf(c.status) >= 0; }).length;
+    var approved = baseList.filter(function(c) { return groupOf(c.status) === "approved"; }).length;
+    var completed = baseList.filter(function(c) { return groupOf(c.status) === "completed"; }).length;
+    var waiting = baseList.filter(function(c) { return groupOf(c.status) === "waiting"; }).length;
+    var inProgress = baseList.filter(function(c) { return groupOf(c.status) === "inProgress"; }).length;
+    var rejected = baseList.filter(function(c) { return groupOf(c.status) === "rejected"; }).length;
     var total = baseList.length;
-    return { total: total, approved: approved, inProgress: inProgress, rejected: rejected };
+    return { total: total, approved: approved, completed: completed, waiting: waiting, inProgress: inProgress, rejected: rejected };
   }, [cases, activeGroup, activeMonth, filterAssignee, currentYear]);
 
   var activeGroupObj = AGENCY_GROUPS.find(function(g) { return g.id === activeGroup; });
@@ -7608,6 +7685,48 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
           );
         })}
       </div>
+
+      {/* 상태별 모아보기 (5그룹: 진행중·대기·승인·완료·부결 → 재신청 후보 종합용) */}
+      {(function() {
+        var base = cases.filter(function(c) {
+          if (c.agency_group !== activeGroup) return false;
+          if (activeMonth !== "all" && Number(c.month) !== Number(activeMonth)) return false;
+          if (Number(c.year) !== currentYear) return false;
+          if (c.deleted_at) return false;
+          if (filterAssignee !== "전체" && c.assignee !== filterAssignee) return false;
+          return true;
+        });
+        if (base.length === 0) return null;
+        var counts = { inProgress: 0, waiting: 0, approved: 0, completed: 0, rejected: 0 };
+        base.forEach(function(c) { counts[groupOf(c.status)] = (counts[groupOf(c.status)] || 0) + 1; });
+        var groups = [
+          { key: "inProgress", label: "진행중", bg: "#EEF2FF", text: "#4338CA" },
+          { key: "waiting", label: "대기", bg: "#FEF3C7", text: "#B45309" },
+          { key: "approved", label: "승인", bg: "#DCFCE7", text: "#15803D" },
+          { key: "completed", label: "완료", bg: "#D1FAE5", text: "#047857" },
+          { key: "rejected", label: "부결", bg: "#FEE2E2", text: "#DC2626" },
+        ];
+        return (
+          <div style={{ display: "flex", gap: 5, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ fontSize: 11, color: "#888", marginRight: 2, fontWeight: 600 }}>상태별 모아보기:</span>
+            {groups.map(function(g) {
+              var active = statusFilter === g.key;
+              return <div key={g.key} onClick={function() { setStatusFilter(function(p) { return p === g.key ? "all" : g.key; }); }}
+                style={{ padding: "5px 13px", borderRadius: 99, cursor: "pointer", fontSize: 12, fontWeight: 600,
+                  background: active ? g.text : g.bg, color: active ? "#fff" : g.text,
+                  border: "1px solid " + (active ? g.text : "transparent") }}>
+                {g.label} {counts[g.key] || 0}
+              </div>;
+            })}
+            {statusFilter !== "all" && (
+              <div onClick={function() { setStatusFilter("all"); }}
+                style={{ padding: "5px 11px", borderRadius: 99, cursor: "pointer", fontSize: 12, color: "#888", border: "1px solid #E8E5E0" }}>
+                ✕ 전체
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* 담당자 필터 */}
       {assigneesInGroup.length > 1 && (
