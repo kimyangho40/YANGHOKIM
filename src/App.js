@@ -613,6 +613,8 @@ function CRMApp({ profile, session }) {
   const [filterStage, setFilterStage] = useState("전체");
   const [filterAssignee, setFilterAssignee] = useState("전체");
   const [filterType, setFilterType] = useState("전체");
+  const [creditFilter, setCreditFilter] = useState("");
+  const [creditMode, setCreditMode] = useState("below");
   const [toast, setToast] = useState(null);
   const [showTodayAlert, setShowTodayAlert] = useState(false);
   const [workNotesBadge, setWorkNotesBadge] = useState(0);
@@ -768,12 +770,20 @@ function CRMApp({ profile, session }) {
 
   const filtered = useMemo(() => (companies || []).filter(c => {
     const s = search.toLowerCase();
-    const matchSearch = !s || c.name?.includes(s) || c.representative?.includes(s);
+    const matchSearch = !s || c.name?.toLowerCase().includes(s) || c.representative?.toLowerCase().includes(s)
+      || c.region?.toLowerCase().includes(s) || c.industry?.toLowerCase().includes(s);
     const matchStage = filterStage === "전체" || c.stage === filterStage;
     const matchAssignee = filterAssignee === "전체" || c.assignee === filterAssignee;
     const matchType = filterType === "전체" || c.type === filterType;
-    return matchSearch && matchStage && matchAssignee && matchType;
-  }), [companies, search, filterStage, filterAssignee, filterType]);
+    let matchCredit = true;
+    if (creditFilter !== "" && !isNaN(parseInt(creditFilter))) {
+      const n = parseInt(creditFilter);
+      const kcb = (c.credit_score_kcb == null || c.credit_score_kcb === "") ? null : parseInt(c.credit_score_kcb);
+      if (kcb == null) matchCredit = false;
+      else matchCredit = creditMode === "below" ? kcb < n : kcb >= n;
+    }
+    return matchSearch && matchStage && matchAssignee && matchType && matchCredit;
+  }), [companies, search, filterStage, filterAssignee, filterType, creditFilter, creditMode]);
 
   const stagnant = companies.filter(c => c.stagnant_days >= 7);
   const assignees = ["전체", ...new Set(profiles.map(p => p.name))];
@@ -1387,7 +1397,7 @@ function CRMApp({ profile, session }) {
             {view === "pipeline" && <PipelineView filtered={filtered} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setCompanies={setCompanies} />}
             {view === "cases" && <ApprovalCasesView profile={profile} />}
             {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={profile?.role === "admin" || profile?.name === "양호"} onSelectCompany={setSelectedCompany} setView={setView} />}
-            {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} />}
+            {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} creditFilter={creditFilter} setCreditFilter={setCreditFilter} creditMode={creditMode} setCreditMode={setCreditMode} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} />}
             {view === "stagnant" && <StagnantView stagnant={stagnant} onSelect={setSelectedCompany} />}
             {view === "members" && profile.role === "admin" && <MembersView profiles={profiles} onRefresh={fetchAll} showToast={showToast} />}
           </>
@@ -2404,7 +2414,7 @@ function IndustryCell({ co, setCompanies, companies }) {
   );
 }
 
-function ListView({ filtered, companies, search, setSearch, filterStage, setFilterStage, filterAssignee, setFilterAssignee, filterType, setFilterType, assignees, onSelect, onAdd, setCompanies, showToast, dashboardFilter, setDashboardFilter }) {
+function ListView({ filtered, companies, search, setSearch, filterStage, setFilterStage, filterAssignee, setFilterAssignee, filterType, setFilterType, creditFilter, setCreditFilter, creditMode, setCreditMode, assignees, onSelect, onAdd, setCompanies, showToast, dashboardFilter, setDashboardFilter }) {
   const [showCompanyTrash, setShowCompanyTrash] = useState(false);
   const [trashedCompanies, setTrashedCompanies] = useState([]);
 
@@ -2553,8 +2563,20 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
       <div style={{ background: "#fff", borderRadius: 10, padding: "12px 16px", border: "1px solid #E8E5E0", marginBottom: 14, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         <div style={{ position: "relative", flex: 1, minWidth: 160 }}>
           <div style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }}><Icon name="search" size={14} color="#AAA" /></div>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="업체명 · 대표자 검색"
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="업체명 · 대표자 · 지역 · 업종 검색"
             style={{ width: "100%", padding: "8px 10px 8px 32px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+        </div>
+        {/* 신용점수 필터 (KCB 기준) */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, border: "1px solid #E8E5E0", borderRadius: 7, padding: "3px 4px 3px 8px", background: creditFilter ? "#FEF3C7" : "#fff" }}>
+          <span style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap" }}>신용점수</span>
+          <button onClick={function() { setCreditMode(creditMode === "below" ? "above" : "below"); }}
+            title="이하/이상 전환"
+            style={{ border: "none", background: "#1A1917", color: "#fff", borderRadius: 5, padding: "4px 7px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+            {creditMode === "below" ? "미만" : "이상"}
+          </button>
+          <input value={creditFilter} onChange={e => setCreditFilter(e.target.value.replace(/[^0-9]/g, ""))} inputMode="numeric" placeholder="840"
+            style={{ width: 52, padding: "6px 4px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 13, outline: "none", textAlign: "center", boxSizing: "border-box" }} />
+          {creditFilter && <button onClick={function() { setCreditFilter(""); }} style={{ border: "none", background: "transparent", color: "#999", cursor: "pointer", fontSize: 14, padding: "0 4px" }}>✕</button>}
         </div>
         {[
           { v: filterStage, set: setFilterStage, opts: ["전체", ...STAGES] },
@@ -2717,7 +2739,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
       {/* 기업목록 휴지통 모달 */}
       {showCompanyTrash && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={function(e) { if (e.target === e.currentTarget) setShowCompanyTrash(false); }}>
+          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowCompanyTrash(false); }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 640, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ 기업목록 휴지통 ({trashedCompanies.length}건)</h2>
@@ -2956,7 +2978,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "flex-end" }}
-      onClick={e => e.target === e.currentTarget && onClose()}>
+      onMouseDown={e => e.target === e.currentTarget && onClose()}>
       <div style={{ width: 460, height: "100vh", background: "#fff", overflowY: "auto", boxShadow: "-8px 0 40px rgba(0,0,0,0.15)", display: "flex", flexDirection: "column" }}>
         {/* 헤더 */}
         <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid #E8E5E0", background: sc.bg || "#F7F6F3" }}>
@@ -3688,7 +3710,7 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-      onClick={function(e) { if (e.target === e.currentTarget) onClose(); }}>
+      onMouseDown={function(e) { if (e.target === e.currentTarget) onClose(); }}>
       <div style={{ background: "#fff", borderRadius: 14, width: 480, maxHeight: "92vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ padding: "20px 24px 14px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
           <div>
@@ -4601,6 +4623,25 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
   var checkItems = editNote.checkItems || [];
   var freeContent = editNote.freeContent !== undefined ? editNote.freeContent : (editNote.content || "");
 
+  // 자동저장: 칸을 벗어나거나 항목 변경 시 즉시 DB 반영 (저장 버튼 안 눌러도 손실 방지)
+  var autoSaveEditNow = function() {
+    setEditNote(function(p) {
+      if (!p || !p.id) return p;
+      var items = (p.checkItems || []).filter(function(i) { return (i.text || "").trim(); }).map(function(i) {
+        var line = "- [" + (i.checked ? "x" : " ") + "] " + i.text.trim();
+        if (i.dueDate) line += " [" + i.dueDate + "]";
+        return line;
+      });
+      var ft = (p.freeContent || "").trim();
+      var parts = [];
+      if (items.length > 0) parts.push(items.join("\n"));
+      if (ft) parts.push(ft);
+      var newContent = parts.join("\n");
+      supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", p.id);
+      return p;
+    });
+  };
+
   return (
     <div style={{ background: "#F0FDF4", border: "2px solid #86EFAC", borderRadius: 12, padding: "18px 20px" }}>
       <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D", marginBottom: 12 }}>✏️ 노트 수정</div>
@@ -4650,11 +4691,12 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
                 }} style={{ width: 15, height: 15, flexShrink: 0, cursor: "pointer" }} />
                 <input type="text" value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성)"}
                   onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); }}
+                  onBlur={autoSaveEditNow}
                   style={{ flex: 1, border: "none", outline: "none", fontSize: 13, background: "transparent", textDecoration: item.checked ? "line-through" : "none", color: item.checked ? "#AAA" : "#333" }} />
                 <input type="date" value={item.dueDate || ""} title="이 항목의 마감일 (선택)"
-                  onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { dueDate: v }); return Object.assign({}, p, { checkItems: items }); }); }}
+                  onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { dueDate: v }); return Object.assign({}, p, { checkItems: items }); }); setTimeout(autoSaveEditNow, 0); }}
                   style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, color: "#4338CA", outline: "none", width: 130 }} />
-                <button onClick={function() { setEditNote(function(p) { var items = (p.checkItems || []).filter(function(_, i) { return i !== idx; }); return Object.assign({}, p, { checkItems: items }); }); }}
+                <button onClick={function() { setEditNote(function(p) { var items = (p.checkItems || []).filter(function(_, i) { return i !== idx; }); return Object.assign({}, p, { checkItems: items }); }); setTimeout(autoSaveEditNow, 0); }}
                   style={{ background: "none", border: "none", cursor: "pointer", color: "#CCC", fontSize: 16, padding: "0 4px", lineHeight: 1 }}>×</button>
               </div>
             );
@@ -4677,6 +4719,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
       </div>
       <textarea value={freeContent} placeholder={checkItems.length > 0 ? "추가 메모 (선택사항)..." : "내용을 자유롭게 입력하세요..."} 
         onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { freeContent: v }); }); }} 
+        onBlur={autoSaveEditNow}
         rows={checkItems.length > 0 ? 4 : 8}
         style={{ width: "100%", padding: "12px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, lineHeight: 1.75, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff", minHeight: 120 }} />
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
@@ -5669,7 +5712,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       {/* 휴지통 모달 */}
       {showTrash && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={function(e) { if (e.target === e.currentTarget) setShowTrash(false); }}>
+          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowTrash(false); }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 560, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ 업무노트 휴지통 ({trashedNotes.length}건)</h2>
@@ -6095,7 +6138,7 @@ function SettlementView() {
       {/* 직접 등록 모달 */}
       {showAddManual && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={function(e) { if (e.target === e.currentTarget) setShowAddManual(false); }}>
+          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowAddManual(false); }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 520, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>정산 직접 등록 ({activeMonth}월)</h2>
@@ -8027,7 +8070,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       )}
       {showPriorityModal && priorityTarget && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={function(e) { if (e.target === e.currentTarget) setShowPriorityModal(false); }}>
+          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowPriorityModal(false); }}>
           <div style={{ background: "#fff", borderRadius: 16, width: 720, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.25)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <div>
@@ -8083,7 +8126,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       {/* 휴지통 모달 */}
       {showTrash && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={function(e) { if (e.target === e.currentTarget) setShowTrash(false); }}>
+          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowTrash(false); }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 600, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ 휴지통 ({trashedCases.length}건)</h2>
@@ -8118,7 +8161,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       {/* 신규 진행건 추가 모달 (자동완성 포함) */}
       {showAddCase && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={function(e) { if (e.target === e.currentTarget) { setShowAddCase(false); setCompanySuggestions([]); } }}>
+          onMouseDown={function(e) { if (e.target === e.currentTarget) { setShowAddCase(false); setCompanySuggestions([]); } }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 520, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>신규 진행건 추가 ({activeGroup} {activeMonth}월)</h2>
@@ -8855,7 +8898,7 @@ function DBLeadsView() {
         )}
       </div>
 
-      {showDupModal && (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={function(e) { if (e.target === e.currentTarget) setShowDupModal(false); }}>
+      {showDupModal && (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center" }} onMouseDown={function(e) { if (e.target === e.currentTarget) setShowDupModal(false); }}>
         <div style={{ background: "#fff", borderRadius: 12, padding: 24, width: 520, maxWidth: "90vw", maxHeight: "80vh", overflowY: "auto" }} onClick={function(e) { e.stopPropagation(); }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
             <span style={{ fontSize: 20 }}>⚠️</span>
@@ -8888,7 +8931,7 @@ function DBLeadsView() {
         </div>
       </div>)}
 
-      {showAddLead && (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={function(e) { if (e.target === e.currentTarget) setShowAddLead(false); }}>
+      {showAddLead && (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onMouseDown={function(e) { if (e.target === e.currentTarget) setShowAddLead(false); }}>
         <div style={{ background: "#fff", borderRadius: 14, width: 520, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
           <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center" }}><h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>신규 DB 등록 ({activeMonth}월)</h2><button onClick={function() { setShowAddLead(false); }} style={{ background: "none", border: "none", cursor: "pointer" }}><Icon name="x" size={18} color="#888" /></button></div>
           <div style={{ padding: "20px 24px" }}>
@@ -9092,7 +9135,7 @@ function DBLeadsView() {
       {/* DB리스트 휴지통 모달 */}
       {showLeadTrash && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={function(e) { if (e.target === e.currentTarget) setShowLeadTrash(false); }}>
+          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowLeadTrash(false); }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 600, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ DB리스트 휴지통 ({trashedLeads.length}건)</h2>
