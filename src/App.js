@@ -8508,6 +8508,14 @@ const LEAD_STATUS_COLORS = {
 
 function DBLeadsView() {
   const [leads, setLeads] = useState([]);
+  const [companiesForDup, setCompaniesForDup] = useState([]);
+  const [dupCandidates, setDupCandidates] = useState([]);
+  const [showDupModal, setShowDupModal] = useState(false);
+  useEffect(function() {
+    supabase.from("companies").select("name, phone, representative").then(function(r) {
+      if (!r.error && r.data) setCompaniesForDup(r.data);
+    });
+  }, []);
   const [leadsLoading, setLeadsLoading] = useState(true);
   const [activeMonth, setActiveMonth] = useState(new Date().getMonth() + 1);
   const [filterStatus, setFilterStatus] = useState("전체");
@@ -8647,11 +8655,38 @@ function DBLeadsView() {
     setNewLead({ year: 2026, month: activeMonth, business_name: "", contact: "", assignee: "", assigned_by: "", status: "미연락", call_1: "", call_2: "", call_3: "", call_4: "", call_5: "", etc: "" });
     setShowAddLead(true);
   };
-  var saveNewLead = async function() {
+  var normNameDup = function(s) { return (s || "").replace(/\(주\)|㈜|주식회사|\(유\)|농업회사법인|\s/g, "").toLowerCase(); };
+  var normPhoneDup = function(s) { return (s || "").replace(/[^0-9]/g, ""); };
+  var saveNewLead = function() {
     if (!newLead.business_name) { alert("사업자명은 필수입니다."); return; }
+    var inName = normNameDup(newLead.business_name);
+    var inPhone = normPhoneDup(newLead.contact);
+    var cands = [];
+    companiesForDup.forEach(function(c) {
+      var reasons = [];
+      if (inName && normNameDup(c.name) === inName) reasons.push("회사명");
+      if (inPhone && c.phone && normPhoneDup(c.phone) === inPhone) reasons.push("번호");
+      if (reasons.length > 0) cands.push({ src: "기업목록", name: c.name, phone: c.phone || "", rep: c.representative || "", reasons: reasons });
+    });
+    leads.forEach(function(l) {
+      if (l.deleted_at) return;
+      var reasons = [];
+      if (inName && normNameDup(l.business_name) === inName) reasons.push("회사명");
+      if (inPhone && l.contact && normPhoneDup(l.contact) === inPhone) reasons.push("번호");
+      if (reasons.length > 0) cands.push({ src: "DB리스트", name: l.business_name, phone: l.contact || "", rep: "", reasons: reasons });
+    });
+    if (cands.length > 0) {
+      cands.sort(function(a, b) { return b.reasons.length - a.reasons.length; });
+      setDupCandidates(cands);
+      setShowDupModal(true);
+      return;
+    }
+    doInsertLead();
+  };
+  var doInsertLead = async function() {
     var leadData = Object.assign({}, newLead, { contact: formatPhone(newLead.contact || "") });
     var result = await supabase.from("db_leads").insert(leadData).select().single();
-    if (!result.error && result.data) { setLeads(function(prev) { return prev.concat([result.data]); }); setShowAddLead(false); }
+    if (!result.error && result.data) { setLeads(function(prev) { return prev.concat([result.data]); }); setShowAddLead(false); setShowDupModal(false); }
   };
 
   if (leadsLoading) return (<div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", flexDirection: "column", gap: 16 }}><div style={{ width: 36, height: 36, border: "3px solid #E8E5E0", borderTopColor: "#1A1917", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} /><span style={{ color: "#888", fontSize: 13 }}>DB리스트 불러오는 중...</span></div>);
@@ -8819,6 +8854,39 @@ function DBLeadsView() {
           </div>
         )}
       </div>
+
+      {showDupModal && (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={function(e) { if (e.target === e.currentTarget) setShowDupModal(false); }}>
+        <div style={{ background: "#fff", borderRadius: 12, padding: 24, width: 520, maxWidth: "90vw", maxHeight: "80vh", overflowY: "auto" }} onClick={function(e) { e.stopPropagation(); }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <span style={{ fontSize: 20 }}>⚠️</span>
+            <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700 }}>비슷한 기존 고객이 있어요</h2>
+          </div>
+          <p style={{ color: "#888", fontSize: 13, margin: "0 0 16px" }}>회사명 또는 번호가 겹치는 건이 {dupCandidates.length}개 있습니다. 확인 후 등록 여부를 결정하세요.</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
+            {dupCandidates.map(function(d, i) {
+              var strong = d.reasons.length >= 2;
+              return (
+                <div key={i} style={{ border: "1px solid " + (strong ? "#FCA5A5" : "#E8E5E0"), background: strong ? "#FEF2F2" : "#FAFAF8", borderRadius: 8, padding: "10px 12px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                    <span style={{ fontWeight: 700, fontSize: 14 }}>{d.name}</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 99, background: d.src === "기업목록" ? "#EEF2FF" : "#FEF3C7", color: d.src === "기업목록" ? "#4338CA" : "#B45309" }}>{d.src}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#666" }}>
+                    {d.phone ? "📞 " + d.phone : ""}{d.rep ? "  ·  대표 " + d.rep : ""}
+                  </div>
+                  <div style={{ fontSize: 11, color: strong ? "#DC2626" : "#999", marginTop: 4, fontWeight: 600 }}>
+                    {strong ? "🔴 " : ""}{d.reasons.join(" + ")} 일치{strong ? " (중복 가능성 높음)" : ""}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={function() { setShowDupModal(false); }} style={{ flex: 1, padding: "12px", background: "#F1EFE8", color: "#555", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>취소</button>
+            <button onClick={doInsertLead} style={{ flex: 1, padding: "12px", background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>그래도 등록</button>
+          </div>
+        </div>
+      </div>)}
 
       {showAddLead && (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={function(e) { if (e.target === e.currentTarget) setShowAddLead(false); }}>
         <div style={{ background: "#fff", borderRadius: 14, width: 520, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
