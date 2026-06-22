@@ -7369,32 +7369,29 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
 
   // 순서 이동 함수 - dir: -1(위) 또는 +1(아래)
   var moveCaseOrder = async function(caseId, dir) {
-    // 현재 filtered 기준 같은 그룹/월의 항목들만 대상
-    var siblings = filtered;
+    // 현재 보이는 순서(filtered)에서 위치를 바꾸고, 전체에 sort_order를 1,2,3...으로 다시 부여 (일부만 교환하면 순서가 꼬임)
+    var siblings = filtered.slice();
     var idx = siblings.findIndex(function(c) { return c.id === caseId; });
     if (idx < 0) return;
     var targetIdx = idx + dir;
     if (targetIdx < 0 || targetIdx >= siblings.length) return;
-    var me = siblings[idx];
-    var other = siblings[targetIdx];
-    // 두 항목의 sort_order 값 교환
-    var myOrder = me.sort_order != null ? me.sort_order : (idx + 1) * 1000;
-    var otherOrder = other.sort_order != null ? other.sort_order : (targetIdx + 1) * 1000;
-    // 즉시 UI 반영 (낙관적 업데이트)
+    // 배열에서 두 항목 위치 swap
+    var tmp = siblings[idx]; siblings[idx] = siblings[targetIdx]; siblings[targetIdx] = tmp;
+    // 새 순서대로 1,2,3... 재부여
+    var orderMap = {};
+    siblings.forEach(function(c, i) { orderMap[c.id] = i + 1; });
+    // 즉시 UI 반영 (낙관적)
     setCases(function(prev) {
-      return prev.map(function(c) {
-        if (c.id === me.id) return Object.assign({}, c, { sort_order: otherOrder });
-        if (c.id === other.id) return Object.assign({}, c, { sort_order: myOrder });
-        return c;
-      });
+      return prev.map(function(c) { return orderMap[c.id] != null ? Object.assign({}, c, { sort_order: orderMap[c.id] }) : c; });
     });
-    // DB 업데이트
+    // DB 일괄 업데이트 (병렬)
     try {
-      await supabase.from("agency_cases").update({ sort_order: otherOrder }).eq("id", me.id);
-      await supabase.from("agency_cases").update({ sort_order: myOrder }).eq("id", other.id);
+      await Promise.all(siblings.map(function(c, i) {
+        return supabase.from("agency_cases").update({ sort_order: i + 1 }).eq("id", c.id);
+      }));
     } catch (e) {
       console.warn("순서 변경 저장 실패:", e);
-      fetchCases(); // 실패 시 새로고침
+      fetchCases();
     }
   };
 
@@ -7410,11 +7407,12 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     completed: ["완료"],
     waiting: ["기관 방문 전","기관 방문 후 대기","온라인 신청 후 대기","심사대기"],
     rejected: ["부결","반려","진행불가","신청취소","신청못함","중단"],
+    inProgress: ["진행 중","심사중","최종제출","임시저장","우선도 평가","우선도 평가 예비","실태 조사 예정","실태 조사 완료"],
   };
-  // 위 4그룹에 안 속하면 전부 '진행중'(inProgress)
+  // 위 그룹에 안 속하면 '기타'(보류/시작 전 등) — 5개 칩 어디에도 안 잡히고 '전체'에서만 보임
   var groupOf = function(status) {
     for (var k in STATUS_GROUPS) { if (STATUS_GROUPS[k].indexOf(status) >= 0) return k; }
-    return "inProgress";
+    return "other";
   };
 
   var filtered = useMemo(function() {
@@ -7783,7 +7781,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
           return true;
         });
         if (base.length === 0) return null;
-        var counts = { inProgress: 0, waiting: 0, approved: 0, completed: 0, rejected: 0 };
+        var counts = { inProgress: 0, waiting: 0, approved: 0, completed: 0, rejected: 0, other: 0 };
         base.forEach(function(c) { counts[groupOf(c.status)] = (counts[groupOf(c.status)] || 0) + 1; });
         var groups = [
           { key: "inProgress", label: "진행중", bg: "#EEF2FF", text: "#4338CA" },
