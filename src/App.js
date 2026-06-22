@@ -94,7 +94,7 @@ const AGENCY_GROUPS = [
   { id: "경정청구", label: "경정청구", color: "#0369A1" },
   { id: "기타", label: "기타", color: "#555" },
 ];
-const DOC_LIST = ["사업자등록증","최근 3년치 재무제표 (23년~25년)","최근 3년치 부가세 증명원 (23년~25년)","법인 기업 금융거래 확인서","대표자 신용점수","4대보험 명부","월별 고용보험 가입자 명부","그 외 사업전환 필수 서류","최근 1년 수출실적 증명서","사업자 대출 금융거래 확인서","대표자 신분증","임대차 계약서","회사 소개서 또는 사업계획서","2026년 상반기 부가세 증명원","대표자 개인 대출 금융거래 확인서","직전연도 상시근로자 수 파악","기업 인증 자료 (벤처, 이노비즈, 연구전담 부서 등)","특허 및 상표권 관련 자료"];
+const DOC_LIST = ["사업자등록증","최근 3년치 재무제표 (23년~25년)","최근 3년치 부가세 증명원 (23년~25년)","법인 기업 금융거래 확인서","대표자 신용점수","4대보험 명부","월별 고용보험 가입자 명부","그 외 사업전환 필수 서류","최근 1년 수출실적 증명서","사업자 대출 금융거래 확인서","대표자 신분증","임대차 계약서","회사 소개서 또는 사업계획서","2026년 상반기 부가세 증명원","대표자 개인 대출 금융거래 확인서","직전연도 상시근로자 수 파악","기업 인증 자료 (벤처·이노비즈·연구전담 부서 등)","특허 및 상표권 관련 자료"];
 const TEAMS = ["법인전담","개인전담","관리자"];
 const ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일","양호"];
 const INDUSTRY_OPTIONS = ["제조업","농업·어업","숙박업","음식점업","전자상거래업","정보통신업","도소매업","서비스업","창고업","자동차임대업"];
@@ -824,7 +824,8 @@ function CRMApp({ profile, session }) {
   // 회사 저장
   const saveCompany = async (data, prevData) => {
     const { documents, ...rest } = data;
-    const { error } = await supabase.from("companies").update({
+    // 모든 필드를 모으되, 빈값(빈문자열/null/undefined)은 저장에서 제외 → 기존 DB값 유지(실수로 비워지는 손실 방지)
+    const allFields = {
       name: rest.name, type: rest.type, representative: rest.representative,
       phone: rest.phone, stage: rest.stage, assignee: rest.assignee,
       agency: rest.agency, received_docs: rest.received_docs, last_contact: rest.last_contact,
@@ -832,17 +833,33 @@ function CRMApp({ profile, session }) {
       fee: rest.fee, fee_status: rest.fee_status,
       revenue_2023: rest.revenue_2023, revenue_2024: rest.revenue_2024, revenue_2025: rest.revenue_2025,
       issue: rest.issue, next_action: rest.next_action,
-      employee_count: rest.employee_count || null, credit_score: rest.credit_score || null,
-      credit_score_kcb: rest.credit_score_kcb ? parseInt(rest.credit_score_kcb) || null : null,
-      credit_score_nice: rest.credit_score_nice ? parseInt(rest.credit_score_nice) || null : null,
-      founded_year: rest.founded_year || null, founded_month: rest.founded_month ? parseInt(rest.founded_month) || null : null,
-      application_month: rest.application_month || null,
-      business_number: rest.business_number || null,
-      business_type: rest.business_type || null,
-      industry: rest.industry || null,
-      region: rest.region || null,
-      contract_date: rest.contract_date || null,
-    }).eq("id", rest.id);
+      employee_count: rest.employee_count,
+      credit_score: rest.credit_score,
+      credit_score_kcb: rest.credit_score_kcb ? (parseInt(rest.credit_score_kcb) || null) : null,
+      credit_score_nice: rest.credit_score_nice ? (parseInt(rest.credit_score_nice) || null) : null,
+      founded_year: rest.founded_year,
+      founded_month: rest.founded_month ? (parseInt(rest.founded_month) || null) : null,
+      application_month: rest.application_month,
+      business_number: rest.business_number,
+      business_type: rest.business_type,
+      industry: rest.industry,
+      region: rest.region,
+      contract_date: rest.contract_date,
+    };
+    // stage/assignee/received_docs 등은 빈값도 의미가 있을 수 있으나, 일반 정보 필드는 빈값이면 건드리지 않음
+    const keepEvenIfEmpty = { stage: 1, assignee: 1, received_docs: 1, fee_status: 1 };
+    const updateObj = {};
+    Object.keys(allFields).forEach(function(k) {
+      const v = allFields[k];
+      if (keepEvenIfEmpty[k]) { updateObj[k] = v; return; }
+      if (v === "" || v === null || v === undefined) return; // 빈값은 제외 → DB 기존값 유지
+      updateObj[k] = v;
+    });
+    // 계정정보(accounts)는 항목이 1개 이상 입력됐을 때만 저장 (컬럼 미생성 시 일반 저장이 깨지지 않도록 안전 처리)
+    if (Array.isArray(rest.accounts) && rest.accounts.length > 0) {
+      updateObj.accounts = rest.accounts;
+    }
+    const { error } = await supabase.from("companies").update(updateObj).eq("id", rest.id);
     if (!error) {
       // 🆕 stage가 "부결/반려"로 새로 바뀌면 → 사례집 자동 초안 생성
       if (rest.stage === "부결/반려" && prevData && prevData.stage !== "부결/반려") {
@@ -960,7 +977,8 @@ function CRMApp({ profile, session }) {
       }
       showToast("저장됐어요!");
       // 전체 리로드(fetchAll) 시 목록이 재정렬되며 스크롤이 맨 위로 튀므로, 해당 회사만 로컬 갱신
-      setCompanies(function(prev) { return prev.map(function(c) { return c.id === rest.id ? Object.assign({}, c, rest) : c; }); });
+      // 실제 DB에 저장한 값(updateObj)으로 갱신해야 화면과 DB가 일치함
+      setCompanies(function(prev) { return prev.map(function(c) { return c.id === rest.id ? Object.assign({}, c, updateObj) : c; }); });
     }
     else showToast("저장 실패: " + error.message, "error");
   };
@@ -3181,6 +3199,31 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>지역</div>
                   <input type="text" value={data.region || ""} placeholder="예: 서울_강남, 경기_안산" onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { region: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
                 </div>
+              </div>
+              {/* 🔐 계정·인증 정보 (자유 입력) */}
+              <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "12px 14px", marginBottom: 10 }}>
+                <div style={{ fontSize: 11, color: "#888", marginBottom: 8, display: "flex", alignItems: "center", gap: 5 }}>🔐 계정·인증 정보 <span style={{ color: "#BBB" }}>(소진공·중진공·홈택스·계좌·아이핀·인증서 등 자유 입력)</span></div>
+                {(Array.isArray(data.accounts) ? data.accounts : []).map(function(acc, ai) {
+                  return (
+                    <div key={ai} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: "1px solid #E8E5E0" }}>
+                      <input value={acc.label || ""} placeholder="구분 (예: 소진공 계정, 사업자 계좌)"
+                        onChange={function(e) { var v = e.target.value; setData(function(p) { var a = (p.accounts || []).slice(); a[ai] = Object.assign({}, a[ai], { label: v }); return Object.assign({}, p, { accounts: a }); }); }}
+                        style={{ width: "100%", fontSize: 12, fontWeight: 600, padding: "5px 7px", border: "1px solid #E8E5E0", borderRadius: 5, marginBottom: 4, boxSizing: "border-box", outline: "none" }} />
+                      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                        <input value={acc.id || ""} placeholder="아이디 / 내용"
+                          onChange={function(e) { var v = e.target.value; setData(function(p) { var a = (p.accounts || []).slice(); a[ai] = Object.assign({}, a[ai], { id: v }); return Object.assign({}, p, { accounts: a }); }); }}
+                          style={{ flex: 1, minWidth: 0, fontSize: 12, padding: "5px 7px", border: "1px solid #E8E5E0", borderRadius: 5, boxSizing: "border-box", outline: "none" }} />
+                        <input value={acc.pw || ""} placeholder="비밀번호 (선택)"
+                          onChange={function(e) { var v = e.target.value; setData(function(p) { var a = (p.accounts || []).slice(); a[ai] = Object.assign({}, a[ai], { pw: v }); return Object.assign({}, p, { accounts: a }); }); }}
+                          style={{ flex: 1, minWidth: 0, fontSize: 12, padding: "5px 7px", border: "1px solid #E8E5E0", borderRadius: 5, boxSizing: "border-box", outline: "none" }} />
+                        <button onClick={function() { setData(function(p) { return Object.assign({}, p, { accounts: (p.accounts || []).filter(function(_, i) { return i !== ai; }) }); }); }}
+                          style={{ border: "none", background: "transparent", color: "#CCC", cursor: "pointer", fontSize: 15, padding: "0 2px" }}>✕</button>
+                      </div>
+                    </div>
+                  );
+                })}
+                <button onClick={function() { setData(function(p) { return Object.assign({}, p, { accounts: (p.accounts || []).concat([{ label: "", id: "", pw: "" }]) }); }); }}
+                  style={{ width: "100%", fontSize: 12, padding: "6px 10px", background: "#fff", border: "1px solid #D1D5DB", borderRadius: 6, color: "#555", fontWeight: 600, cursor: "pointer" }}>+ 항목 추가</button>
               </div>
               {/* 담당자 다중선택 */}
               <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "12px 14px", marginBottom: 10 }}>
@@ -8700,6 +8743,34 @@ function DBLeadsView() {
   };
   var normNameDup = function(s) { return (s || "").replace(/\(주\)|㈜|주식회사|\(유\)|농업회사법인|\s/g, "").toLowerCase(); };
   var normPhoneDup = function(s) { return (s || "").replace(/[^0-9]/g, ""); };
+  // 목록 내 + 기업목록 기준 회사명/번호 중복 카운트 (이미 있는 중복도 표시)
+  var dupNameCnt = {}, dupPhoneCnt = {};
+  (leads || []).forEach(function(l) { if (l.deleted_at) return; var n = normNameDup(l.business_name); if (n) dupNameCnt[n] = (dupNameCnt[n] || 0) + 1; var p = normPhoneDup(l.contact); if (p) dupPhoneCnt[p] = (dupPhoneCnt[p] || 0) + 1; });
+  (companiesForDup || []).forEach(function(c) { var n = normNameDup(c.name); if (n) dupNameCnt[n] = (dupNameCnt[n] || 0) + 1; var p = normPhoneDup(c.phone); if (p) dupPhoneCnt[p] = (dupPhoneCnt[p] || 0) + 1; });
+  var isLeadDup = function(row) { var n = normNameDup(row.business_name); var p = normPhoneDup(row.contact); return (!!n && dupNameCnt[n] >= 2) || (!!p && dupPhoneCnt[p] >= 2); };
+  // DB리스트 사이드패널 전체 저장 (자동저장 실패 대비 명시적 버튼용)
+  var saveAllLead = async function() {
+    if (!selectedLead || !selectedLead.id) return;
+    var u = {
+      business_name: selectedLead.business_name, contact: formatPhone(selectedLead.contact || ""),
+      assignee: selectedLead.assignee, assigned_by: selectedLead.assigned_by, status: selectedLead.status,
+      script_memo: selectedLead.script_memo || null, etc: selectedLead.etc || null,
+      call_1_date: selectedLead.call_1_date || null, call_1_status: selectedLead.call_1_status || null, call_1_memo: selectedLead.call_1_memo || null,
+      call_2_date: selectedLead.call_2_date || null, call_2_status: selectedLead.call_2_status || null, call_2_memo: selectedLead.call_2_memo || null,
+      call_3_date: selectedLead.call_3_date || null, call_3_status: selectedLead.call_3_status || null, call_3_memo: selectedLead.call_3_memo || null,
+      call_4_date: selectedLead.call_4_date || null, call_4_status: selectedLead.call_4_status || null, call_4_memo: selectedLead.call_4_memo || null,
+      call_5_date: selectedLead.call_5_date || null, call_5_status: selectedLead.call_5_status || null, call_5_memo: selectedLead.call_5_memo || null,
+      updated_at: new Date().toISOString(),
+    };
+    var r = await supabase.from("db_leads").update(u).eq("id", selectedLead.id);
+    if (!r.error) {
+      setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, u) : l; }); });
+      alert("저장됐어요!");
+    } else {
+      alert("저장 실패: " + r.error.message);
+    }
+  };
+
   var saveNewLead = function() {
     if (!newLead.business_name) { alert("사업자명은 필수입니다."); return; }
     var inName = normNameDup(newLead.business_name);
@@ -8807,7 +8878,7 @@ function DBLeadsView() {
                       <td style={{ padding: "9px 8px" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
                         {isEditing
                           ? <input value={editData.business_name || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { business_name: e.target.value }); }); }} style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12, width: "100%", boxSizing: "border-box" }} />
-                          : <span style={{ fontWeight: 600 }}>{row.business_name || "-"}</span>}
+                          : <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ fontWeight: 600 }}>{row.business_name || "-"}</span>{isLeadDup(row) && <span title="회사명 또는 번호가 다른 건과 겹침" style={{ fontSize: 10, padding: "1px 6px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", fontWeight: 700 }}>중복</span>}</span>}
                       </td>
                       <td style={{ padding: "9px 8px" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
                         {isEditing
@@ -9127,6 +9198,9 @@ function DBLeadsView() {
                   rows={4} style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.6, resize: "vertical", boxSizing: "border-box", outline: "none", fontFamily: "inherit" }} />
                 <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>입력 후 칸 밖 클릭 시 자동 저장</div>
               </div>
+
+              {/* 전체 저장 버튼 (자동저장이 안 될 때 확실히 저장) */}
+              <button onClick={saveAllLead} style={{ width: "100%", padding: "13px", background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer", marginBottom: 8 }}>💾 전체 저장</button>
             </div>
           </div>
         </div>
