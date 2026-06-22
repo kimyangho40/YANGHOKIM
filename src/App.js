@@ -3198,32 +3198,32 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>지역</div>
                   <input type="text" value={data.region || ""} placeholder="예: 서울_강남, 경기_안산" onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { region: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+                  {/* 🔐 계정·인증 정보 (지역 칸 빈 공간 활용, 세로 배치) */}
+                  <div style={{ marginTop: 12, borderTop: "1px solid #E8E5E0", paddingTop: 10 }}>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 8, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>🔐 계정·인증 정보 <span style={{ color: "#BBB", fontSize: 10 }}>(소진공·중진공·홈택스·계좌·아이핀 등 자유)</span></div>
+                    {(Array.isArray(data.accounts) ? data.accounts : []).map(function(acc, ai) {
+                      return (
+                        <div key={ai} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: "1px solid #E8E5E0" }}>
+                          <div style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 4 }}>
+                            <input value={acc.label || ""} placeholder="구분 (예: 소진공 계정)"
+                              onChange={function(e) { var v = e.target.value; setData(function(p) { var a = (p.accounts || []).slice(); a[ai] = Object.assign({}, a[ai], { label: v }); return Object.assign({}, p, { accounts: a }); }); }}
+                              style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, padding: "5px 7px", border: "1px solid #E8E5E0", borderRadius: 5, boxSizing: "border-box", outline: "none" }} />
+                            <button onClick={function() { setData(function(p) { return Object.assign({}, p, { accounts: (p.accounts || []).filter(function(_, i) { return i !== ai; }) }); }); }}
+                              style={{ border: "none", background: "transparent", color: "#CCC", cursor: "pointer", fontSize: 15, padding: "0 2px" }}>✕</button>
+                          </div>
+                          <input value={acc.id || ""} placeholder="아이디 / 내용"
+                            onChange={function(e) { var v = e.target.value; setData(function(p) { var a = (p.accounts || []).slice(); a[ai] = Object.assign({}, a[ai], { id: v }); return Object.assign({}, p, { accounts: a }); }); }}
+                            style={{ width: "100%", fontSize: 12, padding: "5px 7px", border: "1px solid #E8E5E0", borderRadius: 5, boxSizing: "border-box", outline: "none", marginBottom: 4 }} />
+                          <input value={acc.pw || ""} placeholder="비밀번호 (선택)"
+                            onChange={function(e) { var v = e.target.value; setData(function(p) { var a = (p.accounts || []).slice(); a[ai] = Object.assign({}, a[ai], { pw: v }); return Object.assign({}, p, { accounts: a }); }); }}
+                            style={{ width: "100%", fontSize: 12, padding: "5px 7px", border: "1px solid #E8E5E0", borderRadius: 5, boxSizing: "border-box", outline: "none" }} />
+                        </div>
+                      );
+                    })}
+                    <button onClick={function() { setData(function(p) { return Object.assign({}, p, { accounts: (p.accounts || []).concat([{ label: "", id: "", pw: "" }]) }); }); }}
+                      style={{ width: "100%", fontSize: 12, padding: "6px 10px", background: "#fff", border: "1px solid #D1D5DB", borderRadius: 6, color: "#555", fontWeight: 600, cursor: "pointer" }}>+ 항목 추가</button>
+                  </div>
                 </div>
-              </div>
-              {/* 🔐 계정·인증 정보 (자유 입력) */}
-              <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "12px 14px", marginBottom: 10 }}>
-                <div style={{ fontSize: 11, color: "#888", marginBottom: 8, display: "flex", alignItems: "center", gap: 5 }}>🔐 계정·인증 정보 <span style={{ color: "#BBB" }}>(소진공·중진공·홈택스·계좌·아이핀·인증서 등 자유 입력)</span></div>
-                {(Array.isArray(data.accounts) ? data.accounts : []).map(function(acc, ai) {
-                  return (
-                    <div key={ai} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: "1px solid #E8E5E0" }}>
-                      <input value={acc.label || ""} placeholder="구분 (예: 소진공 계정, 사업자 계좌)"
-                        onChange={function(e) { var v = e.target.value; setData(function(p) { var a = (p.accounts || []).slice(); a[ai] = Object.assign({}, a[ai], { label: v }); return Object.assign({}, p, { accounts: a }); }); }}
-                        style={{ width: "100%", fontSize: 12, fontWeight: 600, padding: "5px 7px", border: "1px solid #E8E5E0", borderRadius: 5, marginBottom: 4, boxSizing: "border-box", outline: "none" }} />
-                      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                        <input value={acc.id || ""} placeholder="아이디 / 내용"
-                          onChange={function(e) { var v = e.target.value; setData(function(p) { var a = (p.accounts || []).slice(); a[ai] = Object.assign({}, a[ai], { id: v }); return Object.assign({}, p, { accounts: a }); }); }}
-                          style={{ flex: 1, minWidth: 0, fontSize: 12, padding: "5px 7px", border: "1px solid #E8E5E0", borderRadius: 5, boxSizing: "border-box", outline: "none" }} />
-                        <input value={acc.pw || ""} placeholder="비밀번호 (선택)"
-                          onChange={function(e) { var v = e.target.value; setData(function(p) { var a = (p.accounts || []).slice(); a[ai] = Object.assign({}, a[ai], { pw: v }); return Object.assign({}, p, { accounts: a }); }); }}
-                          style={{ flex: 1, minWidth: 0, fontSize: 12, padding: "5px 7px", border: "1px solid #E8E5E0", borderRadius: 5, boxSizing: "border-box", outline: "none" }} />
-                        <button onClick={function() { setData(function(p) { return Object.assign({}, p, { accounts: (p.accounts || []).filter(function(_, i) { return i !== ai; }) }); }); }}
-                          style={{ border: "none", background: "transparent", color: "#CCC", cursor: "pointer", fontSize: 15, padding: "0 2px" }}>✕</button>
-                      </div>
-                    </div>
-                  );
-                })}
-                <button onClick={function() { setData(function(p) { return Object.assign({}, p, { accounts: (p.accounts || []).concat([{ label: "", id: "", pw: "" }]) }); }); }}
-                  style={{ width: "100%", fontSize: 12, padding: "6px 10px", background: "#fff", border: "1px solid #D1D5DB", borderRadius: 6, color: "#555", fontWeight: 600, cursor: "pointer" }}>+ 항목 추가</button>
               </div>
               {/* 담당자 다중선택 */}
               <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "12px 14px", marginBottom: 10 }}>
