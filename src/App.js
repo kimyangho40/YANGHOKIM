@@ -8658,7 +8658,7 @@ function DBLeadsView() {
 
   var filtered = useMemo(function() {
     return leads.filter(function(l) {
-      if (l.month !== activeMonth || l.year !== 2026 || l.deleted_at) return false;
+      if ((activeMonth !== "all" && l.month !== activeMonth) || l.year !== 2026 || l.deleted_at) return false;
       if (filterStatus !== "전체" && l.status !== filterStatus) return false;
       if (filterWeek !== "전체") {
         var w = getWeek(l);
@@ -8682,7 +8682,7 @@ function DBLeadsView() {
 
   var weeksWithData = useMemo(function() {
     var counts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-    leads.filter(function(l) { return l.month === activeMonth && l.year === 2026 && !l.deleted_at; }).forEach(function(l) {
+    leads.filter(function(l) { return (activeMonth === "all" || l.month === activeMonth) && l.year === 2026 && !l.deleted_at; }).forEach(function(l) {
       var w = getWeek(l);
       if (w && w >= 1 && w <= 5) counts[w]++;
     });
@@ -8690,7 +8690,7 @@ function DBLeadsView() {
   }, [leads, activeMonth]);
 
   var summary = useMemo(function() {
-    var all = leads.filter(function(l) { return l.month === activeMonth && l.year === 2026 && !l.deleted_at; });
+    var all = leads.filter(function(l) { return (activeMonth === "all" || l.month === activeMonth) && l.year === 2026 && !l.deleted_at; });
     return {
       total: all.length,
       connected: all.filter(function(l) { return l.status === "연결"; }).length,
@@ -8736,7 +8736,7 @@ function DBLeadsView() {
     if (!result.error) { setLeads(function(prev) { return prev.map(function(l) { return l.id === id ? Object.assign({}, l, { deleted_at: now }) : l; }); }); }
   };
   var openAddLead = function() {
-    setNewLead({ year: 2026, month: activeMonth, business_name: "", contact: "", assignee: "", assigned_by: "", status: "미연락", call_1: "", call_2: "", call_3: "", call_4: "", call_5: "", etc: "" });
+    setNewLead({ year: 2026, month: activeMonth === "all" ? (new Date().getMonth() + 1) : activeMonth, business_name: "", contact: "", assignee: "", assigned_by: "", status: "미연락", call_1: "", call_2: "", call_3: "", call_4: "", call_5: "", etc: "" });
     setShowAddLead(true);
   };
   var normNameDup = function(s) { return (s || "").replace(/\(주\)|㈜|주식회사|\(유\)|농업회사법인|\s/g, "").toLowerCase(); };
@@ -8824,6 +8824,7 @@ function DBLeadsView() {
 
       <div style={{ display: "flex", gap: 4, marginBottom: 18, flexWrap: "wrap" }}>
         {MONTHS_LIST.map(function(m) { var hasData = monthsWithData.has(m); var isActive = activeMonth === m; return (<div key={m} onClick={function() { setActiveMonth(m); setFilterStatus("전체"); }} style={{ padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: isActive ? 700 : 400, background: isActive ? "#1A1917" : hasData ? "#fff" : "#F7F6F3", color: isActive ? "#fff" : hasData ? "#333" : "#CCC", border: isActive ? "none" : hasData ? "1px solid #E8E5E0" : "1px solid #EDEBE8" }}>{m}월{hasData && !isActive ? " ●" : ""}</div>); })}
+        <div onClick={function() { setActiveMonth("all"); setFilterStatus("전체"); }} style={{ padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: activeMonth === "all" ? 700 : 600, background: activeMonth === "all" ? "#1A1917" : "#fff", color: activeMonth === "all" ? "#fff" : "#333", border: activeMonth === "all" ? "none" : "1px solid #E8E5E0" }}>📋 전체</div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10, marginBottom: 18 }}>
