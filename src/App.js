@@ -8741,11 +8741,11 @@ function DBLeadsView() {
   };
   var normNameDup = function(s) { return (s || "").replace(/\(주\)|㈜|주식회사|\(유\)|농업회사법인|\s/g, "").toLowerCase(); };
   var normPhoneDup = function(s) { return (s || "").replace(/[^0-9]/g, ""); };
-  // 목록 내 + 기업목록 기준 회사명/번호 중복 카운트 (이미 있는 중복도 표시)
-  var dupNameCnt = {}, dupPhoneCnt = {};
-  (leads || []).forEach(function(l) { if (l.deleted_at) return; var n = normNameDup(l.business_name); if (n) dupNameCnt[n] = (dupNameCnt[n] || 0) + 1; var p = normPhoneDup(l.contact); if (p) dupPhoneCnt[p] = (dupPhoneCnt[p] || 0) + 1; });
-  (companiesForDup || []).forEach(function(c) { var n = normNameDup(c.name); if (n) dupNameCnt[n] = (dupNameCnt[n] || 0) + 1; var p = normPhoneDup(c.phone); if (p) dupPhoneCnt[p] = (dupPhoneCnt[p] || 0) + 1; });
-  var isLeadDup = function(row) { var n = normNameDup(row.business_name); var p = normPhoneDup(row.contact); return (!!n && dupNameCnt[n] >= 2) || (!!p && dupPhoneCnt[p] >= 2); };
+  // 회사명+번호 둘 다 같은(2개 이상 일치) 건이 있을 때만 중복으로 표시
+  var dupComboCnt = {};
+  (leads || []).forEach(function(l) { if (l.deleted_at) return; var n = normNameDup(l.business_name); var p = normPhoneDup(l.contact); if (n && p) { var k = n + "|" + p; dupComboCnt[k] = (dupComboCnt[k] || 0) + 1; } });
+  (companiesForDup || []).forEach(function(c) { var n = normNameDup(c.name); var p = normPhoneDup(c.phone); if (n && p) { var k = n + "|" + p; dupComboCnt[k] = (dupComboCnt[k] || 0) + 1; } });
+  var isLeadDup = function(row) { var n = normNameDup(row.business_name); var p = normPhoneDup(row.contact); if (!n || !p) return false; return (dupComboCnt[n + "|" + p] || 0) >= 2; };
   // DB리스트 사이드패널 전체 저장 (자동저장 실패 대비 명시적 버튼용)
   var saveAllLead = async function() {
     if (!selectedLead || !selectedLead.id) return;
