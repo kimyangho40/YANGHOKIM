@@ -773,7 +773,7 @@ function CRMApp({ profile, session }) {
     const matchSearch = !s || c.name?.toLowerCase().includes(s) || c.representative?.toLowerCase().includes(s)
       || c.region?.toLowerCase().includes(s) || c.industry?.toLowerCase().includes(s);
     const matchStage = filterStage === "전체" || c.stage === filterStage;
-    const matchAssignee = filterAssignee === "전체" || c.assignee === filterAssignee;
+    const matchAssignee = filterAssignee === "전체" || (c.assignee || "").split(",").map(function(x) { return x.trim(); }).includes(filterAssignee);
     const matchType = filterType === "전체" || c.type === filterType;
     let matchCredit = true;
     if (creditFilter !== "" && !isNaN(parseInt(creditFilter))) {
@@ -2894,6 +2894,36 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   const [settlements, setSettlements] = useState([]);
   const [commLogs, setCommLogs] = useState([]);
   const [commInput, setCommInput] = useState("");
+  // 📷 카톡 캡처 OCR (무료 Tesseract.js, 시간 패턴 제거하고 대화 내용만 추출)
+  const [ocrBusy, setOcrBusy] = useState(null);
+  var handleOcrFile = async function(file, target) {
+    if (!file) return;
+    setOcrBusy(target);
+    try {
+      if (!window.Tesseract) {
+        await new Promise(function(res, rej) { var s = document.createElement("script"); s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
+      }
+      var r = await window.Tesseract.recognize(file, "kor");
+      var text = (r.data.text || "").split("\n").map(function(line) {
+        // 시간 패턴 제거: 오전/오후 3:24, 3:24, 14:30, 3:24 PM 등
+        return line.replace(/(오전|오후)\s*\d{1,2}:\d{2}/g, "").replace(/\d{1,2}:\d{2}\s*(AM|PM|am|pm)?/g, "").trim();
+      }).filter(function(l) { return l; }).join("\n");
+      if (!text) { alert("이미지에서 글자를 찾지 못했어요. 더 선명한 캡처로 다시 시도해보세요."); }
+      else if (target === "issue") setData(function(p) { return Object.assign({}, p, { issue: (p.issue ? p.issue + "\n" : "") + text }); });
+      else if (target === "next_action") setData(function(p) { return Object.assign({}, p, { next_action: (p.next_action ? p.next_action + "\n" : "") + text }); });
+      else if (target === "comm") setCommInput(function(prev) { return (prev ? prev + "\n" : "") + text; });
+    } catch (e) { alert("이미지 인식 실패: " + (e.message || e)); }
+    setOcrBusy(null);
+  };
+  var OcrButton = function(props) {
+    return (
+      <label style={{ fontSize: 10, color: ocrBusy ? "#AAA" : "#4338CA", cursor: ocrBusy ? "default" : "pointer", border: "1px solid #C7D2FE", borderRadius: 5, padding: "2px 8px", background: "#EEF2FF", whiteSpace: "nowrap" }}>
+        {ocrBusy === props.target ? "인식중..." : "📷 캡처 읽기"}
+        <input type="file" accept="image/*" style={{ display: "none" }} disabled={!!ocrBusy}
+          onChange={function(e) { var f = e.target.files[0]; e.target.value = ""; handleOcrFile(f, props.target); }} />
+      </label>
+    );
+  };
   const [loadingExtra, setLoadingExtra] = useState(false);
   const [editingLogId, setEditingLogId] = useState(null);
   const [editingLogText, setEditingLogText] = useState("");
@@ -3338,7 +3368,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               <div style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                   <div style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>현재 이슈</div>
-                  <div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 자유 형식</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}><OcrButton target="issue" /><div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 자유 형식</div></div>
                 </div>
                 <textarea value={data.issue || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return { ...p, issue: v }; }); }}
                   placeholder={"예시:\n- 신용점수 부족 (685점)\n- 매출 감소 추세\n- 5/30까지 보완서류 제출 필요"}
@@ -3347,7 +3377,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               <div style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                   <div style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>차기 업무 / 다음 액션</div>
-                  <div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 자유 형식</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}><OcrButton target="next_action" /><div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 자유 형식</div></div>
                 </div>
                 <textarea value={data.next_action || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return { ...p, next_action: v }; }); }}
                   placeholder={"예시:\n1. 5/28 화요일 14시 - 추가서류 안내\n2. 5/30 금요일 - 기관 방문 동행\n3. 6/3 - 결과 확인 및 다음 단계 안내"}
@@ -3357,7 +3387,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               <div style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                   <div style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>💬 소통 내역</div>
-                  <div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 여러 줄 OK</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}><OcrButton target="comm" /><div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 여러 줄 OK</div></div>
                 </div>
                 <textarea value={commInput} onChange={function(e) { var v = e.target.value; setCommInput(v); }}
                   placeholder={"예시:\n- 10:30 통화 - 대표 부재중\n- 11:15 다시 통화\n- 다음 주 월요일 방문 예약"}
@@ -4774,7 +4804,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
 }
 
 // ── 업무노트 카드 (독립 컴포넌트 - 입력버그 방지) ──────────────────────────────
-function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditingId, toggleDone, togglePin, deleteNote, fmtDate, currentUserName, onChecklistChange }) {
+function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditingId, toggleDone, togglePin, deleteNote, fmtDate, currentUserName, onChecklistChange, moveNoteDate }) {
   var isEditing = editingId === note.id;
   var isMyNote = true;
 
@@ -4839,6 +4869,12 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
           <div style={{ display: "flex", gap: 4 }}>
             <button onClick={function() { togglePin(note); }} title={note.pinned ? "고정 해제" : "고정"}
               style={{ background: "none", border: "none", cursor: "pointer", padding: 4, fontSize: 14, opacity: note.pinned ? 1 : 0.4 }}>📌</button>
+            <label title="다른 날짜로 이동" style={{ position: "relative", display: "inline-flex", alignItems: "center", cursor: "pointer", padding: 4, fontSize: 14 }}>
+              📅
+              <input type="date" defaultValue={note.note_date || ""}
+                onChange={function(e) { if (e.target.value && moveNoteDate) moveNoteDate(note.id, e.target.value); }}
+                style={{ position: "absolute", left: 0, top: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer" }} />
+            </label>
             <button onClick={function() { setEditingId(note.id); setEditNote(Object.assign({}, note)); window.scrollTo({ top: 0, behavior: "smooth" }); }}
               style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Icon name="edit" size={14} color="#888" /></button>
             <button onClick={function() { deleteNote(note.id); }}
@@ -5313,6 +5349,17 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     if (!r.error) setNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { pinned: !note.pinned }) : n; }); });
   };
 
+  // 노트를 원하는 날짜로 이동 (못 한 업무를 다른 날로 넘기기)
+  var moveNoteDate = async function(noteId, newDate) {
+    if (!newDate) return;
+    var r = await supabase.from("work_notes").update({ note_date: newDate, updated_at: new Date().toISOString() }).eq("id", noteId);
+    if (!r.error) {
+      setNotes(function(prev) { return prev.map(function(n) { return n.id === noteId ? Object.assign({}, n, { note_date: newDate }) : n; }); });
+    } else {
+      alert("날짜 이동 실패: " + r.error.message);
+    }
+  };
+
   var deleteNote = async function(id) {
     if (!window.confirm("휴지통으로 이동하시겠습니까? (휴지통에서 복구 가능)")) return;
     var r = await supabase.from("work_notes").update({ deleted_at: new Date().toISOString() }).eq("id", id);
@@ -5361,7 +5408,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <button onClick={function() { setViewMode("list"); }}
               style={{ padding: "6px 12px", fontSize: 12, fontWeight: 600, background: viewMode === "list" ? "#fff" : "transparent", border: "1px solid " + (viewMode === "list" ? "#E8E5E0" : "transparent"), borderRadius: 6, color: viewMode === "list" ? "#1A1917" : "#888", cursor: "pointer" }}>📋 목록</button>
           </div>
-          <button onClick={function() { setShowAdd(true); setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "", note_date: selectedDate || todayStr }); }}
+          <button onClick={function() { var nd = selectedDate || todayStr; var md = nd ? (parseInt(nd.slice(5,7)) + "월" + parseInt(nd.slice(8,10)) + "일") : ""; var autoTitle = (md ? md + " " : "") + (profile?.name || "") + " 업무"; setShowAdd(true); setNewNote({ title: autoTitle, content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "", note_date: nd }); }}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             <Icon name="plus" size={15} color="#F7F6F3" /> 새 노트
           </button>
@@ -5674,7 +5721,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
                   {notesForSelectedDate.map(function(note) {
-                    return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} />;
+                    return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} />;
                   })}
                 </div>
               )}
@@ -5736,7 +5783,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#B45309", letterSpacing: "0.05em", marginBottom: 10 }}>📌 고정된 노트</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} />; })}
+                {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} />; })}
               </div>
             </div>
           )}
@@ -5745,7 +5792,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div>
               {pinned.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: "#888", letterSpacing: "0.05em", marginBottom: 10 }}>전체 노트</div>}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} />; })}
+                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} />; })}
               </div>
             </div>
           )}
