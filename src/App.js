@@ -981,6 +981,19 @@ function CRMApp({ profile, session }) {
       if (logEntries.length > 0) {
         await supabase.from("activity_logs").insert(logEntries);
       }
+      // 상태·담당자 변경 자동 기록 (누가 언제 무엇을 → 무엇으로) — 상세패널 활동에 표시되도록 company_id 사용
+      const changeLog = [];
+      if (prevData && rest.stage !== prevData.stage) {
+        changeLog.push({ company_id: rest.id, business_name: rest.name, assignee: rest.assignee, log_type: "stage_change", memo: "진행단계: " + (prevData.stage || "없음") + " → " + (rest.stage || "없음") + (profile?.name ? " (변경: " + profile.name + ")" : ""), logged_by: profile?.name || rest.assignee });
+      }
+      var curAssignee2 = Array.isArray(rest.assignee) ? rest.assignee.join(", ") : (rest.assignee || "");
+      var prevAssignee2 = prevData ? (Array.isArray(prevData.assignee) ? prevData.assignee.join(", ") : (prevData.assignee || "")) : "";
+      if (prevData && curAssignee2 !== prevAssignee2) {
+        changeLog.push({ company_id: rest.id, business_name: rest.name, assignee: rest.assignee, log_type: "assignee_change", memo: "담당자: " + (prevAssignee2 || "없음") + " → " + (curAssignee2 || "없음") + (profile?.name ? " (변경: " + profile.name + ")" : ""), logged_by: profile?.name || rest.assignee });
+      }
+      if (changeLog.length > 0) {
+        await supabase.from("activity_logs").insert(changeLog);
+      }
       // 기관별 현황 자동 동기화: 회사명이 같은 모든 agency_cases의 정보를 최신화
       if (rest.name && prevData) {
         var syncUpdates = {};
