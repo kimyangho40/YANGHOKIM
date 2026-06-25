@@ -69,6 +69,33 @@ function kstDate(offsetDays) {
   return new Date(d.getTime() + 9 * 3600000).toISOString().slice(0, 10);
 }
 
+// 차기 업무(자유 텍스트)에서 날짜(6/30, 6월30일, 6.30)를 뽑아 가장 가까운 마감일 추정
+function parseActionDates(text) {
+  if (!text) return [];
+  var now = new Date(); var yr = now.getFullYear();
+  var out = []; var re = /(\d{1,2})\s*[\/월.]\s*(\d{1,2})/g; var m;
+  while ((m = re.exec(text)) !== null) {
+    var mo = parseInt(m[1]), d = parseInt(m[2]);
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) continue;
+    out.push(new Date(yr, mo - 1, d));
+  }
+  return out;
+}
+function nearestActionDate(text) {
+  var dates = parseActionDates(text);
+  if (!dates.length) return null;
+  var today = new Date(); today.setHours(0, 0, 0, 0);
+  var future = dates.filter(function(d) { return d >= today; }).sort(function(a, b) { return a - b; });
+  if (future.length) return future[0];
+  return dates.sort(function(a, b) { return b - a; })[0];
+}
+function daysUntil(date) {
+  if (!date) return null;
+  var today = new Date(); today.setHours(0, 0, 0, 0);
+  var d = new Date(date); d.setHours(0, 0, 0, 0);
+  return Math.round((d - today) / 86400000);
+}
+
 function getProductColor(name) {
   if (!name) return null;
   return PRODUCT_COLORS[name] || { bg: "#F3F4F6", text: "#374151" };
@@ -1414,7 +1441,7 @@ function CRMApp({ profile, session }) {
             {view === "manual" && <ManualView />}
             {view === "pipeline" && <PipelineView filtered={filtered} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setCompanies={setCompanies} />}
             {view === "cases" && <ApprovalCasesView profile={profile} />}
-            {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={profile?.role === "admin" || profile?.name === "양호"} onSelectCompany={setSelectedCompany} setView={setView} />}
+            {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={profile?.role === "admin" || profile?.name === "양호"} onSelectCompany={setSelectedCompany} setView={setView} companies={companies} />}
             {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} creditFilter={creditFilter} setCreditFilter={setCreditFilter} creditMode={creditMode} setCreditMode={setCreditMode} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} />}
             {view === "stagnant" && <StagnantView stagnant={stagnant} onSelect={setSelectedCompany} />}
             {view === "members" && profile.role === "admin" && <MembersView profiles={profiles} onRefresh={fetchAll} showToast={showToast} />}
@@ -1661,8 +1688,39 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
               {/* 📋 내 할일 위젯 - work_notes 체크박스 기반 (항상 표시) */}
               <MyTodoWidget setView={setView} />
-              
-              {/* companies 기반 위젯 제거됨 - work_notes 기반 "내 할일" 위젯이 메인 */}
+
+              {/* 📅 차기 업무 마감 요약 (next_action 날짜 자동 집계) */}
+              {(function() {
+                var acts = (companies || []).filter(function(c) { return c.next_action && nearestActionDate(c.next_action) !== null; }).map(function(c) { return daysUntil(nearestActionDate(c.next_action)); });
+                var todayCnt = acts.filter(function(d) { return d === 0; }).length;
+                var soonCnt = acts.filter(function(d) { return d >= 1 && d <= 3; }).length;
+                var overdueCnt = acts.filter(function(d) { return d < 0; }).length;
+                return (
+                  <>
+                    {todayCnt > 0 && (
+                      <div onClick={function() { setView("mytodo"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #4338CA" }}>
+                        <div style={{ fontSize: 10, color: "#4338CA", fontWeight: 700, marginBottom: 4 }}>📅 오늘 마감</div>
+                        <div style={{ fontSize: 20, fontWeight: 700, color: "#4338CA" }}>{todayCnt}건</div>
+                        <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>차기 업무 오늘까지</div>
+                      </div>
+                    )}
+                    {soonCnt > 0 && (
+                      <div onClick={function() { setView("mytodo"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #B45309" }}>
+                        <div style={{ fontSize: 10, color: "#B45309", fontWeight: 700, marginBottom: 4 }}>⏳ 마감 임박</div>
+                        <div style={{ fontSize: 20, fontWeight: 700, color: "#B45309" }}>{soonCnt}건</div>
+                        <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>3일 이내 마감</div>
+                      </div>
+                    )}
+                    {overdueCnt > 0 && (
+                      <div onClick={function() { setView("mytodo"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
+                        <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 700, marginBottom: 4 }}>⏰ 기한 지남</div>
+                        <div style={{ fontSize: 20, fontWeight: 700, color: "#DC2626" }}>{overdueCnt}건</div>
+                        <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>차기 업무 마감 지남</div>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
               {stagnant14.length > 0 && (
                 <div onClick={function() { setView("stagnant"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
                   <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 700, marginBottom: 4 }}>🔴 심각 정체</div>
@@ -1992,7 +2050,7 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
 // ============================================================
 // 📋 내 할일 화면 - work_notes content에서 체크박스 파싱
 // ============================================================
-function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
+function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView, companies }) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState(isAdmin ? "all" : "mine"); // "mine" | "all"
@@ -2147,6 +2205,18 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
   var noDue = unchecked.filter(function(i) { return !i.dueDate; });
   var later = unchecked.filter(function(i) { return i.dueDate && i.dueDate > weekEnd; });
 
+  // 📅 기업목록 차기 업무(next_action)에서 날짜가 적힌 건들을 모아 마감일순 정렬
+  var actionTodos = (companies || []).filter(function(c) {
+    if (!c.next_action || nearestActionDate(c.next_action) === null) return false;
+    var names = (c.assignee || "").split(",").map(function(s) { return s.trim(); });
+    if (viewMode === "mine" && currentUser) return names.includes(currentUser);
+    if (filterAssignee) return names.includes(filterAssignee);
+    return true;
+  }).map(function(c) {
+    var dt = nearestActionDate(c.next_action);
+    return { c: c, date: dt, days: daysUntil(dt) };
+  }).sort(function(a, b) { return a.date - b.date; });
+
   // 카테고리 렌더 헬퍼
   function renderSection(title, items, color, bgColor, icon) {
     if (items.length === 0) return null;
@@ -2246,7 +2316,33 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
         </div>
       </div>
 
-      {allItems.length === 0 && (
+      {/* 📅 기업목록 차기 업무 마감 (next_action에 날짜 적힌 건 자동 수집) */}
+      {actionTodos.length > 0 && (
+        <div style={{ marginBottom: 20, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 12, padding: "14px 16px" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#92400E", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+            📅 기업목록 차기 업무 마감 <span style={{ fontSize: 11, fontWeight: 400, color: "#B45309" }}>({actionTodos.length}건 · 클릭하면 해당 업체로 이동)</span>
+          </div>
+          {actionTodos.map(function(t, i) {
+            var dday = t.days;
+            var ddayLabel = dday < 0 ? "D+" + Math.abs(dday) + " 지남" : dday === 0 ? "오늘" : "D-" + dday;
+            var ddayColor = dday < 0 ? "#DC2626" : dday === 0 ? "#4338CA" : dday <= 3 ? "#B45309" : "#888";
+            var ddayBg = dday < 0 ? "#FEE2E2" : dday === 0 ? "#EEF2FF" : dday <= 3 ? "#FEF3C7" : "#F3F4F6";
+            var firstLine = (t.c.next_action || "").split("\n").map(function(s) { return s.trim(); }).filter(Boolean)[0] || "";
+            return (
+              <div key={t.c.id + "_" + i} onClick={function() { onSelectCompany && onSelectCompany(t.c); }}
+                style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 8, cursor: "pointer", background: "#fff", marginBottom: 6, border: "1px solid #FEF3C7" }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: ddayColor, background: ddayBg, padding: "3px 8px", borderRadius: 99, whiteSpace: "nowrap", flexShrink: 0 }}>{ddayLabel}</span>
+                <span style={{ fontSize: 12, color: "#888", whiteSpace: "nowrap", flexShrink: 0 }}>{(t.date.getMonth() + 1) + "/" + t.date.getDate()}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "#1A1917", whiteSpace: "nowrap", flexShrink: 0 }}>{t.c.name}</span>
+                <span style={{ fontSize: 12, color: "#666", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{firstLine}</span>
+                {t.c.assignee && <span style={{ fontSize: 10, color: "#999", whiteSpace: "nowrap", flexShrink: 0, marginLeft: "auto" }}>{t.c.assignee}</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {allItems.length === 0 && actionTodos.length === 0 && (
         <div style={{ background: "#F7F6F3", borderRadius: 12, padding: 40, textAlign: "center", color: "#888" }}>
           <div style={{ fontSize: 30, marginBottom: 12 }}>📝</div>
           <div style={{ fontSize: 14, marginBottom: 6 }}>할일이 없어요!</div>
