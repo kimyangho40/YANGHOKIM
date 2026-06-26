@@ -2716,7 +2716,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
           </select>
         ))}
         {(search || filterStage !== "전체" || filterAssignee !== "전체" || filterType !== "전체") && (
-          <button onClick={() => { setSearch(""); setFilterStage("전체"); setFilterAssignee("전체"); setFilterType("전체"); }}
+          <button onClick={() => { setSearch(""); setFilterStage("전체"); setFilterAssignee([]); setFilterType("전체"); }}
             style={{ fontSize: 12, color: "#888", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>초기화</button>
         )}
       </div>
@@ -7862,7 +7862,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         {AGENCY_GROUPS.map(function(g) {
           var isActive = activeGroup === g.id;
           return (
-            <div key={g.id} onClick={function() { setActiveGroup(g.id); setEditingId(null); setFilterAssignee("전체"); }}
+            <div key={g.id} onClick={function() { setActiveGroup(g.id); setEditingId(null); setFilterAssignee([]); }}
               style={{ padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: isActive ? 700 : 400,
                 background: isActive ? g.color : "#fff", color: isActive ? "#fff" : "#555",
                 border: isActive ? "none" : "1px solid #E8E5E0", transition: "all 0.15s" }}>
@@ -7878,7 +7878,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
           var hasData = monthsWithData.has(m);
           var isActive = Number(activeMonth) === m;
           return (
-            <div key={m} onClick={function() { setActiveMonth(m); setEditingId(null); setFilterAssignee("전체"); setStatusFilter("all"); }}
+            <div key={m} onClick={function() { setActiveMonth(m); setEditingId(null); setFilterAssignee([]); setStatusFilter("all"); }}
               style={{ padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: isActive ? 700 : 400,
                 background: isActive ? groupColor : hasData ? "#fff" : "#F7F6F3",
                 color: isActive ? "#fff" : hasData ? "#333" : "#CCC",
@@ -7888,7 +7888,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
           );
         })}
         {/* 전체 월 보기 */}
-        <div onClick={function() { setActiveMonth("all"); setEditingId(null); setFilterAssignee("전체"); setStatusFilter("all"); }}
+        <div onClick={function() { setActiveMonth("all"); setEditingId(null); setFilterAssignee([]); setStatusFilter("all"); }}
           style={{ padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12,
             fontWeight: activeMonth === "all" ? 700 : 600,
             background: activeMonth === "all" ? groupColor : "#1A1917",
