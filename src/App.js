@@ -7377,7 +7377,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   const [editingId, setEditingId] = useState(null);
   const [editData, setEditData] = useState({});
   const [showTrash, setShowTrash] = useState(false);
-  const [filterAssignee, setFilterAssignee] = useState("전체");
+  const [filterAssignee, setFilterAssignee] = useState([]); // 다중선택, 빈 배열 = 전체
   const [showAddCase, setShowAddCase] = useState(false);
   const [newCase, setNewCase] = useState({});
   const [companySuggestions, setCompanySuggestions] = useState([]);
@@ -7579,7 +7579,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         && matchMonth
         && Number(c.year) === currentYear
         && !c.deleted_at
-        && (filterAssignee === "전체" || c.assignee === filterAssignee)
+        && (filterAssignee.length === 0 || filterAssignee.some(function(n) { return (c.assignee || "").split(",").map(function(x) { return x.trim(); }).includes(n); }))
         && matchStatus;
     }).sort(function(a, b) {
       // sort_order 우선, 없으면 created_at 순
@@ -7608,8 +7608,8 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     var s = new Set();
     cases.filter(function(c) {
       return c.agency_group === activeGroup && Number(c.month) === Number(activeMonth) && !c.deleted_at;
-    }).forEach(function(c) { if (c.assignee) s.add(c.assignee); });
-    return ["전체"].concat(Array.from(s).sort());
+    }).forEach(function(c) { if (c.assignee) c.assignee.split(",").map(function(x) { return x.trim(); }).filter(Boolean).forEach(function(n) { s.add(n); }); });
+    return Array.from(s).sort();
   }, [cases, activeGroup, activeMonth]);
 
   var summary = useMemo(function() {
@@ -7618,7 +7618,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     var baseList = cases.filter(function(c) {
       var matchMonth = activeMonth === "all" ? true : Number(c.month) === Number(activeMonth);
       return c.agency_group === activeGroup && matchMonth && Number(c.year) === currentYear && !c.deleted_at
-        && (filterAssignee === "전체" || c.assignee === filterAssignee);
+        && (filterAssignee.length === 0 || filterAssignee.some(function(n) { return (c.assignee || "").split(",").map(function(x) { return x.trim(); }).includes(n); }));
     });
     var approved = baseList.filter(function(c) { return groupOf(c.status) === "approved"; }).length;
     var completed = baseList.filter(function(c) { return groupOf(c.status) === "completed"; }).length;
@@ -7933,7 +7933,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
           if (activeMonth !== "all" && Number(c.month) !== Number(activeMonth)) return false;
           if (Number(c.year) !== currentYear) return false;
           if (c.deleted_at) return false;
-          if (filterAssignee !== "전체" && c.assignee !== filterAssignee) return false;
+          if (filterAssignee.length > 0 && !filterAssignee.some(function(n) { return (c.assignee || "").split(",").map(function(x) { return x.trim(); }).includes(n); })) return false;
           return true;
         });
         if (base.length === 0) return null;
@@ -7968,19 +7968,25 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         );
       })()}
 
-      {/* 담당자 필터 */}
-      {assigneesInGroup.length > 1 && (
-        <div style={{ display: "flex", gap: 5, marginBottom: 14, flexWrap: "wrap" }}>
+      {/* 담당자 필터 (다중 선택 - 여러 명 중 한 명이라도 담당이면 표시) */}
+      {assigneesInGroup.length > 0 && (
+        <div style={{ display: "flex", gap: 5, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+          <div onClick={function() { setFilterAssignee([]); }}
+            style={{ padding: "5px 13px", borderRadius: 99, cursor: "pointer", fontSize: 12, fontWeight: filterAssignee.length === 0 ? 700 : 400,
+              background: filterAssignee.length === 0 ? "#1A1917" : "#fff", color: filterAssignee.length === 0 ? "#fff" : "#666",
+              border: filterAssignee.length === 0 ? "none" : "1px solid #E8E5E0" }}>전체</div>
           {assigneesInGroup.map(function(a) {
+            var active = filterAssignee.includes(a);
             return (
-              <div key={a} onClick={function() { setFilterAssignee(a); }}
-                style={{ padding: "5px 13px", borderRadius: 99, cursor: "pointer", fontSize: 12,
-                  background: filterAssignee === a ? "#1A1917" : "#fff", color: filterAssignee === a ? "#fff" : "#666",
-                  border: filterAssignee === a ? "none" : "1px solid #E8E5E0" }}>
-                {a}
+              <div key={a} onClick={function() { setFilterAssignee(function(prev) { return prev.includes(a) ? prev.filter(function(x) { return x !== a; }) : prev.concat([a]); }); }}
+                style={{ padding: "5px 13px", borderRadius: 99, cursor: "pointer", fontSize: 12, fontWeight: active ? 700 : 400,
+                  background: active ? "#4338CA" : "#fff", color: active ? "#fff" : "#666",
+                  border: active ? "none" : "1px solid #E8E5E0" }}>
+                {active ? "✓ " : ""}{a}
               </div>
             );
           })}
+          {filterAssignee.length > 0 && <span style={{ fontSize: 11, color: "#888" }}>{filterAssignee.length}명 선택 (한 명이라도 담당이면 표시)</span>}
         </div>
       )}
 
@@ -9062,13 +9068,13 @@ function DBLeadsView() {
                             <button onClick={function(e) { e.stopPropagation(); saveEdit(); }} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 4, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>저장</button>
                             <button onClick={function(e) { e.stopPropagation(); cancelEdit(); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 4, padding: "3px 6px", fontSize: 11, cursor: "pointer" }}>취소</button>
                           </> : <>
-                            <button onClick={function() { startEdit(row); setExpandedId(row.id); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Icon name="edit" size={14} color="#888" /></button>
+                            <button onClick={function(e) { e.stopPropagation(); setSelectedLead(row); }} title="상세/콜 이력 편집" style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Icon name="edit" size={14} color="#888" /></button>
                             <button onClick={function() { deleteLead(row.id); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Icon name="x" size={14} color="#CCC" /></button>
                           </>}
                         </div>
                       </td>
                     </tr>,
-                    isExpanded && (<tr key={row.id + "-detail"} style={{ borderBottom: "1px solid #F0EDE8", background: "#FAFAF8" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}><td colSpan={8} style={{ padding: "12px 16px 16px 50px" }}>
+                    false && isExpanded && (<tr key={row.id + "-detail"} style={{ borderBottom: "1px solid #F0EDE8", background: "#FAFAF8" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}><td colSpan={8} style={{ padding: "12px 16px 16px 50px" }}>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, fontSize: 12 }}>
                         {[1,2,3,4,5].map(function(n) {
                           var dateKey = "call_" + n + "_date";
@@ -9307,34 +9313,45 @@ function DBLeadsView() {
                   {[1,2,3,4,5].map(function(ci) {
                     var dateKey = "call_" + ci + "_date";
                     var statusKey = "call_" + ci + "_status";
-                    var hasData = selectedLead[dateKey] || selectedLead[statusKey];
+                    var memoKey = "call_" + ci + "_memo";
+                    var hasData = selectedLead[dateKey] || selectedLead[statusKey] || selectedLead[memoKey];
                     return (
-                      <div key={ci} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: ci < 5 ? 6 : 0, opacity: hasData ? 1 : 0.6 }}>
-                        <span style={{ fontSize: 10, fontWeight: 700, color: "#4338CA", width: 32, flexShrink: 0 }}>{ci}차</span>
-                        <input type="date" value={selectedLead[dateKey] || ""}
-                          onChange={function(e) { setSelectedLead(function(p) { return Object.assign({}, p, { [dateKey]: e.target.value }); }); }}
+                      <div key={ci} style={{ marginBottom: ci < 5 ? 10 : 0, paddingBottom: ci < 5 ? 10 : 0, borderBottom: ci < 5 ? "1px solid #E8E5E0" : "none", opacity: hasData ? 1 : 0.6 }}>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: "#4338CA", width: 32, flexShrink: 0 }}>{ci}차</span>
+                          <input type="date" value={selectedLead[dateKey] || ""}
+                            onChange={function(e) { setSelectedLead(function(p) { return Object.assign({}, p, { [dateKey]: e.target.value }); }); }}
+                            onBlur={async function() {
+                              var u = {}; u[dateKey] = selectedLead[dateKey] || null; u.updated_at = new Date().toISOString();
+                              var r = await supabase.from("db_leads").update(u).eq("id", selectedLead.id);
+                              if (!r.error) setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, u) : l; }); });
+                            }}
+                            style={{ flex: 1, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, background: "#fff" }} />
+                          <select value={selectedLead[statusKey] || ""}
+                            onChange={async function(e) {
+                              var v = e.target.value;
+                              var u = {}; u[statusKey] = v || null; u.updated_at = new Date().toISOString();
+                              var r = await supabase.from("db_leads").update(u).eq("id", selectedLead.id);
+                              if (!r.error) {
+                                setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, u) : l; }); });
+                                setSelectedLead(function(p) { return Object.assign({}, p, { [statusKey]: v }); });
+                              }
+                            }}
+                            style={{ flex: 1, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, background: "#fff" }}>
+                            <option value="">-</option>
+                            <option value="통화완료">통화완료</option><option value="부재">부재</option><option value="거절">거절</option>
+                            <option value="문자발송">문자발송</option><option value="카톡발송">카톡발송</option><option value="콜백요청">콜백요청</option>
+                            <option value="미팅예약">미팅예약</option><option value="상담완료">상담완료</option><option value="수신거부">수신거부</option>
+                          </select>
+                        </div>
+                        <input value={selectedLead[memoKey] || ""} placeholder={ci + "차콜 메모"}
+                          onChange={function(e) { setSelectedLead(function(p) { return Object.assign({}, p, { [memoKey]: e.target.value }); }); }}
                           onBlur={async function() {
-                            var u = {}; u[dateKey] = selectedLead[dateKey] || null; u.updated_at = new Date().toISOString();
+                            var u = {}; u[memoKey] = selectedLead[memoKey] || null; u.updated_at = new Date().toISOString();
                             var r = await supabase.from("db_leads").update(u).eq("id", selectedLead.id);
                             if (!r.error) setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, u) : l; }); });
                           }}
-                          style={{ flex: 1, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, background: "#fff" }} />
-                        <select value={selectedLead[statusKey] || ""}
-                          onChange={async function(e) {
-                            var v = e.target.value;
-                            var u = {}; u[statusKey] = v || null; u.updated_at = new Date().toISOString();
-                            var r = await supabase.from("db_leads").update(u).eq("id", selectedLead.id);
-                            if (!r.error) {
-                              setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, u) : l; }); });
-                              setSelectedLead(function(p) { return Object.assign({}, p, { [statusKey]: v }); });
-                            }
-                          }}
-                          style={{ flex: 1, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, background: "#fff" }}>
-                          <option value="">-</option>
-                          <option value="통화완료">통화완료</option><option value="부재">부재</option><option value="거절">거절</option>
-                          <option value="문자발송">문자발송</option><option value="카톡발송">카톡발송</option><option value="콜백요청">콜백요청</option>
-                          <option value="미팅예약">미팅예약</option><option value="상담완료">상담완료</option><option value="수신거부">수신거부</option>
-                        </select>
+                          style={{ width: "100%", marginTop: 5, marginLeft: 38, maxWidth: "calc(100% - 38px)", padding: "5px 7px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, background: "#fff", boxSizing: "border-box", outline: "none" }} />
                       </div>
                     );
                   })}
