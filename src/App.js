@@ -386,6 +386,7 @@ const Icon = ({ name, size = 16, color = "currentColor" }) => {
     calendar:  <svg {...p}><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>,
     chevronR:  <svg {...p}><polyline points="9 18 15 12 9 6"/></svg>,
     chevronL:  <svg {...p}><polyline points="15 18 9 12 15 6"/></svg>,
+    link:      <svg {...p}><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>,
   };
   return icons[name] || null;
 };
@@ -1292,6 +1293,7 @@ function CRMApp({ profile, session }) {
             { id: "list",       label: "기업 목록",   icon: "list" },
             { id: "pipeline",   label: "파이프라인",  icon: "pipeline" },
             { id: "cases",      label: "사례집",      icon: "folder" },
+            { id: "quicklinks", label: "바로가기",    icon: "link" },
           ].map(({ id, label, icon }) => (
             <div key={id} onClick={() => setView(id)}
               style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 8, cursor: "pointer", marginBottom: 2, background: view === id ? "#2E2C29" : "transparent", color: view === id ? "#F7F6F3" : "#666", fontSize: 13, fontWeight: view === id ? 600 : 400 }}>
@@ -1452,6 +1454,7 @@ function CRMApp({ profile, session }) {
             {view === "worknotes" && <WorkNotesView profile={profile} onBadgeUpdate={function() { fetchWorkNotesBadge(profile?.name); }} />}
             {view === "calendar" && <CalendarView companies={companies} onSelectCompany={setSelectedCompany} profile={profile} />}
             {view === "manual" && <ManualView />}
+            {view === "quicklinks" && <QuickLinksView />}
             {view === "pipeline" && <PipelineView filtered={filtered} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setCompanies={setCompanies} />}
             {view === "cases" && <ApprovalCasesView profile={profile} />}
             {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={profile?.role === "admin" || profile?.name === "양호"} onSelectCompany={setSelectedCompany} setView={setView} companies={companies} />}
@@ -7108,6 +7111,131 @@ function formatFileSize(bytes) {
   if (bytes < 1024) return bytes + "B";
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + "KB";
   return (bytes / (1024 * 1024)).toFixed(1) + "MB";
+}
+
+function QuickLinksView() {
+  const [links, setLinks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [form, setForm] = useState({ name: "", url: "", category: "" });
+
+  useEffect(function() { fetchLinks(); }, []);
+
+  async function fetchLinks() {
+    setLoading(true);
+    var r = await supabase.from("quick_links").select("*").order("sort_order", { ascending: true }).order("created_at", { ascending: true });
+    if (!r.error) setLinks(r.data || []);
+    setLoading(false);
+  }
+
+  function normalizeUrl(u) {
+    u = (u || "").trim();
+    if (!u) return "";
+    if (!/^https?:\/\//i.test(u)) u = "https://" + u;
+    return u;
+  }
+
+  async function saveLink() {
+    if (!form.name.trim() || !form.url.trim()) { alert("이름과 주소를 입력하세요."); return; }
+    var payload = { name: form.name.trim(), url: normalizeUrl(form.url), category: form.category.trim() || "기타" };
+    if (editId) {
+      var r = await supabase.from("quick_links").update(payload).eq("id", editId);
+      if (r.error) { alert("저장 실패: " + r.error.message); return; }
+    } else {
+      payload.sort_order = links.length;
+      var r2 = await supabase.from("quick_links").insert(payload);
+      if (r2.error) { alert("저장 실패: " + r2.error.message); return; }
+    }
+    setShowAdd(false); setEditId(null); setForm({ name: "", url: "", category: "" });
+    fetchLinks();
+  }
+
+  async function deleteLink(id) {
+    if (!confirm("이 바로가기를 삭제할까요?")) return;
+    var r = await supabase.from("quick_links").delete().eq("id", id);
+    if (!r.error) setLinks(function(prev) { return prev.filter(function(l) { return l.id !== id; }); });
+  }
+
+  function startEdit(l) {
+    setEditId(l.id); setForm({ name: l.name, url: l.url, category: l.category || "" }); setShowAdd(true);
+  }
+
+  // 카테고리별 그룹
+  var grouped = {};
+  links.forEach(function(l) { var c = l.category || "기타"; if (!grouped[c]) grouped[c] = []; grouped[c].push(l); });
+  var categories = Object.keys(grouped);
+
+  return (
+    <div style={{ padding: "0 4px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔗 바로가기</h1>
+          <div style={{ fontSize: 13, color: "#888", marginTop: 4 }}>자주 쓰는 기관·사이트를 모아두고 한 번에 이동</div>
+        </div>
+        <button onClick={function() { setEditId(null); setForm({ name: "", url: "", category: "" }); setShowAdd(true); }}
+          style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+          <Icon name="plus" size={15} color="#F7F6F3" /> 바로가기 추가
+        </button>
+      </div>
+
+      {showAdd && (
+        <div style={{ background: "#F0FDF4", border: "2px solid #86EFAC", borderRadius: 12, padding: "16px 18px", marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D", marginBottom: 12 }}>{editId ? "✏️ 바로가기 수정" : "➕ 새 바로가기"}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
+            <div>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>이름</div>
+              <input value={form.name} placeholder="예: 중진공" onChange={function(e) { var v = e.target.value; setForm(function(p) { return Object.assign({}, p, { name: v }); }); }}
+                style={{ width: "100%", padding: "9px 11px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>주소 (URL)</div>
+              <input value={form.url} placeholder="예: kosmes.or.kr" onChange={function(e) { var v = e.target.value; setForm(function(p) { return Object.assign({}, p, { url: v }); }); }}
+                style={{ width: "100%", padding: "9px 11px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>분류 (자유)</div>
+              <input value={form.category} placeholder="예: 기관 / 개인" list="ql-cats" onChange={function(e) { var v = e.target.value; setForm(function(p) { return Object.assign({}, p, { category: v }); }); }}
+                style={{ width: "100%", padding: "9px 11px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+              <datalist id="ql-cats">{categories.map(function(c) { return <option key={c} value={c} />; })}</datalist>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={saveLink} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "9px 20px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
+            <button onClick={function() { setShowAdd(false); setEditId(null); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "9px 16px", fontSize: 13, cursor: "pointer" }}>취소</button>
+          </div>
+        </div>
+      )}
+
+      {loading ? <div style={{ color: "#888", fontSize: 13, padding: 20 }}>불러오는 중...</div>
+        : links.length === 0 ? <div style={{ color: "#888", fontSize: 13, padding: 30, textAlign: "center" }}>아직 바로가기가 없어요. "바로가기 추가"로 등록하세요.</div>
+        : categories.map(function(cat) {
+          return (
+            <div key={cat} style={{ marginBottom: 24 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#888", marginBottom: 10, letterSpacing: "0.03em" }}>{cat}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 10 }}>
+                {grouped[cat].map(function(l) {
+                  return (
+                    <div key={l.id} style={{ position: "relative", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 10, padding: "14px 14px", cursor: "pointer", transition: "border 0.15s" }}
+                      onClick={function() { window.open(l.url, "_blank", "noopener"); }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                        <Icon name="link" size={16} color="#4338CA" />
+                        <span style={{ fontSize: 14, fontWeight: 600, color: "#1A1917", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: "#AAA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{(l.url || "").replace(/^https?:\/\//, "")}</div>
+                      <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 2 }}>
+                        <button onClick={function(e) { e.stopPropagation(); startEdit(l); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 3, opacity: 0.5 }}><Icon name="edit" size={12} color="#888" /></button>
+                        <button onClick={function(e) { e.stopPropagation(); deleteLink(l.id); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 3, opacity: 0.5 }}><Icon name="x" size={12} color="#CCC" /></button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+    </div>
+  );
 }
 
 function ManualView() {
