@@ -887,6 +887,10 @@ function CRMApp({ profile, session }) {
     if (Array.isArray(rest.accounts) && rest.accounts.length > 0) {
       updateObj.accounts = rest.accounts;
     }
+    // 기업정보 탭: 기대출 내역(loans), 기업정보 항목(company_info), 기타 메모(company_info_memo)
+    if (Array.isArray(rest.loans)) updateObj.loans = rest.loans;
+    if (Array.isArray(rest.company_info)) updateObj.company_info = rest.company_info;
+    if (rest.company_info_memo !== undefined && rest.company_info_memo !== null) updateObj.company_info_memo = rest.company_info_memo;
     const { error } = await supabase.from("companies").update(updateObj).eq("id", rest.id);
     if (!error) {
       // 🆕 stage가 "부결/반려"로 새로 바뀌면 → 사례집 자동 초안 생성
@@ -1101,6 +1105,10 @@ function CRMApp({ profile, session }) {
     } else if (form.agency_list_str) {
       insertData.agency_list = form.agency_list_str;
     }
+    // 기업정보 탭 (기업현황표 자동추출분)
+    if (Array.isArray(form.loans) && form.loans.length > 0) insertData.loans = form.loans;
+    if (Array.isArray(form.company_info) && form.company_info.length > 0) insertData.company_info = form.company_info;
+    if (form.company_info_memo) insertData.company_info_memo = form.company_info_memo;
 
     const { data: co, error } = await supabase.from("companies").insert(insertData).select().single();
     if (!error && co) {
@@ -3198,6 +3206,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
         <div style={{ display: "flex", borderBottom: "1px solid #E8E5E0", background: "#FAFAF8", overflowX: "auto" }}>
           {[
             { id: "info", label: "기본정보" },
+            { id: "bizinfo", label: "기업정보", badge: (Array.isArray(data.loans) ? data.loans.length : 0) + (Array.isArray(data.company_info) ? data.company_info.length : 0) },
             { id: "docs", label: "서류현황" },
             { id: "history", label: "이슈·액션", badge: commLogs.length },
             { id: "agency", label: "기관진행", badge: agencyCases.length },
@@ -3416,6 +3425,102 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 </div>
               </div>
             </>
+          )}
+
+          {tab === "bizinfo" && (
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: "#888" }}>기업현황표에서 자동 추출 · 직접 수정 가능</div>
+                <button onClick={function() { onSave(data); }} style={{ display: "flex", alignItems: "center", gap: 5, background: "#15803D", color: "#fff", border: "none", borderRadius: 7, padding: "8px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                  <Icon name="save" size={13} color="#fff" /> 기업정보 저장
+                </button>
+              </div>
+
+              {/* 기대출 내역 표 */}
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 7 }}>💰 기대출 내역</div>
+              <div style={{ overflowX: "auto", marginBottom: 8 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+                  <thead>
+                    <tr style={{ background: "#F4F4F8" }}>
+                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "26%" }}>기관</th>
+                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "16%" }}>금액</th>
+                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "14%" }}>은행</th>
+                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "19%" }}>실행일</th>
+                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "19%" }}>만기일</th>
+                      <th style={{ padding: "6px 2px", border: "1px solid #E8E5E0", width: "6%" }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(Array.isArray(data.loans) ? data.loans : []).map(function(ln, li) {
+                      var updateLoan = function(field, val) {
+                        setData(function(p) {
+                          var arr = (Array.isArray(p.loans) ? p.loans : []).slice();
+                          arr[li] = Object.assign({}, arr[li], { [field]: val });
+                          return Object.assign({}, p, { loans: arr });
+                        });
+                      };
+                      var cellStyle = { border: "1px solid #E8E5E0", padding: 0 };
+                      var inStyle = { width: "100%", border: "none", padding: "6px 5px", fontSize: 11.5, background: "transparent", outline: "none", boxSizing: "border-box" };
+                      return (
+                        <tr key={li}>
+                          <td style={cellStyle}><input value={ln.inst || ""} onChange={function(e) { updateLoan("inst", e.target.value); }} style={inStyle} /></td>
+                          <td style={cellStyle}><input value={ln.amount || ""} onChange={function(e) { updateLoan("amount", e.target.value); }} style={inStyle} /></td>
+                          <td style={cellStyle}><input value={ln.bank || ""} onChange={function(e) { updateLoan("bank", e.target.value); }} style={inStyle} /></td>
+                          <td style={cellStyle}><input value={ln.start || ""} placeholder="26.01.13" onChange={function(e) { updateLoan("start", e.target.value); }} style={inStyle} /></td>
+                          <td style={cellStyle}><input value={ln.end || ""} placeholder="31.01.13" onChange={function(e) { updateLoan("end", e.target.value); }} style={inStyle} /></td>
+                          <td style={{ border: "1px solid #E8E5E0", textAlign: "center" }}>
+                            <button onClick={function() { setData(function(p) { var arr = (Array.isArray(p.loans) ? p.loans : []).slice(); arr.splice(li, 1); return Object.assign({}, p, { loans: arr }); }); }}
+                              style={{ background: "none", border: "none", cursor: "pointer", color: "#CCC", padding: 3 }}><Icon name="x" size={11} color="#CCC" /></button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {(!Array.isArray(data.loans) || data.loans.length === 0) && (
+                      <tr><td colSpan={6} style={{ border: "1px solid #E8E5E0", padding: "10px", textAlign: "center", color: "#BBB", fontSize: 11 }}>기대출 내역 없음</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <button onClick={function() { setData(function(p) { var arr = (Array.isArray(p.loans) ? p.loans : []).slice(); arr.push({ inst: "", amount: "", bank: "", start: "", end: "" }); return Object.assign({}, p, { loans: arr }); }); }}
+                style={{ background: "#fff", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 7, padding: "6px 12px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", marginBottom: 20 }}>
+                + 대출 행 추가
+              </button>
+
+              {/* 기업정보 항목 (라벨+값, 추가/삭제/이름변경) */}
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 7, marginTop: 6 }}>📋 기업정보 항목</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8, marginBottom: 8 }}>
+                {(Array.isArray(data.company_info) ? data.company_info : []).map(function(it, ii) {
+                  return (
+                    <div key={ii} style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 10px", position: "relative" }}>
+                      <input value={it.label || ""} placeholder="항목명"
+                        onChange={function(e) { var v = e.target.value; setData(function(p) { var arr = (Array.isArray(p.company_info) ? p.company_info : []).slice(); arr[ii] = Object.assign({}, arr[ii], { label: v }); return Object.assign({}, p, { company_info: arr }); }); }}
+                        style={{ width: "calc(100% - 18px)", border: "none", fontSize: 10.5, color: "#888", fontWeight: 600, padding: 0, marginBottom: 3, background: "transparent", outline: "none" }} />
+                      <button onClick={function() { setData(function(p) { var arr = (Array.isArray(p.company_info) ? p.company_info : []).slice(); arr.splice(ii, 1); return Object.assign({}, p, { company_info: arr }); }); }}
+                        style={{ position: "absolute", top: 6, right: 6, background: "none", border: "none", cursor: "pointer", color: "#DDD", padding: 2 }}><Icon name="x" size={11} color="#DDD" /></button>
+                      <textarea value={it.value || ""} placeholder="내용"
+                        onChange={function(e) { var v = e.target.value; setData(function(p) { var arr = (Array.isArray(p.company_info) ? p.company_info : []).slice(); arr[ii] = Object.assign({}, arr[ii], { value: v }); return Object.assign({}, p, { company_info: arr }); }); }}
+                        rows={1} style={{ width: "100%", border: "none", fontSize: 12.5, color: "#1A1917", padding: 0, background: "transparent", outline: "none", resize: "vertical", boxSizing: "border-box", fontFamily: "inherit", minHeight: 18 }} />
+                    </div>
+                  );
+                })}
+              </div>
+              <button onClick={function() { setData(function(p) { var arr = (Array.isArray(p.company_info) ? p.company_info : []).slice(); arr.push({ label: "", value: "" }); return Object.assign({}, p, { company_info: arr }); }); }}
+                style={{ background: "#fff", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 7, padding: "6px 12px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", marginBottom: 20 }}>
+                + 항목 추가
+              </button>
+
+              {/* 기타 메모 */}
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 7, marginTop: 6 }}>📝 기타 (비고)</div>
+              <textarea value={data.company_info_memo || ""} placeholder="비고·자유 입력"
+                onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { company_info_memo: v }); }); }}
+                style={{ width: "100%", minHeight: 70, border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, boxSizing: "border-box", outline: "none", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }} />
+
+              <div style={{ marginTop: 16 }}>
+                <button onClick={function() { onSave(data); }} style={{ width: "100%", display: "flex", justifyContent: "center", alignItems: "center", gap: 6, background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                  <Icon name="save" size={14} color="#fff" /> 기업정보 저장
+                </button>
+              </div>
+            </div>
           )}
 
           {tab === "docs" && (
@@ -4076,49 +4181,48 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
                     updates.type = "개인";
                   }
 
-                  // 나머지 정보 → 이슈 칸에 자동 정리
-                  var extras = [];
-                  extras.push("[기업현황표 자동 추출 - " + kstDate() + "]");
-                  extras.push("");
-                  var addExtra = function(label, val) { if (val) extras.push("▸ " + label + ": " + val); };
-                  addExtra("사업장 주소", getCell(4, 2));
-                  addExtra("세무사 연락처", getCell(4, 8));
-                  addExtra("주요취급품목", getCell(7, 2));
-                  addExtra("대표 결혼 유/무", getCell(7, 8));
-                  addExtra("추가 사업자 여부", getCell(8, 2));
-                  addExtra("회생 및 파산 이력", getCell(8, 8));
-                  addExtra("대표자 거주지", getCell(9, 2));
-                  addExtra("사업장 부동산 유무", getCell(9, 8));
-                  addExtra("대표이사 자산", getCell(10, 2));
-                  addExtra("사업장 부동산 현황", getCell(10, 8));
-                  addExtra("올해 매출/예상", getCell(11, 2));
-                  addExtra("법인 자본금", getCell(11, 8));
-                  addExtra("수출실적", getCell(13, 2));
-                  addExtra("세금/금융 연체", getCell(13, 6));
-                  addExtra("기업인증", [getCell(14, 8), getCell(15, 8)].filter(Boolean).join(", "));
-                  addExtra("연구소/전담부서", getCell(14, 2));
-                  addExtra("특허/상표/디자인", getCell(14, 6));
-                  addExtra("폐업 이력", getCell(15, 2));
-                  // 기대출 (17행)
-                  var loanInst = getCell(17, 2);
-                  var loanAmt = getCell(17, 5);
-                  var loanRate = getCell(17, 8);
-                  if (loanInst || loanAmt) {
-                    extras.push("▸ 기존 대출: " + [loanInst, loanAmt, loanRate ? "(금리 " + loanRate + ")" : ""].filter(Boolean).join(" "));
+                  // ▼ 기업정보 탭용 구조화 추출 (확정된 셀 좌표 기준)
+                  // 1) 기대출 내역: 17~23행 (24행은 카드론), 기관[r,2] 금액[r,5] 은행[r,7] 실행일[r,8] 만기일[r,10]
+                  var loans = [];
+                  for (var lr = 17; lr <= 23; lr++) {
+                    var inst = getCell(lr, 2);
+                    var amt = getCell(lr, 5);
+                    var bank = getCell(lr, 7);
+                    var sdate = getCell(lr, 8);
+                    var edate = getCell(lr, 10);
+                    if (inst || amt || bank || sdate || edate) {
+                      loans.push({ inst: inst, amount: amt, bank: bank, start: sdate, end: edate });
+                    }
                   }
-                  addExtra("카드론/현금서비스", getCell(24, 5));
-                  addExtra("필요자금 사용용도", getCell(26, 2));
-                  // 비고 (29행 또는 그 아래 텍스트)
-                  var bigo = getCell(29, 2) || getCell(30, 2) || getCell(31, 2);
-                  if (bigo) {
-                    extras.push("");
-                    extras.push("▸ 비고:");
-                    extras.push(bigo);
-                  }
-                  if (extras.length > 2) {
-                    updates.issue = extras.join("\n");
-                    auto.issue = true;
-                  }
+                  if (loans.length > 0) { updates.loans = loans; auto.loans = true; }
+
+                  // 2) 기업정보 항목 (라벨+값, 추가/삭제/이름변경 가능한 자유 배열)
+                  var infoItems = [];
+                  var addInfo = function(label, val) { if (val && String(val).trim()) infoItems.push({ label: label, value: String(val).trim() }); };
+                  addInfo("대표자 생년월일", getCell(3, 8));
+                  addInfo("26년 현재/예상 매출", getCell(11, 2));
+                  addInfo("법인 자본금", getCell(11, 8));
+                  addInfo("회생 및 파산 이력", getCell(8, 8));
+                  addInfo("폐업 이력", getCell(15, 2));
+                  addInfo("기업인증", [getCell(13, 10), getCell(14, 8), getCell(15, 8)].filter(function(x) { return x && x !== "노란우산공제, 제로페이" && x !== "내일채움"; }).join(", "));
+                  addInfo("특허/상표/디자인", getCell(14, 6));
+                  addInfo("연구소/전담부서", getCell(14, 2));
+                  addInfo("수출실적", getCell(13, 2));
+                  addInfo("세금/금융 연체", getCell(13, 6));
+                  addInfo("추가 사업자 여부", getCell(8, 2));
+                  addInfo("주요취급품목", getCell(7, 2));
+                  addInfo("대표 결혼 유/무", getCell(7, 8));
+                  addInfo("대표자 거주지 부동산", getCell(9, 2));
+                  addInfo("사업장 부동산 유무", getCell(9, 8));
+                  addInfo("대표이사 자산현황", getCell(10, 2));
+                  addInfo("사업장 부동산 현황", getCell(10, 8));
+                  addInfo("세무사 연락처", getCell(4, 8));
+                  addInfo("필요자금 사용용도", getCell(26, 2));
+                  if (infoItems.length > 0) { updates.company_info = infoItems; auto.company_info = true; }
+
+                  // 3) 비고 → 기타 메모
+                  var bigoMemo = getCell(28, 2) || getCell(29, 2) || getCell(30, 2);
+                  if (bigoMemo) { updates.company_info_memo = bigoMemo; auto.company_info_memo = true; }
 
                   // 한 번에 적용
                   setMulti(updates);
