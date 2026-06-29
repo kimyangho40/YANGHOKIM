@@ -1432,7 +1432,6 @@ function CRMApp({ profile, session }) {
           {[
             { id: "dashboard",  label: "대시보드",   icon: "dashboard" },
             { id: "mytodo",     label: "내 할일",     icon: "check" },
-            { id: "leave",      label: "연차/휴가",   icon: "calendar" },
             { id: "agency",     label: "기관별 현황", icon: "building" },
             { id: "worknotes",  label: "업무 노트",   icon: "edit" },
             { id: "list",       label: "기업 목록",   icon: "list" },
@@ -1468,6 +1467,7 @@ function CRMApp({ profile, session }) {
               <div style={{ fontSize: 10, color: "#444", letterSpacing: "0.08em", padding: "4px 12px 6px", fontWeight: 600 }}>추가 메뉴</div>
               {/* DB리스트 + 캘린더 위아래 */}
               {[
+                { id: "leave", label: "연차/휴가", icon: "calendar" },
                 { id: "dbleads", label: "DB리스트", icon: "phone" },
                 { id: "calendar", label: "캘린더", icon: "calendar" },
               ].map(function({ id, label, icon }) {
