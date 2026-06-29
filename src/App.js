@@ -8149,7 +8149,8 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     approved: ["승인","약정"],
     completed: ["완료"],
     waiting: ["기관 방문 전","기관 방문 후 대기","온라인 신청 후 대기","심사대기"],
-    rejected: ["부결","반려","진행불가","신청취소","신청못함","중단"],
+    returned: ["반려"],
+    rejected: ["부결","진행불가","신청취소","신청못함","중단"],
     inProgress: ["진행 중","심사중","최종제출","임시저장","우선도 평가","우선도 평가 예비","실태 조사 예정","실태 조사 완료"],
   };
   // 위 그룹에 안 속하면 '기타'(보류/시작 전 등) — 5개 칩 어디에도 안 잡히고 '전체'에서만 보임
@@ -8212,8 +8213,9 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     var waiting = baseList.filter(function(c) { return groupOf(c.status) === "waiting"; }).length;
     var inProgress = baseList.filter(function(c) { return groupOf(c.status) === "inProgress"; }).length;
     var rejected = baseList.filter(function(c) { return groupOf(c.status) === "rejected"; }).length;
+    var returned = baseList.filter(function(c) { return groupOf(c.status) === "returned"; }).length;
     var total = baseList.length;
-    return { total: total, approved: approved, completed: completed, waiting: waiting, inProgress: inProgress, rejected: rejected };
+    return { total: total, approved: approved, completed: completed, waiting: waiting, inProgress: inProgress, rejected: rejected, returned: returned };
   }, [cases, activeGroup, activeMonth, filterAssignee, currentYear]);
 
   var activeGroupObj = AGENCY_GROUPS.find(function(g) { return g.id === activeGroup; });
@@ -8492,7 +8494,8 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
           { label: "총 진행", value: summary.total, color: "#1A1917", key: "all" },
           { label: "승인/약정", value: summary.approved, color: "#047857", key: "approved" },
           { label: "진행중", value: summary.inProgress, color: "#4338CA", key: "inProgress" },
-          { label: "부결/반려", value: summary.rejected, color: "#DC2626", key: "rejected" },
+          { label: "반려 (기한주의)", value: summary.returned, color: "#B45309", key: "returned" },
+          { label: "부결", value: summary.rejected, color: "#DC2626", key: "rejected" },
         ].map(function(s) {
           var isActive = statusFilter === s.key;
           return (
@@ -8524,13 +8527,14 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
           return true;
         });
         if (base.length === 0) return null;
-        var counts = { inProgress: 0, waiting: 0, approved: 0, completed: 0, rejected: 0, other: 0 };
+        var counts = { inProgress: 0, waiting: 0, approved: 0, completed: 0, returned: 0, rejected: 0, other: 0 };
         base.forEach(function(c) { counts[groupOf(c.status)] = (counts[groupOf(c.status)] || 0) + 1; });
         var groups = [
           { key: "inProgress", label: "진행중", bg: "#EEF2FF", text: "#4338CA" },
           { key: "waiting", label: "대기", bg: "#FEF3C7", text: "#B45309" },
           { key: "approved", label: "승인", bg: "#DCFCE7", text: "#15803D" },
           { key: "completed", label: "완료", bg: "#D1FAE5", text: "#047857" },
+          { key: "returned", label: "반려", bg: "#FEF0D9", text: "#B45309" },
           { key: "rejected", label: "부결", bg: "#FEE2E2", text: "#DC2626" },
         ];
         return (
