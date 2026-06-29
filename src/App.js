@@ -3152,6 +3152,32 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   const [commLogs, setCommLogs] = useState([]);
   const [commInput, setCommInput] = useState("");
   const [xlsxPreview, setXlsxPreview] = useState(null); // 기업현황표 첨부 미리보기 {updates, auto}
+  const [kakaoLoading, setKakaoLoading] = useState(false); // 카톡 캡처 AI 요약 중
+  async function handleKakaoImage(file) {
+    if (!file || file.type.indexOf("image") !== 0) { alert("이미지 파일만 가능합니다."); return; }
+    setKakaoLoading(true);
+    try {
+      var base64 = await new Promise(function(resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function() { resolve(String(reader.result).split(",")[1]); };
+        reader.onerror = function() { reject(new Error("이미지 읽기 실패")); };
+        reader.readAsDataURL(file);
+      });
+      var resp = await fetch("/api/summarize-kakao", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ imageBase64: base64, mediaType: file.type }),
+      });
+      var data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "요약 요청 실패");
+      if (!data.summary) throw new Error("요약 내용이 비어 있습니다.");
+      setCommInput(function(prev) { return prev && prev.trim() ? (prev.trimEnd() + "\n" + data.summary) : data.summary; });
+    } catch (err) {
+      alert("❌ 카톡 요약 실패: " + (err && err.message ? err.message : err) + "\n\n(API 키 설정 또는 네트워크를 확인해주세요)");
+    } finally {
+      setKakaoLoading(false);
+    }
+  }
   const FIELD_LABELS_X = { name: "업체명", representative: "대표자", phone: "연락처", region: "지역", industry: "업종", employee_count: "직원수", credit_score_kcb: "KCB점수", credit_score_nice: "NICE점수", founded_year: "설립연도", founded_month: "설립월", revenue_2025: "2025년 매출", revenue_2024: "2024년 매출", revenue_2023: "2023년 매출", business_number: "사업자번호", business_type: "사업자유형", type: "유형" };
   async function handleXlsxAttach(file) {
     if (!file) return;
@@ -3779,10 +3805,37 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               <div style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                   <div style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>💬 소통 내역</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}><OcrButton target="comm" /><div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 여러 줄 OK</div></div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11, fontWeight: 700, color: "#B45309", background: "#FEF3C7", padding: "4px 9px", borderRadius: 6, cursor: kakaoLoading ? "wait" : "pointer" }}>
+                      {kakaoLoading ? "요약 중..." : "📷 카톡요약"}
+                      <input type="file" accept="image/*" style={{ display: "none" }} disabled={kakaoLoading} onChange={function(e) { var f = e.target.files && e.target.files[0]; e.target.value = ""; handleKakaoImage(f); }} />
+                    </label>
+                    <div style={{ fontSize: 10, color: "#BBB" }}>붙여넣기·드래그 가능</div>
+                  </div>
                 </div>
-                <textarea value={commInput} onChange={function(e) { var v = e.target.value; setCommInput(v); }}
-                  placeholder={"예시:\n- 10:30 통화 - 대표 부재중\n- 11:15 다시 통화\n- 다음 주 월요일 방문 예약"}
+                {kakaoLoading && <div style={{ fontSize: 11, color: "#B45309", marginBottom: 6, padding: "6px 10px", background: "#FEF9EC", borderRadius: 6 }}>🤖 카톡 대화를 읽고 요약하는 중입니다... (몇 초 걸려요)</div>}
+                <textarea value={commInput}
+                  onChange={function(e) { var v = e.target.value; setCommInput(v); }}
+                  onPaste={function(e) {
+                    var items = e.clipboardData && e.clipboardData.items;
+                    if (!items) return;
+                    for (var i = 0; i < items.length; i++) {
+                      if (items[i].type && items[i].type.indexOf("image") === 0) {
+                        e.preventDefault();
+                        handleKakaoImage(items[i].getAsFile());
+                        return;
+                      }
+                    }
+                  }}
+                  onDrop={function(e) {
+                    var files = e.dataTransfer && e.dataTransfer.files;
+                    if (files && files.length && files[0].type && files[0].type.indexOf("image") === 0) {
+                      e.preventDefault();
+                      handleKakaoImage(files[0]);
+                    }
+                  }}
+                  onDragOver={function(e) { e.preventDefault(); }}
+                  placeholder={"카톡 대화 캡처를 여기에 붙여넣기(Ctrl+V)하거나 끌어다 놓으면 AI가 요약해줘요.\n\n또는 직접 입력:\n- 10:30 통화 - 대표 부재중\n- 11:15 다시 통화\n- 다음 주 월요일 방문 예약"}
                   style={{ width: "100%", padding: "13px 15px", border: "1px solid #BAE6FD", borderRadius: 8, fontSize: 13, lineHeight: 1.8, resize: "vertical", minHeight: 220, background: "#F0F9FF", color: "#075985", boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
                 <button onClick={saveCommLog} disabled={!commInput.trim()}
                   style={{ width: "100%", marginTop: 6, padding: "8px", background: commInput.trim() ? "#075985" : "#E8E5E0", color: commInput.trim() ? "#F0F9FF" : "#AAA", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: commInput.trim() ? "pointer" : "not-allowed" }}>
