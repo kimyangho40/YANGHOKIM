@@ -1432,6 +1432,7 @@ function CRMApp({ profile, session }) {
           {[
             { id: "dashboard",  label: "대시보드",   icon: "dashboard" },
             { id: "mytodo",     label: "내 할일",     icon: "check" },
+            { id: "leave",      label: "연차/휴가",   icon: "calendar" },
             { id: "agency",     label: "기관별 현황", icon: "building" },
             { id: "worknotes",  label: "업무 노트",   icon: "edit" },
             { id: "list",       label: "기업 목록",   icon: "list" },
@@ -1596,6 +1597,7 @@ function CRMApp({ profile, session }) {
             {view === "settlement" && <SettlementView />}
             {view === "activitylog" && <ActivityLogView />}
             {view === "worknotes" && <WorkNotesView profile={profile} onBadgeUpdate={function() { fetchWorkNotesBadge(profile?.name); }} />}
+            {view === "leave" && <LeaveView profile={profile} profiles={profiles} />}
             {view === "calendar" && <CalendarView companies={companies} onSelectCompany={setSelectedCompany} profile={profile} />}
             {view === "manual" && <ManualView />}
             {view === "quicklinks" && <QuickLinksView />}
@@ -6163,6 +6165,267 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     </div>
   );
 }
+// ── 연차/휴가 관리 ────────────────────────────────────────────────────────────
+function LeaveView({ profile, profiles }) {
+  const myName = (profile && profile.name) || "";
+  const isApprover = myName === "양호" || myName === "유진";
+  const [requests, setRequests] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [newReq, setNewReq] = useState({ type: "연차", start_date: "", end_date: "", reason: "" });
+  const [calMonth, setCalMonth] = useState(function() { var d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
+
+  const LEAVE_TYPES = ["연차", "반차", "병가", "경조사"];
+  const TYPE_COLORS = { "연차": { bg: "#E1F5EE", fg: "#0F6E56" }, "반차": { bg: "#FAEEDA", fg: "#854F0B" }, "병가": { bg: "#FCEBEB", fg: "#A32D2D" }, "경조사": { bg: "#EEEDFE", fg: "#534AB7" } };
+  const STATUS_COLORS = { "대기": { bg: "#FAEEDA", fg: "#854F0B" }, "승인": { bg: "#EAF3DE", fg: "#3B6D11" }, "반려": { bg: "#FCEBEB", fg: "#A32D2D" } };
+
+  function fetchRequests() {
+    setLoading(true);
+    supabase.from("leave_requests").select("*").order("start_date", { ascending: false }).then(function(r) {
+      if (!r.error) setRequests(r.data || []);
+      setLoading(false);
+    });
+  }
+  useEffect(fetchRequests, []);
+
+  var myRequests = requests.filter(function(r) { return r.requester_name === myName; });
+  var pending = requests.filter(function(r) { return r.status === "대기"; });
+  var usedDays = myRequests.filter(function(r) { return r.status === "승인"; }).reduce(function(s, r) { return s + (Number(r.days) || 0); }, 0);
+
+  function calcDays(start, end, type) {
+    if (type === "반차") return 0.5;
+    if (!start) return 0;
+    if (!end || end === start) return 1;
+    var d1 = new Date(start), d2 = new Date(end);
+    var diff = Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1;
+    return diff > 0 ? diff : 1;
+  }
+
+  function fmtKDate(s) {
+    if (!s) return "";
+    var d = new Date(s);
+    var days = ["일", "월", "화", "수", "목", "금", "토"];
+    return (d.getMonth() + 1) + "/" + d.getDate() + " (" + days[d.getDay()] + ")";
+  }
+
+  async function submitRequest() {
+    if (!newReq.start_date) { alert("시작일을 입력해주세요."); return; }
+    var end = newReq.type === "반차" ? newReq.start_date : (newReq.end_date || newReq.start_date);
+    var days = calcDays(newReq.start_date, end, newReq.type);
+    var r = await supabase.from("leave_requests").insert({
+      requester_name: myName, type: newReq.type,
+      start_date: newReq.start_date, end_date: end,
+      days: days, reason: newReq.reason, status: "대기",
+    });
+    if (r.error) { alert("신청 실패: " + r.error.message); return; }
+    setShowForm(false);
+    setNewReq({ type: "연차", start_date: "", end_date: "", reason: "" });
+    fetchRequests();
+  }
+
+  async function decide(id, status) {
+    var r = await supabase.from("leave_requests").update({ status: status, approved_by: myName }).eq("id", id);
+    if (r.error) { alert("처리 실패: " + r.error.message); return; }
+    fetchRequests();
+  }
+
+  async function deleteReq(id) {
+    if (!confirm("이 신청을 삭제할까요?")) return;
+    await supabase.from("leave_requests").delete().eq("id", id);
+    fetchRequests();
+  }
+
+  // 캘린더: 해당 월 승인된 휴가를 날짜별로
+  var year = calMonth.getFullYear(), mon = calMonth.getMonth();
+  var firstDay = new Date(year, mon, 1).getDay();
+  var daysInMonth = new Date(year, mon + 1, 0).getDate();
+  var leaveByDate = {};
+  requests.filter(function(r) { return r.status === "승인"; }).forEach(function(r) {
+    var d1 = new Date(r.start_date), d2 = new Date(r.end_date || r.start_date);
+    for (var d = new Date(d1); d <= d2; d.setDate(d.getDate() + 1)) {
+      if (d.getFullYear() === year && d.getMonth() === mon) {
+        var key = d.getDate();
+        if (!leaveByDate[key]) leaveByDate[key] = [];
+        leaveByDate[key].push(r);
+      }
+    }
+  });
+
+  function renderRequestRow(r, showName, showActions) {
+    var tc = TYPE_COLORS[r.type] || TYPE_COLORS["연차"];
+    var sc = STATUS_COLORS[r.status] || STATUS_COLORS["대기"];
+    var period = r.type === "반차" ? (fmtKDate(r.start_date) + " · 0.5일")
+      : (r.start_date === r.end_date ? (fmtKDate(r.start_date) + " · " + r.days + "일")
+        : (fmtKDate(r.start_date) + " ~ " + fmtKDate(r.end_date) + " · " + r.days + "일"));
+    return (
+      <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "#FAFAF8", border: "0.5px solid #E8E5E0", borderRadius: 8, fontSize: 13 }}>
+        {showName && <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#EEEDFE", color: "#534AB7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>{r.requester_name}</div>}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            <span style={{ background: tc.bg, color: tc.fg, fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 6 }}>{r.type}</span>
+            <span>{period}</span>
+          </div>
+          {r.reason && <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>사유: {r.reason}</div>}
+        </div>
+        {showActions ? (
+          <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
+            <button onClick={function() { decide(r.id, "승인"); }} style={{ background: "#0F6E56", color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>승인</button>
+            <button onClick={function() { decide(r.id, "반려"); }} style={{ background: "#fff", color: "#A32D2D", border: "0.5px solid #F09595", borderRadius: 6, padding: "6px 12px", fontSize: 12, cursor: "pointer" }}>반려</button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+            <span style={{ background: sc.bg, color: sc.fg, fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 6 }}>{r.status === "대기" ? "대기중" : r.status === "승인" ? "승인됨" : "반려됨"}</span>
+            {r.requester_name === myName && r.status === "대기" && (
+              <button onClick={function() { deleteReq(r.id); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#CCC", padding: 2 }} title="신청 취소"><Icon name="x" size={13} color="#CCC" /></button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#888" }}>불러오는 중...</div>;
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>연차 / 휴가</h1>
+          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>{isApprover ? "전체 신청 관리 · 승인" : "내 휴가 신청 · 내역"}</p>
+        </div>
+        <button onClick={function() { setShowForm(true); }} style={{ background: "#534AB7", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>+ 휴가 신청</button>
+      </div>
+
+      {/* 내 연차 현황 */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 6 }}>
+        <div style={{ background: "#F7F6F3", borderRadius: 8, padding: 14 }}>
+          <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>총 연차</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: "#BBB" }}>— 일</div>
+        </div>
+        <div style={{ background: "#F7F6F3", borderRadius: 8, padding: 14 }}>
+          <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>사용 (승인됨)</div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>{usedDays} 일</div>
+        </div>
+        <div style={{ background: "#F7F6F3", borderRadius: 8, padding: 14 }}>
+          <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>잔여</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: "#0F6E56" }}>— 일</div>
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: "#BBB", marginBottom: 20 }}>※ 총 연차 일수는 협의 후 입력 예정</div>
+
+      {/* 승인권자: 승인 대기 */}
+      {isApprover && (
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+            승인 대기 {pending.length > 0 && <span style={{ background: "#FAEEDA", color: "#854F0B", fontSize: 11, padding: "1px 7px", borderRadius: 6 }}>{pending.length}건</span>}
+          </div>
+          {pending.length === 0 ? (
+            <div style={{ fontSize: 12, color: "#BBB", padding: "12px", background: "#FAFAF8", borderRadius: 8, textAlign: "center" }}>대기 중인 신청이 없습니다.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {pending.map(function(r) { return renderRequestRow(r, true, true); })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 휴가 캘린더 */}
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>휴가 캘린더</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button onClick={function() { setCalMonth(new Date(year, mon - 1, 1)); }} style={{ background: "none", border: "0.5px solid #E8E5E0", borderRadius: 6, padding: "4px 9px", cursor: "pointer", fontSize: 13 }}>‹</button>
+            <span style={{ fontSize: 13, fontWeight: 600, minWidth: 70, textAlign: "center" }}>{year}.{mon + 1}</span>
+            <button onClick={function() { setCalMonth(new Date(year, mon + 1, 1)); }} style={{ background: "none", border: "0.5px solid #E8E5E0", borderRadius: 6, padding: "4px 9px", cursor: "pointer", fontSize: 13 }}>›</button>
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 3 }}>
+          {["일", "월", "화", "수", "목", "금", "토"].map(function(d) {
+            return <div key={d} style={{ textAlign: "center", fontSize: 11, color: "#888", padding: "3px 0", fontWeight: 600 }}>{d}</div>;
+          })}
+          {Array.from({ length: firstDay }).map(function(_, i) { return <div key={"e" + i}></div>; })}
+          {Array.from({ length: daysInMonth }).map(function(_, i) {
+            var day = i + 1;
+            var leaves = leaveByDate[day] || [];
+            return (
+              <div key={day} style={{ minHeight: 54, borderRadius: 6, background: leaves.length ? "#F0FDF4" : "#FAFAF8", border: "0.5px solid #F0EFEa", padding: 4, fontSize: 11 }}>
+                <div style={{ color: "#999", marginBottom: 2 }}>{day}</div>
+                {leaves.slice(0, 3).map(function(r, idx) {
+                  var tc = TYPE_COLORS[r.type] || TYPE_COLORS["연차"];
+                  return <div key={idx} style={{ fontSize: 9.5, color: tc.fg, background: tc.bg, borderRadius: 3, padding: "1px 3px", marginBottom: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.requester_name} {r.type === "반차" ? "반차" : ""}</div>;
+                })}
+                {leaves.length > 3 && <div style={{ fontSize: 9, color: "#999" }}>+{leaves.length - 3}</div>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 내 신청 내역 */}
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>내 신청 내역</div>
+        {myRequests.length === 0 ? (
+          <div style={{ fontSize: 12, color: "#BBB", padding: "12px", background: "#FAFAF8", borderRadius: 8, textAlign: "center" }}>아직 신청한 휴가가 없어요.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {myRequests.map(function(r) { return renderRequestRow(r, false, false); })}
+          </div>
+        )}
+      </div>
+
+      {/* 신청 폼 모달 */}
+      {showForm && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div onClick={function(e) { e.stopPropagation(); }} style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 420, padding: 24 }}>
+            <h2 style={{ margin: "0 0 18px", fontSize: 17, fontWeight: 700 }}>휴가 신청</h2>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: "#888", marginBottom: 6, fontWeight: 600 }}>종류</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {LEAVE_TYPES.map(function(t) {
+                  var sel = newReq.type === t;
+                  var tc = TYPE_COLORS[t];
+                  return <button key={t} onClick={function() { setNewReq(function(p) { return Object.assign({}, p, { type: t }); }); }}
+                    style={{ padding: "7px 14px", borderRadius: 8, border: sel ? ("1.5px solid " + tc.fg) : "1px solid #E8E5E0", background: sel ? tc.bg : "#fff", color: sel ? tc.fg : "#888", fontSize: 13, fontWeight: sel ? 700 : 400, cursor: "pointer" }}>{t}</button>;
+                })}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: "#888", marginBottom: 6, fontWeight: 600 }}>{newReq.type === "반차" ? "날짜" : "시작일"}</div>
+              <input type="date" value={newReq.start_date} onChange={function(e) { var v = e.target.value; setNewReq(function(p) { return Object.assign({}, p, { start_date: v }); }); }}
+                style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 14, boxSizing: "border-box", outline: "none" }} />
+            </div>
+
+            {newReq.type !== "반차" && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 12, color: "#888", marginBottom: 6, fontWeight: 600 }}>종료일 <span style={{ color: "#BBB", fontWeight: 400 }}>(하루면 비워두세요)</span></div>
+                <input type="date" value={newReq.end_date} onChange={function(e) { var v = e.target.value; setNewReq(function(p) { return Object.assign({}, p, { end_date: v }); }); }}
+                  style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 14, boxSizing: "border-box", outline: "none" }} />
+              </div>
+            )}
+
+            <div style={{ marginBottom: 8, fontSize: 12, color: "#534AB7", fontWeight: 600 }}>
+              → {calcDays(newReq.start_date, newReq.type === "반차" ? newReq.start_date : (newReq.end_date || newReq.start_date), newReq.type) || 0}일 신청
+            </div>
+
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontSize: 12, color: "#888", marginBottom: 6, fontWeight: 600 }}>사유 <span style={{ color: "#BBB", fontWeight: 400 }}>(선택)</span></div>
+              <input value={newReq.reason} onChange={function(e) { var v = e.target.value; setNewReq(function(p) { return Object.assign({}, p, { reason: v }); }); }}
+                placeholder="예: 개인 일정, 병원 진료" style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 14, boxSizing: "border-box", outline: "none" }} />
+            </div>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={submitRequest} style={{ flex: 1, background: "#534AB7", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>신청하기</button>
+              <button onClick={function() { setShowForm(false); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "12px 18px", fontSize: 14, cursor: "pointer" }}>취소</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── 정산관리 ──────────────────────────────────────────────────────────────────
 function SettlementView() {
   const [cases, setCases] = useState([]);       // 자동 (agency_cases)
