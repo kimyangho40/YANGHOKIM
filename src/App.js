@@ -69,6 +69,33 @@ function kstDate(offsetDays) {
   return new Date(d.getTime() + 9 * 3600000).toISOString().slice(0, 10);
 }
 
+// 차기 업무(자유 텍스트)에서 날짜(6/30, 6월30일, 6.30)를 뽑아 가장 가까운 마감일 추정
+function parseActionDates(text) {
+  if (!text) return [];
+  var now = new Date(); var yr = now.getFullYear();
+  var out = []; var re = /(\d{1,2})\s*[\/월.]\s*(\d{1,2})/g; var m;
+  while ((m = re.exec(text)) !== null) {
+    var mo = parseInt(m[1]), d = parseInt(m[2]);
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) continue;
+    out.push(new Date(yr, mo - 1, d));
+  }
+  return out;
+}
+function nearestActionDate(text) {
+  var dates = parseActionDates(text);
+  if (!dates.length) return null;
+  var today = new Date(); today.setHours(0, 0, 0, 0);
+  var future = dates.filter(function(d) { return d >= today; }).sort(function(a, b) { return a - b; });
+  if (future.length) return future[0];
+  return dates.sort(function(a, b) { return b - a; })[0];
+}
+function daysUntil(date) {
+  if (!date) return null;
+  var today = new Date(); today.setHours(0, 0, 0, 0);
+  var d = new Date(date); d.setHours(0, 0, 0, 0);
+  return Math.round((d - today) / 86400000);
+}
+
 function getProductColor(name) {
   if (!name) return null;
   return PRODUCT_COLORS[name] || { bg: "#F3F4F6", text: "#374151" };
@@ -94,7 +121,7 @@ const AGENCY_GROUPS = [
   { id: "경정청구", label: "경정청구", color: "#0369A1" },
   { id: "기타", label: "기타", color: "#555" },
 ];
-const DOC_LIST = ["사업자등록증","최근 3년치 재무제표 (23년~25년)","최근 3년치 부가세 증명원 (23년~25년)","법인 기업 금융거래 확인서","대표자 신용점수","4대보험 명부","월별 고용보험 가입자 명부","그 외 사업전환 필수 서류","최근 1년 수출실적 증명서","사업자 대출 금융거래 확인서","대표자 신분증","임대차 계약서","회사 소개서 또는 사업계획서","2026년 상반기 부가세 증명원","대표자 개인 대출 금융거래 확인서","직전연도 상시근로자 수 파악","기업 인증 자료 (벤처, 이노비즈, 연구전담 부서 등)","특허 및 상표권 관련 자료"];
+const DOC_LIST = ["사업자등록증","최근 3년치 재무제표 (23년~25년)","최근 3년치 부가세 증명원 (23년~25년)","법인 기업 금융거래 확인서","대표자 신용점수","4대보험 명부","월별 고용보험 가입자 명부","그 외 사업전환 필수 서류","최근 1년 수출실적 증명서","사업자 대출 금융거래 확인서","대표자 신분증","임대차 계약서","회사 소개서 또는 사업계획서","2026년 상반기 부가세 증명원","대표자 개인 대출 금융거래 확인서","직전연도 상시근로자 수 파악","기업 인증 자료 (벤처·이노비즈·연구전담 부서 등)","특허 및 상표권 관련 자료"];
 const TEAMS = ["법인전담","개인전담","관리자"];
 const ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일","양호"];
 const INDUSTRY_OPTIONS = ["제조업","농업·어업","숙박업","음식점업","전자상거래업","정보통신업","도소매업","서비스업","창고업","자동차임대업"];
@@ -334,6 +361,142 @@ const formatRevenue = (val) => {
 };
 
 // ── 아이콘 ────────────────────────────────────────────────────────────────────
+// 기업현황표(xlsx) 파싱 공용 함수 - 신규등록/상세패널 양쪽에서 사용
+async function parseHyeonhwangpyo(file) {
+  if (typeof window.XLSX === "undefined") {
+    await new Promise(function(resolve, reject) {
+      var script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+      script.onload = resolve;
+      script.onerror = function() { reject(new Error("SheetJS 라이브러리 로드 실패. 인터넷 연결을 확인해주세요.")); };
+      document.head.appendChild(script);
+    });
+  }
+  var XLSX = window.XLSX;
+  var data = await file.arrayBuffer();
+  var wb = XLSX.read(data, { type: "array", cellDates: true });
+  var sheetName = wb.SheetNames.find(function(n) { return n.indexOf("기업개요") >= 0; }) || wb.SheetNames[0];
+  var ws = wb.Sheets[sheetName];
+  var rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+  var getCell = function(r, c) {
+    if (!rows[r]) return "";
+    var v = rows[r][c];
+    if (v === null || v === undefined) return "";
+    if (v instanceof Date) { return v.getFullYear() + "-" + String(v.getMonth() + 1).padStart(2, "0") + "-" + String(v.getDate()).padStart(2, "0"); }
+    return String(v).trim();
+  };
+  var parseRevenue = function(s) {
+    if (!s) return "";
+    var str = String(s).replace(/\s/g, "");
+    var match = str.match(/([0-9.,]+)(억|천만|백만|만)?/);
+    if (!match) return "";
+    var num = parseFloat(match[1].replace(/,/g, ""));
+    if (isNaN(num)) return "";
+    var unit = match[2] || "";
+    if (unit === "억") return Math.round(num * 100000000);
+    if (unit === "천만") return Math.round(num * 10000000);
+    if (unit === "백만") return Math.round(num * 1000000);
+    if (unit === "만") return Math.round(num * 10000);
+    return Math.round(num);
+  };
+  var parseCredit = function(s) {
+    if (!s) return { kcb: "", nice: "" };
+    var kcbMatch = String(s).match(/KCB\s*([0-9]+)/i);
+    var niceMatch = String(s).match(/NICE\s*([0-9]+)/i);
+    return { kcb: kcbMatch ? kcbMatch[1] : "", nice: niceMatch ? niceMatch[1] : "" };
+  };
+  var parseRepAndPhone = function(s) {
+    if (!s) return { rep: "", phone: "" };
+    var parts = String(s).split("/").map(function(x) { return x.trim(); });
+    var rep = parts[0] || "";
+    var phone = parts[1] || "";
+    rep = rep.replace(/대표(이사)?$/, "").trim();
+    phone = phone.replace(/[^0-9-]/g, "");
+    return { rep: rep, phone: phone };
+  };
+  var parseFoundedDate = function(s) {
+    if (!s) return { year: "", month: "" };
+    var str = String(s);
+    var match = str.match(/(\d{4})[-/.년\s]*(\d{1,2})/);
+    if (match) return { year: match[1], month: parseInt(match[2]) };
+    return { year: "", month: "" };
+  };
+  var parseRegion = function(addr) {
+    if (!addr) return "";
+    var s = String(addr);
+    var doMap = { "서울특별시": "서울", "서울": "서울", "부산광역시": "부산", "부산": "부산", "대구광역시": "대구", "대구": "대구", "인천광역시": "인천", "인천": "인천", "광주광역시": "광주", "광주": "광주", "대전광역시": "대전", "대전": "대전", "울산광역시": "울산", "울산": "울산", "세종특별자치시": "세종", "세종": "세종", "경기도": "경기", "강원도": "강원", "강원특별자치도": "강원", "충청북도": "충북", "충북": "충북", "충청남도": "충남", "충남": "충남", "전라북도": "전북", "전북": "전북", "전북특별자치도": "전북", "전라남도": "전남", "전남": "전남", "경상북도": "경북", "경북": "경북", "경상남도": "경남", "경남": "경남", "제주특별자치도": "제주", "제주도": "제주", "제주": "제주" };
+    var firstWord = s.split(/\s+/)[0];
+    var doName = doMap[firstWord] || firstWord;
+    var secondWord = s.split(/\s+/)[1] || "";
+    var siGuGun = secondWord.replace(/시$|군$|구$/, "");
+    return doName + (siGuGun ? "_" + siGuGun : "");
+  };
+  var updates = {};
+  var auto = {};
+  var name = getCell(2, 2);
+  if (name) { updates.name = name; auto.name = true; }
+  var bizNum = getCell(2, 8);
+  if (bizNum) { updates.business_number = bizNum; auto.business_number = true; }
+  var repPhone = parseRepAndPhone(getCell(3, 2));
+  if (repPhone.rep) { updates.representative = repPhone.rep; auto.representative = true; }
+  if (repPhone.phone) { updates.phone = repPhone.phone; auto.phone = true; }
+  var addr = getCell(4, 2);
+  var region = parseRegion(addr);
+  if (region) { updates.region = region; auto.region = true; }
+  var industry = getCell(5, 2);
+  if (industry) { updates.industry = industry; auto.industry = true; }
+  var emp = getCell(5, 8);
+  if (emp && emp !== "없음" && emp !== "추후") {
+    var empNum = String(emp).replace(/[^0-9]/g, "");
+    if (empNum) { updates.employee_count = empNum; auto.employee_count = true; }
+  } else if (emp === "없음") { updates.employee_count = "0"; auto.employee_count = true; }
+  var credit = parseCredit(getCell(6, 2));
+  if (credit.kcb) { updates.credit_score_kcb = credit.kcb; auto.credit_score_kcb = true; }
+  if (credit.nice) { updates.credit_score_nice = credit.nice; auto.credit_score_nice = true; }
+  var founded = parseFoundedDate(getCell(6, 8));
+  if (founded.year) { updates.founded_year = founded.year; auto.founded_year = true; }
+  if (founded.month) { updates.founded_month = founded.month; auto.founded_month = true; }
+  var rev2025 = parseRevenue(getCell(12, 2));
+  var rev2024 = parseRevenue(getCell(12, 6));
+  var rev2023 = parseRevenue(getCell(12, 10));
+  if (rev2025) { updates.revenue_2025 = rev2025; auto.revenue_2025 = true; }
+  if (rev2024) { updates.revenue_2024 = rev2024; auto.revenue_2024 = true; }
+  if (rev2023) { updates.revenue_2023 = rev2023; auto.revenue_2023 = true; }
+  if (name && (/^\(주\)|^㈜|주식회사/.test(name))) { updates.business_type = "법인사업자"; updates.type = "법인"; }
+  else if (name) { updates.business_type = "개인사업자"; updates.type = "개인"; }
+  var loans = [];
+  for (var lr = 17; lr <= 23; lr++) {
+    var inst = getCell(lr, 2), amt = getCell(lr, 5), bank = getCell(lr, 7), sdate = getCell(lr, 8), edate = getCell(lr, 10);
+    if (inst || amt || bank || sdate || edate) { loans.push({ inst: inst, amount: amt, bank: bank, start: sdate, end: edate }); }
+  }
+  if (loans.length > 0) { updates.loans = loans; auto.loans = true; }
+  var infoItems = [];
+  var addInfo = function(label, val) { if (val && String(val).trim()) infoItems.push({ label: label, value: String(val).trim() }); };
+  addInfo("대표자 생년월일", getCell(3, 8));
+  addInfo("26년 현재/예상 매출", getCell(11, 2));
+  addInfo("법인 자본금", getCell(11, 8));
+  addInfo("회생 및 파산 이력", getCell(8, 8));
+  addInfo("폐업 이력", getCell(15, 2));
+  addInfo("기업인증", [getCell(13, 10), getCell(14, 8), getCell(15, 8)].filter(function(x) { return x && x !== "노란우산공제, 제로페이" && x !== "내일채움"; }).join(", "));
+  addInfo("특허/상표/디자인", getCell(14, 6));
+  addInfo("연구소/전담부서", getCell(14, 2));
+  addInfo("수출실적", getCell(13, 2));
+  addInfo("세금/금융 연체", getCell(13, 6));
+  addInfo("추가 사업자 여부", getCell(8, 2));
+  addInfo("주요취급품목", getCell(7, 2));
+  addInfo("대표 결혼 유/무", getCell(7, 8));
+  addInfo("대표자 거주지 부동산", getCell(9, 2));
+  addInfo("사업장 부동산 유무", getCell(9, 8));
+  addInfo("대표이사 자산현황", getCell(10, 2));
+  addInfo("사업장 부동산 현황", getCell(10, 8));
+  addInfo("세무사 연락처", getCell(4, 8));
+  addInfo("필요자금 사용용도", getCell(26, 2));
+  if (infoItems.length > 0) { updates.company_info = infoItems; auto.company_info = true; }
+  var bigoMemo = getCell(28, 2) || getCell(29, 2) || getCell(30, 2);
+  if (bigoMemo) { updates.company_info_memo = bigoMemo; auto.company_info_memo = true; }
+  return { updates: updates, auto: auto };
+}
+
 const Icon = ({ name, size = 16, color = "currentColor" }) => {
   const p = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" };
   const icons = {
@@ -359,6 +522,7 @@ const Icon = ({ name, size = 16, color = "currentColor" }) => {
     calendar:  <svg {...p}><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>,
     chevronR:  <svg {...p}><polyline points="9 18 15 12 9 6"/></svg>,
     chevronL:  <svg {...p}><polyline points="15 18 9 12 15 6"/></svg>,
+    link:      <svg {...p}><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>,
   };
   return icons[name] || null;
 };
@@ -613,6 +777,8 @@ function CRMApp({ profile, session }) {
   const [filterStage, setFilterStage] = useState("전체");
   const [filterAssignee, setFilterAssignee] = useState("전체");
   const [filterType, setFilterType] = useState("전체");
+  const [creditFilter, setCreditFilter] = useState("");
+  const [creditMode, setCreditMode] = useState("below");
   const [toast, setToast] = useState(null);
   const [showTodayAlert, setShowTodayAlert] = useState(false);
   const [workNotesBadge, setWorkNotesBadge] = useState(0);
@@ -768,12 +934,20 @@ function CRMApp({ profile, session }) {
 
   const filtered = useMemo(() => (companies || []).filter(c => {
     const s = search.toLowerCase();
-    const matchSearch = !s || c.name?.includes(s) || c.representative?.includes(s);
+    const matchSearch = !s || c.name?.toLowerCase().includes(s) || c.representative?.toLowerCase().includes(s)
+      || c.region?.toLowerCase().includes(s) || c.industry?.toLowerCase().includes(s);
     const matchStage = filterStage === "전체" || c.stage === filterStage;
-    const matchAssignee = filterAssignee === "전체" || c.assignee === filterAssignee;
+    const matchAssignee = filterAssignee === "전체" || (c.assignee || "").split(",").map(function(x) { return x.trim(); }).includes(filterAssignee);
     const matchType = filterType === "전체" || c.type === filterType;
-    return matchSearch && matchStage && matchAssignee && matchType;
-  }), [companies, search, filterStage, filterAssignee, filterType]);
+    let matchCredit = true;
+    if (creditFilter !== "" && !isNaN(parseInt(creditFilter))) {
+      const n = parseInt(creditFilter);
+      const kcb = (c.credit_score_kcb == null || c.credit_score_kcb === "") ? null : parseInt(c.credit_score_kcb);
+      if (kcb == null) matchCredit = false;
+      else matchCredit = creditMode === "below" ? kcb < n : kcb >= n;
+    }
+    return matchSearch && matchStage && matchAssignee && matchType && matchCredit;
+  }), [companies, search, filterStage, filterAssignee, filterType, creditFilter, creditMode]);
 
   const stagnant = companies.filter(c => c.stagnant_days >= 7);
   const assignees = ["전체", ...new Set(profiles.map(p => p.name))];
@@ -814,7 +988,8 @@ function CRMApp({ profile, session }) {
   // 회사 저장
   const saveCompany = async (data, prevData) => {
     const { documents, ...rest } = data;
-    const { error } = await supabase.from("companies").update({
+    // 모든 필드를 모으되, 빈값(빈문자열/null/undefined)은 저장에서 제외 → 기존 DB값 유지(실수로 비워지는 손실 방지)
+    const allFields = {
       name: rest.name, type: rest.type, representative: rest.representative,
       phone: rest.phone, stage: rest.stage, assignee: rest.assignee,
       agency: rest.agency, received_docs: rest.received_docs, last_contact: rest.last_contact,
@@ -822,17 +997,37 @@ function CRMApp({ profile, session }) {
       fee: rest.fee, fee_status: rest.fee_status,
       revenue_2023: rest.revenue_2023, revenue_2024: rest.revenue_2024, revenue_2025: rest.revenue_2025,
       issue: rest.issue, next_action: rest.next_action,
-      employee_count: rest.employee_count || null, credit_score: rest.credit_score || null,
-      credit_score_kcb: rest.credit_score_kcb ? parseInt(rest.credit_score_kcb) || null : null,
-      credit_score_nice: rest.credit_score_nice ? parseInt(rest.credit_score_nice) || null : null,
-      founded_year: rest.founded_year || null, founded_month: rest.founded_month ? parseInt(rest.founded_month) || null : null,
-      application_month: rest.application_month || null,
-      business_number: rest.business_number || null,
-      business_type: rest.business_type || null,
-      industry: rest.industry || null,
-      region: rest.region || null,
-      contract_date: rest.contract_date || null,
-    }).eq("id", rest.id);
+      employee_count: rest.employee_count,
+      credit_score: rest.credit_score,
+      credit_score_kcb: rest.credit_score_kcb ? (parseInt(rest.credit_score_kcb) || null) : null,
+      credit_score_nice: rest.credit_score_nice ? (parseInt(rest.credit_score_nice) || null) : null,
+      founded_year: rest.founded_year,
+      founded_month: rest.founded_month ? (parseInt(rest.founded_month) || null) : null,
+      application_month: rest.application_month,
+      business_number: rest.business_number,
+      business_type: rest.business_type,
+      industry: rest.industry,
+      region: rest.region,
+      contract_date: rest.contract_date,
+    };
+    // stage/assignee/received_docs 등은 빈값도 의미가 있을 수 있으나, 일반 정보 필드는 빈값이면 건드리지 않음
+    const keepEvenIfEmpty = { stage: 1, assignee: 1, received_docs: 1, fee_status: 1 };
+    const updateObj = {};
+    Object.keys(allFields).forEach(function(k) {
+      const v = allFields[k];
+      if (keepEvenIfEmpty[k]) { updateObj[k] = v; return; }
+      if (v === "" || v === null || v === undefined) return; // 빈값은 제외 → DB 기존값 유지
+      updateObj[k] = v;
+    });
+    // 계정정보(accounts)는 항목이 1개 이상 입력됐을 때만 저장 (컬럼 미생성 시 일반 저장이 깨지지 않도록 안전 처리)
+    if (Array.isArray(rest.accounts) && rest.accounts.length > 0) {
+      updateObj.accounts = rest.accounts;
+    }
+    // 기업정보 탭: 기대출 내역(loans), 기업정보 항목(company_info), 기타 메모(company_info_memo)
+    if (Array.isArray(rest.loans)) updateObj.loans = rest.loans;
+    if (Array.isArray(rest.company_info)) updateObj.company_info = rest.company_info;
+    if (rest.company_info_memo !== undefined && rest.company_info_memo !== null) updateObj.company_info_memo = rest.company_info_memo;
+    const { error } = await supabase.from("companies").update(updateObj).eq("id", rest.id);
     if (!error) {
       // 🆕 stage가 "부결/반려"로 새로 바뀌면 → 사례집 자동 초안 생성
       if (rest.stage === "부결/반려" && prevData && prevData.stage !== "부결/반려") {
@@ -927,6 +1122,19 @@ function CRMApp({ profile, session }) {
       if (logEntries.length > 0) {
         await supabase.from("activity_logs").insert(logEntries);
       }
+      // 상태·담당자 변경 자동 기록 (누가 언제 무엇을 → 무엇으로) — 상세패널 활동에 표시되도록 company_id 사용
+      const changeLog = [];
+      if (prevData && rest.stage !== prevData.stage) {
+        changeLog.push({ company_id: rest.id, business_name: rest.name, assignee: rest.assignee, log_type: "stage_change", memo: "진행단계: " + (prevData.stage || "없음") + " → " + (rest.stage || "없음") + (profile?.name ? " (변경: " + profile.name + ")" : ""), logged_by: profile?.name || rest.assignee });
+      }
+      var curAssignee2 = Array.isArray(rest.assignee) ? rest.assignee.join(", ") : (rest.assignee || "");
+      var prevAssignee2 = prevData ? (Array.isArray(prevData.assignee) ? prevData.assignee.join(", ") : (prevData.assignee || "")) : "";
+      if (prevData && curAssignee2 !== prevAssignee2) {
+        changeLog.push({ company_id: rest.id, business_name: rest.name, assignee: rest.assignee, log_type: "assignee_change", memo: "담당자: " + (prevAssignee2 || "없음") + " → " + (curAssignee2 || "없음") + (profile?.name ? " (변경: " + profile.name + ")" : ""), logged_by: profile?.name || rest.assignee });
+      }
+      if (changeLog.length > 0) {
+        await supabase.from("activity_logs").insert(changeLog);
+      }
       // 기관별 현황 자동 동기화: 회사명이 같은 모든 agency_cases의 정보를 최신화
       if (rest.name && prevData) {
         var syncUpdates = {};
@@ -950,7 +1158,8 @@ function CRMApp({ profile, session }) {
       }
       showToast("저장됐어요!");
       // 전체 리로드(fetchAll) 시 목록이 재정렬되며 스크롤이 맨 위로 튀므로, 해당 회사만 로컬 갱신
-      setCompanies(function(prev) { return prev.map(function(c) { return c.id === rest.id ? Object.assign({}, c, rest) : c; }); });
+      // 실제 DB에 저장한 값(updateObj)으로 갱신해야 화면과 DB가 일치함
+      setCompanies(function(prev) { return prev.map(function(c) { return c.id === rest.id ? Object.assign({}, c, updateObj) : c; }); });
     }
     else showToast("저장 실패: " + error.message, "error");
   };
@@ -1032,6 +1241,10 @@ function CRMApp({ profile, session }) {
     } else if (form.agency_list_str) {
       insertData.agency_list = form.agency_list_str;
     }
+    // 기업정보 탭 (기업현황표 자동추출분)
+    if (Array.isArray(form.loans) && form.loans.length > 0) insertData.loans = form.loans;
+    if (Array.isArray(form.company_info) && form.company_info.length > 0) insertData.company_info = form.company_info;
+    if (form.company_info_memo) insertData.company_info_memo = form.company_info_memo;
 
     const { data: co, error } = await supabase.from("companies").insert(insertData).select().single();
     if (!error && co) {
@@ -1224,6 +1437,7 @@ function CRMApp({ profile, session }) {
             { id: "list",       label: "기업 목록",   icon: "list" },
             { id: "pipeline",   label: "파이프라인",  icon: "pipeline" },
             { id: "cases",      label: "사례집",      icon: "folder" },
+            { id: "quicklinks", label: "바로가기",    icon: "link" },
           ].map(({ id, label, icon }) => (
             <div key={id} onClick={() => setView(id)}
               style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 8, cursor: "pointer", marginBottom: 2, background: view === id ? "#2E2C29" : "transparent", color: view === id ? "#F7F6F3" : "#666", fontSize: 13, fontWeight: view === id ? 600 : 400 }}>
@@ -1384,10 +1598,11 @@ function CRMApp({ profile, session }) {
             {view === "worknotes" && <WorkNotesView profile={profile} onBadgeUpdate={function() { fetchWorkNotesBadge(profile?.name); }} />}
             {view === "calendar" && <CalendarView companies={companies} onSelectCompany={setSelectedCompany} profile={profile} />}
             {view === "manual" && <ManualView />}
+            {view === "quicklinks" && <QuickLinksView />}
             {view === "pipeline" && <PipelineView filtered={filtered} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setCompanies={setCompanies} />}
             {view === "cases" && <ApprovalCasesView profile={profile} />}
-            {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={profile?.role === "admin" || profile?.name === "양호"} onSelectCompany={setSelectedCompany} setView={setView} />}
-            {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} />}
+            {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={profile?.role === "admin" || profile?.name === "양호"} onSelectCompany={setSelectedCompany} setView={setView} companies={companies} />}
+            {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} creditFilter={creditFilter} setCreditFilter={setCreditFilter} creditMode={creditMode} setCreditMode={setCreditMode} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} />}
             {view === "stagnant" && <StagnantView stagnant={stagnant} onSelect={setSelectedCompany} />}
             {view === "members" && profile.role === "admin" && <MembersView profiles={profiles} onRefresh={fetchAll} showToast={showToast} />}
           </>
@@ -1425,6 +1640,7 @@ function CRMApp({ profile, session }) {
           { id: "dashboard",  label: "홈",      icon: "dashboard" },
           { id: "agency",     label: "기관",     icon: "building" },
           { id: "dbleads",    label: "DB",       icon: "phone" },
+          { id: "worknotes",  label: "노트",     icon: "edit" },
           { id: "settlement", label: "정산",     icon: "money" },
           { id: "calendar",   label: "캘린더",   icon: "calendar" },
         ].map(({ id, label, icon }) => (
@@ -1633,8 +1849,39 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
               {/* 📋 내 할일 위젯 - work_notes 체크박스 기반 (항상 표시) */}
               <MyTodoWidget setView={setView} />
-              
-              {/* companies 기반 위젯 제거됨 - work_notes 기반 "내 할일" 위젯이 메인 */}
+
+              {/* 📅 차기 업무 마감 요약 (next_action 날짜 자동 집계) */}
+              {(function() {
+                var acts = (companies || []).filter(function(c) { return c.next_action && nearestActionDate(c.next_action) !== null; }).map(function(c) { return daysUntil(nearestActionDate(c.next_action)); });
+                var todayCnt = acts.filter(function(d) { return d === 0; }).length;
+                var soonCnt = acts.filter(function(d) { return d >= 1 && d <= 3; }).length;
+                var overdueCnt = acts.filter(function(d) { return d < 0; }).length;
+                return (
+                  <>
+                    {todayCnt > 0 && (
+                      <div onClick={function() { setView("mytodo"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #4338CA" }}>
+                        <div style={{ fontSize: 10, color: "#4338CA", fontWeight: 700, marginBottom: 4 }}>📅 오늘 마감</div>
+                        <div style={{ fontSize: 20, fontWeight: 700, color: "#4338CA" }}>{todayCnt}건</div>
+                        <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>차기 업무 오늘까지</div>
+                      </div>
+                    )}
+                    {soonCnt > 0 && (
+                      <div onClick={function() { setView("mytodo"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #B45309" }}>
+                        <div style={{ fontSize: 10, color: "#B45309", fontWeight: 700, marginBottom: 4 }}>⏳ 마감 임박</div>
+                        <div style={{ fontSize: 20, fontWeight: 700, color: "#B45309" }}>{soonCnt}건</div>
+                        <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>3일 이내 마감</div>
+                      </div>
+                    )}
+                    {overdueCnt > 0 && (
+                      <div onClick={function() { setView("mytodo"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
+                        <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 700, marginBottom: 4 }}>⏰ 기한 지남</div>
+                        <div style={{ fontSize: 20, fontWeight: 700, color: "#DC2626" }}>{overdueCnt}건</div>
+                        <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>차기 업무 마감 지남</div>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
               {stagnant14.length > 0 && (
                 <div onClick={function() { setView("stagnant"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
                   <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 700, marginBottom: 4 }}>🔴 심각 정체</div>
@@ -1964,7 +2211,7 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
 // ============================================================
 // 📋 내 할일 화면 - work_notes content에서 체크박스 파싱
 // ============================================================
-function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
+function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView, companies }) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState(isAdmin ? "all" : "mine"); // "mine" | "all"
@@ -2119,6 +2366,18 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
   var noDue = unchecked.filter(function(i) { return !i.dueDate; });
   var later = unchecked.filter(function(i) { return i.dueDate && i.dueDate > weekEnd; });
 
+  // 📅 기업목록 차기 업무(next_action)에서 날짜가 적힌 건들을 모아 마감일순 정렬
+  var actionTodos = (companies || []).filter(function(c) {
+    if (!c.next_action || nearestActionDate(c.next_action) === null) return false;
+    var names = (c.assignee || "").split(",").map(function(s) { return s.trim(); });
+    if (viewMode === "mine" && currentUser) return names.includes(currentUser);
+    if (filterAssignee) return names.includes(filterAssignee);
+    return true;
+  }).map(function(c) {
+    var dt = nearestActionDate(c.next_action);
+    return { c: c, date: dt, days: daysUntil(dt) };
+  }).sort(function(a, b) { return a.date - b.date; });
+
   // 카테고리 렌더 헬퍼
   function renderSection(title, items, color, bgColor, icon) {
     if (items.length === 0) return null;
@@ -2218,7 +2477,33 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView }) {
         </div>
       </div>
 
-      {allItems.length === 0 && (
+      {/* 📅 기업목록 차기 업무 마감 (next_action에 날짜 적힌 건 자동 수집) */}
+      {actionTodos.length > 0 && (
+        <div style={{ marginBottom: 20, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 12, padding: "14px 16px" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#92400E", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+            📅 기업목록 차기 업무 마감 <span style={{ fontSize: 11, fontWeight: 400, color: "#B45309" }}>({actionTodos.length}건 · 클릭하면 해당 업체로 이동)</span>
+          </div>
+          {actionTodos.map(function(t, i) {
+            var dday = t.days;
+            var ddayLabel = dday < 0 ? "D+" + Math.abs(dday) + " 지남" : dday === 0 ? "오늘" : "D-" + dday;
+            var ddayColor = dday < 0 ? "#DC2626" : dday === 0 ? "#4338CA" : dday <= 3 ? "#B45309" : "#888";
+            var ddayBg = dday < 0 ? "#FEE2E2" : dday === 0 ? "#EEF2FF" : dday <= 3 ? "#FEF3C7" : "#F3F4F6";
+            var firstLine = (t.c.next_action || "").split("\n").map(function(s) { return s.trim(); }).filter(Boolean)[0] || "";
+            return (
+              <div key={t.c.id + "_" + i} onClick={function() { onSelectCompany && onSelectCompany(t.c); }}
+                style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 8, cursor: "pointer", background: "#fff", marginBottom: 6, border: "1px solid #FEF3C7" }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: ddayColor, background: ddayBg, padding: "3px 8px", borderRadius: 99, whiteSpace: "nowrap", flexShrink: 0 }}>{ddayLabel}</span>
+                <span style={{ fontSize: 12, color: "#888", whiteSpace: "nowrap", flexShrink: 0 }}>{(t.date.getMonth() + 1) + "/" + t.date.getDate()}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "#1A1917", whiteSpace: "nowrap", flexShrink: 0 }}>{t.c.name}</span>
+                <span style={{ fontSize: 12, color: "#666", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{firstLine}</span>
+                {t.c.assignee && <span style={{ fontSize: 10, color: "#999", whiteSpace: "nowrap", flexShrink: 0, marginLeft: "auto" }}>{t.c.assignee}</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {allItems.length === 0 && actionTodos.length === 0 && (
         <div style={{ background: "#F7F6F3", borderRadius: 12, padding: 40, textAlign: "center", color: "#888" }}>
           <div style={{ fontSize: 30, marginBottom: 12 }}>📝</div>
           <div style={{ fontSize: 14, marginBottom: 6 }}>할일이 없어요!</div>
@@ -2404,7 +2689,7 @@ function IndustryCell({ co, setCompanies, companies }) {
   );
 }
 
-function ListView({ filtered, companies, search, setSearch, filterStage, setFilterStage, filterAssignee, setFilterAssignee, filterType, setFilterType, assignees, onSelect, onAdd, setCompanies, showToast, dashboardFilter, setDashboardFilter }) {
+function ListView({ filtered, companies, search, setSearch, filterStage, setFilterStage, filterAssignee, setFilterAssignee, filterType, setFilterType, creditFilter, setCreditFilter, creditMode, setCreditMode, assignees, onSelect, onAdd, setCompanies, showToast, dashboardFilter, setDashboardFilter }) {
   const [showCompanyTrash, setShowCompanyTrash] = useState(false);
   const [trashedCompanies, setTrashedCompanies] = useState([]);
 
@@ -2553,8 +2838,20 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
       <div style={{ background: "#fff", borderRadius: 10, padding: "12px 16px", border: "1px solid #E8E5E0", marginBottom: 14, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         <div style={{ position: "relative", flex: 1, minWidth: 160 }}>
           <div style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }}><Icon name="search" size={14} color="#AAA" /></div>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="업체명 · 대표자 검색"
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="업체명 · 대표자 · 지역 · 업종 검색"
             style={{ width: "100%", padding: "8px 10px 8px 32px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+        </div>
+        {/* 신용점수 필터 (KCB 기준) */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, border: "1px solid #E8E5E0", borderRadius: 7, padding: "3px 4px 3px 8px", background: creditFilter ? "#FEF3C7" : "#fff" }}>
+          <span style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap" }}>신용점수</span>
+          <button onClick={function() { setCreditMode(creditMode === "below" ? "above" : "below"); }}
+            title="이하/이상 전환"
+            style={{ border: "none", background: "#1A1917", color: "#fff", borderRadius: 5, padding: "4px 7px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+            {creditMode === "below" ? "미만" : "이상"}
+          </button>
+          <input value={creditFilter} onChange={e => setCreditFilter(e.target.value.replace(/[^0-9]/g, ""))} inputMode="numeric" placeholder="840"
+            style={{ width: 52, padding: "6px 4px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 13, outline: "none", textAlign: "center", boxSizing: "border-box" }} />
+          {creditFilter && <button onClick={function() { setCreditFilter(""); }} style={{ border: "none", background: "transparent", color: "#999", cursor: "pointer", fontSize: 14, padding: "0 4px" }}>✕</button>}
         </div>
         {[
           { v: filterStage, set: setFilterStage, opts: ["전체", ...STAGES] },
@@ -2567,7 +2864,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
           </select>
         ))}
         {(search || filterStage !== "전체" || filterAssignee !== "전체" || filterType !== "전체") && (
-          <button onClick={() => { setSearch(""); setFilterStage("전체"); setFilterAssignee("전체"); setFilterType("전체"); }}
+          <button onClick={() => { setSearch(""); setFilterStage("전체"); setFilterAssignee([]); setFilterType("전체"); }}
             style={{ fontSize: 12, color: "#888", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>초기화</button>
         )}
       </div>
@@ -2717,7 +3014,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
       {/* 기업목록 휴지통 모달 */}
       {showCompanyTrash && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={function(e) { if (e.target === e.currentTarget) setShowCompanyTrash(false); }}>
+          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowCompanyTrash(false); }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 640, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ 기업목록 휴지통 ({trashedCompanies.length}건)</h2>
@@ -2854,6 +3151,62 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   const [settlements, setSettlements] = useState([]);
   const [commLogs, setCommLogs] = useState([]);
   const [commInput, setCommInput] = useState("");
+  const [xlsxPreview, setXlsxPreview] = useState(null); // 기업현황표 첨부 미리보기 {updates, auto}
+  const FIELD_LABELS_X = { name: "업체명", representative: "대표자", phone: "연락처", region: "지역", industry: "업종", employee_count: "직원수", credit_score_kcb: "KCB점수", credit_score_nice: "NICE점수", founded_year: "설립연도", founded_month: "설립월", revenue_2025: "2025년 매출", revenue_2024: "2024년 매출", revenue_2023: "2023년 매출", business_number: "사업자번호", business_type: "사업자유형", type: "유형" };
+  async function handleXlsxAttach(file) {
+    if (!file) return;
+    try { var res = await parseHyeonhwangpyo(file); setXlsxPreview(res); }
+    catch (err) { alert("❌ 엑셀 읽기 실패: " + err.message + "\n\n양식이 표준 기업현황표인지 확인해주세요."); }
+  }
+  function applyXlsxPreview() {
+    if (!xlsxPreview) return;
+    var u = xlsxPreview.updates;
+    setData(function(p) {
+      var merged = Object.assign({}, p);
+      Object.keys(u).forEach(function(k) {
+        if (k === "company_info") {
+          var ex = Array.isArray(p.company_info) ? p.company_info.slice() : [];
+          var idx = {}; ex.forEach(function(it, i) { idx[it.label] = i; });
+          u.company_info.forEach(function(ni) { if (idx[ni.label] !== undefined) ex[idx[ni.label]] = ni; else ex.push(ni); });
+          merged.company_info = ex;
+        } else if (k === "loans") { merged.loans = u.loans; }
+        else { merged[k] = u[k]; }
+      });
+      return merged;
+    });
+    setXlsxPreview(null);
+    alert("✅ 적용됐어요. 내용 확인 후 저장 버튼을 눌러주세요.");
+  }
+  // 📷 카톡 캡처 OCR (무료 Tesseract.js, 시간 패턴 제거하고 대화 내용만 추출)
+  const [ocrBusy, setOcrBusy] = useState(null);
+  var handleOcrFile = async function(file, target) {
+    if (!file) return;
+    setOcrBusy(target);
+    try {
+      if (!window.Tesseract) {
+        await new Promise(function(res, rej) { var s = document.createElement("script"); s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
+      }
+      var r = await window.Tesseract.recognize(file, "kor");
+      var text = (r.data.text || "").split("\n").map(function(line) {
+        // 시간 패턴 제거: 오전/오후 3:24, 3:24, 14:30, 3:24 PM 등
+        return line.replace(/(오전|오후)\s*\d{1,2}:\d{2}/g, "").replace(/\d{1,2}:\d{2}\s*(AM|PM|am|pm)?/g, "").trim();
+      }).filter(function(l) { return l; }).join("\n");
+      if (!text) { alert("이미지에서 글자를 찾지 못했어요. 더 선명한 캡처로 다시 시도해보세요."); }
+      else if (target === "issue") setData(function(p) { return Object.assign({}, p, { issue: (p.issue ? p.issue + "\n" : "") + text }); });
+      else if (target === "next_action") setData(function(p) { return Object.assign({}, p, { next_action: (p.next_action ? p.next_action + "\n" : "") + text }); });
+      else if (target === "comm") setCommInput(function(prev) { return (prev ? prev + "\n" : "") + text; });
+    } catch (e) { alert("이미지 인식 실패: " + (e.message || e)); }
+    setOcrBusy(null);
+  };
+  var OcrButton = function(props) {
+    return (
+      <label style={{ fontSize: 10, color: ocrBusy ? "#AAA" : "#4338CA", cursor: ocrBusy ? "default" : "pointer", border: "1px solid #C7D2FE", borderRadius: 5, padding: "2px 8px", background: "#EEF2FF", whiteSpace: "nowrap" }}>
+        {ocrBusy === props.target ? "인식중..." : "📷 캡처 읽기"}
+        <input type="file" accept="image/*" style={{ display: "none" }} disabled={!!ocrBusy}
+          onChange={function(e) { var f = e.target.files[0]; e.target.value = ""; handleOcrFile(f, props.target); }} />
+      </label>
+    );
+  };
   const [loadingExtra, setLoadingExtra] = useState(false);
   const [editingLogId, setEditingLogId] = useState(null);
   const [editingLogText, setEditingLogText] = useState("");
@@ -2956,7 +3309,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "flex-end" }}
-      onClick={e => e.target === e.currentTarget && onClose()}>
+      onMouseDown={e => e.target === e.currentTarget && onClose()}>
       <div style={{ width: 460, height: "100vh", background: "#fff", overflowY: "auto", boxShadow: "-8px 0 40px rgba(0,0,0,0.15)", display: "flex", flexDirection: "column" }}>
         {/* 헤더 */}
         <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid #E8E5E0", background: sc.bg || "#F7F6F3" }}>
@@ -3016,6 +3369,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
         <div style={{ display: "flex", borderBottom: "1px solid #E8E5E0", background: "#FAFAF8", overflowX: "auto" }}>
           {[
             { id: "info", label: "기본정보" },
+            { id: "bizinfo", label: "기업정보", badge: (Array.isArray(data.loans) ? data.loans.length : 0) + (Array.isArray(data.company_info) ? data.company_info.length : 0) },
             { id: "docs", label: "서류현황" },
             { id: "history", label: "이슈·액션", badge: commLogs.length },
             { id: "agency", label: "기관진행", badge: agencyCases.length },
@@ -3032,6 +3386,12 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
         <div style={{ flex: 1, padding: "20px 24px", overflowY: "auto" }}>
           {tab === "info" && (
             <>
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 4, background: "#FEF3C7", color: "#B45309", border: "none", borderRadius: 7, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                  📎 기업현황표 첨부 (자동 입력)
+                  <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={function(e) { var f = e.target.files && e.target.files[0]; e.target.value = ""; handleXlsxAttach(f); }} />
+                </label>
+              </div>
               <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "12px 14px", marginBottom: 10 }}>
                 <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>담당 기관 (복수 선택 가능)</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -3158,6 +3518,31 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>지역</div>
                   <input type="text" value={data.region || ""} placeholder="예: 서울_강남, 경기_안산" onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { region: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+                  {/* 🔐 계정·인증 정보 (지역 칸 빈 공간 활용, 세로 배치) */}
+                  <div style={{ marginTop: 12, borderTop: "1px solid #E8E5E0", paddingTop: 10 }}>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 8, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>🔐 계정·인증 정보 <span style={{ color: "#BBB", fontSize: 10 }}>(소진공·중진공·홈택스·계좌·아이핀 등 자유)</span></div>
+                    {(Array.isArray(data.accounts) ? data.accounts : []).map(function(acc, ai) {
+                      return (
+                        <div key={ai} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: "1px solid #E8E5E0" }}>
+                          <div style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 4 }}>
+                            <input value={acc.label || ""} placeholder="구분 (예: 소진공 계정)"
+                              onChange={function(e) { var v = e.target.value; setData(function(p) { var a = (p.accounts || []).slice(); a[ai] = Object.assign({}, a[ai], { label: v }); return Object.assign({}, p, { accounts: a }); }); }}
+                              style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, padding: "5px 7px", border: "1px solid #E8E5E0", borderRadius: 5, boxSizing: "border-box", outline: "none" }} />
+                            <button onClick={function() { setData(function(p) { return Object.assign({}, p, { accounts: (p.accounts || []).filter(function(_, i) { return i !== ai; }) }); }); }}
+                              style={{ border: "none", background: "transparent", color: "#CCC", cursor: "pointer", fontSize: 15, padding: "0 2px" }}>✕</button>
+                          </div>
+                          <input value={acc.id || ""} placeholder="아이디 / 내용"
+                            onChange={function(e) { var v = e.target.value; setData(function(p) { var a = (p.accounts || []).slice(); a[ai] = Object.assign({}, a[ai], { id: v }); return Object.assign({}, p, { accounts: a }); }); }}
+                            style={{ width: "100%", fontSize: 12, padding: "5px 7px", border: "1px solid #E8E5E0", borderRadius: 5, boxSizing: "border-box", outline: "none", marginBottom: 4 }} />
+                          <input value={acc.pw || ""} placeholder="비밀번호 (선택)"
+                            onChange={function(e) { var v = e.target.value; setData(function(p) { var a = (p.accounts || []).slice(); a[ai] = Object.assign({}, a[ai], { pw: v }); return Object.assign({}, p, { accounts: a }); }); }}
+                            style={{ width: "100%", fontSize: 12, padding: "5px 7px", border: "1px solid #E8E5E0", borderRadius: 5, boxSizing: "border-box", outline: "none" }} />
+                        </div>
+                      );
+                    })}
+                    <button onClick={function() { setData(function(p) { return Object.assign({}, p, { accounts: (p.accounts || []).concat([{ label: "", id: "", pw: "" }]) }); }); }}
+                      style={{ width: "100%", fontSize: 12, padding: "6px 10px", background: "#fff", border: "1px solid #D1D5DB", borderRadius: 6, color: "#555", fontWeight: 600, cursor: "pointer" }}>+ 항목 추가</button>
+                  </div>
                 </div>
               </div>
               {/* 담당자 다중선택 */}
@@ -3209,6 +3594,108 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 </div>
               </div>
             </>
+          )}
+
+          {tab === "bizinfo" && (
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 8, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 11, color: "#888" }}>기업현황표에서 자동 추출 · 직접 수정 가능</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 4, background: "#FEF3C7", color: "#B45309", border: "none", borderRadius: 7, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                    📎 현황표 첨부
+                    <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={function(e) { var f = e.target.files && e.target.files[0]; e.target.value = ""; handleXlsxAttach(f); }} />
+                  </label>
+                  <button onClick={function() { onSave(data); }} style={{ display: "flex", alignItems: "center", gap: 5, background: "#15803D", color: "#fff", border: "none", borderRadius: 7, padding: "8px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                    <Icon name="save" size={13} color="#fff" /> 기업정보 저장
+                  </button>
+                </div>
+              </div>
+
+              {/* 기대출 내역 표 */}
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 7 }}>💰 기대출 내역</div>
+              <div style={{ overflowX: "auto", marginBottom: 8 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+                  <thead>
+                    <tr style={{ background: "#F4F4F8" }}>
+                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "26%" }}>기관</th>
+                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "16%" }}>금액</th>
+                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "14%" }}>은행</th>
+                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "19%" }}>실행일</th>
+                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "19%" }}>만기일</th>
+                      <th style={{ padding: "6px 2px", border: "1px solid #E8E5E0", width: "6%" }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(Array.isArray(data.loans) ? data.loans : []).map(function(ln, li) {
+                      var updateLoan = function(field, val) {
+                        setData(function(p) {
+                          var arr = (Array.isArray(p.loans) ? p.loans : []).slice();
+                          arr[li] = Object.assign({}, arr[li], { [field]: val });
+                          return Object.assign({}, p, { loans: arr });
+                        });
+                      };
+                      var cellStyle = { border: "1px solid #E8E5E0", padding: 0 };
+                      var inStyle = { width: "100%", border: "none", padding: "6px 5px", fontSize: 11.5, background: "transparent", outline: "none", boxSizing: "border-box" };
+                      return (
+                        <tr key={li}>
+                          <td style={cellStyle}><input value={ln.inst || ""} onChange={function(e) { updateLoan("inst", e.target.value); }} style={inStyle} /></td>
+                          <td style={cellStyle}><input value={ln.amount || ""} onChange={function(e) { updateLoan("amount", e.target.value); }} style={inStyle} /></td>
+                          <td style={cellStyle}><input value={ln.bank || ""} onChange={function(e) { updateLoan("bank", e.target.value); }} style={inStyle} /></td>
+                          <td style={cellStyle}><input value={ln.start || ""} placeholder="26.01.13" onChange={function(e) { updateLoan("start", e.target.value); }} style={inStyle} /></td>
+                          <td style={cellStyle}><input value={ln.end || ""} placeholder="31.01.13" onChange={function(e) { updateLoan("end", e.target.value); }} style={inStyle} /></td>
+                          <td style={{ border: "1px solid #E8E5E0", textAlign: "center" }}>
+                            <button onClick={function() { setData(function(p) { var arr = (Array.isArray(p.loans) ? p.loans : []).slice(); arr.splice(li, 1); return Object.assign({}, p, { loans: arr }); }); }}
+                              style={{ background: "none", border: "none", cursor: "pointer", color: "#CCC", padding: 3 }}><Icon name="x" size={11} color="#CCC" /></button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {(!Array.isArray(data.loans) || data.loans.length === 0) && (
+                      <tr><td colSpan={6} style={{ border: "1px solid #E8E5E0", padding: "10px", textAlign: "center", color: "#BBB", fontSize: 11 }}>기대출 내역 없음</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <button onClick={function() { setData(function(p) { var arr = (Array.isArray(p.loans) ? p.loans : []).slice(); arr.push({ inst: "", amount: "", bank: "", start: "", end: "" }); return Object.assign({}, p, { loans: arr }); }); }}
+                style={{ background: "#fff", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 7, padding: "6px 12px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", marginBottom: 20 }}>
+                + 대출 행 추가
+              </button>
+
+              {/* 기업정보 항목 (라벨+값, 추가/삭제/이름변경) */}
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 7, marginTop: 6 }}>📋 기업정보 항목</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8, marginBottom: 8 }}>
+                {(Array.isArray(data.company_info) ? data.company_info : []).map(function(it, ii) {
+                  return (
+                    <div key={ii} style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 10px", position: "relative" }}>
+                      <input value={it.label || ""} placeholder="항목명"
+                        onChange={function(e) { var v = e.target.value; setData(function(p) { var arr = (Array.isArray(p.company_info) ? p.company_info : []).slice(); arr[ii] = Object.assign({}, arr[ii], { label: v }); return Object.assign({}, p, { company_info: arr }); }); }}
+                        style={{ width: "calc(100% - 18px)", border: "none", fontSize: 10.5, color: "#888", fontWeight: 600, padding: 0, marginBottom: 3, background: "transparent", outline: "none" }} />
+                      <button onClick={function() { setData(function(p) { var arr = (Array.isArray(p.company_info) ? p.company_info : []).slice(); arr.splice(ii, 1); return Object.assign({}, p, { company_info: arr }); }); }}
+                        style={{ position: "absolute", top: 6, right: 6, background: "none", border: "none", cursor: "pointer", color: "#DDD", padding: 2 }}><Icon name="x" size={11} color="#DDD" /></button>
+                      <textarea value={it.value || ""} placeholder="내용"
+                        onChange={function(e) { var v = e.target.value; setData(function(p) { var arr = (Array.isArray(p.company_info) ? p.company_info : []).slice(); arr[ii] = Object.assign({}, arr[ii], { value: v }); return Object.assign({}, p, { company_info: arr }); }); }}
+                        rows={1} style={{ width: "100%", border: "none", fontSize: 12.5, color: "#1A1917", padding: 0, background: "transparent", outline: "none", resize: "vertical", boxSizing: "border-box", fontFamily: "inherit", minHeight: 18 }} />
+                    </div>
+                  );
+                })}
+              </div>
+              <button onClick={function() { setData(function(p) { var arr = (Array.isArray(p.company_info) ? p.company_info : []).slice(); arr.push({ label: "", value: "" }); return Object.assign({}, p, { company_info: arr }); }); }}
+                style={{ background: "#fff", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 7, padding: "6px 12px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", marginBottom: 20 }}>
+                + 항목 추가
+              </button>
+
+              {/* 기타 메모 */}
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 7, marginTop: 6 }}>📝 기타 (비고)</div>
+              <textarea value={data.company_info_memo || ""} placeholder="비고·자유 입력"
+                onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { company_info_memo: v }); }); }}
+                style={{ width: "100%", minHeight: 70, border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, boxSizing: "border-box", outline: "none", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }} />
+
+              <div style={{ marginTop: 16 }}>
+                <button onClick={function() { onSave(data); }} style={{ width: "100%", display: "flex", justifyContent: "center", alignItems: "center", gap: 6, background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                  <Icon name="save" size={14} color="#fff" /> 기업정보 저장
+                </button>
+              </div>
+            </div>
           )}
 
           {tab === "docs" && (
@@ -3273,7 +3760,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               <div style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                   <div style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>현재 이슈</div>
-                  <div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 자유 형식</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}><OcrButton target="issue" /><div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 자유 형식</div></div>
                 </div>
                 <textarea value={data.issue || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return { ...p, issue: v }; }); }}
                   placeholder={"예시:\n- 신용점수 부족 (685점)\n- 매출 감소 추세\n- 5/30까지 보완서류 제출 필요"}
@@ -3282,7 +3769,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               <div style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                   <div style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>차기 업무 / 다음 액션</div>
-                  <div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 자유 형식</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}><OcrButton target="next_action" /><div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 자유 형식</div></div>
                 </div>
                 <textarea value={data.next_action || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return { ...p, next_action: v }; }); }}
                   placeholder={"예시:\n1. 5/28 화요일 14시 - 추가서류 안내\n2. 5/30 금요일 - 기관 방문 동행\n3. 6/3 - 결과 확인 및 다음 단계 안내"}
@@ -3292,7 +3779,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               <div style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                   <div style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>💬 소통 내역</div>
-                  <div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 여러 줄 OK</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}><OcrButton target="comm" /><div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 여러 줄 OK</div></div>
                 </div>
                 <textarea value={commInput} onChange={function(e) { var v = e.target.value; setCommInput(v); }}
                   placeholder={"예시:\n- 10:30 통화 - 대표 부재중\n- 11:15 다시 통화\n- 다음 주 월요일 방문 예약"}
@@ -3496,6 +3983,48 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           )}
         </div>
 
+        {/* 기업현황표 자동입력 미리보기 모달 */}
+        {xlsxPreview && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={function() { setXlsxPreview(null); }}>
+            <div onClick={function(e) { e.stopPropagation(); }} style={{ background: "#fff", borderRadius: 12, maxWidth: 460, width: "100%", maxHeight: "80vh", overflow: "auto", padding: 22, boxSizing: "border-box" }}>
+              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>📄 기업현황표 자동 입력 미리보기</div>
+              <div style={{ fontSize: 11.5, color: "#888", marginBottom: 14, lineHeight: 1.5 }}>아래 내용으로 채워집니다. 기존 값이 있으면 <b style={{ color: "#B45309" }}>덮어쓰기</b> 됩니다. (기업정보 항목은 같은 이름만 갱신, 나머지는 추가)</div>
+              {(function() {
+                var u = xlsxPreview.updates;
+                var basicKeys = Object.keys(u).filter(function(k) { return FIELD_LABELS_X[k]; });
+                var fmt = function(k, v) { return (String(k).indexOf("revenue") === 0 && v) ? Number(v).toLocaleString() + "원" : String(v == null ? "" : v); };
+                if (basicKeys.length === 0 && !u.loans && !u.company_info && !u.company_info_memo) {
+                  return <div style={{ fontSize: 13, color: "#888", padding: "10px 0" }}>추출된 정보가 없습니다. 양식을 확인해주세요.</div>;
+                }
+                return (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {basicKeys.map(function(k) {
+                      var oldV = data[k];
+                      var hasOld = oldV !== null && oldV !== undefined && String(oldV) !== "";
+                      return (
+                        <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, padding: "6px 10px", background: "#F7F6F3", borderRadius: 6 }}>
+                          <span style={{ color: "#888", width: 86, flexShrink: 0, fontWeight: 600 }}>{FIELD_LABELS_X[k]}</span>
+                          {hasOld
+                            ? <span style={{ flex: 1 }}><span style={{ color: "#BBB", textDecoration: "line-through" }}>{fmt(k, oldV)}</span> <span style={{ color: "#B45309" }}>→</span> <b>{fmt(k, u[k])}</b></span>
+                            : <b style={{ flex: 1 }}>{fmt(k, u[k])}</b>}
+                        </div>
+                      );
+                    })}
+                    {u.loans && <div style={{ fontSize: 12.5, padding: "6px 10px", background: "#EEF2FF", borderRadius: 6, color: "#4338CA", fontWeight: 600 }}>💰 기대출 내역 {u.loans.length}건 {Array.isArray(data.loans) && data.loans.length > 0 ? "(기존 " + data.loans.length + "건 교체)" : ""}</div>}
+                    {u.company_info && <div style={{ fontSize: 12.5, padding: "6px 10px", background: "#EEF2FF", borderRadius: 6, color: "#4338CA", fontWeight: 600 }}>📋 기업정보 {u.company_info.length}개 항목</div>}
+                    {u.company_info_memo && <div style={{ fontSize: 12.5, padding: "6px 10px", background: "#EEF2FF", borderRadius: 6, color: "#4338CA", fontWeight: 600 }}>📝 비고 메모</div>}
+                  </div>
+                );
+              })()}
+              <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
+                <button onClick={applyXlsxPreview} style={{ flex: 1, background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>✓ 적용하기</button>
+                <button onClick={function() { setXlsxPreview(null); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "11px 18px", fontSize: 13, cursor: "pointer" }}>취소</button>
+              </div>
+              <div style={{ fontSize: 11, color: "#AAA", marginTop: 10, textAlign: "center" }}>적용 후 반드시 저장 버튼을 눌러야 DB에 반영됩니다</div>
+            </div>
+          </div>
+        )}
+
         {/* 저장 버튼 */}
         <div style={{ padding: "14px 24px", borderTop: "1px solid #E8E5E0", display: "flex", gap: 8 }}>
           <button onClick={() => onSave({ ...data, name: nameInput || data.name }, company)}
@@ -3688,7 +4217,7 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-      onClick={function(e) { if (e.target === e.currentTarget) onClose(); }}>
+      onMouseDown={function(e) { if (e.target === e.currentTarget) onClose(); }}>
       <div style={{ background: "#fff", borderRadius: 14, width: 480, maxHeight: "92vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ padding: "20px 24px 14px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
           <div>
@@ -3717,208 +4246,10 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
                 if (!file) return;
                 setAttachedFile(file.name);
                 try {
-                  // SheetJS 동적 로딩 (한 번만)
-                  if (typeof window.XLSX === "undefined") {
-                    await new Promise(function(resolve, reject) {
-                      var script = document.createElement("script");
-                      script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-                      script.onload = resolve;
-                      script.onerror = function() { reject(new Error("SheetJS 라이브러리 로드 실패. 인터넷 연결을 확인해주세요.")); };
-                      document.head.appendChild(script);
-                    });
-                  }
-                  var XLSX = window.XLSX;
-                  // 파일 읽기
-                  var data = await file.arrayBuffer();
-                  var wb = XLSX.read(data, { type: "array", cellDates: true });
-                  var sheetName = wb.SheetNames.find(function(n) { return n.indexOf("기업개요") >= 0; }) || wb.SheetNames[0];
-                  var ws = wb.Sheets[sheetName];
-                  var rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
-
-                  // 셀 값 추출 헬퍼
-                  var getCell = function(r, c) {
-                    if (!rows[r]) return "";
-                    var v = rows[r][c];
-                    if (v === null || v === undefined) return "";
-                    if (v instanceof Date) {
-                      return v.getFullYear() + "-" + String(v.getMonth() + 1).padStart(2, "0") + "-" + String(v.getDate()).padStart(2, "0");
-                    }
-                    return String(v).trim();
-                  };
-
-                  // 매출 파싱 ("55백만원" → 55000000)
-                  var parseRevenue = function(s) {
-                    if (!s) return "";
-                    var str = String(s).replace(/\s/g, "");
-                    var match = str.match(/([0-9.,]+)(억|천만|백만|만)?/);
-                    if (!match) return "";
-                    var num = parseFloat(match[1].replace(/,/g, ""));
-                    if (isNaN(num)) return "";
-                    var unit = match[2] || "";
-                    if (unit === "억") return Math.round(num * 100000000);
-                    if (unit === "천만") return Math.round(num * 10000000);
-                    if (unit === "백만") return Math.round(num * 1000000);
-                    if (unit === "만") return Math.round(num * 10000);
-                    return Math.round(num); // 단위 없으면 원
-                  };
-
-                  // 신용점수 파싱 ("KCB 595점/ NICE 685점(5/28일 현재)")
-                  var parseCredit = function(s) {
-                    if (!s) return { kcb: "", nice: "" };
-                    var kcbMatch = String(s).match(/KCB\s*([0-9]+)/i);
-                    var niceMatch = String(s).match(/NICE\s*([0-9]+)/i);
-                    return {
-                      kcb: kcbMatch ? kcbMatch[1] : "",
-                      nice: niceMatch ? niceMatch[1] : "",
-                    };
-                  };
-
-                  // 대표자/연락처 분리 ("박옥란대표 / 010-2337-6699")
-                  var parseRepAndPhone = function(s) {
-                    if (!s) return { rep: "", phone: "" };
-                    var parts = String(s).split("/").map(function(x) { return x.trim(); });
-                    var rep = parts[0] || "";
-                    var phone = parts[1] || "";
-                    // "대표" 단어 제거
-                    rep = rep.replace(/대표(이사)?$/, "").trim();
-                    // 전화번호 정규화
-                    phone = phone.replace(/[^0-9-]/g, "");
-                    return { rep: rep, phone: phone };
-                  };
-
-                  // 설립일 파싱 (날짜 객체 또는 "2015-09-23" → year, month)
-                  var parseFoundedDate = function(s) {
-                    if (!s) return { year: "", month: "" };
-                    var str = String(s);
-                    var match = str.match(/(\d{4})[-/.년\s]*(\d{1,2})/);
-                    if (match) return { year: match[1], month: parseInt(match[2]) };
-                    return { year: "", month: "" };
-                  };
-
-                  // 지역 추출 ("인천광역시 서구 서달로221번길 14" → "인천_서구")
-                  var parseRegion = function(addr) {
-                    if (!addr) return "";
-                    var s = String(addr);
-                    var doMap = { "서울특별시": "서울", "서울": "서울", "부산광역시": "부산", "부산": "부산", "대구광역시": "대구", "대구": "대구", "인천광역시": "인천", "인천": "인천", "광주광역시": "광주", "광주": "광주", "대전광역시": "대전", "대전": "대전", "울산광역시": "울산", "울산": "울산", "세종특별자치시": "세종", "세종": "세종", "경기도": "경기", "강원도": "강원", "강원특별자치도": "강원", "충청북도": "충북", "충북": "충북", "충청남도": "충남", "충남": "충남", "전라북도": "전북", "전북": "전북", "전북특별자치도": "전북", "전라남도": "전남", "전남": "전남", "경상북도": "경북", "경북": "경북", "경상남도": "경남", "경남": "경남", "제주특별자치도": "제주", "제주도": "제주", "제주": "제주" };
-                    var firstWord = s.split(/\s+/)[0];
-                    var doName = doMap[firstWord] || firstWord;
-                    var secondWord = s.split(/\s+/)[1] || "";
-                    var siGuGun = secondWord.replace(/시$|군$|구$/, "");
-                    return doName + (siGuGun ? "_" + siGuGun : "");
-                  };
-
-                  // ▼ 매핑 시작
-                  var updates = {};
-                  var auto = {};
-
-                  // 회사명
-                  var name = getCell(2, 2);
-                  if (name) { updates.name = name; auto.name = true; }
-
-                  // 사업자번호
-                  var bizNum = getCell(2, 8);
-                  if (bizNum) { updates.business_number = bizNum; auto.business_number = true; }
-
-                  // 대표자/연락처
-                  var repPhone = parseRepAndPhone(getCell(3, 2));
-                  if (repPhone.rep) { updates.representative = repPhone.rep; auto.representative = true; }
-                  if (repPhone.phone) { updates.phone = repPhone.phone; auto.phone = true; }
-
-                  // 지역 (사업장 주소에서 추출)
-                  var addr = getCell(4, 2);
-                  var region = parseRegion(addr);
-                  if (region) { updates.region = region; auto.region = true; }
-
-                  // 업태/종목
-                  var industry = getCell(5, 2);
-                  if (industry) { updates.industry = industry; auto.industry = true; }
-
-                  // 직원수
-                  var emp = getCell(5, 8);
-                  if (emp && emp !== "없음" && emp !== "추후") {
-                    var empNum = String(emp).replace(/[^0-9]/g, "");
-                    if (empNum) { updates.employee_count = empNum; auto.employee_count = true; }
-                  } else if (emp === "없음") {
-                    updates.employee_count = "0"; auto.employee_count = true;
-                  }
-
-                  // 신용점수
-                  var credit = parseCredit(getCell(6, 2));
-                  if (credit.kcb) { updates.credit_score_kcb = credit.kcb; auto.credit_score_kcb = true; }
-                  if (credit.nice) { updates.credit_score_nice = credit.nice; auto.credit_score_nice = true; }
-
-                  // 설립일
-                  var founded = parseFoundedDate(getCell(6, 8));
-                  if (founded.year) { updates.founded_year = founded.year; auto.founded_year = true; }
-                  if (founded.month) { updates.founded_month = founded.month; auto.founded_month = true; }
-
-                  // 매출 3개년: 2025=[12,2], 2024=[12,6], 2023=[12,10]
-                  var rev2025 = parseRevenue(getCell(12, 2));
-                  var rev2024 = parseRevenue(getCell(12, 6));
-                  var rev2023 = parseRevenue(getCell(12, 10));
-                  if (rev2025) { updates.revenue_2025 = rev2025; auto.revenue_2025 = true; }
-                  if (rev2024) { updates.revenue_2024 = rev2024; auto.revenue_2024 = true; }
-                  if (rev2023) { updates.revenue_2023 = rev2023; auto.revenue_2023 = true; }
-
-                  // 사업자 유형: 회사명이 "(주)"로 시작하거나 법인 키워드면 법인
-                  if (name && (/^\(주\)|^㈜|주식회사/.test(name))) {
-                    updates.business_type = "법인사업자";
-                    updates.type = "법인";
-                  } else if (name) {
-                    updates.business_type = "개인사업자";
-                    updates.type = "개인";
-                  }
-
-                  // 나머지 정보 → 이슈 칸에 자동 정리
-                  var extras = [];
-                  extras.push("[기업현황표 자동 추출 - " + kstDate() + "]");
-                  extras.push("");
-                  var addExtra = function(label, val) { if (val) extras.push("▸ " + label + ": " + val); };
-                  addExtra("사업장 주소", getCell(4, 2));
-                  addExtra("세무사 연락처", getCell(4, 8));
-                  addExtra("주요취급품목", getCell(7, 2));
-                  addExtra("대표 결혼 유/무", getCell(7, 8));
-                  addExtra("추가 사업자 여부", getCell(8, 2));
-                  addExtra("회생 및 파산 이력", getCell(8, 8));
-                  addExtra("대표자 거주지", getCell(9, 2));
-                  addExtra("사업장 부동산 유무", getCell(9, 8));
-                  addExtra("대표이사 자산", getCell(10, 2));
-                  addExtra("사업장 부동산 현황", getCell(10, 8));
-                  addExtra("올해 매출/예상", getCell(11, 2));
-                  addExtra("법인 자본금", getCell(11, 8));
-                  addExtra("수출실적", getCell(13, 2));
-                  addExtra("세금/금융 연체", getCell(13, 6));
-                  addExtra("기업인증", [getCell(14, 8), getCell(15, 8)].filter(Boolean).join(", "));
-                  addExtra("연구소/전담부서", getCell(14, 2));
-                  addExtra("특허/상표/디자인", getCell(14, 6));
-                  addExtra("폐업 이력", getCell(15, 2));
-                  // 기대출 (17행)
-                  var loanInst = getCell(17, 2);
-                  var loanAmt = getCell(17, 5);
-                  var loanRate = getCell(17, 8);
-                  if (loanInst || loanAmt) {
-                    extras.push("▸ 기존 대출: " + [loanInst, loanAmt, loanRate ? "(금리 " + loanRate + ")" : ""].filter(Boolean).join(" "));
-                  }
-                  addExtra("카드론/현금서비스", getCell(24, 5));
-                  addExtra("필요자금 사용용도", getCell(26, 2));
-                  // 비고 (29행 또는 그 아래 텍스트)
-                  var bigo = getCell(29, 2) || getCell(30, 2) || getCell(31, 2);
-                  if (bigo) {
-                    extras.push("");
-                    extras.push("▸ 비고:");
-                    extras.push(bigo);
-                  }
-                  if (extras.length > 2) {
-                    updates.issue = extras.join("\n");
-                    auto.issue = true;
-                  }
-
-                  // 한 번에 적용
-                  setMulti(updates);
-                  setAutoFilled(function(p) { return Object.assign({}, p, auto); });
-
-                  var filledCount = Object.keys(auto).length;
-                  alert("📄 자동 입력 " + filledCount + "개 완료!\n확인 후 빈 칸 보완해서 등록하세요.");
+                  var res = await parseHyeonhwangpyo(file);
+                  setMulti(res.updates);
+                  setAutoFilled(function(p) { return Object.assign({}, p, res.auto); });
+                  alert("📄 자동 입력 " + Object.keys(res.auto).length + "개 완료!\n확인 후 빈 칸 보완해서 등록하세요.");
                 } catch (err) {
                   console.error("기업현황표 파싱 오류:", err);
                   alert("❌ 엑셀 읽기 실패: " + err.message + "\n\n양식이 표준 기업현황표인지 확인해주세요.");
@@ -4601,6 +4932,25 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
   var checkItems = editNote.checkItems || [];
   var freeContent = editNote.freeContent !== undefined ? editNote.freeContent : (editNote.content || "");
 
+  // 자동저장: 칸을 벗어나거나 항목 변경 시 즉시 DB 반영 (저장 버튼 안 눌러도 손실 방지)
+  var autoSaveEditNow = function() {
+    setEditNote(function(p) {
+      if (!p || !p.id) return p;
+      var items = (p.checkItems || []).filter(function(i) { return (i.text || "").trim(); }).map(function(i) {
+        var line = "- [" + (i.checked ? "x" : " ") + "] " + i.text.trim();
+        if (i.dueDate) line += " [" + i.dueDate + "]";
+        return line;
+      });
+      var ft = (p.freeContent || "").trim();
+      var parts = [];
+      if (items.length > 0) parts.push(items.join("\n"));
+      if (ft) parts.push(ft);
+      var newContent = parts.join("\n");
+      supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", p.id);
+      return p;
+    });
+  };
+
   return (
     <div style={{ background: "#F0FDF4", border: "2px solid #86EFAC", borderRadius: 12, padding: "18px 20px" }}>
       <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D", marginBottom: 12 }}>✏️ 노트 수정</div>
@@ -4650,11 +5000,12 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
                 }} style={{ width: 15, height: 15, flexShrink: 0, cursor: "pointer" }} />
                 <input type="text" value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성)"}
                   onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); }}
+                  onBlur={autoSaveEditNow}
                   style={{ flex: 1, border: "none", outline: "none", fontSize: 13, background: "transparent", textDecoration: item.checked ? "line-through" : "none", color: item.checked ? "#AAA" : "#333" }} />
                 <input type="date" value={item.dueDate || ""} title="이 항목의 마감일 (선택)"
-                  onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { dueDate: v }); return Object.assign({}, p, { checkItems: items }); }); }}
+                  onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { dueDate: v }); return Object.assign({}, p, { checkItems: items }); }); setTimeout(autoSaveEditNow, 0); }}
                   style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, color: "#4338CA", outline: "none", width: 130 }} />
-                <button onClick={function() { setEditNote(function(p) { var items = (p.checkItems || []).filter(function(_, i) { return i !== idx; }); return Object.assign({}, p, { checkItems: items }); }); }}
+                <button onClick={function() { setEditNote(function(p) { var items = (p.checkItems || []).filter(function(_, i) { return i !== idx; }); return Object.assign({}, p, { checkItems: items }); }); setTimeout(autoSaveEditNow, 0); }}
                   style={{ background: "none", border: "none", cursor: "pointer", color: "#CCC", fontSize: 16, padding: "0 4px", lineHeight: 1 }}>×</button>
               </div>
             );
@@ -4677,6 +5028,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
       </div>
       <textarea value={freeContent} placeholder={checkItems.length > 0 ? "추가 메모 (선택사항)..." : "내용을 자유롭게 입력하세요..."} 
         onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { freeContent: v }); }); }} 
+        onBlur={autoSaveEditNow}
         rows={checkItems.length > 0 ? 4 : 8}
         style={{ width: "100%", padding: "12px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, lineHeight: 1.75, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff", minHeight: 120 }} />
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
@@ -4688,7 +5040,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
 }
 
 // ── 업무노트 카드 (독립 컴포넌트 - 입력버그 방지) ──────────────────────────────
-function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditingId, toggleDone, togglePin, deleteNote, fmtDate, currentUserName, onChecklistChange }) {
+function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditingId, toggleDone, togglePin, deleteNote, fmtDate, currentUserName, onChecklistChange, moveNoteDate }) {
   var isEditing = editingId === note.id;
   var isMyNote = true;
 
@@ -4727,7 +5079,7 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
   }
 
   return (
-    <div style={{ background: note.pinned ? "#FFFBEB" : "#fff", border: note.pinned ? "1px solid #FDE68A" : "1px solid #E8E5E0", borderRadius: 12, padding: "16px 18px", opacity: note.is_done ? 0.6 : 1, transition: "opacity 0.2s" }}>
+    <div className="wn-card" style={{ background: note.pinned ? "#FFFBEB" : "#fff", border: note.pinned ? "1px solid #FDE68A" : "1px solid #E8E5E0", borderRadius: 12, padding: "16px 18px", opacity: note.is_done ? 0.6 : 1, transition: "opacity 0.2s" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {note.is_todo && (
@@ -4753,6 +5105,12 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
           <div style={{ display: "flex", gap: 4 }}>
             <button onClick={function() { togglePin(note); }} title={note.pinned ? "고정 해제" : "고정"}
               style={{ background: "none", border: "none", cursor: "pointer", padding: 4, fontSize: 14, opacity: note.pinned ? 1 : 0.4 }}>📌</button>
+            <label title="다른 날짜로 이동" style={{ position: "relative", display: "inline-flex", alignItems: "center", cursor: "pointer", padding: 4, fontSize: 14 }}>
+              📅
+              <input type="date" defaultValue={note.note_date || ""}
+                onChange={function(e) { if (e.target.value && moveNoteDate) moveNoteDate(note.id, e.target.value); }}
+                style={{ position: "absolute", left: 0, top: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer" }} />
+            </label>
             <button onClick={function() { setEditingId(note.id); setEditNote(Object.assign({}, note)); window.scrollTo({ top: 0, behavior: "smooth" }); }}
               style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Icon name="edit" size={14} color="#888" /></button>
             <button onClick={function() { deleteNote(note.id); }}
@@ -4866,6 +5224,25 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
 
   const [companiesList, setCompaniesList] = useState([]);
   const [pushEnabled, setPushEnabled] = useState(false);
+
+  // 📱 업무노트 모바일 최적화 CSS 주입 (휴대폰에서 작성 편하게)
+  useEffect(function() {
+    if (document.getElementById("worknotes-mobile-css")) return;
+    var st = document.createElement("style");
+    st.id = "worknotes-mobile-css";
+    st.textContent = [
+      "@media(max-width:600px){",
+      ".wn-root input,.wn-root textarea,.wn-root select{font-size:16px !important;}", // iOS 자동확대 방지
+      ".wn-root .wn-header{flex-direction:column !important; align-items:stretch !important; gap:12px !important;}",
+      ".wn-root .wn-actions{flex-wrap:wrap !important; justify-content:flex-start !important;}",
+      ".wn-root .wn-actions button{flex:0 0 auto; min-height:42px;}", // 터치 영역 확보
+      ".wn-root .wn-addform{max-width:100% !important; width:100% !important; padding:14px !important;}",
+      ".wn-root .wn-card{padding:14px !important;}",
+      ".wn-root{padding-bottom:90px !important;}",
+      "}"
+    ].join("");
+    document.head.appendChild(st);
+  }, []);
 
   // 브라우저 푸시 알림 권한 요청
   useEffect(function() {
@@ -5227,6 +5604,17 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     if (!r.error) setNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { pinned: !note.pinned }) : n; }); });
   };
 
+  // 노트를 원하는 날짜로 이동 (못 한 업무를 다른 날로 넘기기)
+  var moveNoteDate = async function(noteId, newDate) {
+    if (!newDate) return;
+    var r = await supabase.from("work_notes").update({ note_date: newDate, updated_at: new Date().toISOString() }).eq("id", noteId);
+    if (!r.error) {
+      setNotes(function(prev) { return prev.map(function(n) { return n.id === noteId ? Object.assign({}, n, { note_date: newDate }) : n; }); });
+    } else {
+      alert("날짜 이동 실패: " + r.error.message);
+    }
+  };
+
   var deleteNote = async function(id) {
     if (!window.confirm("휴지통으로 이동하시겠습니까? (휴지통에서 복구 가능)")) return;
     var r = await supabase.from("work_notes").update({ deleted_at: new Date().toISOString() }).eq("id", id);
@@ -5260,14 +5648,14 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   );
 
   return (
-    <div>
+    <div className="wn-root">
       {/* 헤더 */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+      <div className="wn-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>업무 노트</h1>
           <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>메모 · 할 일 · 업무일지</p>
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div className="wn-actions" style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {/* 📅/📋 토글 */}
           <div style={{ display: "flex", gap: 2, padding: 3, background: "#F7F6F3", borderRadius: 8 }}>
             <button onClick={function() { setViewMode("calendar"); }}
@@ -5275,7 +5663,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <button onClick={function() { setViewMode("list"); }}
               style={{ padding: "6px 12px", fontSize: 12, fontWeight: 600, background: viewMode === "list" ? "#fff" : "transparent", border: "1px solid " + (viewMode === "list" ? "#E8E5E0" : "transparent"), borderRadius: 6, color: viewMode === "list" ? "#1A1917" : "#888", cursor: "pointer" }}>📋 목록</button>
           </div>
-          <button onClick={function() { setShowAdd(true); setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "", note_date: selectedDate || todayStr }); }}
+          <button onClick={function() { var nd = selectedDate || todayStr; var md = nd ? (parseInt(nd.slice(5,7)) + "월" + parseInt(nd.slice(8,10)) + "일") : ""; var autoTitle = (md ? md + " " : "") + (profile?.name || "") + " 업무"; setShowAdd(true); setNewNote({ title: autoTitle, content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "", note_date: nd }); }}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             <Icon name="plus" size={15} color="#F7F6F3" /> 새 노트
           </button>
@@ -5334,9 +5722,9 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
 
       {/* 새 노트 작성 폼 */}
       {showAdd && (
-        <div style={{ background: "#F0FDF4", border: "2px solid #86EFAC", borderRadius: 12, padding: "18px 20px", marginBottom: 20 }}>
+        <div className="wn-addform" style={{ background: "#F0FDF4", border: "2px solid #86EFAC", borderRadius: 12, padding: "18px 20px", marginBottom: 20 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D", marginBottom: 12 }}>✏️ 새 노트 작성</div>
-          <div style={{ display: "flex", gap: 16, marginBottom: 10 }}>
+          <div style={{ display: "flex", gap: 16, marginBottom: 10, flexWrap: "wrap" }}>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
               <input type="checkbox" checked={newNote.is_todo} onChange={function(e) { setNewNote(function(p) { return Object.assign({}, p, { is_todo: e.target.checked }); }); }} />
               📋 할 일로 등록
@@ -5588,7 +5976,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
                   {notesForSelectedDate.map(function(note) {
-                    return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} />;
+                    return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} />;
                   })}
                 </div>
               )}
@@ -5650,7 +6038,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#B45309", letterSpacing: "0.05em", marginBottom: 10 }}>📌 고정된 노트</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} />; })}
+                {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} />; })}
               </div>
             </div>
           )}
@@ -5659,7 +6047,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div>
               {pinned.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: "#888", letterSpacing: "0.05em", marginBottom: 10 }}>전체 노트</div>}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} />; })}
+                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} />; })}
               </div>
             </div>
           )}
@@ -5669,7 +6057,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       {/* 휴지통 모달 */}
       {showTrash && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={function(e) { if (e.target === e.currentTarget) setShowTrash(false); }}>
+          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowTrash(false); }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 560, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ 업무노트 휴지통 ({trashedNotes.length}건)</h2>
@@ -6095,7 +6483,7 @@ function SettlementView() {
       {/* 직접 등록 모달 */}
       {showAddManual && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={function(e) { if (e.target === e.currentTarget) setShowAddManual(false); }}>
+          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowAddManual(false); }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 520, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>정산 직접 등록 ({activeMonth}월)</h2>
@@ -6868,6 +7256,131 @@ function formatFileSize(bytes) {
   return (bytes / (1024 * 1024)).toFixed(1) + "MB";
 }
 
+function QuickLinksView() {
+  const [links, setLinks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [form, setForm] = useState({ name: "", url: "", category: "" });
+
+  useEffect(function() { fetchLinks(); }, []);
+
+  async function fetchLinks() {
+    setLoading(true);
+    var r = await supabase.from("quick_links").select("*").order("sort_order", { ascending: true }).order("created_at", { ascending: true });
+    if (!r.error) setLinks(r.data || []);
+    setLoading(false);
+  }
+
+  function normalizeUrl(u) {
+    u = (u || "").trim();
+    if (!u) return "";
+    if (!/^https?:\/\//i.test(u)) u = "https://" + u;
+    return u;
+  }
+
+  async function saveLink() {
+    if (!form.name.trim() || !form.url.trim()) { alert("이름과 주소를 입력하세요."); return; }
+    var payload = { name: form.name.trim(), url: normalizeUrl(form.url), category: form.category.trim() || "기타" };
+    if (editId) {
+      var r = await supabase.from("quick_links").update(payload).eq("id", editId);
+      if (r.error) { alert("저장 실패: " + r.error.message); return; }
+    } else {
+      payload.sort_order = links.length;
+      var r2 = await supabase.from("quick_links").insert(payload);
+      if (r2.error) { alert("저장 실패: " + r2.error.message); return; }
+    }
+    setShowAdd(false); setEditId(null); setForm({ name: "", url: "", category: "" });
+    fetchLinks();
+  }
+
+  async function deleteLink(id) {
+    if (!confirm("이 바로가기를 삭제할까요?")) return;
+    var r = await supabase.from("quick_links").delete().eq("id", id);
+    if (!r.error) setLinks(function(prev) { return prev.filter(function(l) { return l.id !== id; }); });
+  }
+
+  function startEdit(l) {
+    setEditId(l.id); setForm({ name: l.name, url: l.url, category: l.category || "" }); setShowAdd(true);
+  }
+
+  // 카테고리별 그룹
+  var grouped = {};
+  links.forEach(function(l) { var c = l.category || "기타"; if (!grouped[c]) grouped[c] = []; grouped[c].push(l); });
+  var categories = Object.keys(grouped);
+
+  return (
+    <div style={{ padding: "0 4px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔗 바로가기</h1>
+          <div style={{ fontSize: 13, color: "#888", marginTop: 4 }}>자주 쓰는 기관·사이트를 모아두고 한 번에 이동</div>
+        </div>
+        <button onClick={function() { setEditId(null); setForm({ name: "", url: "", category: "" }); setShowAdd(true); }}
+          style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+          <Icon name="plus" size={15} color="#F7F6F3" /> 바로가기 추가
+        </button>
+      </div>
+
+      {showAdd && (
+        <div style={{ background: "#F0FDF4", border: "2px solid #86EFAC", borderRadius: 12, padding: "16px 18px", marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D", marginBottom: 12 }}>{editId ? "✏️ 바로가기 수정" : "➕ 새 바로가기"}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
+            <div>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>이름</div>
+              <input value={form.name} placeholder="예: 중진공" onChange={function(e) { var v = e.target.value; setForm(function(p) { return Object.assign({}, p, { name: v }); }); }}
+                style={{ width: "100%", padding: "9px 11px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>주소 (URL)</div>
+              <input value={form.url} placeholder="예: kosmes.or.kr" onChange={function(e) { var v = e.target.value; setForm(function(p) { return Object.assign({}, p, { url: v }); }); }}
+                style={{ width: "100%", padding: "9px 11px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>분류 (자유)</div>
+              <input value={form.category} placeholder="예: 기관 / 개인" list="ql-cats" onChange={function(e) { var v = e.target.value; setForm(function(p) { return Object.assign({}, p, { category: v }); }); }}
+                style={{ width: "100%", padding: "9px 11px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+              <datalist id="ql-cats">{categories.map(function(c) { return <option key={c} value={c} />; })}</datalist>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={saveLink} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "9px 20px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
+            <button onClick={function() { setShowAdd(false); setEditId(null); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "9px 16px", fontSize: 13, cursor: "pointer" }}>취소</button>
+          </div>
+        </div>
+      )}
+
+      {loading ? <div style={{ color: "#888", fontSize: 13, padding: 20 }}>불러오는 중...</div>
+        : links.length === 0 ? <div style={{ color: "#888", fontSize: 13, padding: 30, textAlign: "center" }}>아직 바로가기가 없어요. "바로가기 추가"로 등록하세요.</div>
+        : categories.map(function(cat) {
+          return (
+            <div key={cat} style={{ marginBottom: 24 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#888", marginBottom: 10, letterSpacing: "0.03em" }}>{cat}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 10 }}>
+                {grouped[cat].map(function(l) {
+                  return (
+                    <div key={l.id} style={{ position: "relative", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 10, padding: "14px 14px", cursor: "pointer", transition: "border 0.15s" }}
+                      onClick={function() { window.open(l.url, "_blank", "noopener"); }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                        <Icon name="link" size={16} color="#4338CA" />
+                        <span style={{ fontSize: 14, fontWeight: 600, color: "#1A1917", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: "#AAA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{(l.url || "").replace(/^https?:\/\//, "")}</div>
+                      <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 2 }}>
+                        <button onClick={function(e) { e.stopPropagation(); startEdit(l); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 3, opacity: 0.5 }}><Icon name="edit" size={12} color="#888" /></button>
+                        <button onClick={function(e) { e.stopPropagation(); deleteLink(l.id); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 3, opacity: 0.5 }}><Icon name="x" size={12} color="#CCC" /></button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+    </div>
+  );
+}
+
 function ManualView() {
   const [files, setFiles] = useState([]);
   const [folders, setFolders] = useState([]);
@@ -7135,7 +7648,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   const [editingId, setEditingId] = useState(null);
   const [editData, setEditData] = useState({});
   const [showTrash, setShowTrash] = useState(false);
-  const [filterAssignee, setFilterAssignee] = useState("전체");
+  const [filterAssignee, setFilterAssignee] = useState([]); // 다중선택, 빈 배열 = 전체
   const [showAddCase, setShowAddCase] = useState(false);
   const [newCase, setNewCase] = useState({});
   const [companySuggestions, setCompanySuggestions] = useState([]);
@@ -7283,32 +7796,29 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
 
   // 순서 이동 함수 - dir: -1(위) 또는 +1(아래)
   var moveCaseOrder = async function(caseId, dir) {
-    // 현재 filtered 기준 같은 그룹/월의 항목들만 대상
-    var siblings = filtered;
+    // 현재 보이는 순서(filtered)에서 위치를 바꾸고, 전체에 sort_order를 1,2,3...으로 다시 부여 (일부만 교환하면 순서가 꼬임)
+    var siblings = filtered.slice();
     var idx = siblings.findIndex(function(c) { return c.id === caseId; });
     if (idx < 0) return;
     var targetIdx = idx + dir;
     if (targetIdx < 0 || targetIdx >= siblings.length) return;
-    var me = siblings[idx];
-    var other = siblings[targetIdx];
-    // 두 항목의 sort_order 값 교환
-    var myOrder = me.sort_order != null ? me.sort_order : (idx + 1) * 1000;
-    var otherOrder = other.sort_order != null ? other.sort_order : (targetIdx + 1) * 1000;
-    // 즉시 UI 반영 (낙관적 업데이트)
+    // 배열에서 두 항목 위치 swap
+    var tmp = siblings[idx]; siblings[idx] = siblings[targetIdx]; siblings[targetIdx] = tmp;
+    // 새 순서대로 1,2,3... 재부여
+    var orderMap = {};
+    siblings.forEach(function(c, i) { orderMap[c.id] = i + 1; });
+    // 즉시 UI 반영 (낙관적)
     setCases(function(prev) {
-      return prev.map(function(c) {
-        if (c.id === me.id) return Object.assign({}, c, { sort_order: otherOrder });
-        if (c.id === other.id) return Object.assign({}, c, { sort_order: myOrder });
-        return c;
-      });
+      return prev.map(function(c) { return orderMap[c.id] != null ? Object.assign({}, c, { sort_order: orderMap[c.id] }) : c; });
     });
-    // DB 업데이트
+    // DB 일괄 업데이트 (병렬)
     try {
-      await supabase.from("agency_cases").update({ sort_order: otherOrder }).eq("id", me.id);
-      await supabase.from("agency_cases").update({ sort_order: myOrder }).eq("id", other.id);
+      await Promise.all(siblings.map(function(c, i) {
+        return supabase.from("agency_cases").update({ sort_order: i + 1 }).eq("id", c.id);
+      }));
     } catch (e) {
       console.warn("순서 변경 저장 실패:", e);
-      fetchCases(); // 실패 시 새로고침
+      fetchCases();
     }
   };
 
@@ -7324,11 +7834,12 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     completed: ["완료"],
     waiting: ["기관 방문 전","기관 방문 후 대기","온라인 신청 후 대기","심사대기"],
     rejected: ["부결","반려","진행불가","신청취소","신청못함","중단"],
+    inProgress: ["진행 중","심사중","최종제출","임시저장","우선도 평가","우선도 평가 예비","실태 조사 예정","실태 조사 완료"],
   };
-  // 위 4그룹에 안 속하면 전부 '진행중'(inProgress)
+  // 위 그룹에 안 속하면 '기타'(보류/시작 전 등) — 5개 칩 어디에도 안 잡히고 '전체'에서만 보임
   var groupOf = function(status) {
     for (var k in STATUS_GROUPS) { if (STATUS_GROUPS[k].indexOf(status) >= 0) return k; }
-    return "inProgress";
+    return "other";
   };
 
   var filtered = useMemo(function() {
@@ -7339,7 +7850,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         && matchMonth
         && Number(c.year) === currentYear
         && !c.deleted_at
-        && (filterAssignee === "전체" || c.assignee === filterAssignee)
+        && (filterAssignee.length === 0 || filterAssignee.some(function(n) { return (c.assignee || "").split(",").map(function(x) { return x.trim(); }).includes(n); }))
         && matchStatus;
     }).sort(function(a, b) {
       // sort_order 우선, 없으면 created_at 순
@@ -7368,8 +7879,8 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     var s = new Set();
     cases.filter(function(c) {
       return c.agency_group === activeGroup && Number(c.month) === Number(activeMonth) && !c.deleted_at;
-    }).forEach(function(c) { if (c.assignee) s.add(c.assignee); });
-    return ["전체"].concat(Array.from(s).sort());
+    }).forEach(function(c) { if (c.assignee) c.assignee.split(",").map(function(x) { return x.trim(); }).filter(Boolean).forEach(function(n) { s.add(n); }); });
+    return Array.from(s).sort();
   }, [cases, activeGroup, activeMonth]);
 
   var summary = useMemo(function() {
@@ -7378,7 +7889,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     var baseList = cases.filter(function(c) {
       var matchMonth = activeMonth === "all" ? true : Number(c.month) === Number(activeMonth);
       return c.agency_group === activeGroup && matchMonth && Number(c.year) === currentYear && !c.deleted_at
-        && (filterAssignee === "전체" || c.assignee === filterAssignee);
+        && (filterAssignee.length === 0 || filterAssignee.some(function(n) { return (c.assignee || "").split(",").map(function(x) { return x.trim(); }).includes(n); }));
     });
     var approved = baseList.filter(function(c) { return groupOf(c.status) === "approved"; }).length;
     var completed = baseList.filter(function(c) { return groupOf(c.status) === "completed"; }).length;
@@ -7622,7 +8133,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         {AGENCY_GROUPS.map(function(g) {
           var isActive = activeGroup === g.id;
           return (
-            <div key={g.id} onClick={function() { setActiveGroup(g.id); setEditingId(null); setFilterAssignee("전체"); }}
+            <div key={g.id} onClick={function() { setActiveGroup(g.id); setEditingId(null); setFilterAssignee([]); }}
               style={{ padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: isActive ? 700 : 400,
                 background: isActive ? g.color : "#fff", color: isActive ? "#fff" : "#555",
                 border: isActive ? "none" : "1px solid #E8E5E0", transition: "all 0.15s" }}>
@@ -7638,7 +8149,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
           var hasData = monthsWithData.has(m);
           var isActive = Number(activeMonth) === m;
           return (
-            <div key={m} onClick={function() { setActiveMonth(m); setEditingId(null); setFilterAssignee("전체"); setStatusFilter("all"); }}
+            <div key={m} onClick={function() { setActiveMonth(m); setEditingId(null); setFilterAssignee([]); setStatusFilter("all"); }}
               style={{ padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: isActive ? 700 : 400,
                 background: isActive ? groupColor : hasData ? "#fff" : "#F7F6F3",
                 color: isActive ? "#fff" : hasData ? "#333" : "#CCC",
@@ -7648,7 +8159,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
           );
         })}
         {/* 전체 월 보기 */}
-        <div onClick={function() { setActiveMonth("all"); setEditingId(null); setFilterAssignee("전체"); setStatusFilter("all"); }}
+        <div onClick={function() { setActiveMonth("all"); setEditingId(null); setFilterAssignee([]); setStatusFilter("all"); }}
           style={{ padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12,
             fontWeight: activeMonth === "all" ? 700 : 600,
             background: activeMonth === "all" ? groupColor : "#1A1917",
@@ -7693,11 +8204,11 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
           if (activeMonth !== "all" && Number(c.month) !== Number(activeMonth)) return false;
           if (Number(c.year) !== currentYear) return false;
           if (c.deleted_at) return false;
-          if (filterAssignee !== "전체" && c.assignee !== filterAssignee) return false;
+          if (filterAssignee.length > 0 && !filterAssignee.some(function(n) { return (c.assignee || "").split(",").map(function(x) { return x.trim(); }).includes(n); })) return false;
           return true;
         });
         if (base.length === 0) return null;
-        var counts = { inProgress: 0, waiting: 0, approved: 0, completed: 0, rejected: 0 };
+        var counts = { inProgress: 0, waiting: 0, approved: 0, completed: 0, rejected: 0, other: 0 };
         base.forEach(function(c) { counts[groupOf(c.status)] = (counts[groupOf(c.status)] || 0) + 1; });
         var groups = [
           { key: "inProgress", label: "진행중", bg: "#EEF2FF", text: "#4338CA" },
@@ -7728,19 +8239,25 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         );
       })()}
 
-      {/* 담당자 필터 */}
-      {assigneesInGroup.length > 1 && (
-        <div style={{ display: "flex", gap: 5, marginBottom: 14, flexWrap: "wrap" }}>
+      {/* 담당자 필터 (다중 선택 - 여러 명 중 한 명이라도 담당이면 표시) */}
+      {assigneesInGroup.length > 0 && (
+        <div style={{ display: "flex", gap: 5, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+          <div onClick={function() { setFilterAssignee([]); }}
+            style={{ padding: "5px 13px", borderRadius: 99, cursor: "pointer", fontSize: 12, fontWeight: filterAssignee.length === 0 ? 700 : 400,
+              background: filterAssignee.length === 0 ? "#1A1917" : "#fff", color: filterAssignee.length === 0 ? "#fff" : "#666",
+              border: filterAssignee.length === 0 ? "none" : "1px solid #E8E5E0" }}>전체</div>
           {assigneesInGroup.map(function(a) {
+            var active = filterAssignee.includes(a);
             return (
-              <div key={a} onClick={function() { setFilterAssignee(a); }}
-                style={{ padding: "5px 13px", borderRadius: 99, cursor: "pointer", fontSize: 12,
-                  background: filterAssignee === a ? "#1A1917" : "#fff", color: filterAssignee === a ? "#fff" : "#666",
-                  border: filterAssignee === a ? "none" : "1px solid #E8E5E0" }}>
-                {a}
+              <div key={a} onClick={function() { setFilterAssignee(function(prev) { return prev.includes(a) ? prev.filter(function(x) { return x !== a; }) : prev.concat([a]); }); }}
+                style={{ padding: "5px 13px", borderRadius: 99, cursor: "pointer", fontSize: 12, fontWeight: active ? 700 : 400,
+                  background: active ? "#4338CA" : "#fff", color: active ? "#fff" : "#666",
+                  border: active ? "none" : "1px solid #E8E5E0" }}>
+                {active ? "✓ " : ""}{a}
               </div>
             );
           })}
+          {filterAssignee.length > 0 && <span style={{ fontSize: 11, color: "#888" }}>{filterAssignee.length}명 선택 (한 명이라도 담당이면 표시)</span>}
         </div>
       )}
 
@@ -8027,7 +8544,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       )}
       {showPriorityModal && priorityTarget && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={function(e) { if (e.target === e.currentTarget) setShowPriorityModal(false); }}>
+          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowPriorityModal(false); }}>
           <div style={{ background: "#fff", borderRadius: 16, width: 720, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.25)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <div>
@@ -8083,7 +8600,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       {/* 휴지통 모달 */}
       {showTrash && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={function(e) { if (e.target === e.currentTarget) setShowTrash(false); }}>
+          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowTrash(false); }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 600, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ 휴지통 ({trashedCases.length}건)</h2>
@@ -8118,7 +8635,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       {/* 신규 진행건 추가 모달 (자동완성 포함) */}
       {showAddCase && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={function(e) { if (e.target === e.currentTarget) { setShowAddCase(false); setCompanySuggestions([]); } }}>
+          onMouseDown={function(e) { if (e.target === e.currentTarget) { setShowAddCase(false); setCompanySuggestions([]); } }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 520, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>신규 진행건 추가 ({activeGroup} {activeMonth}월)</h2>
@@ -8508,6 +9025,14 @@ const LEAD_STATUS_COLORS = {
 
 function DBLeadsView() {
   const [leads, setLeads] = useState([]);
+  const [companiesForDup, setCompaniesForDup] = useState([]);
+  const [dupCandidates, setDupCandidates] = useState([]);
+  const [showDupModal, setShowDupModal] = useState(false);
+  useEffect(function() {
+    supabase.from("companies").select("name, phone, representative").then(function(r) {
+      if (!r.error && r.data) setCompaniesForDup(r.data);
+    });
+  }, []);
   const [leadsLoading, setLeadsLoading] = useState(true);
   const [activeMonth, setActiveMonth] = useState(new Date().getMonth() + 1);
   const [filterStatus, setFilterStatus] = useState("전체");
@@ -8566,7 +9091,7 @@ function DBLeadsView() {
 
   var filtered = useMemo(function() {
     return leads.filter(function(l) {
-      if (l.month !== activeMonth || l.year !== 2026 || l.deleted_at) return false;
+      if ((activeMonth !== "all" && l.month !== activeMonth) || l.year !== 2026 || l.deleted_at) return false;
       if (filterStatus !== "전체" && l.status !== filterStatus) return false;
       if (filterWeek !== "전체") {
         var w = getWeek(l);
@@ -8590,7 +9115,7 @@ function DBLeadsView() {
 
   var weeksWithData = useMemo(function() {
     var counts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-    leads.filter(function(l) { return l.month === activeMonth && l.year === 2026 && !l.deleted_at; }).forEach(function(l) {
+    leads.filter(function(l) { return (activeMonth === "all" || l.month === activeMonth) && l.year === 2026 && !l.deleted_at; }).forEach(function(l) {
       var w = getWeek(l);
       if (w && w >= 1 && w <= 5) counts[w]++;
     });
@@ -8598,7 +9123,7 @@ function DBLeadsView() {
   }, [leads, activeMonth]);
 
   var summary = useMemo(function() {
-    var all = leads.filter(function(l) { return l.month === activeMonth && l.year === 2026 && !l.deleted_at; });
+    var all = leads.filter(function(l) { return (activeMonth === "all" || l.month === activeMonth) && l.year === 2026 && !l.deleted_at; });
     return {
       total: all.length,
       connected: all.filter(function(l) { return l.status === "연결"; }).length,
@@ -8644,14 +9169,69 @@ function DBLeadsView() {
     if (!result.error) { setLeads(function(prev) { return prev.map(function(l) { return l.id === id ? Object.assign({}, l, { deleted_at: now }) : l; }); }); }
   };
   var openAddLead = function() {
-    setNewLead({ year: 2026, month: activeMonth, business_name: "", contact: "", assignee: "", assigned_by: "", status: "미연락", call_1: "", call_2: "", call_3: "", call_4: "", call_5: "", etc: "" });
+    setNewLead({ year: 2026, month: activeMonth === "all" ? (new Date().getMonth() + 1) : activeMonth, business_name: "", contact: "", assignee: "", assigned_by: "", status: "미연락", call_1: "", call_2: "", call_3: "", call_4: "", call_5: "", etc: "" });
     setShowAddLead(true);
   };
-  var saveNewLead = async function() {
+  var normNameDup = function(s) { return (s || "").replace(/\(주\)|㈜|주식회사|\(유\)|농업회사법인|\s/g, "").toLowerCase(); };
+  var normPhoneDup = function(s) { return (s || "").replace(/[^0-9]/g, ""); };
+  // 회사명+번호 둘 다 같은(2개 이상 일치) 건이 있을 때만 중복으로 표시
+  var dupComboCnt = {};
+  (leads || []).forEach(function(l) { if (l.deleted_at) return; var n = normNameDup(l.business_name); var p = normPhoneDup(l.contact); if (n && p) { var k = n + "|" + p; dupComboCnt[k] = (dupComboCnt[k] || 0) + 1; } });
+  (companiesForDup || []).forEach(function(c) { var n = normNameDup(c.name); var p = normPhoneDup(c.phone); if (n && p) { var k = n + "|" + p; dupComboCnt[k] = (dupComboCnt[k] || 0) + 1; } });
+  var isLeadDup = function(row) { var n = normNameDup(row.business_name); var p = normPhoneDup(row.contact); if (!n || !p) return false; return (dupComboCnt[n + "|" + p] || 0) >= 2; };
+  // DB리스트 사이드패널 전체 저장 (자동저장 실패 대비 명시적 버튼용)
+  var saveAllLead = async function() {
+    if (!selectedLead || !selectedLead.id) return;
+    var u = {
+      business_name: selectedLead.business_name, contact: formatPhone(selectedLead.contact || ""),
+      assignee: selectedLead.assignee, assigned_by: selectedLead.assigned_by, status: selectedLead.status,
+      script_memo: selectedLead.script_memo || null, etc: selectedLead.etc || null,
+      call_1_date: selectedLead.call_1_date || null, call_1_status: selectedLead.call_1_status || null, call_1_memo: selectedLead.call_1_memo || null,
+      call_2_date: selectedLead.call_2_date || null, call_2_status: selectedLead.call_2_status || null, call_2_memo: selectedLead.call_2_memo || null,
+      call_3_date: selectedLead.call_3_date || null, call_3_status: selectedLead.call_3_status || null, call_3_memo: selectedLead.call_3_memo || null,
+      call_4_date: selectedLead.call_4_date || null, call_4_status: selectedLead.call_4_status || null, call_4_memo: selectedLead.call_4_memo || null,
+      call_5_date: selectedLead.call_5_date || null, call_5_status: selectedLead.call_5_status || null, call_5_memo: selectedLead.call_5_memo || null,
+      updated_at: new Date().toISOString(),
+    };
+    var r = await supabase.from("db_leads").update(u).eq("id", selectedLead.id);
+    if (!r.error) {
+      setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, u) : l; }); });
+      alert("저장됐어요!");
+    } else {
+      alert("저장 실패: " + r.error.message);
+    }
+  };
+
+  var saveNewLead = function() {
     if (!newLead.business_name) { alert("사업자명은 필수입니다."); return; }
+    var inName = normNameDup(newLead.business_name);
+    var inPhone = normPhoneDup(newLead.contact);
+    var cands = [];
+    companiesForDup.forEach(function(c) {
+      var reasons = [];
+      if (inName && normNameDup(c.name) === inName) reasons.push("회사명");
+      if (inPhone && c.phone && normPhoneDup(c.phone) === inPhone) reasons.push("번호");
+      if (reasons.length > 0) cands.push({ src: "기업목록", name: c.name, phone: c.phone || "", rep: c.representative || "", reasons: reasons });
+    });
+    leads.forEach(function(l) {
+      if (l.deleted_at) return;
+      var reasons = [];
+      if (inName && normNameDup(l.business_name) === inName) reasons.push("회사명");
+      if (inPhone && l.contact && normPhoneDup(l.contact) === inPhone) reasons.push("번호");
+      if (reasons.length > 0) cands.push({ src: "DB리스트", name: l.business_name, phone: l.contact || "", rep: "", reasons: reasons });
+    });
+    if (cands.length > 0) {
+      cands.sort(function(a, b) { return b.reasons.length - a.reasons.length; });
+      setDupCandidates(cands);
+      setShowDupModal(true);
+      return;
+    }
+    doInsertLead();
+  };
+  var doInsertLead = async function() {
     var leadData = Object.assign({}, newLead, { contact: formatPhone(newLead.contact || "") });
     var result = await supabase.from("db_leads").insert(leadData).select().single();
-    if (!result.error && result.data) { setLeads(function(prev) { return prev.concat([result.data]); }); setShowAddLead(false); }
+    if (!result.error && result.data) { setLeads(function(prev) { return prev.concat([result.data]); }); setShowAddLead(false); setShowDupModal(false); }
   };
 
   if (leadsLoading) return (<div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", flexDirection: "column", gap: 16 }}><div style={{ width: 36, height: 36, border: "3px solid #E8E5E0", borderTopColor: "#1A1917", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} /><span style={{ color: "#888", fontSize: 13 }}>DB리스트 불러오는 중...</span></div>);
@@ -8677,6 +9257,7 @@ function DBLeadsView() {
 
       <div style={{ display: "flex", gap: 4, marginBottom: 18, flexWrap: "wrap" }}>
         {MONTHS_LIST.map(function(m) { var hasData = monthsWithData.has(m); var isActive = activeMonth === m; return (<div key={m} onClick={function() { setActiveMonth(m); setFilterStatus("전체"); }} style={{ padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: isActive ? 700 : 400, background: isActive ? "#1A1917" : hasData ? "#fff" : "#F7F6F3", color: isActive ? "#fff" : hasData ? "#333" : "#CCC", border: isActive ? "none" : hasData ? "1px solid #E8E5E0" : "1px solid #EDEBE8" }}>{m}월{hasData && !isActive ? " ●" : ""}</div>); })}
+        <div onClick={function() { setActiveMonth("all"); setFilterStatus("전체"); }} style={{ padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: activeMonth === "all" ? 700 : 600, background: activeMonth === "all" ? "#1A1917" : "#fff", color: activeMonth === "all" ? "#fff" : "#333", border: activeMonth === "all" ? "none" : "1px solid #E8E5E0" }}>📋 전체</div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10, marginBottom: 18 }}>
@@ -8729,7 +9310,7 @@ function DBLeadsView() {
                       <td style={{ padding: "9px 8px" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
                         {isEditing
                           ? <input value={editData.business_name || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { business_name: e.target.value }); }); }} style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12, width: "100%", boxSizing: "border-box" }} />
-                          : <span style={{ fontWeight: 600 }}>{row.business_name || "-"}</span>}
+                          : <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ fontWeight: 600 }}>{row.business_name || "-"}</span>{isLeadDup(row) && <span title="회사명 또는 번호가 다른 건과 겹침" style={{ fontSize: 10, padding: "1px 6px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", fontWeight: 700 }}>중복</span>}</span>}
                       </td>
                       <td style={{ padding: "9px 8px" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
                         {isEditing
@@ -8758,13 +9339,13 @@ function DBLeadsView() {
                             <button onClick={function(e) { e.stopPropagation(); saveEdit(); }} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 4, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>저장</button>
                             <button onClick={function(e) { e.stopPropagation(); cancelEdit(); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 4, padding: "3px 6px", fontSize: 11, cursor: "pointer" }}>취소</button>
                           </> : <>
-                            <button onClick={function() { startEdit(row); setExpandedId(row.id); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Icon name="edit" size={14} color="#888" /></button>
+                            <button onClick={function(e) { e.stopPropagation(); setSelectedLead(row); }} title="상세/콜 이력 편집" style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Icon name="edit" size={14} color="#888" /></button>
                             <button onClick={function() { deleteLead(row.id); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Icon name="x" size={14} color="#CCC" /></button>
                           </>}
                         </div>
                       </td>
                     </tr>,
-                    isExpanded && (<tr key={row.id + "-detail"} style={{ borderBottom: "1px solid #F0EDE8", background: "#FAFAF8" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}><td colSpan={8} style={{ padding: "12px 16px 16px 50px" }}>
+                    false && isExpanded && (<tr key={row.id + "-detail"} style={{ borderBottom: "1px solid #F0EDE8", background: "#FAFAF8" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}><td colSpan={8} style={{ padding: "12px 16px 16px 50px" }}>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, fontSize: 12 }}>
                         {[1,2,3,4,5].map(function(n) {
                           var dateKey = "call_" + n + "_date";
@@ -8820,7 +9401,40 @@ function DBLeadsView() {
         )}
       </div>
 
-      {showAddLead && (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={function(e) { if (e.target === e.currentTarget) setShowAddLead(false); }}>
+      {showDupModal && (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center" }} onMouseDown={function(e) { if (e.target === e.currentTarget) setShowDupModal(false); }}>
+        <div style={{ background: "#fff", borderRadius: 12, padding: 24, width: 520, maxWidth: "90vw", maxHeight: "80vh", overflowY: "auto" }} onClick={function(e) { e.stopPropagation(); }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <span style={{ fontSize: 20 }}>⚠️</span>
+            <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700 }}>비슷한 기존 고객이 있어요</h2>
+          </div>
+          <p style={{ color: "#888", fontSize: 13, margin: "0 0 16px" }}>회사명 또는 번호가 겹치는 건이 {dupCandidates.length}개 있습니다. 확인 후 등록 여부를 결정하세요.</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
+            {dupCandidates.map(function(d, i) {
+              var strong = d.reasons.length >= 2;
+              return (
+                <div key={i} style={{ border: "1px solid " + (strong ? "#FCA5A5" : "#E8E5E0"), background: strong ? "#FEF2F2" : "#FAFAF8", borderRadius: 8, padding: "10px 12px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                    <span style={{ fontWeight: 700, fontSize: 14 }}>{d.name}</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 99, background: d.src === "기업목록" ? "#EEF2FF" : "#FEF3C7", color: d.src === "기업목록" ? "#4338CA" : "#B45309" }}>{d.src}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#666" }}>
+                    {d.phone ? "📞 " + d.phone : ""}{d.rep ? "  ·  대표 " + d.rep : ""}
+                  </div>
+                  <div style={{ fontSize: 11, color: strong ? "#DC2626" : "#999", marginTop: 4, fontWeight: 600 }}>
+                    {strong ? "🔴 " : ""}{d.reasons.join(" + ")} 일치{strong ? " (중복 가능성 높음)" : ""}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={function() { setShowDupModal(false); }} style={{ flex: 1, padding: "12px", background: "#F1EFE8", color: "#555", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>취소</button>
+            <button onClick={doInsertLead} style={{ flex: 1, padding: "12px", background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>그래도 등록</button>
+          </div>
+        </div>
+      </div>)}
+
+      {showAddLead && (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onMouseDown={function(e) { if (e.target === e.currentTarget) setShowAddLead(false); }}>
         <div style={{ background: "#fff", borderRadius: 14, width: 520, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
           <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center" }}><h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>신규 DB 등록 ({activeMonth}월)</h2><button onClick={function() { setShowAddLead(false); }} style={{ background: "none", border: "none", cursor: "pointer" }}><Icon name="x" size={18} color="#888" /></button></div>
           <div style={{ padding: "20px 24px" }}>
@@ -8970,34 +9584,45 @@ function DBLeadsView() {
                   {[1,2,3,4,5].map(function(ci) {
                     var dateKey = "call_" + ci + "_date";
                     var statusKey = "call_" + ci + "_status";
-                    var hasData = selectedLead[dateKey] || selectedLead[statusKey];
+                    var memoKey = "call_" + ci + "_memo";
+                    var hasData = selectedLead[dateKey] || selectedLead[statusKey] || selectedLead[memoKey];
                     return (
-                      <div key={ci} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: ci < 5 ? 6 : 0, opacity: hasData ? 1 : 0.6 }}>
-                        <span style={{ fontSize: 10, fontWeight: 700, color: "#4338CA", width: 32, flexShrink: 0 }}>{ci}차</span>
-                        <input type="date" value={selectedLead[dateKey] || ""}
-                          onChange={function(e) { setSelectedLead(function(p) { return Object.assign({}, p, { [dateKey]: e.target.value }); }); }}
+                      <div key={ci} style={{ marginBottom: ci < 5 ? 10 : 0, paddingBottom: ci < 5 ? 10 : 0, borderBottom: ci < 5 ? "1px solid #E8E5E0" : "none", opacity: hasData ? 1 : 0.6 }}>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: "#4338CA", width: 32, flexShrink: 0 }}>{ci}차</span>
+                          <input type="date" value={selectedLead[dateKey] || ""}
+                            onChange={function(e) { setSelectedLead(function(p) { return Object.assign({}, p, { [dateKey]: e.target.value }); }); }}
+                            onBlur={async function() {
+                              var u = {}; u[dateKey] = selectedLead[dateKey] || null; u.updated_at = new Date().toISOString();
+                              var r = await supabase.from("db_leads").update(u).eq("id", selectedLead.id);
+                              if (!r.error) setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, u) : l; }); });
+                            }}
+                            style={{ flex: 1, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, background: "#fff" }} />
+                          <select value={selectedLead[statusKey] || ""}
+                            onChange={async function(e) {
+                              var v = e.target.value;
+                              var u = {}; u[statusKey] = v || null; u.updated_at = new Date().toISOString();
+                              var r = await supabase.from("db_leads").update(u).eq("id", selectedLead.id);
+                              if (!r.error) {
+                                setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, u) : l; }); });
+                                setSelectedLead(function(p) { return Object.assign({}, p, { [statusKey]: v }); });
+                              }
+                            }}
+                            style={{ flex: 1, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, background: "#fff" }}>
+                            <option value="">-</option>
+                            <option value="통화완료">통화완료</option><option value="부재">부재</option><option value="거절">거절</option>
+                            <option value="문자발송">문자발송</option><option value="카톡발송">카톡발송</option><option value="콜백요청">콜백요청</option>
+                            <option value="미팅예약">미팅예약</option><option value="상담완료">상담완료</option><option value="수신거부">수신거부</option>
+                          </select>
+                        </div>
+                        <input value={selectedLead[memoKey] || ""} placeholder={ci + "차콜 메모"}
+                          onChange={function(e) { setSelectedLead(function(p) { return Object.assign({}, p, { [memoKey]: e.target.value }); }); }}
                           onBlur={async function() {
-                            var u = {}; u[dateKey] = selectedLead[dateKey] || null; u.updated_at = new Date().toISOString();
+                            var u = {}; u[memoKey] = selectedLead[memoKey] || null; u.updated_at = new Date().toISOString();
                             var r = await supabase.from("db_leads").update(u).eq("id", selectedLead.id);
                             if (!r.error) setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, u) : l; }); });
                           }}
-                          style={{ flex: 1, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, background: "#fff" }} />
-                        <select value={selectedLead[statusKey] || ""}
-                          onChange={async function(e) {
-                            var v = e.target.value;
-                            var u = {}; u[statusKey] = v || null; u.updated_at = new Date().toISOString();
-                            var r = await supabase.from("db_leads").update(u).eq("id", selectedLead.id);
-                            if (!r.error) {
-                              setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, u) : l; }); });
-                              setSelectedLead(function(p) { return Object.assign({}, p, { [statusKey]: v }); });
-                            }
-                          }}
-                          style={{ flex: 1, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, background: "#fff" }}>
-                          <option value="">-</option>
-                          <option value="통화완료">통화완료</option><option value="부재">부재</option><option value="거절">거절</option>
-                          <option value="문자발송">문자발송</option><option value="카톡발송">카톡발송</option><option value="콜백요청">콜백요청</option>
-                          <option value="미팅예약">미팅예약</option><option value="상담완료">상담완료</option><option value="수신거부">수신거부</option>
-                        </select>
+                          style={{ width: "100%", marginTop: 5, marginLeft: 38, maxWidth: "calc(100% - 38px)", padding: "5px 7px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, background: "#fff", boxSizing: "border-box", outline: "none" }} />
                       </div>
                     );
                   })}
@@ -9016,6 +9641,9 @@ function DBLeadsView() {
                   rows={4} style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.6, resize: "vertical", boxSizing: "border-box", outline: "none", fontFamily: "inherit" }} />
                 <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>입력 후 칸 밖 클릭 시 자동 저장</div>
               </div>
+
+              {/* 전체 저장 버튼 (자동저장이 안 될 때 확실히 저장) */}
+              <button onClick={saveAllLead} style={{ width: "100%", padding: "13px", background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer", marginBottom: 8 }}>💾 전체 저장</button>
             </div>
           </div>
         </div>
@@ -9024,7 +9652,7 @@ function DBLeadsView() {
       {/* DB리스트 휴지통 모달 */}
       {showLeadTrash && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={function(e) { if (e.target === e.currentTarget) setShowLeadTrash(false); }}>
+          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowLeadTrash(false); }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 600, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ DB리스트 휴지통 ({trashedLeads.length}건)</h2>
@@ -9327,7 +9955,7 @@ function ApprovalCasesView({ profile }) {
 
       {/* 사례 추가/수정 폼 모달 */}
       {showForm && editingCase && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={function() { setShowForm(false); }}>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div onClick={function(e) { e.stopPropagation(); }}
             style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 700, maxHeight: "90vh", overflowY: "auto", padding: 24 }}>
             <h2 style={{ margin: 0, marginBottom: 20, fontSize: 18, fontWeight: 700 }}>{editingCase.id ? "사례 수정" : "사례 추가"}</h2>
@@ -10618,7 +11246,7 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
 
       {/* 새 팀 노트 추가 모달 */}
       {showAdd && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={function() { setShowAdd(false); }}>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div onClick={function(e) { e.stopPropagation(); }}
             style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 500, padding: 24 }}>
             <h2 style={{ margin: 0, marginBottom: 16, fontSize: 16, fontWeight: 700 }}>📋 팀 업무 등록</h2>
