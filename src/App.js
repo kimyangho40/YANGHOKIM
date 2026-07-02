@@ -992,7 +992,7 @@ function CRMApp({ profile, session }) {
     const allFields = {
       name: rest.name, type: rest.type, representative: rest.representative,
       phone: rest.phone, stage: rest.stage, assignee: rest.assignee,
-      agency: rest.agency, received_docs: rest.received_docs, last_contact: rest.last_contact,
+      agency: rest.agency, received_docs: rest.received_docs, requested_docs: rest.requested_docs, last_contact: rest.last_contact,
       next_contact: rest.next_contact, call_count: rest.call_count,
       fee: rest.fee, fee_status: rest.fee_status,
       revenue_2023: rest.revenue_2023, revenue_2024: rest.revenue_2024, revenue_2025: rest.revenue_2025,
@@ -1012,7 +1012,7 @@ function CRMApp({ profile, session }) {
       referrer: rest.referrer,
     };
     // stage/assignee/received_docs 등은 빈값도 의미가 있을 수 있으나, 일반 정보 필드는 빈값이면 건드리지 않음
-    const keepEvenIfEmpty = { stage: 1, assignee: 1, received_docs: 1, fee_status: 1, referrer: 1 };
+    const keepEvenIfEmpty = { stage: 1, assignee: 1, received_docs: 1, requested_docs: 1, fee_status: 1, referrer: 1 };
     const updateObj = {};
     Object.keys(allFields).forEach(function(k) {
       const v = allFields[k];
@@ -3729,28 +3729,65 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 + 대출 행 추가
               </button>
 
-              {/* 기업정보 항목 (라벨+값, 추가/삭제/이름변경) */}
-              <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 7, marginTop: 6 }}>📋 기업정보 항목</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8, marginBottom: 8 }}>
-                {(Array.isArray(data.company_info) ? data.company_info : []).map(function(it, ii) {
-                  return (
-                    <div key={ii} style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 10px", position: "relative" }}>
-                      <input value={it.label || ""} placeholder="항목명"
-                        onChange={function(e) { var v = e.target.value; setData(function(p) { var arr = (Array.isArray(p.company_info) ? p.company_info : []).slice(); arr[ii] = Object.assign({}, arr[ii], { label: v }); return Object.assign({}, p, { company_info: arr }); }); }}
-                        style={{ width: "calc(100% - 18px)", border: "none", fontSize: 10.5, color: "#888", fontWeight: 600, padding: 0, marginBottom: 3, background: "transparent", outline: "none" }} />
-                      <button onClick={function() { setData(function(p) { var arr = (Array.isArray(p.company_info) ? p.company_info : []).slice(); arr.splice(ii, 1); return Object.assign({}, p, { company_info: arr }); }); }}
-                        style={{ position: "absolute", top: 6, right: 6, background: "none", border: "none", cursor: "pointer", color: "#DDD", padding: 2 }}><Icon name="x" size={11} color="#DDD" /></button>
-                      <textarea value={it.value || ""} placeholder="내용"
-                        onChange={function(e) { var v = e.target.value; setData(function(p) { var arr = (Array.isArray(p.company_info) ? p.company_info : []).slice(); arr[ii] = Object.assign({}, arr[ii], { value: v }); return Object.assign({}, p, { company_info: arr }); }); }}
-                        rows={1} style={{ width: "100%", border: "none", fontSize: 12.5, color: "#1A1917", padding: 0, background: "transparent", outline: "none", resize: "vertical", boxSizing: "border-box", fontFamily: "inherit", minHeight: 18 }} />
+              {/* 기업정보 항목 — 기본 6개(고정) + 추가 항목(자유) */}
+              {(function() {
+                var DEFAULT_LABELS = ["재창업 조건 (폐업이력)", "수출실적", "연구소", "노란우산공제", "기업인증", "특허 및 상표권"];
+                var infoArr = Array.isArray(data.company_info) ? data.company_info : [];
+                var getVal = function(label) { var it = infoArr.find(function(x) { return x.label === label; }); return it ? (it.value || "") : ""; };
+                var setVal = function(label, val) {
+                  setData(function(p) {
+                    var arr = (Array.isArray(p.company_info) ? p.company_info : []).slice();
+                    var idx = arr.findIndex(function(x) { return x.label === label; });
+                    if (idx >= 0) arr[idx] = Object.assign({}, arr[idx], { value: val });
+                    else arr.push({ label: label, value: val });
+                    return Object.assign({}, p, { company_info: arr });
+                  });
+                };
+                var extraItems = infoArr.map(function(it, ii) { return { it: it, ii: ii }; }).filter(function(x) { return DEFAULT_LABELS.indexOf(x.it.label) < 0; });
+                return (
+                  <>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 7, marginTop: 6 }}>📋 기업정보 (기본 항목)</div>
+                    <div style={{ fontSize: 10.5, color: "#AAA", marginBottom: 8 }}>해당되는 것만 입력하세요. 여러 개면 줄바꿈으로 나열 (예: 특허 2건은 각 줄에)</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 8, marginBottom: 16 }}>
+                      {DEFAULT_LABELS.map(function(label) {
+                        var val = getVal(label);
+                        var filled = val && val.trim();
+                        return (
+                          <div key={label} style={{ background: filled ? "#F0FDF4" : "#FAFAF8", border: filled ? "1px solid #BBF7D0" : "1px solid #E8E5E0", borderRadius: 8, padding: "9px 11px" }}>
+                            <div style={{ fontSize: 11, color: filled ? "#15803D" : "#999", fontWeight: 700, marginBottom: 4 }}>{label}</div>
+                            <textarea value={val} placeholder="해당 없으면 비워두세요"
+                              onChange={function(e) { setVal(label, e.target.value); }}
+                              rows={1} style={{ width: "100%", border: "none", fontSize: 12.5, color: "#1A1917", padding: 0, background: "transparent", outline: "none", resize: "vertical", boxSizing: "border-box", fontFamily: "inherit", minHeight: 18, lineHeight: 1.5 }} />
+                          </div>
+                        );
+                      })}
                     </div>
-                  );
-                })}
-              </div>
-              <button onClick={function() { setData(function(p) { var arr = (Array.isArray(p.company_info) ? p.company_info : []).slice(); arr.push({ label: "", value: "" }); return Object.assign({}, p, { company_info: arr }); }); }}
-                style={{ background: "#fff", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 7, padding: "6px 12px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", marginBottom: 20 }}>
-                + 항목 추가
-              </button>
+
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 7 }}>➕ 추가 항목 (자유)</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 8, marginBottom: 8 }}>
+                      {extraItems.map(function(x) {
+                        var ii = x.ii;
+                        return (
+                          <div key={ii} style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 10px", position: "relative" }}>
+                            <input value={x.it.label || ""} placeholder="항목명"
+                              onChange={function(e) { var v = e.target.value; setData(function(p) { var arr = (Array.isArray(p.company_info) ? p.company_info : []).slice(); arr[ii] = Object.assign({}, arr[ii], { label: v }); return Object.assign({}, p, { company_info: arr }); }); }}
+                              style={{ width: "calc(100% - 18px)", border: "none", fontSize: 10.5, color: "#888", fontWeight: 600, padding: 0, marginBottom: 3, background: "transparent", outline: "none" }} />
+                            <button onClick={function() { setData(function(p) { var arr = (Array.isArray(p.company_info) ? p.company_info : []).slice(); arr.splice(ii, 1); return Object.assign({}, p, { company_info: arr }); }); }}
+                              style={{ position: "absolute", top: 6, right: 6, background: "none", border: "none", cursor: "pointer", color: "#DDD", padding: 2 }}><Icon name="x" size={11} color="#DDD" /></button>
+                            <textarea value={x.it.value || ""} placeholder="내용"
+                              onChange={function(e) { var v = e.target.value; setData(function(p) { var arr = (Array.isArray(p.company_info) ? p.company_info : []).slice(); arr[ii] = Object.assign({}, arr[ii], { value: v }); return Object.assign({}, p, { company_info: arr }); }); }}
+                              rows={1} style={{ width: "100%", border: "none", fontSize: 12.5, color: "#1A1917", padding: 0, background: "transparent", outline: "none", resize: "vertical", boxSizing: "border-box", fontFamily: "inherit", minHeight: 18 }} />
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <button onClick={function() { setData(function(p) { var arr = (Array.isArray(p.company_info) ? p.company_info : []).slice(); arr.push({ label: "", value: "" }); return Object.assign({}, p, { company_info: arr }); }); }}
+                      style={{ background: "#fff", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 7, padding: "6px 12px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", marginBottom: 20 }}>
+                      + 항목 추가
+                    </button>
+                  </>
+                );
+              })()}
 
               {/* 기타 메모 */}
               <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 7, marginTop: 6 }}>📝 기타 (비고)</div>
@@ -3768,58 +3805,60 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
 
           {tab === "docs" && (
             <div>
-              {/* 위쪽: 요청해야 하는 서류 (아직 수령 안 된 것들 - 클릭하면 수령으로 표시) */}
-              <div style={{ background: "#FFF7ED", borderRadius: 8, padding: "12px 14px", marginBottom: 10, border: "1px solid #FED7AA" }}>
-                <div style={{ fontSize: 11, color: "#9A3412", marginBottom: 8, fontWeight: 700 }}>📋 요청해야 하는 서류 (클릭하면 수령 완료로 이동)</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  {DOC_LIST.filter(function(doc) {
-                    return !(data.received_docs || "").split(",").map(function(s) { return s.trim(); }).includes(doc);
-                  }).map(function(doc) {
-                    return (
-                      <button key={doc} onClick={function() {
-                        const current = (data.received_docs || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
-                        const next = [...current, doc];
-                        setData(function(p) { return { ...p, received_docs: next.join(", ") }; });
-                      }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: "1px solid #FECACA", background: "#FEF2F2", color: "#DC2626", cursor: "pointer", fontWeight: 400 }}>
-                        {doc}
-                      </button>
-                    );
-                  })}
-                </div>
-                {(function() {
-                  var remaining = DOC_LIST.filter(function(doc) { return !(data.received_docs || "").split(",").map(function(s) { return s.trim(); }).includes(doc); });
-                  if (remaining.length === 0) {
-                    return <div style={{ fontSize: 11, color: "#15803D", marginTop: 10, fontWeight: 600 }}>✅ 요청할 서류 없음 (모두 수령완료)</div>;
-                  }
-                  return <div style={{ fontSize: 11, color: "#9A3412", marginTop: 10, fontWeight: 600 }}>요청 대기: {remaining.length}개</div>;
-                })()}
-              </div>
-              {/* 아래쪽: 수령 완료 서류 (이미 수령한 것들 - 클릭하면 요청 대기로 되돌림) */}
-              <div style={{ background: "#F0FDF4", borderRadius: 8, padding: "12px 14px", border: "1px solid #BBF7D0" }}>
-                <div style={{ fontSize: 11, color: "#15803D", marginBottom: 8, fontWeight: 700 }}>✅ 수령 완료 서류 (클릭하면 요청 대기로 되돌림)</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  {DOC_LIST.filter(function(doc) {
-                    return (data.received_docs || "").split(",").map(function(s) { return s.trim(); }).includes(doc);
-                  }).map(function(doc) {
-                    return (
-                      <button key={doc} onClick={function() {
-                        const current = (data.received_docs || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
-                        const next = current.filter(function(a) { return a !== doc; });
-                        setData(function(p) { return { ...p, received_docs: next.join(", ") }; });
-                      }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: "1px solid #15803D", background: "#15803D", color: "#fff", cursor: "pointer", fontWeight: 700 }}>
-                        ✓ {doc}
-                      </button>
-                    );
-                  })}
-                </div>
-                {data.received_docs ? (
-                  <div style={{ fontSize: 11, color: "#15803D", marginTop: 10, fontWeight: 600 }}>
-                    수령완료: {data.received_docs.split(",").filter(Boolean).length}개
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 11, color: "#888", marginTop: 10 }}>아직 수령된 서류가 없어요</div>
-                )}
-              </div>
+              {(function() {
+                var reqList = (data.requested_docs || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+                var recList = (data.received_docs || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+                var docStatus = function(doc) { if (recList.indexOf(doc) >= 0) return "received"; if (reqList.indexOf(doc) >= 0) return "requested"; return "none"; };
+                var cycleDoc = function(doc) {
+                  var st = docStatus(doc);
+                  var nReq = reqList.slice(), nRec = recList.slice();
+                  if (st === "none") { nReq.push(doc); }
+                  else if (st === "requested") { nReq = nReq.filter(function(d) { return d !== doc; }); nRec.push(doc); }
+                  else { nRec = nRec.filter(function(d) { return d !== doc; }); }
+                  setData(function(p) { return Object.assign({}, p, { requested_docs: nReq.join(", "), received_docs: nRec.join(", ") }); });
+                };
+                var noneList = DOC_LIST.filter(function(d) { return docStatus(d) === "none"; });
+                var reqedList = DOC_LIST.filter(function(d) { return docStatus(d) === "requested"; });
+                var recedList = DOC_LIST.filter(function(d) { return docStatus(d) === "received"; });
+                return (
+                  <>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 10, background: "#F7F6F3", borderRadius: 6, padding: "8px 11px" }}>💡 서류를 누르면 <b style={{ color: "#6B7280" }}>미요청</b> → <b style={{ color: "#B45309" }}>요청함</b> → <b style={{ color: "#15803D" }}>수령완료</b> 순으로 바뀝니다.</div>
+
+                    {/* 1. 미요청 */}
+                    <div style={{ background: "#F9FAFB", borderRadius: 8, padding: "12px 14px", marginBottom: 10, border: "1px solid #E5E7EB" }}>
+                      <div style={{ fontSize: 11, color: "#6B7280", marginBottom: 8, fontWeight: 700 }}>⬜ 미요청 — 아직 요청 안 한 서류 (클릭 → 요청함) · {noneList.length}개</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {noneList.map(function(doc) {
+                          return <button key={doc} onClick={function() { cycleDoc(doc); }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: "1px solid #D1D5DB", background: "#fff", color: "#6B7280", cursor: "pointer" }}>{doc}</button>;
+                        })}
+                        {noneList.length === 0 && <span style={{ fontSize: 11, color: "#BBB" }}>모두 요청했어요</span>}
+                      </div>
+                    </div>
+
+                    {/* 2. 요청함(대기) */}
+                    <div style={{ background: "#FFFBEB", borderRadius: 8, padding: "12px 14px", marginBottom: 10, border: "1px solid #FDE68A" }}>
+                      <div style={{ fontSize: 11, color: "#B45309", marginBottom: 8, fontWeight: 700 }}>📤 요청함 — 요청했으나 아직 못 받은 서류 (클릭 → 수령완료) · {reqedList.length}개</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {reqedList.map(function(doc) {
+                          return <button key={doc} onClick={function() { cycleDoc(doc); }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: "1px solid #FBBF24", background: "#FEF3C7", color: "#B45309", cursor: "pointer", fontWeight: 600 }}>⏳ {doc}</button>;
+                        })}
+                        {reqedList.length === 0 && <span style={{ fontSize: 11, color: "#BBB" }}>요청 대기 중인 서류가 없어요</span>}
+                      </div>
+                    </div>
+
+                    {/* 3. 수령완료 */}
+                    <div style={{ background: "#F0FDF4", borderRadius: 8, padding: "12px 14px", border: "1px solid #BBF7D0" }}>
+                      <div style={{ fontSize: 11, color: "#15803D", marginBottom: 8, fontWeight: 700 }}>✅ 수령완료 (클릭 → 미요청으로 되돌림) · {recedList.length}개</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {recedList.map(function(doc) {
+                          return <button key={doc} onClick={function() { cycleDoc(doc); }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: "1px solid #15803D", background: "#15803D", color: "#fff", cursor: "pointer", fontWeight: 700 }}>✓ {doc}</button>;
+                        })}
+                        {recedList.length === 0 && <span style={{ fontSize: 11, color: "#BBB" }}>아직 수령된 서류가 없어요</span>}
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           )}
 
@@ -3888,14 +3927,32 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   <div style={{ marginTop: 10, padding: "10px 12px", background: "#FAFAF8", borderRadius: 8, border: "1px solid #E8E5E0", maxHeight: 280, overflowY: "auto" }}>
                     <div style={{ fontSize: 11, color: "#888", fontWeight: 600, marginBottom: 8 }}>📋 누적 내역 ({commLogs.length}건)</div>
                     {commLogs.map(function(log, i) {
+                      var isEditingThis = editingLogId === log.id;
+                      var canEditThis = canEditLog(log);
                       return (
                         <div key={log.id || i} style={{ paddingBottom: 8, marginBottom: 8, borderBottom: i < commLogs.length - 1 ? "1px solid #F0EDE8" : "none" }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                             <span style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>{log.logged_by || "-"} · {log.created_at ? new Date(log.created_at).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "numeric", minute: "numeric" }) : "-"}</span>
-                            <button onClick={function() { if (confirm("이 소통 내역을 삭제할까요?")) deleteCommLog(log.id); }}
-                              style={{ background: "none", border: "none", cursor: "pointer", color: "#CCC", fontSize: 11, padding: "0 4px" }} title="삭제">🗑</button>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              {canEditThis && !isEditingThis && (
+                                <button onClick={function() { startEditLog(log); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 11, padding: "0 4px" }} title="수정">✏️</button>
+                              )}
+                              <button onClick={function() { if (confirm("이 소통 내역을 삭제할까요?")) deleteCommLog(log.id); }}
+                                style={{ background: "none", border: "none", cursor: "pointer", color: "#CCC", fontSize: 11, padding: "0 4px" }} title="삭제">🗑</button>
+                            </div>
                           </div>
-                          <div style={{ fontSize: 12, color: "#444", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{log.memo}</div>
+                          {isEditingThis ? (
+                            <div>
+                              <textarea value={editingLogText} onChange={function(e) { setEditingLogText(e.target.value); }}
+                                style={{ width: "100%", padding: "8px 10px", border: "1px solid #4338CA", borderRadius: 6, fontSize: 12, lineHeight: 1.5, resize: "vertical", minHeight: 60, boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+                              <div style={{ display: "flex", gap: 6, marginTop: 5, justifyContent: "flex-end" }}>
+                                <button onClick={saveEditLog} disabled={!editingLogText.trim()} style={{ background: editingLogText.trim() ? "#4338CA" : "#E8E5E0", color: "#fff", border: "none", borderRadius: 5, padding: "5px 12px", fontSize: 11, fontWeight: 700, cursor: editingLogText.trim() ? "pointer" : "not-allowed" }}>저장</button>
+                                <button onClick={function() { setEditingLogId(null); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 5, padding: "5px 12px", fontSize: 11, cursor: "pointer" }}>취소</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: 12, color: "#444", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{log.memo}</div>
+                          )}
                         </div>
                       );
                     })}
