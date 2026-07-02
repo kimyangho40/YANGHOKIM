@@ -1,5 +1,5 @@
 /* eslint-disable no-unused-vars, react-hooks/exhaustive-deps, no-redeclare */
-import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef, Fragment } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 // ── Supabase 설정 ─────────────────────────────────────────────────────────────
@@ -1009,9 +1009,10 @@ function CRMApp({ profile, session }) {
       industry: rest.industry,
       region: rest.region,
       contract_date: rest.contract_date,
+      referrer: rest.referrer,
     };
     // stage/assignee/received_docs 등은 빈값도 의미가 있을 수 있으나, 일반 정보 필드는 빈값이면 건드리지 않음
-    const keepEvenIfEmpty = { stage: 1, assignee: 1, received_docs: 1, fee_status: 1 };
+    const keepEvenIfEmpty = { stage: 1, assignee: 1, received_docs: 1, fee_status: 1, referrer: 1 };
     const updateObj = {};
     Object.keys(allFields).forEach(function(k) {
       const v = allFields[k];
@@ -1245,6 +1246,7 @@ function CRMApp({ profile, session }) {
     if (Array.isArray(form.loans) && form.loans.length > 0) insertData.loans = form.loans;
     if (Array.isArray(form.company_info) && form.company_info.length > 0) insertData.company_info = form.company_info;
     if (form.company_info_memo) insertData.company_info_memo = form.company_info_memo;
+    if (form.referrer) insertData.referrer = form.referrer;
 
     const { data: co, error } = await supabase.from("companies").insert(insertData).select().single();
     if (!error && co) {
@@ -1468,6 +1470,7 @@ function CRMApp({ profile, session }) {
               {/* DB리스트 + 캘린더 위아래 */}
               {[
                 { id: "leave", label: "연차/휴가", icon: "calendar" },
+                { id: "partners", label: "협업 담당자", icon: "users" },
                 { id: "dbleads", label: "DB리스트", icon: "phone" },
                 { id: "calendar", label: "캘린더", icon: "calendar" },
               ].map(function({ id, label, icon }) {
@@ -1598,6 +1601,7 @@ function CRMApp({ profile, session }) {
             {view === "activitylog" && <ActivityLogView />}
             {view === "worknotes" && <WorkNotesView profile={profile} onBadgeUpdate={function() { fetchWorkNotesBadge(profile?.name); }} />}
             {view === "leave" && <LeaveView profile={profile} profiles={profiles} />}
+            {view === "partners" && <PartnersView />}
             {view === "calendar" && <CalendarView companies={companies} onSelectCompany={setSelectedCompany} profile={profile} />}
             {view === "manual" && <ManualView />}
             {view === "quicklinks" && <QuickLinksView />}
@@ -2695,10 +2699,30 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
   const [showCompanyTrash, setShowCompanyTrash] = useState(false);
   const [trashedCompanies, setTrashedCompanies] = useState([]);
 
+  // 중복 사업장: 업체명 + 대표자명이 같으면 중복 (전체 기업 기준)
+  const listDupKeys = useMemo(function() {
+    var counts = {};
+    (companies || []).forEach(function(c) {
+      var bn = (c.name || "").trim();
+      var rep = (c.representative || "").trim();
+      if (!bn || !rep) return;
+      counts[bn + "|" + rep] = (counts[bn + "|" + rep] || 0) + 1;
+    });
+    var dups = {};
+    Object.keys(counts).forEach(function(k) { if (counts[k] >= 2) dups[k] = counts[k]; });
+    return dups;
+  }, [companies]);
+  function isListDup(co) {
+    var bn = (co.name || "").trim();
+    var rep = (co.representative || "").trim();
+    if (!bn || !rep) return 0;
+    return listDupKeys[bn + "|" + rep] || 0;
+  }
+
   // 컬럼 너비 수동 조절 (헤더 경계 드래그) - 브라우저(localStorage)에 자동 저장
   const DEFAULT_LIST_COL_WIDTHS = {
     "업체명": 130, "유형": 80, "지역": 90, "업종": 120, "대표자": 80, "담당": 60,
-    "진행단계": 130, "정체일수": 70, "신청기관": 150, "계약일": 90, "진행기관": 140,
+    "진행단계": 130, "중복": 56, "정체일수": 70, "신청기관": 150, "계약일": 90, "진행기관": 140,
     "23년~25년 매출": 160, "신용점수": 90, "기타": 140, "작업": 110
   };
   const [listColWidths, setListColWidths] = useState(function() {
@@ -2875,7 +2899,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1200, tableLayout: "fixed" }}>
           <thead>
             <tr style={{ background: "#F7F6F3", borderBottom: "1px solid #E8E5E0", position: "sticky", top: 0, zIndex: 2 }}>
-              {["업체명","유형","지역","업종","대표자","담당","진행단계","정체일수","신청기관","계약일","진행기관","23년~25년 매출","신용점수","기타","작업"].map(h => (
+              {["업체명","유형","지역","업종","대표자","담당","진행단계","중복","정체일수","신청기관","계약일","진행기관","23년~25년 매출","신용점수","기타","작업"].map(h => (
                 <th key={h} style={Object.assign({ padding: "10px 8px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left", letterSpacing: "0.03em", whiteSpace: "nowrap", background: "#F7F6F3", position: "relative", boxSizing: "border-box", width: listColWidths[h], minWidth: listColWidths[h], maxWidth: listColWidths[h] },
                   h === "업체명" ? { position: "sticky", left: 0, zIndex: 3, boxShadow: "2px 0 4px -2px rgba(0,0,0,0.08)" } : {}
                 )}>{h}
@@ -2946,6 +2970,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                   <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis" }}>{co.representative || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 12, whiteSpace: "nowrap" }}>{co.assignee || "-"}</td>
                   <td style={{ padding: "11px 13px", whiteSpace: "nowrap" }}><span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, fontWeight: 600 }}>{co.stage}</span></td>
+                  <td style={{ padding: "11px 13px", textAlign: "center" }}>{(function() { var cnt = isListDup(co); return cnt ? <span title={"같은 사업장이 총 " + cnt + "건 등록됨"} style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", whiteSpace: "nowrap" }}>중복</span> : null; })()}</td>
                   <td style={{ padding: "11px 13px", whiteSpace: "nowrap", textAlign: "center" }}>{(function() { var d = co.stagnant_days || 0; if (d >= 14) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", fontWeight: 700 }}>⚠ {d}일</span>; if (d >= 7) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEF3C7", color: "#B45309", fontWeight: 700 }}>{d}일</span>; return <span style={{ fontSize: 11, color: "#AAA" }}>{d}일</span>; })()}</td>
                   <td style={{ padding: "8px 8px", fontSize: 11, verticalAlign: "middle" }}>
                     {(function() {
@@ -3152,6 +3177,12 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   const [agencyCases, setAgencyCases] = useState([]);
   const [settlements, setSettlements] = useState([]);
   const [commLogs, setCommLogs] = useState([]);
+  const [partnersList, setPartnersList] = useState([]);
+  useEffect(function() {
+    supabase.from("partners").select("id,name").order("created_at", { ascending: true }).then(function(r) {
+      if (!r.error) setPartnersList(r.data || []);
+    });
+  }, []);
   const [commInput, setCommInput] = useState("");
   const [xlsxPreview, setXlsxPreview] = useState(null); // 기업현황표 첨부 미리보기 {updates, auto}
   const [kakaoLoading, setKakaoLoading] = useState(false); // 카톡 캡처 AI 요약 중
@@ -3437,6 +3468,15 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   })}
                 </div>
                 {data.agency && <div style={{ fontSize: 11, color: "#4338CA", marginTop: 8, fontWeight: 600 }}>선택: {data.agency}</div>}
+              </div>
+              <div style={{ background: "#FBF7F0", borderRadius: 8, padding: "10px 13px", marginBottom: 10, border: "1px solid #F0E6D6" }}>
+                <div style={{ fontSize: 11, color: "#B45309", marginBottom: 6, fontWeight: 600 }}>🤝 소개자 (협업 담당자)</div>
+                <select value={data.referrer || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { referrer: v }); }); }}
+                  style={{ width: "100%", fontSize: 13, padding: "7px 10px", border: "1px solid #E8E5E0", borderRadius: 6, background: "#fff", outline: "none" }}>
+                  <option value="">— 소개자 없음 —</option>
+                  {partnersList.map(function(pt) { return <option key={pt.id} value={pt.name}>{pt.name}</option>; })}
+                  {data.referrer && partnersList.findIndex(function(pt) { return pt.name === data.referrer; }) < 0 && <option value={data.referrer}>{data.referrer} (목록에 없음)</option>}
+                </select>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
@@ -6165,6 +6205,179 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     </div>
   );
 }
+// ── 협업 담당자 ────────────────────────────────────────────────────────────────
+function PartnersView() {
+  const [partners, setPartners] = useState([]);
+  const [introByRef, setIntroByRef] = useState({}); // {소개자이름: [업체...]}
+  const [expandedId, setExpandedId] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null); // 수정 중인 항목 (null이면 신규)
+  const [form, setForm] = useState({ name: "", org: "", phone: "", email: "", role: "", memo: "" });
+  const [search, setSearch] = useState("");
+
+  function fetchPartners() {
+    setLoading(true);
+    supabase.from("partners").select("*").order("created_at", { ascending: true }).then(function(r) {
+      if (!r.error) setPartners(r.data || []);
+      setLoading(false);
+    });
+    // 소개받은 업체 집계 (companies.referrer 기준)
+    supabase.from("companies").select("id,name,stage,referrer").not("referrer", "is", null).then(function(r) {
+      if (!r.error) {
+        var map = {};
+        (r.data || []).forEach(function(c) {
+          var ref = (c.referrer || "").trim();
+          if (!ref) return;
+          if (!map[ref]) map[ref] = [];
+          map[ref].push(c);
+        });
+        setIntroByRef(map);
+      }
+    });
+  }
+  useEffect(fetchPartners, []);
+
+  function openNew() { setEditing(null); setForm({ name: "", org: "", phone: "", email: "", role: "", memo: "" }); setShowForm(true); }
+  function openEdit(pt) { setEditing(pt); setForm({ name: pt.name || "", org: pt.org || "", phone: pt.phone || "", email: pt.email || "", role: pt.role || "", memo: pt.memo || "" }); setShowForm(true); }
+
+  async function save() {
+    if (!form.name.trim()) { alert("이름/직함을 입력해주세요."); return; }
+    if (editing) {
+      var r = await supabase.from("partners").update(form).eq("id", editing.id);
+      if (r.error) { alert("저장 실패: " + r.error.message); return; }
+    } else {
+      var r2 = await supabase.from("partners").insert(form);
+      if (r2.error) { alert("저장 실패: " + r2.error.message); return; }
+    }
+    setShowForm(false);
+    fetchPartners();
+  }
+  async function remove(id) {
+    if (!confirm("이 담당자를 삭제할까요?")) return;
+    await supabase.from("partners").delete().eq("id", id);
+    fetchPartners();
+  }
+
+  var filtered = partners.filter(function(pt) {
+    if (!search.trim()) return true;
+    var q = search.toLowerCase();
+    return [pt.name, pt.org, pt.role, pt.phone, pt.email, pt.memo].some(function(v) { return (v || "").toLowerCase().indexOf(q) >= 0; });
+  });
+
+  var thStyle = { padding: "10px 12px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left", background: "#F7F6F3", whiteSpace: "nowrap" };
+  var tdStyle = { padding: "11px 12px", fontSize: 13, color: "#333", borderBottom: "1px solid #F0EFEA", verticalAlign: "top" };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, gap: 10, flexWrap: "wrap" }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>협업 담당자</h1>
+          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>회계사 · 법무사 · 세무사 등 외부 협업 파트너 연락처</p>
+        </div>
+        <button onClick={openNew} style={{ background: "#534AB7", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>+ 담당자 추가</button>
+      </div>
+
+      <input value={search} onChange={function(e) { setSearch(e.target.value); }} placeholder="이름 · 소속 · 업무 검색"
+        style={{ width: "100%", maxWidth: 340, padding: "9px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none", marginBottom: 16 }} />
+
+      {loading ? (
+        <div style={{ padding: 40, textAlign: "center", color: "#888" }}>불러오는 중...</div>
+      ) : filtered.length === 0 ? (
+        <div style={{ padding: 40, textAlign: "center", color: "#BBB", background: "#FAFAF8", borderRadius: 10 }}>{partners.length === 0 ? "아직 등록된 협업 담당자가 없어요. [+ 담당자 추가]를 눌러보세요." : "검색 결과가 없어요."}</div>
+      ) : (
+        <div style={{ overflowX: "auto", border: "1px solid #EEE", borderRadius: 10 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
+            <thead>
+              <tr>
+                <th style={thStyle}>이름 / 직함</th>
+                <th style={thStyle}>소속</th>
+                <th style={thStyle}>연락처</th>
+                <th style={thStyle}>이메일</th>
+                <th style={thStyle}>주요 업무</th>
+                <th style={Object.assign({}, thStyle, { textAlign: "center" })}>소개 업체</th>
+                <th style={thStyle}>비고</th>
+                <th style={Object.assign({}, thStyle, { textAlign: "center", width: 90 })}>관리</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(function(pt) {
+                var intros = introByRef[pt.name] || [];
+                var isExpanded = expandedId === pt.id;
+                return (
+                  <Fragment key={pt.id}>
+                  <tr>
+                    <td style={Object.assign({}, tdStyle, { fontWeight: 700 })}>{pt.name}</td>
+                    <td style={tdStyle}>{pt.org || "-"}</td>
+                    <td style={tdStyle}>{pt.phone ? <a href={"tel:" + pt.phone} style={{ color: "#0369A1", textDecoration: "none" }}>{pt.phone}</a> : "-"}</td>
+                    <td style={tdStyle}>{pt.email ? <a href={"mailto:" + pt.email} style={{ color: "#0369A1", textDecoration: "none" }}>{pt.email}</a> : "-"}</td>
+                    <td style={tdStyle}>{pt.role || "-"}</td>
+                    <td style={Object.assign({}, tdStyle, { textAlign: "center" })}>
+                      {intros.length > 0 ? (
+                        <button onClick={function() { setExpandedId(isExpanded ? null : pt.id); }} style={{ background: "#EEF2FF", color: "#4338CA", border: "none", borderRadius: 99, padding: "3px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{intros.length}건 {isExpanded ? "▲" : "▼"}</button>
+                      ) : <span style={{ fontSize: 12, color: "#CCC" }}>-</span>}
+                    </td>
+                    <td style={Object.assign({}, tdStyle, { color: "#888", fontSize: 12, whiteSpace: "pre-wrap" })}>{pt.memo || "-"}</td>
+                    <td style={Object.assign({}, tdStyle, { textAlign: "center", whiteSpace: "nowrap" })}>
+                      <button onClick={function() { openEdit(pt); }} style={{ background: "none", border: "1px solid #E8E5E0", borderRadius: 6, padding: "4px 8px", fontSize: 11, cursor: "pointer", marginRight: 4 }}>수정</button>
+                      <button onClick={function() { remove(pt.id); }} style={{ background: "none", border: "1px solid #F0D0D0", borderRadius: 6, padding: "4px 8px", fontSize: 11, color: "#DC2626", cursor: "pointer" }}>삭제</button>
+                    </td>
+                  </tr>
+                  {isExpanded && intros.length > 0 && (
+                    <tr>
+                      <td colSpan={8} style={{ padding: "10px 16px", background: "#F7F8FC", borderBottom: "1px solid #E8E5E0" }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#4338CA", marginBottom: 6 }}>{pt.name} 님이 소개한 업체 ({intros.length}건)</div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {intros.map(function(c) {
+                            return <span key={c.id} style={{ fontSize: 12, background: "#fff", border: "1px solid #E0E0EA", borderRadius: 6, padding: "4px 10px", color: "#333" }}>{c.name}{c.stage ? <span style={{ color: "#999", marginLeft: 5 }}>· {c.stage}</span> : ""}</span>;
+                          })}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {showForm && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div onClick={function(e) { e.stopPropagation(); }} style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 460, maxHeight: "90vh", overflowY: "auto", padding: 24 }}>
+            <h2 style={{ margin: "0 0 18px", fontSize: 17, fontWeight: 700 }}>{editing ? "담당자 수정" : "협업 담당자 추가"}</h2>
+            {[
+              { k: "name", label: "이름 / 직함", ph: "예: 회계사 양용석", req: true },
+              { k: "org", label: "소속", ph: "예: 안세회계법인" },
+              { k: "phone", label: "연락처", ph: "예: 010-1234-5678" },
+              { k: "email", label: "이메일", ph: "예: name@example.com" },
+              { k: "role", label: "주요 업무", ph: "예: 법인 세무·기장·결산" },
+            ].map(function(f) {
+              return (
+                <div key={f.k} style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, color: "#888", marginBottom: 5, fontWeight: 600 }}>{f.label}{f.req && <span style={{ color: "#DC2626" }}> *</span>}</div>
+                  <input value={form[f.k]} onChange={function(e) { var v = e.target.value; setForm(function(p) { return Object.assign({}, p, { [f.k]: v }); }); }}
+                    placeholder={f.ph} style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 14, boxSizing: "border-box", outline: "none" }} />
+                </div>
+              );
+            })}
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontSize: 12, color: "#888", marginBottom: 5, fontWeight: 600 }}>비고</div>
+              <textarea value={form.memo} onChange={function(e) { var v = e.target.value; setForm(function(p) { return Object.assign({}, p, { memo: v }); }); }}
+                placeholder="수수료 조건, 협업 이력 등 자유 메모" style={{ width: "100%", minHeight: 60, padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 14, boxSizing: "border-box", outline: "none", resize: "vertical", fontFamily: "inherit" }} />
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={save} style={{ flex: 1, background: "#534AB7", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>{editing ? "저장" : "추가"}</button>
+              <button onClick={function() { setShowForm(false); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "12px 18px", fontSize: 14, cursor: "pointer" }}>취소</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── 연차/휴가 관리 ────────────────────────────────────────────────────────────
 function LeaveView({ profile, profiles }) {
   const myName = (profile && profile.name) || "";
@@ -8018,7 +8231,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   // 컬럼 너비 - 기관 그룹별로 localStorage에 저장
   const DEFAULT_COL_WIDTHS = {
     num: 40, business_name: 160, representative: 80, assignee: 80, amount: 70,
-    product: 140, industry: 70, region: 80, contact: 130, status: 110, docs: 200,
+    product: 140, industry: 70, region: 80, contact: 130, status: 110, dup: 56, docs: 200,
     credit: 60, notes: 140, action: 120
   };
   const [colWidths, setColWidths] = useState(function() {
@@ -8144,6 +8357,30 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     if (jumpToMonth) setActiveMonth(Number(jumpToMonth));
     if (jumpToGroup) setActiveGroup(jumpToGroup);
   }, [jumpToMonth, jumpToGroup]);
+
+  // 중복 사업장 판단: 같은 기관(activeGroup) 안에서 사업자명+대표자명이 같으면 중복
+  // (신보에도 있고 기보에도 있는 건 협업이라 중복 아님. 한 기관 안 중복 등록만 잡음)
+  const dupKeys = useMemo(function() {
+    var counts = {};
+    (cases || []).forEach(function(c) {
+      var bn = (c.business_name || "").trim();
+      var rep = (c.representative || "").trim();
+      var grp = c.agency_group || c.group || "";
+      if (!bn || !rep) return;
+      var key = grp + "||" + bn + "|" + rep;
+      counts[key] = (counts[key] || 0) + 1;
+    });
+    var dups = {};
+    Object.keys(counts).forEach(function(k) { if (counts[k] >= 2) dups[k] = counts[k]; });
+    return dups;
+  }, [cases]);
+  function isDupRow(c) {
+    var bn = (c.business_name || "").trim();
+    var rep = (c.representative || "").trim();
+    var grp = c.agency_group || c.group || "";
+    if (!bn || !rep) return 0;
+    return dupKeys[grp + "||" + bn + "|" + rep] || 0;
+  }
 
   var STATUS_GROUPS = {
     approved: ["승인","약정"],
@@ -8608,6 +8845,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                   <th style={headerCellStyle("contact", { color: "#0369A1" })}>📞 연락처<ResizeHandle colKey="contact" /></th>
                 )}
                 <th style={headerCellStyle("status", { color: activeGroup === "구조혁신&사업전환" ? "#BE123C" : "#888" })}>상태<ResizeHandle colKey="status" /></th>
+                <th style={headerCellStyle("dup", { textAlign: "center" })}>중복<ResizeHandle colKey="dup" /></th>
                 {activeGroup === "구조혁신&사업전환" && (
                   <th style={headerCellStyle("docs", { color: "#0F6E56", background: "#E1F5EE" })}>전달 및 완료 서류<ResizeHandle colKey="docs" /></th>
                 )}
@@ -8791,6 +9029,13 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                               </span>
                             );
                           })()}
+                    </td>
+                    <td style={{ padding: "10px 12px", textAlign: "center" }}>
+                      {(function() {
+                        var cnt = isDupRow(row);
+                        if (!cnt) return null;
+                        return <span title={"같은 사업장(사업자명+대표자명)이 총 " + cnt + "건 등록됨"} style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", whiteSpace: "nowrap" }}>중복</span>;
+                      })()}
                     </td>
                     {activeGroup === "구조혁신&사업전환" && (
                       <td style={{ padding: "10px 12px" }}>
