@@ -476,11 +476,12 @@ async function parseHyeonhwangpyo(file) {
   addInfo("26년 현재/예상 매출", getCell(11, 2));
   addInfo("법인 자본금", getCell(11, 8));
   addInfo("회생 및 파산 이력", getCell(8, 8));
-  addInfo("폐업 이력", getCell(15, 2));
+  addInfo("재창업 조건 (폐업이력)", getCell(15, 2));
   addInfo("기업인증", [getCell(13, 10), getCell(14, 8), getCell(15, 8)].filter(function(x) { return x && x !== "노란우산공제, 제로페이" && x !== "내일채움"; }).join(", "));
-  addInfo("특허/상표/디자인", getCell(14, 6));
-  addInfo("연구소/전담부서", getCell(14, 2));
+  addInfo("특허 및 상표권", getCell(14, 6));
+  addInfo("연구소", getCell(14, 2));
   addInfo("수출실적", getCell(13, 2));
+  addInfo("노란우산공제", getCell(14, 10));
   addInfo("세금/금융 연체", getCell(13, 6));
   addInfo("추가 사업자 여부", getCell(8, 2));
   addInfo("주요취급품목", getCell(7, 2));
@@ -1028,6 +1029,7 @@ function CRMApp({ profile, session }) {
     if (Array.isArray(rest.loans)) updateObj.loans = rest.loans;
     if (Array.isArray(rest.company_info)) updateObj.company_info = rest.company_info;
     if (rest.company_info_memo !== undefined && rest.company_info_memo !== null) updateObj.company_info_memo = rest.company_info_memo;
+    if (rest.doc_request_dates && typeof rest.doc_request_dates === "object") updateObj.doc_request_dates = rest.doc_request_dates;
     const { error } = await supabase.from("companies").update(updateObj).eq("id", rest.id);
     if (!error) {
       // 🆕 stage가 "부결/반려"로 새로 바뀌면 → 사례집 자동 초안 생성
@@ -1843,7 +1845,20 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         var stagnant14 = companies.filter(function(c) { return c.stagnant_days >= 14; });
         var stagnant7 = companies.filter(function(c) { return c.stagnant_days >= 7 && c.stagnant_days < 14; });
         var weekContracts = companies.filter(function(c) { return c.contract_date && c.contract_date > today && c.contract_date <= weekLater; });
-        var totalCount = todayItems.length + tomorrowItems.length + overdue.length + stagnant14.length + stagnant7.length + weekContracts.length;
+        // 서류 요청 지연: 요청한 지 3일 넘고 아직 수령 안 된 서류
+        var overdueDocs = [];
+        (companies || []).forEach(function(c) {
+          var dates = c.doc_request_dates;
+          if (!dates || typeof dates !== "object") return;
+          var recv = (c.received_docs || "").split(",").map(function(s) { return s.trim(); });
+          Object.keys(dates).forEach(function(doc) {
+            if (recv.indexOf(doc) >= 0) return;
+            var dd = Math.floor((new Date().setHours(0,0,0,0) - new Date(dates[doc]).setHours(0,0,0,0)) / 86400000);
+            if (dd >= 3) overdueDocs.push({ company: c, doc: doc, days: dd });
+          });
+        });
+        overdueDocs.sort(function(a, b) { return b.days - a.days; });
+        var totalCount = todayItems.length + tomorrowItems.length + overdue.length + stagnant14.length + stagnant7.length + weekContracts.length + overdueDocs.length;
         // 내 할일 위젯은 별도로 항상 표시 (work_notes 기반)
         var showCompaniesWidget = totalCount > 0;
         return (
@@ -1909,7 +1924,32 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
                   <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>7일 내 계약 예정</div>
                 </div>
               )}
+              {overdueDocs.length > 0 && (
+                <div style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", borderLeft: "3px solid #DC2626" }}>
+                  <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 700, marginBottom: 4 }}>📮 서류 요청 지연</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "#DC2626" }}>{overdueDocs.length}건</div>
+                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>요청 3일+ 미수령</div>
+                </div>
+              )}
             </div>
+            {/* 서류 요청 지연 상세 목록 */}
+            {overdueDocs.length > 0 && (
+              <div style={{ marginTop: 14, background: "#fff", borderRadius: 10, padding: "12px 16px", border: "1px solid #FECACA" }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#DC2626", marginBottom: 8 }}>📮 요청했는데 아직 못 받은 서류 ({overdueDocs.length}건)</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                  {overdueDocs.slice(0, 12).map(function(od, i) {
+                    return (
+                      <div key={i} onClick={function() { onSelectCompany(od.company); }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: od.days >= 7 ? "#FEF2F2" : "#FFFBEB", borderRadius: 7, cursor: "pointer", fontSize: 12.5 }}>
+                        <span style={{ fontWeight: 700, color: "#DC2626", minWidth: 44 }}>{od.days}일째</span>
+                        <span style={{ fontWeight: 600, flex: "0 0 auto" }}>{od.company.name}</span>
+                        <span style={{ color: "#888" }}>— {od.doc}</span>
+                      </div>
+                    );
+                  })}
+                  {overdueDocs.length > 12 && <div style={{ fontSize: 11, color: "#999", textAlign: "center", paddingTop: 4 }}>외 {overdueDocs.length - 12}건 더</div>}
+                </div>
+              </div>
+            )}
           </div>
         );
       })()}
@@ -3808,14 +3848,23 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               {(function() {
                 var reqList = (data.requested_docs || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
                 var recList = (data.received_docs || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+                var reqDates = (data.doc_request_dates && typeof data.doc_request_dates === "object") ? data.doc_request_dates : {};
                 var docStatus = function(doc) { if (recList.indexOf(doc) >= 0) return "received"; if (reqList.indexOf(doc) >= 0) return "requested"; return "none"; };
                 var cycleDoc = function(doc) {
                   var st = docStatus(doc);
                   var nReq = reqList.slice(), nRec = recList.slice();
-                  if (st === "none") { nReq.push(doc); }
-                  else if (st === "requested") { nReq = nReq.filter(function(d) { return d !== doc; }); nRec.push(doc); }
-                  else { nRec = nRec.filter(function(d) { return d !== doc; }); }
-                  setData(function(p) { return Object.assign({}, p, { requested_docs: nReq.join(", "), received_docs: nRec.join(", ") }); });
+                  var nDates = Object.assign({}, reqDates);
+                  if (st === "none") {
+                    nReq.push(doc);
+                    var t = new Date(); nDates[doc] = t.getFullYear() + "-" + String(t.getMonth() + 1).padStart(2, "0") + "-" + String(t.getDate()).padStart(2, "0"); // 요청한 오늘 날짜 기록
+                  } else if (st === "requested") {
+                    nReq = nReq.filter(function(d) { return d !== doc; }); nRec.push(doc);
+                    delete nDates[doc]; // 수령완료되면 날짜 제거
+                  } else {
+                    nRec = nRec.filter(function(d) { return d !== doc; });
+                    delete nDates[doc];
+                  }
+                  setData(function(p) { return Object.assign({}, p, { requested_docs: nReq.join(", "), received_docs: nRec.join(", "), doc_request_dates: nDates }); });
                 };
                 var noneList = DOC_LIST.filter(function(d) { return docStatus(d) === "none"; });
                 var reqedList = DOC_LIST.filter(function(d) { return docStatus(d) === "requested"; });
@@ -3840,7 +3889,14 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                       <div style={{ fontSize: 11, color: "#B45309", marginBottom: 8, fontWeight: 700 }}>📤 요청함 — 요청했으나 아직 못 받은 서류 (클릭 → 수령완료) · {reqedList.length}개</div>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                         {reqedList.map(function(doc) {
-                          return <button key={doc} onClick={function() { cycleDoc(doc); }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: "1px solid #FBBF24", background: "#FEF3C7", color: "#B45309", cursor: "pointer", fontWeight: 600 }}>⏳ {doc}</button>;
+                          var reqDate = reqDates[doc];
+                          var days = null;
+                          if (reqDate) {
+                            var diff = Math.floor((new Date().setHours(0,0,0,0) - new Date(reqDate).setHours(0,0,0,0)) / 86400000);
+                            days = diff;
+                          }
+                          var overdue = days !== null && days >= 3;
+                          return <button key={doc} onClick={function() { cycleDoc(doc); }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: overdue ? "1px solid #DC2626" : "1px solid #FBBF24", background: overdue ? "#FEE2E2" : "#FEF3C7", color: overdue ? "#DC2626" : "#B45309", cursor: "pointer", fontWeight: 600 }}>{overdue ? "🔴" : "⏳"} {doc}{days !== null ? " (" + (days === 0 ? "오늘" : days + "일째") + ")" : ""}</button>;
                         })}
                         {reqedList.length === 0 && <span style={{ fontSize: 11, color: "#BBB" }}>요청 대기 중인 서류가 없어요</span>}
                       </div>
