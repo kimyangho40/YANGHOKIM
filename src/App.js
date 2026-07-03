@@ -8473,14 +8473,16 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
 
   // 중복 사업장 판단: 같은 기관(activeGroup) 안에서 사업자명+대표자명이 같으면 중복
   // (신보에도 있고 기보에도 있는 건 협업이라 중복 아님. 한 기관 안 중복 등록만 잡음)
+  // 중복: 같은 기관 + 같은 업체(사업자명+대표자명) + 같은 월에 2건 이상일 때만 (전월 탈락→다음달 재신청은 중복 아님)
   const dupKeys = useMemo(function() {
     var counts = {};
     (cases || []).forEach(function(c) {
       var bn = (c.business_name || "").trim();
       var rep = (c.representative || "").trim();
       var grp = c.agency_group || c.group || "";
+      var mon = c.month != null ? String(c.month) : "";
       if (!bn || !rep) return;
-      var key = grp + "||" + bn + "|" + rep;
+      var key = grp + "||" + bn + "|" + rep + "||" + mon;
       counts[key] = (counts[key] || 0) + 1;
     });
     var dups = {};
@@ -8491,8 +8493,9 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     var bn = (c.business_name || "").trim();
     var rep = (c.representative || "").trim();
     var grp = c.agency_group || c.group || "";
+    var mon = c.month != null ? String(c.month) : "";
     if (!bn || !rep) return 0;
-    return dupKeys[grp + "||" + bn + "|" + rep] || 0;
+    return dupKeys[grp + "||" + bn + "|" + rep + "||" + mon] || 0;
   }
 
   var STATUS_GROUPS = {
@@ -8510,7 +8513,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   };
 
   var filtered = useMemo(function() {
-    return cases.filter(function(c) {
+    var list = cases.filter(function(c) {
       var matchMonth = activeMonth === "all" ? true : Number(c.month) === Number(activeMonth);
       var matchStatus = statusFilter === "all" ? true : groupOf(c.status) === statusFilter;
       return c.agency_group === activeGroup
@@ -8519,8 +8522,25 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         && !c.deleted_at
         && (filterAssignee.length === 0 || filterAssignee.some(function(n) { return (c.assignee || "").split(",").map(function(x) { return x.trim(); }).includes(n); }))
         && matchStatus;
-    }).sort(function(a, b) {
-      // sort_order 우선, 없으면 created_at 순
+    });
+    // "전체"일 때: 같은 업체(기관+사업자명+대표자명)가 여러 달에 있으면 가장 최근 월만 표시
+    if (activeMonth === "all") {
+      var latest = {};
+      list.forEach(function(c) {
+        var bn = (c.business_name || "").trim(), rep = (c.representative || "").trim(), grp = c.agency_group || "";
+        if (!bn || !rep) return;
+        var k = grp + "|" + bn + "|" + rep;
+        var m = Number(c.month) || 0;
+        if (latest[k] == null || m > latest[k]) latest[k] = m;
+      });
+      list = list.filter(function(c) {
+        var bn = (c.business_name || "").trim(), rep = (c.representative || "").trim(), grp = c.agency_group || "";
+        if (!bn || !rep) return true;
+        var k = grp + "|" + bn + "|" + rep;
+        return Number(c.month) === latest[k];
+      });
+    }
+    return list.sort(function(a, b) {
       var aOrder = a.sort_order != null ? a.sort_order : null;
       var bOrder = b.sort_order != null ? b.sort_order : null;
       if (aOrder != null && bOrder != null) return aOrder - bOrder;
