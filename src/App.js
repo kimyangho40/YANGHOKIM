@@ -121,6 +121,15 @@ const AGENCY_GROUPS = [
   { id: "경정청구", label: "경정청구", color: "#0369A1" },
   { id: "기타", label: "기타", color: "#555" },
 ];
+// 기업목록 기관별 필터: 짧은 라벨 → company.agency에 들어올 수 있는 전체 명칭 집합
+const AGENCY_FILTER_OPTS = ["전체", "소진공", "중진공", "신보", "기보", "재단"];
+const AGENCY_FILTER_MAP = {
+  "소진공": ["소상공인시장진흥공단"],
+  "중진공": ["중소벤처기업진흥공단", "구조혁신&사업전환"],
+  "신보": ["신용보증기금"],
+  "기보": ["기술보증기금"],
+  "재단": ["신용보증재단", "서민금융진흥원"], // 서민금융진흥원→재단 (AGENCY_MAP과 동일)
+};
 const DOC_LIST = ["사업자등록증","최근 3년치 재무제표 (23년~25년)","최근 3년치 부가세 증명원 (23년~25년)","법인 기업 금융거래 확인서","대표자 신용점수","4대보험 명부","월별 고용보험 가입자 명부","그 외 사업전환 필수 서류","최근 1년 수출실적 증명서","사업자 대출 금융거래 확인서","대표자 신분증","임대차 계약서","회사 소개서 또는 사업계획서","2026년 상반기 부가세 증명원","대표자 개인 대출 금융거래 확인서","직전연도 상시근로자 수 파악","기업 인증 자료 (벤처·이노비즈·연구전담 부서 등)","특허 및 상표권 관련 자료"];
 const TEAMS = ["법인전담","개인전담","관리자"];
 const ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일","양호"];
@@ -778,6 +787,7 @@ function CRMApp({ profile, session }) {
   const [filterStage, setFilterStage] = useState("전체");
   const [filterAssignee, setFilterAssignee] = useState("전체");
   const [filterType, setFilterType] = useState("전체");
+  const [filterAgency, setFilterAgency] = useState("전체");
   const [creditFilter, setCreditFilter] = useState("");
   const [creditMode, setCreditMode] = useState("below");
   const [toast, setToast] = useState(null);
@@ -940,6 +950,11 @@ function CRMApp({ profile, session }) {
     const matchStage = filterStage === "전체" || c.stage === filterStage;
     const matchAssignee = filterAssignee === "전체" || (c.assignee || "").split(",").map(function(x) { return x.trim(); }).includes(filterAssignee);
     const matchType = filterType === "전체" || c.type === filterType;
+    const matchAgency = filterAgency === "전체" || (function() {
+      const want = AGENCY_FILTER_MAP[filterAgency] || [];
+      const has = (c.agency || "").split(",").map(function(x) { return x.trim(); }).filter(Boolean);
+      return has.some(function(a) { return want.includes(a); });
+    })();
     let matchCredit = true;
     if (creditFilter !== "" && !isNaN(parseInt(creditFilter))) {
       const n = parseInt(creditFilter);
@@ -947,8 +962,8 @@ function CRMApp({ profile, session }) {
       if (kcb == null) matchCredit = false;
       else matchCredit = creditMode === "below" ? kcb < n : kcb >= n;
     }
-    return matchSearch && matchStage && matchAssignee && matchType && matchCredit;
-  }), [companies, search, filterStage, filterAssignee, filterType, creditFilter, creditMode]);
+    return matchSearch && matchStage && matchAssignee && matchType && matchAgency && matchCredit;
+  }), [companies, search, filterStage, filterAssignee, filterType, filterAgency, creditFilter, creditMode]);
 
   const stagnant = companies.filter(c => c.stagnant_days >= 7);
   const assignees = ["전체", ...new Set(profiles.map(p => p.name))];
@@ -1611,7 +1626,7 @@ function CRMApp({ profile, session }) {
             {view === "pipeline" && <PipelineView filtered={filtered} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setCompanies={setCompanies} />}
             {view === "cases" && <ApprovalCasesView profile={profile} />}
             {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={profile?.role === "admin" || profile?.name === "양호"} onSelectCompany={setSelectedCompany} setView={setView} companies={companies} />}
-            {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} creditFilter={creditFilter} setCreditFilter={setCreditFilter} creditMode={creditMode} setCreditMode={setCreditMode} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} />}
+            {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} filterAgency={filterAgency} setFilterAgency={setFilterAgency} creditFilter={creditFilter} setCreditFilter={setCreditFilter} creditMode={creditMode} setCreditMode={setCreditMode} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} />}
             {view === "stagnant" && <StagnantView stagnant={stagnant} onSelect={setSelectedCompany} />}
             {view === "members" && profile.role === "admin" && <MembersView profiles={profiles} onRefresh={fetchAll} showToast={showToast} />}
           </>
@@ -2761,7 +2776,7 @@ function IndustryCell({ co, setCompanies, companies }) {
   );
 }
 
-function ListView({ filtered, companies, search, setSearch, filterStage, setFilterStage, filterAssignee, setFilterAssignee, filterType, setFilterType, creditFilter, setCreditFilter, creditMode, setCreditMode, assignees, onSelect, onAdd, setCompanies, showToast, dashboardFilter, setDashboardFilter }) {
+function ListView({ filtered, companies, search, setSearch, filterStage, setFilterStage, filterAssignee, setFilterAssignee, filterType, setFilterType, filterAgency, setFilterAgency, creditFilter, setCreditFilter, creditMode, setCreditMode, assignees, onSelect, onAdd, setCompanies, showToast, dashboardFilter, setDashboardFilter }) {
   const [showCompanyTrash, setShowCompanyTrash] = useState(false);
   const [trashedCompanies, setTrashedCompanies] = useState([]);
 
@@ -2965,14 +2980,15 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
           { v: filterStage, set: setFilterStage, opts: ["전체", ...STAGES] },
           { v: filterAssignee, set: setFilterAssignee, opts: assignees },
           { v: filterType, set: setFilterType, opts: ["전체", "법인", "개인"] },
+          { v: filterAgency, set: setFilterAgency, opts: AGENCY_FILTER_OPTS },
         ].map(({ v, set, opts }, i) => (
           <select key={i} value={v} onChange={e => set(e.target.value)}
             style={{ padding: "8px 10px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 13, background: "#fff", cursor: "pointer" }}>
             {opts.map(o => <option key={o}>{o}</option>)}
           </select>
         ))}
-        {(search || filterStage !== "전체" || filterAssignee !== "전체" || filterType !== "전체") && (
-          <button onClick={() => { setSearch(""); setFilterStage("전체"); setFilterAssignee([]); setFilterType("전체"); }}
+        {(search || filterStage !== "전체" || filterAssignee !== "전체" || filterType !== "전체" || filterAgency !== "전체") && (
+          <button onClick={() => { setSearch(""); setFilterStage("전체"); setFilterAssignee([]); setFilterType("전체"); setFilterAgency("전체"); }}
             style={{ fontSize: 12, color: "#888", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>초기화</button>
         )}
       </div>
