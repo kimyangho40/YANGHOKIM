@@ -996,7 +996,7 @@ function CRMApp({ profile, session }) {
       agency: rest.agency, received_docs: rest.received_docs, requested_docs: rest.requested_docs, last_contact: rest.last_contact,
       next_contact: rest.next_contact, call_count: rest.call_count,
       fee: rest.fee, fee_status: rest.fee_status,
-      revenue_2023: rest.revenue_2023, revenue_2024: rest.revenue_2024, revenue_2025: rest.revenue_2025,
+      revenue_2023: rest.revenue_2023, revenue_2024: rest.revenue_2024, revenue_2025: rest.revenue_2025, revenue_2026_h1: rest.revenue_2026_h1,
       issue: rest.issue, next_action: rest.next_action,
       employee_count: rest.employee_count,
       credit_score: rest.credit_score,
@@ -1237,6 +1237,7 @@ function CRMApp({ profile, session }) {
     if (form.revenue_2023) insertData.revenue_2023 = parseInt(form.revenue_2023) || null;
     if (form.revenue_2024) insertData.revenue_2024 = parseInt(form.revenue_2024) || null;
     if (form.revenue_2025) insertData.revenue_2025 = parseInt(form.revenue_2025) || null;
+    if (form.revenue_2026_h1) insertData.revenue_2026_h1 = parseInt(form.revenue_2026_h1) || null;
     // 빠른 등록에서 agency_list(배열)와 agency 처리
     if (Array.isArray(form.agency_list) && form.agency_list.length > 0) {
       insertData.agency = form.agency_list.join(", ");
@@ -2762,8 +2763,8 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
   // 컬럼 너비 수동 조절 (헤더 경계 드래그) - 브라우저(localStorage)에 자동 저장
   const DEFAULT_LIST_COL_WIDTHS = {
     "업체명": 130, "유형": 80, "지역": 90, "업종": 120, "대표자": 80, "담당": 60,
-    "진행단계": 130, "중복": 56, "정체일수": 70, "신청기관": 150, "계약일": 90, "진행기관": 140,
-    "23년~25년 매출": 160, "신용점수": 90, "기타": 140, "작업": 110
+    "진행단계": 175, "중복": 56, "정체일수": 70, "신청기관": 150, "계약일": 90, "진행기관": 140,
+    "23년~25년 매출": 160, "26년 상반기 매출": 120, "신용점수": 90, "기타": 140, "작업": 110
   };
   const [listColWidths, setListColWidths] = useState(function() {
     try {
@@ -2808,6 +2809,22 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
     "소상공인시장진흥공단": "소진공", "중소벤처기업진흥공단": "중진공", "신용보증기금": "신보",
     "기술보증기금": "기보", "신용보증재단": "재단", "구조혁신&사업전환": "구조혁신",
     "경정청구": "경정청구", "기타": "기타",
+  };
+  // 마스터 상태: 한 업체가 여러 기관에서 각각 다른 단계일 때 종합해 하나로 표시
+  var DONE_STATUSES = ["승인", "약정", "완료"];
+  var REJECT_STATUSES = ["부결", "반려", "신청취소", "진행불가", "신청못함", "중단"];
+  var masterStatus = function(businessName) {
+    var cases = agencyByName[businessName] || [];
+    if (cases.length === 0) return null; // 기관 케이스 없으면 기존 stage 사용
+    var total = cases.length;
+    var done = cases.filter(function(c) { return DONE_STATUSES.indexOf(c.status) >= 0; }).length;
+    var reject = cases.filter(function(c) { return REJECT_STATUSES.indexOf(c.status) >= 0; }).length;
+    var active = total - done - reject; // 진행중(접수·심사 등)
+    if (done > 0 && done === total) return { label: "완료", bg: "#DCFCE7", text: "#15803D" };
+    if (done > 0) return { label: "일부승인", bg: "#D1FAE5", text: "#047857" };
+    if (active > 0) return { label: "진행중", bg: "#EDE9FE", text: "#6D28D9" };
+    if (reject > 0 && reject === total) return { label: "부결", bg: "#FEE2E2", text: "#DC2626" };
+    return { label: "진행중", bg: "#EDE9FE", text: "#6D28D9" };
   };
   var agencyStatusColor = function(status) {
     if (["부결","반려","신청취소","진행불가","신청못함","중단"].indexOf(status) >= 0) return { bg: "#FEE2E2", text: "#DC2626" };
@@ -2939,7 +2956,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1200, tableLayout: "fixed" }}>
           <thead>
             <tr style={{ background: "#F7F6F3", borderBottom: "1px solid #E8E5E0", position: "sticky", top: 0, zIndex: 2 }}>
-              {["업체명","유형","지역","업종","대표자","담당","진행단계","중복","정체일수","신청기관","계약일","진행기관","23년~25년 매출","신용점수","기타","작업"].map(h => (
+              {["업체명","유형","지역","업종","대표자","담당","진행단계","중복","정체일수","신청기관","계약일","진행기관","23년~25년 매출","26년 상반기 매출","신용점수","기타","작업"].map(h => (
                 <th key={h} style={Object.assign({ padding: "10px 8px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left", letterSpacing: "0.03em", whiteSpace: "nowrap", background: "#F7F6F3", position: "relative", boxSizing: "border-box", width: listColWidths[h], minWidth: listColWidths[h], maxWidth: listColWidths[h] },
                   h === "업체명" ? { position: "sticky", left: 0, zIndex: 3, boxShadow: "2px 0 4px -2px rgba(0,0,0,0.08)" } : {}
                 )}>{h}
@@ -3009,7 +3026,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                   </td>
                   <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis" }}>{co.representative || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 12, whiteSpace: "nowrap" }}>{co.assignee || "-"}</td>
-                  <td style={{ padding: "11px 13px", whiteSpace: "nowrap" }}><span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, fontWeight: 600 }}>{co.stage}</span></td>
+                  <td style={{ padding: "11px 13px", whiteSpace: "nowrap" }}><span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, fontWeight: 600 }}>{co.stage}</span>{(function(){ var ms = masterStatus(co.name); return ms ? <span style={{ display: "inline-block", marginLeft: 4, fontSize: 9, padding: "3px 7px", borderRadius: 99, background: ms.bg, color: ms.text, fontWeight: 700 }} title="여러 기관 종합 상태">{ms.label}</span> : null; })()}</td>
                   <td style={{ padding: "11px 13px", textAlign: "center" }}>{(function() { var cnt = isListDup(co); return cnt ? <span title={"같은 사업장이 총 " + cnt + "건 등록됨"} style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", whiteSpace: "nowrap" }}>중복</span> : null; })()}</td>
                   <td style={{ padding: "11px 13px", whiteSpace: "nowrap", textAlign: "center" }}>{(function() { var d = co.stagnant_days || 0; if (d >= 14) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", fontWeight: 700 }}>⚠ {d}일</span>; if (d >= 7) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEF3C7", color: "#B45309", fontWeight: 700 }}>{d}일</span>; return <span style={{ fontSize: 11, color: "#AAA" }}>{d}일</span>; })()}</td>
                   <td style={{ padding: "8px 8px", fontSize: 11, verticalAlign: "middle" }}>
@@ -3037,6 +3054,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                   <td style={{ padding: "11px 13px", fontSize: 12, color: "#555", whiteSpace: "nowrap" }}>{co.contract_date || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.agency || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", boxSizing: "border-box" }}>{[formatRevenue(co.revenue_2023), formatRevenue(co.revenue_2024), formatRevenue(co.revenue_2025)].filter(r=>r&&r!=="-").join(" / ") || "-"}</td>
+                  <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap" }}>{formatRevenue(co.revenue_2026_h1) || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap" }}>{(co.credit_score_kcb || co.credit_score_nice) ? ((co.credit_score_kcb || "-") + " / " + (co.credit_score_nice || "-")) : "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                     onClick={function(e) { e.stopPropagation(); }}
@@ -3251,7 +3269,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
       setKakaoLoading(false);
     }
   }
-  const FIELD_LABELS_X = { name: "업체명", representative: "대표자", phone: "연락처", region: "지역", industry: "업종", employee_count: "직원수", credit_score_kcb: "KCB점수", credit_score_nice: "NICE점수", founded_year: "설립연도", founded_month: "설립월", revenue_2025: "2025년 매출", revenue_2024: "2024년 매출", revenue_2023: "2023년 매출", business_number: "사업자번호", business_type: "사업자유형", type: "유형" };
+  const FIELD_LABELS_X = { name: "업체명", representative: "대표자", phone: "연락처", region: "지역", industry: "업종", employee_count: "직원수", credit_score_kcb: "KCB점수", credit_score_nice: "NICE점수", founded_year: "설립연도", founded_month: "설립월", revenue_2025: "2025년 매출", revenue_2024: "2024년 매출", revenue_2023: "2023년 매출", revenue_2026_h1: "2026년 상반기 매출", business_number: "사업자번호", business_type: "사업자유형", type: "유형" };
   async function handleXlsxAttach(file) {
     if (!file) return;
     try { var res = await parseHyeonhwangpyo(file); setXlsxPreview(res); }
@@ -3673,10 +3691,10 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 {data.assignee && <div style={{ fontSize: 11, color: "#555", marginTop: 8, fontWeight: 600 }}>선택: {data.assignee}</div>}
               </div>
               <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "13px 15px", marginBottom: 12 }}>
-                <div style={{ fontSize: 12, color: "#888", marginBottom: 4, fontWeight: 600 }}>최근 3개년 매출액</div>
+                <div style={{ fontSize: 12, color: "#888", marginBottom: 4, fontWeight: 600 }}>매출액 (최근 3개년 + 26년 상반기)</div>
                 <div style={{ fontSize: 10, color: "#AAA", marginBottom: 10 }}>원 단위로 입력 (예: 790000000 → 7.9억 자동 표시)</div>
                 <div style={{ display: "flex", gap: 8 }}>
-                  {[["2023년", "revenue_2023"], ["2024년", "revenue_2024"], ["2025년", "revenue_2025"]].map(([label, key]) => (
+                  {[["2023년", "revenue_2023"], ["2024년", "revenue_2024"], ["2025년", "revenue_2025"], ["26년 상반기", "revenue_2026_h1"]].map(([label, key]) => (
                     <div key={key} style={{ flex: 1, textAlign: "center", background: "#fff", borderRadius: 7, padding: "10px 8px" }}>
                       <div style={{ fontSize: 11, color: "#AAA", marginBottom: 4 }}>{label}</div>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#4338CA", marginBottom: 4 }}>{formatRevenue(data[key])}</div>
@@ -4384,6 +4402,7 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
     revenue_2023: "",
     revenue_2024: "",
     revenue_2025: "",
+    revenue_2026_h1: "",
     issue: "",
     next_action: "",
     application_month: "",
@@ -4540,12 +4559,12 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
           {/* 최근 3개년 매출액 */}
           <div style={Object.assign({ borderRadius: 8, padding: "13px 15px", marginBottom: 10 }, (autoFilled.revenue_2023 || autoFilled.revenue_2024 || autoFilled.revenue_2025) ? { background: "#ECFDF5", borderColor: "#86EFAC", borderWidth: 1, borderStyle: "solid" } : { background: "#F7F6F3" })}>
             <div style={{ fontSize: 12, color: "#888", marginBottom: 4, fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span>최근 3개년 매출액</span>
+              <span>매출액 (최근 3개년 + 26년 상반기)</span>
               {(autoFilled.revenue_2023 || autoFilled.revenue_2024 || autoFilled.revenue_2025) && <span style={{ color: "#15803D", fontSize: 10, fontWeight: 700 }}>✓ 자동</span>}
             </div>
             <div style={{ fontSize: 10, color: "#AAA", marginBottom: 10 }}>원 단위로 입력 (예: 790000000 → 7.9억 자동 표시)</div>
             <div style={{ display: "flex", gap: 8 }}>
-              {[["2023년", "revenue_2023"], ["2024년", "revenue_2024"], ["2025년", "revenue_2025"]].map(function(pair) {
+              {[["2023년", "revenue_2023"], ["2024년", "revenue_2024"], ["2025년", "revenue_2025"], ["26년 상반기", "revenue_2026_h1"]].map(function(pair) {
                 var label = pair[0]; var key = pair[1];
                 return (
                   <div key={key} style={{ flex: 1, textAlign: "center", background: "#fff", borderRadius: 7, padding: "10px 8px" }}>
@@ -6499,11 +6518,12 @@ function LeaveView({ profile, profiles }) {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [newReq, setNewReq] = useState({ type: "연차", start_date: "", end_date: "", reason: "" });
+  const [editId, setEditId] = useState(null);
   const [calMonth, setCalMonth] = useState(function() { var d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
 
   const LEAVE_TYPES = ["연차", "반차", "병가", "경조사"];
   const TYPE_COLORS = { "연차": { bg: "#E1F5EE", fg: "#0F6E56" }, "반차": { bg: "#FAEEDA", fg: "#854F0B" }, "병가": { bg: "#FCEBEB", fg: "#A32D2D" }, "경조사": { bg: "#EEEDFE", fg: "#534AB7" } };
-  const STATUS_COLORS = { "대기": { bg: "#FAEEDA", fg: "#854F0B" }, "승인": { bg: "#EAF3DE", fg: "#3B6D11" }, "반려": { bg: "#FCEBEB", fg: "#A32D2D" } };
+  const STATUS_COLORS = { "대기": { bg: "#FAEEDA", fg: "#854F0B" }, "승인": { bg: "#EAF3DE", fg: "#3B6D11" }, "반려": { bg: "#FCEBEB", fg: "#A32D2D" }, "취소": { bg: "#EFEFEF", fg: "#888888" } };
 
   function fetchRequests() {
     setLoading(true);
@@ -6538,6 +6558,18 @@ function LeaveView({ profile, profiles }) {
     if (!newReq.start_date) { alert("시작일을 입력해주세요."); return; }
     var end = newReq.type === "반차" ? newReq.start_date : (newReq.end_date || newReq.start_date);
     var days = calcDays(newReq.start_date, end, newReq.type);
+    if (editId) {
+      // 수정: 기존 신청을 다시 '대기' 상태로 (승인자 재확인 필요)
+      var u = await supabase.from("leave_requests").update({
+        type: newReq.type, start_date: newReq.start_date, end_date: end,
+        days: days, reason: newReq.reason, status: "대기", approved_by: null,
+      }).eq("id", editId);
+      if (u.error) { alert("수정 실패: " + u.error.message); return; }
+      setShowForm(false); setEditId(null);
+      setNewReq({ type: "연차", start_date: "", end_date: "", reason: "" });
+      fetchRequests();
+      return;
+    }
     var r = await supabase.from("leave_requests").insert({
       requester_name: myName, type: newReq.type,
       start_date: newReq.start_date, end_date: end,
@@ -6547,6 +6579,27 @@ function LeaveView({ profile, profiles }) {
     setShowForm(false);
     setNewReq({ type: "연차", start_date: "", end_date: "", reason: "" });
     fetchRequests();
+  }
+
+  // 수정 시작: 기존 신청 내용을 폼에 채워 모달 열기
+  function startEdit(r) {
+    setNewReq({ type: r.type, start_date: r.start_date, end_date: r.end_date === r.start_date ? "" : r.end_date, reason: r.reason || "" });
+    setEditId(r.id);
+    setShowForm(true);
+  }
+
+  // 신청 취소: 대기중이면 삭제, 승인됐으면 '취소' 상태로 (기록 남김)
+  async function cancelReq(r) {
+    if (r.status === "승인") {
+      if (!confirm("이미 승인된 휴가입니다. 취소하면 관리자에게 취소로 표시됩니다. 취소할까요?")) return;
+      var u = await supabase.from("leave_requests").update({ status: "취소" }).eq("id", r.id);
+      if (u.error) { alert("취소 실패: " + u.error.message); return; }
+      fetchRequests();
+    } else {
+      if (!confirm("이 신청을 취소(삭제)할까요?")) return;
+      await supabase.from("leave_requests").delete().eq("id", r.id);
+      fetchRequests();
+    }
   }
 
   async function decide(id, status) {
@@ -6600,9 +6653,12 @@ function LeaveView({ profile, profiles }) {
           </div>
         ) : (
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-            <span style={{ background: sc.bg, color: sc.fg, fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 6 }}>{r.status === "대기" ? "대기중" : r.status === "승인" ? "승인됨" : "반려됨"}</span>
+            <span style={{ background: sc.bg, color: sc.fg, fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 6 }}>{r.status === "대기" ? "대기중" : r.status === "승인" ? "승인됨" : r.status === "취소" ? "취소됨" : "반려됨"}</span>
             {r.requester_name === myName && r.status === "대기" && (
-              <button onClick={function() { deleteReq(r.id); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#CCC", padding: 2 }} title="신청 취소"><Icon name="x" size={13} color="#CCC" /></button>
+              <button onClick={function() { startEdit(r); }} style={{ background: "#fff", border: "0.5px solid #C7C3F0", borderRadius: 6, padding: "4px 10px", fontSize: 11, fontWeight: 600, color: "#534AB7", cursor: "pointer" }} title="신청 수정">수정</button>
+            )}
+            {r.requester_name === myName && (r.status === "대기" || r.status === "승인") && (
+              <button onClick={function() { cancelReq(r); }} style={{ background: "#fff", border: "0.5px solid #E8E5E0", borderRadius: 6, padding: "4px 10px", fontSize: 11, color: "#888", cursor: "pointer" }} title="신청 취소">취소</button>
             )}
           </div>
         )}
@@ -6703,7 +6759,7 @@ function LeaveView({ profile, profiles }) {
       {showForm && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div onClick={function(e) { e.stopPropagation(); }} style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 420, padding: 24 }}>
-            <h2 style={{ margin: "0 0 18px", fontSize: 17, fontWeight: 700 }}>휴가 신청</h2>
+            <h2 style={{ margin: "0 0 18px", fontSize: 17, fontWeight: 700 }}>{editId ? "휴가 신청 수정" : "휴가 신청"}</h2>
 
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 12, color: "#888", marginBottom: 6, fontWeight: 600 }}>종류</div>
@@ -6742,8 +6798,8 @@ function LeaveView({ profile, profiles }) {
             </div>
 
             <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={submitRequest} style={{ flex: 1, background: "#534AB7", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>신청하기</button>
-              <button onClick={function() { setShowForm(false); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "12px 18px", fontSize: 14, cursor: "pointer" }}>취소</button>
+              <button onClick={submitRequest} style={{ flex: 1, background: "#534AB7", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>{editId ? "수정하기" : "신청하기"}</button>
+              <button onClick={function() { setShowForm(false); setEditId(null); setNewReq({ type: "연차", start_date: "", end_date: "", reason: "" }); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "12px 18px", fontSize: 14, cursor: "pointer" }}>취소</button>
             </div>
           </div>
         </div>
