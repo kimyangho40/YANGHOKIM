@@ -1687,6 +1687,14 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
     });
   }, [thisMonth, thisYear]);
   const monthCases = agencyCases.filter(c => c.month === thisMonth && c.year === thisYear);
+  // 이번 달 요약 카드용 집계 (기존 데이터로만 계산)
+  const monthNewCount = agencyCases.filter(function(c) {
+    if (!c.created_at) return false;
+    var d = new Date(c.created_at);
+    return d.getFullYear() === thisYear && d.getMonth() + 1 === thisMonth;
+  }).length;
+  const monthApprovedCount = monthCases.filter(c => ["승인", "약정", "완료"].includes(c.status)).length;
+  const monthRejectedCount = monthCases.filter(c => ["부결", "반려"].includes(c.status)).length;
   const DASHBOARD_AGENCY_GROUPS = [
     { id: "소상공인시장진흥공단", label: "소진공", color: "#4338CA", ids: ["소상공인시장진흥공단"] },
     { id: "중소벤처기업진흥공단", label: "중진공", color: "#7C3AED", ids: ["중소벤처기업진흥공단","구조혁신&사업전환"] },
@@ -1756,6 +1764,23 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
             </div>
           </div>
         ))}
+      </div>
+
+      {/* 📅 이번 달 진행 요약 (신규·승인·부결) */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 22 }}>
+        {[
+          { label: "이번달 신규 진행", value: monthNewCount, sub: thisMonth + "월 생성 건", color: "#4338CA" },
+          { label: "이번달 승인 완료", value: monthApprovedCount, sub: "승인·약정·완료", color: "#15803D" },
+          { label: "이번달 부결", value: monthRejectedCount, sub: "부결·반려", color: "#DC2626" },
+        ].map(function(k, i) {
+          return (
+            <div key={i} style={{ background: "#fff", borderRadius: 12, padding: "18px 20px", border: "1px solid #E8E5E0" }}>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>{k.label}</div>
+              <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.04em", color: k.color }}>{k.value}건</div>
+              <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>{k.sub}</div>
+            </div>
+          );
+        })}
       </div>
 
       {/* 👥 팀 활동 위젯 */}
