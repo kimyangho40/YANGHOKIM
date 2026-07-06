@@ -3424,6 +3424,40 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
     navigator.clipboard?.writeText(txt).then(() => {});
   };
 
+  // 기관진행 탭: agency_cases를 기관(agency_group)별로 묶어 섹션 표시
+  const groupedAgency = useMemo(function() {
+    var order = AGENCY_GROUPS.map(function(g) { return g.id; });
+    var map = {};
+    agencyCases.forEach(function(c) {
+      var key = c.agency_group || "기타";
+      if (!map[key]) map[key] = [];
+      map[key].push(c);
+    });
+    var keys = Object.keys(map).sort(function(a, b) {
+      var ia = order.indexOf(a), ib = order.indexOf(b);
+      if (ia < 0) ia = 999;
+      if (ib < 0) ib = 999;
+      if (ia !== ib) return ia - ib;
+      return a.localeCompare(b);
+    });
+    return keys.map(function(k) {
+      // 월 역순 정렬
+      var list = map[k].slice().sort(function(a, b) {
+        return (Number(b.month) || 0) - (Number(a.month) || 0);
+      });
+      // 승인금액 합계: 값이 모두 순수 숫자일 때만 (만원/억 등 단위 섞이면 오합계 방지 위해 생략)
+      var sum = 0, cnt = 0, unitClean = true;
+      list.forEach(function(c) {
+        var raw = String(c.approved_amount || "").trim();
+        if (!raw) return;
+        var digits = raw.replace(/[,\s]/g, "");
+        if (/^\d+$/.test(digits)) { sum += parseInt(digits, 10); cnt++; }
+        else { unitClean = false; }
+      });
+      return { key: k, list: list, sum: sum, hasSum: unitClean && cnt > 0, latestStatus: list[0] ? list[0].status : null };
+    });
+  }, [agencyCases]);
+
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "flex-end" }}
       onMouseDown={e => e.target === e.currentTarget && onClose()}>
@@ -4047,38 +4081,53 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   기관별 진행 데이터가 없어요
                 </div>
               ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {agencyCases.map(function(c, i) {
-                    var grpObj = AGENCY_GROUPS.find(function(g) { return g.id === c.agency_group; });
+                <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+                  {groupedAgency.map(function(grp) {
+                    var grpObj = AGENCY_GROUPS.find(function(g) { return g.id === grp.key; });
                     var grpColor = grpObj ? grpObj.color : "#4338CA";
                     return (
-                      <div key={c.id} style={{ background: "#F7F6F3", borderRadius: 10, padding: "14px 16px", border: "1px solid #E8E5E0" }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                            <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: grpColor, color: "#fff", fontWeight: 700 }}>{c.agency_group}</span>
-                            {c.agency_sub && <span style={{ fontSize: 11, color: "#888" }}>{c.agency_sub}</span>}
-                            <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#fff", color: "#555", border: "1px solid #E8E5E0" }}>{c.status || "진행중"}</span>
-                          </div>
-                          <span style={{ fontSize: 11, color: "#AAA" }}>{c.month}월</span>
+                      <div key={grp.key}>
+                        {/* 기관 섹션 헤더: 기관명 · 건수 · 최근 상태 · 승인 합계 */}
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 12, padding: "3px 10px", borderRadius: 99, background: grpColor, color: "#fff", fontWeight: 700 }}>{grp.key}</span>
+                          <span style={{ fontSize: 11, color: "#888", fontWeight: 600 }}>{grp.list.length}건</span>
+                          {grp.latestStatus && <span style={{ fontSize: 11, color: "#555", background: "#F0EDE8", borderRadius: 99, padding: "2px 8px" }}>최근: {grp.latestStatus}</span>}
+                          {grp.hasSum && <span style={{ fontSize: 11, color: "#0F6E56", fontWeight: 700, marginLeft: "auto" }}>승인 합계 {grp.sum.toLocaleString("ko-KR")}</span>}
                         </div>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                          {[
-                            { label: "신청금액", value: c.request_amount },
-                            { label: "신청상품", value: c.request_fund },
-                            { label: "담당자", value: c.assignee },
-                            { label: "신청일", value: c.application_date },
-                            { label: "승인결과", value: c.approval_result },
-                            { label: "승인금액", value: c.approved_amount },
-                          ].map(function(item) {
-                            return item.value ? (
-                              <div key={item.label} style={{ background: "#fff", borderRadius: 6, padding: "7px 10px" }}>
-                                <div style={{ fontSize: 10, color: "#AAA", marginBottom: 2 }}>{item.label}</div>
-                                <div style={{ fontSize: 12, fontWeight: 600, color: "#333" }}>{item.value}</div>
+                        {/* 케이스 카드 (월 역순) */}
+                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                          {grp.list.map(function(c, i) {
+                            return (
+                              <div key={c.id || i} style={{ background: "#F7F6F3", borderRadius: 10, padding: "14px 16px", border: "1px solid #E8E5E0" }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                                    {c.agency_sub && <span style={{ fontSize: 11, color: "#888" }}>{c.agency_sub}</span>}
+                                    <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#fff", color: "#555", border: "1px solid #E8E5E0" }}>{c.status || "진행중"}</span>
+                                  </div>
+                                  <span style={{ fontSize: 11, color: "#AAA" }}>{c.year ? c.year + "년 " : ""}{c.month}월</span>
+                                </div>
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                                  {[
+                                    { label: "신청금액", value: c.request_amount },
+                                    { label: "신청상품", value: c.request_fund },
+                                    { label: "담당자", value: c.assignee },
+                                    { label: "신청일", value: c.application_date },
+                                    { label: "승인결과", value: c.approval_result },
+                                    { label: "승인금액", value: c.approved_amount },
+                                  ].map(function(item) {
+                                    return item.value ? (
+                                      <div key={item.label} style={{ background: "#fff", borderRadius: 6, padding: "7px 10px" }}>
+                                        <div style={{ fontSize: 10, color: "#AAA", marginBottom: 2 }}>{item.label}</div>
+                                        <div style={{ fontSize: 12, fontWeight: 600, color: "#333" }}>{item.value}</div>
+                                      </div>
+                                    ) : null;
+                                  })}
+                                </div>
+                                {c.notes && <div style={{ marginTop: 8, fontSize: 12, color: "#666", background: "#EEF2FF", borderRadius: 6, padding: "7px 10px" }}>{c.notes}</div>}
                               </div>
-                            ) : null;
+                            );
                           })}
                         </div>
-                        {c.notes && <div style={{ marginTop: 8, fontSize: 12, color: "#666", background: "#EEF2FF", borderRadius: 6, padding: "7px 10px" }}>{c.notes}</div>}
                       </div>
                     );
                   })}
