@@ -1764,10 +1764,16 @@ function AiSearchModal({ companies, onClose, onSelectCompany }) {
         onClick={function(e) { e.stopPropagation(); }}>
         {/* 헤더 */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: "1px solid #E8E5E0", background: "#F7F6F3" }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 800, color: "#1A1917" }}>🤖 AI 상담 (전체 검색)</div>
-            <div style={{ fontSize: 11, color: "#999", marginTop: 2 }}>
-              {loadingSnap ? "데이터 불러오는 중…" : "업체 " + (snapshot.업체목록.length) + " · 기관진행 " + (snapshot.기관진행.length) + " · 정산 " + (snapshot.정산.length) + "건 기준"}
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <button onClick={onClose} title="뒤로가기"
+              style={{ display: "flex", alignItems: "center", gap: 4, background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, color: "#555", cursor: "pointer", whiteSpace: "nowrap" }}>
+              ← 뒤로
+            </button>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: "#1A1917" }}>🤖 AI 상담 (전체 검색)</div>
+              <div style={{ fontSize: 11, color: "#999", marginTop: 2 }}>
+                {loadingSnap ? "데이터 불러오는 중…" : "업체 " + (snapshot.업체목록.length) + " · 기관진행 " + (snapshot.기관진행.length) + " · 정산 " + (snapshot.정산.length) + "건 기준"}
+              </div>
             </div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}>
