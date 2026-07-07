@@ -805,6 +805,7 @@ function CRMApp({ profile, session }) {
   const notifRef = useRef(null);
   const [showGlobalSearch, setShowGlobalSearch] = useState(false);
   const [globalSearchQ, setGlobalSearchQ] = useState("");
+  const [showAiSearch, setShowAiSearch] = useState(false);
 
   // 전역 단축키 Ctrl+K (또는 Cmd+K)
   useEffect(function() {
@@ -1450,6 +1451,12 @@ function CRMApp({ profile, session }) {
             <span style={{ flex: 1 }}>통합 검색</span>
             <span style={{ fontSize: 10, background: "#1A1917", padding: "2px 6px", borderRadius: 4, color: "#888" }}>Ctrl+K</span>
           </div>
+          <div onClick={function() { setShowAiSearch(true); }}
+            style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 8, cursor: "pointer", marginBottom: 8, background: "#312E81", color: "#C7D2FE", fontSize: 12, border: "1px solid #4338CA" }}>
+            <span>🤖</span>
+            <span style={{ flex: 1 }}>AI 상담</span>
+            <span style={{ fontSize: 10, background: "#1A1917", padding: "2px 6px", borderRadius: 4, color: "#A5B4FC" }}>질문</span>
+          </div>
           {/* 자주 쓰는 메뉴 */}
           <div style={{ fontSize: 10, color: "#444", letterSpacing: "0.08em", padding: "4px 12px 6px", fontWeight: 600 }}>주요 메뉴</div>
           {[
@@ -1648,6 +1655,14 @@ function CRMApp({ profile, session }) {
         />
       )}
 
+      {showAiSearch && (
+        <AiSearchModal
+          companies={companies}
+          onClose={function() { setShowAiSearch(false); }}
+          onSelectCompany={function(c) { setSelectedCompany(c); setShowAiSearch(false); }}
+        />
+      )}
+
       {selectedCompany && (
         <CompanyModal
           company={selectedCompany}
@@ -1677,6 +1692,138 @@ function CRMApp({ profile, session }) {
             <span style={{ fontSize: 10, color: view === id ? "#F7F6F3" : "#555", fontWeight: view === id ? 700 : 400 }}>{label}</span>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ── 전체 검색형 AI 상담 모달 ────────────────────────────────────────────────────
+function AiSearchModal({ companies, onClose, onSelectCompany }) {
+  const [msgs, setMsgs] = useState([]); // { role, content }
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [snapshot, setSnapshot] = useState(null);
+  const [loadingSnap, setLoadingSnap] = useState(true);
+  const today = new Date().toISOString().slice(0, 10);
+
+  useEffect(function() {
+    var pick = function(obj, keys) {
+      var out = {};
+      keys.forEach(function(k) { if (obj[k] != null && obj[k] !== "") out[k] = obj[k]; });
+      return out;
+    };
+    var companyRows = (companies || []).map(function(c) {
+      return pick(c, ["name", "stage", "agency", "assignee", "region", "industry", "type", "business_type", "credit_score_kcb", "credit_score_nice", "fee_status", "next_contact", "representative", "created_at"]);
+    });
+    Promise.all([
+      supabase.from("agency_cases")
+        .select("business_name, representative, agency_group, agency_sub, status, assignee, region, request_amount, request_fund, result, result_reason, apply_date, month, year, created_at")
+        .is("deleted_at", null).limit(10000),
+      supabase.from("settlement_manual")
+        .select("business_name, agency_group, month, request_amount, contract_fee, commission_fee, received_amount, contract_date, fee_received_date, invoice_issued, fee_received, settlement_notes")
+        .is("deleted_at", null).limit(10000),
+    ]).then(function([r1, r2]) {
+      setSnapshot({
+        업체목록: companyRows,
+        기관진행: (r1.error ? [] : (r1.data || [])),
+        정산: (r2.error ? [] : (r2.data || [])),
+      });
+      setLoadingSnap(false);
+    });
+  }, [companies]);
+
+  var send = async function() {
+    var q = input.trim();
+    if (!q || loading || !snapshot) return;
+    var history = msgs.slice(-8);
+    setMsgs(function(p) { return p.concat([{ role: "user", content: q }]); });
+    setInput("");
+    setLoading(true);
+    try {
+      var resp = await fetch("/api/ai-search", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ question: q, snapshot: snapshot, today: today, history: history }),
+      });
+      var d = await resp.json();
+      if (!resp.ok) throw new Error(d.error || "요청 실패");
+      setMsgs(function(p) { return p.concat([{ role: "assistant", content: d.answer || "(빈 응답)" }]); });
+    } catch (e) {
+      setMsgs(function(p) { return p.concat([{ role: "assistant", content: "❌ 오류: " + (e && e.message ? e.message : e) }]); });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  var examples = ["이번달 부결 정리해줘", "만기임박(입금 예정) 업체는?", "이번주 신규 등록 업체", "담당자별 진행중 건수", "미입금 정산 목록"];
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+      onClick={onClose}>
+      <div style={{ background: "#fff", borderRadius: 14, width: 640, maxWidth: "100%", height: "80vh", maxHeight: 720, display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.25)", overflow: "hidden" }}
+        onClick={function(e) { e.stopPropagation(); }}>
+        {/* 헤더 */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: "1px solid #E8E5E0", background: "#F7F6F3" }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#1A1917" }}>🤖 AI 상담 (전체 검색)</div>
+            <div style={{ fontSize: 11, color: "#999", marginTop: 2 }}>
+              {loadingSnap ? "데이터 불러오는 중…" : "업체 " + (snapshot.업체목록.length) + " · 기관진행 " + (snapshot.기관진행.length) + " · 정산 " + (snapshot.정산.length) + "건 기준"}
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}>
+            <Icon name="x" size={18} color="#888" />
+          </button>
+        </div>
+
+        {msgs.length === 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "12px 20px 0" }}>
+            {examples.map(function(ex) {
+              return (
+                <button key={ex} onClick={function() { setInput(ex); }}
+                  style={{ fontSize: 11, padding: "5px 10px", borderRadius: 99, border: "1px solid #C7D2FE", background: "#EEF2FF", color: "#4338CA", cursor: "pointer" }}>
+                  {ex}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* 대화 */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
+          {msgs.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "50px 0", color: "#CCC", fontSize: 13 }}>
+              <div style={{ fontSize: 32, marginBottom: 10 }}>💬</div>
+              전체 업체·기관진행·정산 데이터로 답합니다.<br />예: "이번달 부결 정리해줘"
+            </div>
+          ) : msgs.map(function(m, i) {
+            var isUser = m.role === "user";
+            return (
+              <div key={i} style={{ display: "flex", justifyContent: isUser ? "flex-end" : "flex-start" }}>
+                <div style={{ maxWidth: "84%", background: isUser ? "#1A1917" : "#F7F6F3", color: isUser ? "#F7F6F3" : "#1A1917", border: isUser ? "none" : "1px solid #E8E5E0", borderRadius: 12, padding: "10px 14px", fontSize: 13, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
+                  {m.content}
+                </div>
+              </div>
+            );
+          })}
+          {loading && (
+            <div style={{ display: "flex", justifyContent: "flex-start" }}>
+              <div style={{ background: "#F7F6F3", border: "1px solid #E8E5E0", borderRadius: 12, padding: "10px 14px", fontSize: 13, color: "#AAA" }}>생각 중…</div>
+            </div>
+          )}
+        </div>
+
+        {/* 입력 */}
+        <div style={{ display: "flex", gap: 8, padding: "12px 20px", borderTop: "1px solid #E8E5E0" }}>
+          <textarea value={input} onChange={function(e) { setInput(e.target.value); }}
+            onKeyDown={function(e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+            placeholder={loadingSnap ? "데이터 불러오는 중…" : "질문 입력 후 Enter (줄바꿈 Shift+Enter)"}
+            disabled={loadingSnap}
+            rows={2} style={{ flex: 1, padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, resize: "none", boxSizing: "border-box", outline: "none", fontFamily: "inherit", lineHeight: 1.5, background: loadingSnap ? "#F7F6F3" : "#fff" }} />
+          <button onClick={send} disabled={!input.trim() || loading || loadingSnap}
+            style={{ padding: "0 18px", background: (input.trim() && !loading && !loadingSnap) ? "#4338CA" : "#E8E5E0", color: (input.trim() && !loading && !loadingSnap) ? "#fff" : "#AAA", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: (input.trim() && !loading && !loadingSnap) ? "pointer" : "not-allowed", whiteSpace: "nowrap" }}>
+            전송
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -3370,6 +3517,53 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   const [loadingExtra, setLoadingExtra] = useState(false);
   const [editingLogId, setEditingLogId] = useState(null);
   const [editingLogText, setEditingLogText] = useState("");
+
+  // ── 업체별 AI 상담 ──
+  const [aiMsgs, setAiMsgs] = useState([]); // { role: "user"|"assistant", content }
+  const [aiInput, setAiInput] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const AI_SENSITIVE = { login_id: 1, login_pw: 1, login_pw2: 1, resident_number: 1, ipin_account: 1, ipin_password: 1, agency_login_id: 1, agency_login_password: 1, personal_cert: 1, business_cert: 1, personal_cert_password: 1, business_cert_password: 1 };
+  var aiStrip = function(obj) {
+    if (!obj || typeof obj !== "object") return obj;
+    var out = {};
+    Object.keys(obj).forEach(function(k) {
+      if (!AI_SENSITIVE[k] && obj[k] != null && obj[k] !== "") out[k] = obj[k];
+    });
+    return out;
+  };
+  var buildCompanyContext = function() {
+    return {
+      업체: aiStrip(data),
+      기관진행: (agencyCases || []).map(aiStrip),
+      정산: (settlements || []).map(aiStrip),
+      소통내역: (commLogs || []).map(function(l) {
+        return { 날짜: l.created_at, 담당: l.assignee || l.logged_by || null, 내용: l.memo || l.note || null };
+      }),
+    };
+  };
+  var sendAiCompany = async function() {
+    var q = aiInput.trim();
+    if (!q || aiLoading) return;
+    var history = aiMsgs.slice(-8);
+    setAiMsgs(function(p) { return p.concat([{ role: "user", content: q }]); });
+    setAiInput("");
+    setAiLoading(true);
+    try {
+      var resp = await fetch("/api/ai-company", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ question: q, companyContext: buildCompanyContext(), history: history }),
+      });
+      var d = await resp.json();
+      if (!resp.ok) throw new Error(d.error || "요청 실패");
+      setAiMsgs(function(p) { return p.concat([{ role: "assistant", content: d.answer || "(빈 응답)" }]); });
+    } catch (e) {
+      setAiMsgs(function(p) { return p.concat([{ role: "assistant", content: "❌ 오류: " + (e && e.message ? e.message : e) }]); });
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   const sc = STAGE_COLORS[data.stage] || {};
 
   useEffect(function() {
@@ -3568,6 +3762,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
             { id: "history", label: "이슈·액션", badge: commLogs.length },
             { id: "agency", label: "기관진행", badge: agencyCases.length },
             { id: "settlement", label: "정산현황", badge: settlements.length },
+            { id: "ai", label: "🤖 AI 상담" },
           ].map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
               style={{ flex: "0 0 auto", padding: "11px 14px", fontSize: 12, fontWeight: tab === t.id ? 700 : 400, color: tab === t.id ? "#1A1917" : "#888", background: "none", border: "none", borderBottom: `2px solid ${tab === t.id ? "#1A1917" : "transparent"}`, cursor: "pointer", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 4 }}>
@@ -4224,6 +4419,59 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   })}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* AI 상담 탭 */}
+          {tab === "ai" && (
+            <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+              <div style={{ fontSize: 11, color: "#888", background: "#F0F5FF", border: "1px solid #DBE5FF", borderRadius: 8, padding: "8px 12px", marginBottom: 12 }}>
+                🤖 이 업체({data.name})의 데이터만 참고해 답합니다. 비밀번호·인증서 등 민감정보는 AI에 전달하지 않습니다.
+              </div>
+              {aiMsgs.length === 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+                  {["현재 진행상황 요약해줘", "다음에 할 일은?", "부결/보류 사유 정리해줘", "정산 현황 알려줘"].map(function(ex) {
+                    return (
+                      <button key={ex} onClick={function() { setAiInput(ex); }}
+                        style={{ fontSize: 11, padding: "5px 10px", borderRadius: 99, border: "1px solid #C7D2FE", background: "#EEF2FF", color: "#4338CA", cursor: "pointer" }}>
+                        {ex}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, minHeight: 200, marginBottom: 12 }}>
+                {aiMsgs.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "40px 0", color: "#CCC", fontSize: 13 }}>
+                    <div style={{ fontSize: 32, marginBottom: 10 }}>💬</div>
+                    이 업체에 대해 궁금한 걸 물어보세요
+                  </div>
+                ) : aiMsgs.map(function(m, i) {
+                  var isUser = m.role === "user";
+                  return (
+                    <div key={i} style={{ display: "flex", justifyContent: isUser ? "flex-end" : "flex-start" }}>
+                      <div style={{ maxWidth: "82%", background: isUser ? "#1A1917" : "#F7F6F3", color: isUser ? "#F7F6F3" : "#1A1917", border: isUser ? "none" : "1px solid #E8E5E0", borderRadius: 12, padding: "10px 14px", fontSize: 13, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
+                        {m.content}
+                      </div>
+                    </div>
+                  );
+                })}
+                {aiLoading && (
+                  <div style={{ display: "flex", justifyContent: "flex-start" }}>
+                    <div style={{ background: "#F7F6F3", border: "1px solid #E8E5E0", borderRadius: 12, padding: "10px 14px", fontSize: 13, color: "#AAA" }}>생각 중…</div>
+                  </div>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <textarea value={aiInput} onChange={function(e) { setAiInput(e.target.value); }}
+                  onKeyDown={function(e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendAiCompany(); } }}
+                  placeholder="질문 입력 후 Enter (줄바꿈은 Shift+Enter)"
+                  rows={2} style={{ flex: 1, padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, resize: "none", boxSizing: "border-box", outline: "none", fontFamily: "inherit", lineHeight: 1.5 }} />
+                <button onClick={sendAiCompany} disabled={!aiInput.trim() || aiLoading}
+                  style={{ padding: "0 18px", background: (aiInput.trim() && !aiLoading) ? "#4338CA" : "#E8E5E0", color: (aiInput.trim() && !aiLoading) ? "#fff" : "#AAA", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: (aiInput.trim() && !aiLoading) ? "pointer" : "not-allowed", whiteSpace: "nowrap" }}>
+                  전송
+                </button>
+              </div>
             </div>
           )}
 
