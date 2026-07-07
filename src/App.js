@@ -3425,6 +3425,8 @@ function MembersView({ profiles, onRefresh, showToast }) {
 // ── 기업 상세 모달 ─────────────────────────────────────────────────────────────
 function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAgencyRegistered, companies }) {
   const [tab, setTab] = useState("info");
+  const [prevTab, setPrevTab] = useState("info");
+  var goTab = function(id) { setPrevTab(tab); setTab(id); };
   const [data, setData] = useState({ ...company });
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(company.name || "");
@@ -3770,7 +3772,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
             { id: "settlement", label: "정산현황", badge: settlements.length },
             { id: "ai", label: "🤖 AI 상담" },
           ].map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)}
+            <button key={t.id} onClick={() => goTab(t.id)}
               style={{ flex: "0 0 auto", padding: "11px 14px", fontSize: 12, fontWeight: tab === t.id ? 700 : 400, color: tab === t.id ? "#1A1917" : "#888", background: "none", border: "none", borderBottom: `2px solid ${tab === t.id ? "#1A1917" : "transparent"}`, cursor: "pointer", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 4 }}>
               {t.label}
               {t.badge > 0 && <span style={{ fontSize: 10, background: tab === t.id ? "#1A1917" : "#E8E5E0", color: tab === t.id ? "#fff" : "#888", borderRadius: 99, padding: "1px 5px", fontWeight: 700 }}>{t.badge}</span>}
@@ -4431,6 +4433,12 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           {/* AI 상담 탭 */}
           {tab === "ai" && (
             <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+              <div style={{ marginBottom: 10 }}>
+                <button onClick={function() { setTab(prevTab === "ai" ? "info" : prevTab); }} title="뒤로가기"
+                  style={{ display: "flex", alignItems: "center", gap: 4, background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, color: "#555", cursor: "pointer" }}>
+                  ← 뒤로
+                </button>
+              </div>
               <div style={{ fontSize: 11, color: "#888", background: "#F0F5FF", border: "1px solid #DBE5FF", borderRadius: 8, padding: "8px 12px", marginBottom: 12 }}>
                 🤖 이 업체({data.name})의 데이터만 참고해 답합니다. 비밀번호·인증서 등 민감정보는 AI에 전달하지 않습니다.
               </div>
