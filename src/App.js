@@ -33,7 +33,10 @@ const STAGE_COLORS = {
   "부결/반려":              { bg: "#FEE2E2", text: "#DC2626", border: "#FCA5A5" },
   "기타":                    { bg: "#F7F6F3", text: "#666",    border: "#D1D5DB" },
 };
-const AGENCIES = ["소상공인시장진흥공단","중소벤처기업진흥공단","신용보증기금","신용보증재단","기술보증기금","서민금융진흥원","구조혁신&사업전환","기타"];
+// 기관 케이스(agency_cases) 상태 분류 단일 기준 — 승인계열/부결계열을 여기 한 곳에서만 정의
+const DONE_STATUSES = ["승인", "약정", "완료"];
+const REJECT_STATUSES = ["부결", "반려", "신청취소", "진행불가", "신청못함", "중단"];
+const AGENCIES =["소상공인시장진흥공단","중소벤처기업진흥공단","신용보증기금","신용보증재단","기술보증기금","서민금융진흥원","구조혁신&사업전환","기타"];
 const JUNGINGONG_PRODUCTS = ["창업기반지원","청년창업자금","혁신성장지원","개발기술사업화","재창업","내수기업수출기업화(10만불 미만)","수출기업글로벌화(10만불 이상)","사업전환","구조개선","긴급경영 안정자금","기타"];
 const SOJINGONG_PRODUCTS = ["신용취약자금","재도전특별자금","혁신성장 촉진자금(스마트 기술)","혁신성장 촉진자금(2년 연속 매출 10% 신장)","혁신성장 촉진자금(수출 자금)","혁신성장 촉진자금(그 외 기타)","상생성장지원자금","그 외 기타","대리대출"];
 
@@ -1708,8 +1711,8 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
     var d = new Date(c.created_at);
     return d.getFullYear() === thisYear && d.getMonth() + 1 === thisMonth;
   }).length;
-  const monthApprovedCount = monthCases.filter(c => ["승인", "약정", "완료"].includes(c.status)).length;
-  const monthRejectedCount = monthCases.filter(c => ["부결", "반려"].includes(c.status)).length;
+  const monthApprovedCount = monthCases.filter(c => DONE_STATUSES.includes(c.status)).length;
+  const monthRejectedCount = monthCases.filter(c => REJECT_STATUSES.includes(c.status)).length;
   const DASHBOARD_AGENCY_GROUPS = [
     { id: "소상공인시장진흥공단", label: "소진공", color: "#4338CA", ids: ["소상공인시장진흥공단"] },
     { id: "중소벤처기업진흥공단", label: "중진공", color: "#7C3AED", ids: ["중소벤처기업진흥공단","구조혁신&사업전환"] },
@@ -1719,7 +1722,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
   ];
   const agencyStats = DASHBOARD_AGENCY_GROUPS.map(function(g) {
     const cases = monthCases.filter(c => g.ids.includes(c.agency_group));
-    const approved = cases.filter(c => ["승인","약정","완료"].includes(c.status)).length;
+    const approved = cases.filter(c => DONE_STATUSES.includes(c.status)).length;
     const total = cases.length;
     const rate = total > 0 ? Math.round(approved / total * 100) : 0;
     return { id: g.id, label: g.label, color: g.color, ids: g.ids, total, approved, rate };
@@ -1728,7 +1731,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
   // 담당자별 KPI
   const assigneeKpi = ASSIGNEES.map(function(name) {
     const myCases = monthCases.filter(c => c.assignee === name);
-    const approved = myCases.filter(c => ["승인","약정","완료"].includes(c.status)).length;
+    const approved = myCases.filter(c => DONE_STATUSES.includes(c.status)).length;
     const goal = kpiGoals.find(g => g.assignee === name);
     const goalAmt = goal ? goal.goal_approvals : 0;
     const pct = goalAmt > 0 ? Math.min(Math.round(approved / goalAmt * 100), 100) : 0;
@@ -1838,7 +1841,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
             {agencyStats.map(function(g) {
               var allCases = agencyCases.filter(function(c) { return g.ids.includes(c.agency_group); });
-              var doneCases = allCases.filter(function(c) { return ["승인","약정","완료"].includes(c.status) && c.contract_date; });
+              var doneCases = allCases.filter(function(c) { return DONE_STATUSES.includes(c.status) && c.contract_date; });
               var avgDays = 0;
               if (doneCases.length > 0) {
                 var totalDays = doneCases.reduce(function(s, c) {
@@ -2851,8 +2854,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
     "경정청구": "경정청구", "기타": "기타",
   };
   // 마스터 상태: 한 업체가 여러 기관에서 각각 다른 단계일 때 종합해 하나로 표시
-  var DONE_STATUSES = ["승인", "약정", "완료"];
-  var REJECT_STATUSES = ["부결", "반려", "신청취소", "진행불가", "신청못함", "중단"];
+  // (분류 기준은 모듈 상수 DONE_STATUSES / REJECT_STATUSES 사용)
   var masterStatus = function(businessName) {
     var cases = agencyByName[businessName] || [];
     if (cases.length === 0) return null; // 기관 케이스 없으면 기존 stage 사용
@@ -2867,8 +2869,8 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
     return { label: "진행중", bg: "#EDE9FE", text: "#6D28D9" };
   };
   var agencyStatusColor = function(status) {
-    if (["부결","반려","신청취소","진행불가","신청못함","중단"].indexOf(status) >= 0) return { bg: "#FEE2E2", text: "#DC2626" };
-    if (["승인","약정","완료"].indexOf(status) >= 0) return { bg: "#DCFCE7", text: "#15803D" };
+    if (REJECT_STATUSES.indexOf(status) >= 0) return { bg: "#FEE2E2", text: "#DC2626" };
+    if (DONE_STATUSES.indexOf(status) >= 0) return { bg: "#DCFCE7", text: "#15803D" };
     if (["시작 전"].indexOf(status) >= 0 || !status) return { bg: "#F3F4F6", text: "#9CA3AF" };
     return { bg: "#EEF2FF", text: "#4338CA" };
   };
@@ -11202,7 +11204,7 @@ function TeamActivityWidget({ profiles }) {
         if (!c.assignee) return;
         var d = ensure(c.assignee);
         d.agencyUpdates++;
-        if (["승인","약정","완료"].indexOf(c.status) >= 0) d.agencyApproved++;
+        if (DONE_STATUSES.indexOf(c.status) >= 0) d.agencyApproved++;
         if (!d.lastActive || c.updated_at > d.lastActive) d.lastActive = c.updated_at;
       });
     }
