@@ -36,7 +36,7 @@ const STAGE_COLORS = {
 // 기관 케이스(agency_cases) 상태 분류 단일 기준 — 승인계열/부결계열을 여기 한 곳에서만 정의
 const DONE_STATUSES = ["승인", "약정", "완료"];
 const REJECT_STATUSES = ["부결", "반려", "신청취소", "진행불가", "신청못함", "중단"];
-const AGENCIES =["소상공인시장진흥공단","중소벤처기업진흥공단","신용보증기금","신용보증재단","기술보증기금","서민금융진흥원","구조혁신&사업전환","기타"];
+const AGENCIES =["소상공인시장진흥공단","중소벤처기업진흥공단","신용보증기금","농협신용보증기금","신용보증재단","기술보증기금","서민금융진흥원","구조혁신&사업전환","기타"];
 const JUNGINGONG_PRODUCTS = ["창업기반지원","청년창업자금","혁신성장지원","개발기술사업화","재창업","내수기업수출기업화(10만불 미만)","수출기업글로벌화(10만불 이상)","사업전환","구조개선","긴급경영 안정자금","기타"];
 const SOJINGONG_PRODUCTS = ["신용취약자금","재도전특별자금","혁신성장 촉진자금(스마트 기술)","혁신성장 촉진자금(2년 연속 매출 10% 신장)","혁신성장 촉진자금(수출 자금)","혁신성장 촉진자금(그 외 기타)","상생성장지원자금","그 외 기타","대리대출"];
 
@@ -132,6 +132,7 @@ function getRegionColor(region) {
 const AGENCY_GROUPS = [
   { id: "소상공인시장진흥공단", label: "소상공인시장진흥공단", color: "#4338CA" },
   { id: "신용보증기금", label: "신용보증기금", color: "#0F6E56" },
+  { id: "농협신용보증기금", label: "농협신용보증기금", color: "#0D9488" },
   { id: "기술보증기금", label: "기술보증기금", color: "#0369A1" },
   { id: "신용보증재단", label: "신용보증재단", color: "#B45309" },
   { id: "중소벤처기업진흥공단", label: "중소벤처기업진흥공단", color: "#7C3AED" },
@@ -140,11 +141,12 @@ const AGENCY_GROUPS = [
   { id: "기타", label: "기타", color: "#555" },
 ];
 // 기업목록 기관별 필터: 짧은 라벨 → company.agency에 들어올 수 있는 전체 명칭 집합
-const AGENCY_FILTER_OPTS = ["전체", "소진공", "중진공", "신보", "기보", "재단"];
+const AGENCY_FILTER_OPTS = ["전체", "소진공", "중진공", "신보", "농협신보", "기보", "재단"];
 const AGENCY_FILTER_MAP = {
   "소진공": ["소상공인시장진흥공단"],
   "중진공": ["중소벤처기업진흥공단", "구조혁신&사업전환"],
   "신보": ["신용보증기금"],
+  "농협신보": ["농협신용보증기금"],
   "기보": ["기술보증기금"],
   "재단": ["신용보증재단", "서민금융진흥원"], // 서민금융진흥원→재단 (AGENCY_MAP과 동일)
 };
@@ -1133,6 +1135,7 @@ function CRMApp({ profile, session }) {
           "소상공인시장진흥공단": "소상공인시장진흥공단",
           "중소벤처기업진흥공단": "중소벤처기업진흥공단",
           "신용보증기금": "신용보증기금",
+          "농협신용보증기금": "농협신용보증기금",
           "기술보증기금": "기술보증기금",
           "신용보증재단": "신용보증재단",
           "서민금융진흥원": "신용보증재단",
@@ -1922,6 +1925,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
     { id: "소상공인시장진흥공단", label: "소진공", color: "#4338CA", ids: ["소상공인시장진흥공단"] },
     { id: "중소벤처기업진흥공단", label: "중진공", color: "#7C3AED", ids: ["중소벤처기업진흥공단","구조혁신&사업전환"] },
     { id: "기금", label: "보증기금", color: "#0F6E56", ids: ["신용보증기금"] },
+    { id: "농협신보", label: "농협신보", color: "#0D9488", ids: ["농협신용보증기금"] },
     { id: "재단", label: "보증재단", color: "#B45309", ids: ["신용보증재단"] },
     { id: "기타", label: "경정청구/기타", color: "#555", ids: ["경정청구","기타"] },
   ];
@@ -3227,7 +3231,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
     });
   }, []);
   var AGENCY_SHORT = {
-    "소상공인시장진흥공단": "소진공", "중소벤처기업진흥공단": "중진공", "신용보증기금": "신보",
+    "소상공인시장진흥공단": "소진공", "중소벤처기업진흥공단": "중진공", "신용보증기금": "신보", "농협신용보증기금": "농협신보",
     "기술보증기금": "기보", "신용보증재단": "재단", "구조혁신&사업전환": "구조혁신",
     "경정청구": "경정청구", "기타": "기타",
   };
@@ -4878,6 +4882,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               "소상공인시장진흥공단": "소상공인시장진흥공단",
               "중소벤처기업진흥공단": "중소벤처기업진흥공단",
               "신용보증기금": "신용보증기금",
+              "농협신용보증기금": "농협신용보증기금",
               "기술보증기금": "기술보증기금",
               "신용보증재단": "신용보증재단",
               "서민금융진흥원": "신용보증재단",
@@ -5508,7 +5513,7 @@ function ActivityLogView() {
 
   // 기관 배지 색
   var agencyColor = function(ag) {
-    var map = { "소상공인시장진흥공단": "#4338CA", "신용보증기금": "#0F6E56", "신용보증재단": "#B45309", "중소벤처기업진흥공단": "#7C3AED", "구조혁신&사업전환": "#BE123C", "경정청구": "#0369A1" };
+    var map = { "소상공인시장진흥공단": "#4338CA", "신용보증기금": "#0F6E56", "농협신용보증기금": "#0D9488", "신용보증재단": "#B45309", "중소벤처기업진흥공단": "#7C3AED", "구조혁신&사업전환": "#BE123C", "경정청구": "#0369A1" };
     return map[ag] || "#888";
   };
 
@@ -5560,7 +5565,7 @@ function ActivityLogView() {
         </div>
         <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
           <span style={{ fontSize: 12, color: "#888" }}>기관:</span>
-          {["전체","소상공인시장진흥공단","신용보증기금","신용보증재단","중소벤처기업진흥공단","구조혁신&사업전환"].map(function(a) {
+          {["전체","소상공인시장진흥공단","신용보증기금","농협신용보증기금","신용보증재단","중소벤처기업진흥공단","구조혁신&사업전환"].map(function(a) {
             return <div key={a} onClick={function(){setFilterAgency(a);}} style={{ padding: "4px 12px", borderRadius: 99, cursor: "pointer", fontSize: 12, background: filterAgency===a ? "#1A1917" : "#fff", color: filterAgency===a ? "#fff" : "#666", border: filterAgency===a ? "none" : "1px solid #E8E5E0" }}>{a}</div>;
           })}
         </div>
@@ -5615,7 +5620,7 @@ function ActivityLogView() {
               <select value={memoAgency} onChange={function(e) { setMemoAgency(e.target.value); }}
                 style={{ padding: "9px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>
                 <option value="">기관 선택 (선택사항)</option>
-                {["소상공인시장진흥공단","신용보증기금","신용보증재단","중소벤처기업진흥공단","구조혁신&사업전환","경정청구","기타"].map(function(a) { return <option key={a} value={a}>{a}</option>; })}
+                {["소상공인시장진흥공단","신용보증기금","농협신용보증기금","신용보증재단","중소벤처기업진흥공단","구조혁신&사업전환","경정청구","기타"].map(function(a) { return <option key={a} value={a}>{a}</option>; })}
               </select>
             </div>
             <button onClick={saveMemo} disabled={memoSaving}
@@ -8941,7 +8946,7 @@ function ManualView() {
     </div>
   );
 }
-const BOJUNG_AGENCIES = ["신용보증기금", "기술보증기금"];
+const BOJUNG_AGENCIES = ["신용보증기금", "농협신용보증기금", "기술보증기금"];
 
 const JUNGINGONG_REGIONS = [
   "서울지역본부", "서울동부지부", "서울서부지부", "서울남부지부",
@@ -11133,7 +11138,7 @@ function ApprovalCasesView({ profile }) {
     return ["전체"].concat(Array.from(s).sort());
   }, [cases]);
 
-  var agencyOpts = ["전체","소상공인시장진흥공단","신용보증기금","기술보증기금","신용보증재단","중소벤처기업진흥공단","구조혁신&사업전환","경정청구","기타"];
+  var agencyOpts = ["전체","소상공인시장진흥공단","신용보증기금","농협신용보증기금","기술보증기금","신용보증재단","중소벤처기업진흥공단","구조혁신&사업전환","경정청구","기타"];
   var resultOpts = ["전체","승인","약정","완료","부결","반려","진행중","신청전"];
 
   // 기관별 신청상품 옵션 매핑
