@@ -98,6 +98,21 @@ function daysUntil(date) {
   var d = new Date(date); d.setHours(0, 0, 0, 0);
   return Math.round((d - today) / 86400000);
 }
+// next_action 텍스트에서 특정 월(1~12) 표기를 찾는다.
+// 인식 형식: "7월","07월","7/","07/","7.","07." (숫자 앞뒤 글자 무관)
+// "17월"→17, "107월"→앞자리 숫자면 스킵 해서 잘못된 월 오매칭 방지.
+function actionHasMonth(text, month) {
+  if (!text) return false;
+  var re = /(\d{1,2})\s*(?:월|[./])/g;
+  var m;
+  while ((m = re.exec(text)) !== null) {
+    var prev = m.index > 0 ? text.charAt(m.index - 1) : "";
+    if (prev >= "0" && prev <= "9") continue; // 앞자리가 숫자면(예: 17월, 107월) 스킵
+    var mm = parseInt(m[1], 10);
+    if (mm >= 1 && mm <= 12 && mm === month) return true;
+  }
+  return false;
+}
 
 function getProductColor(name) {
   if (!name) return null;
@@ -2096,6 +2111,39 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
                   })}
                   {overdueDocs.length > 12 && <div style={{ fontSize: 11, color: "#999", textAlign: "center", paddingTop: 4 }}>외 {overdueDocs.length - 12}건 더</div>}
                 </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* 📅 이번 달 예정 업무 (next_action 월 표기 기준 실시간 필터) */}
+      {(function() {
+        var monthTasks = (companies || []).filter(function(c) { return actionHasMonth(c.next_action, thisMonth); });
+        return (
+          <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+              <span style={{ fontSize: 16 }}>📅</span>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#1A1917" }}>이번 달({thisMonth}월) 예정 업무 <span style={{ color: "#999", fontWeight: 600 }}>{monthTasks.length}건</span></div>
+            </div>
+            {monthTasks.length === 0 ? (
+              <div style={{ textAlign: "center", color: "#CCC", fontSize: 13, padding: "20px 0" }}>이번 달 예정 업무 없음</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {monthTasks.map(function(c) {
+                  var action = (c.next_action || "").split("\n").map(function(s) { return s.trim(); }).filter(Boolean).join(" · ");
+                  return (
+                    <div key={c.id} onClick={function() { onSelectCompany(c); }}
+                      style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "9px 12px", background: "#F7F6F3", borderRadius: 8, cursor: "pointer" }}>
+                      <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#4338CA", marginTop: 5, flexShrink: 0 }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: "#1A1917" }}>{c.name}</span>
+                        <span style={{ fontSize: 12.5, color: "#666" }}> — {action}</span>
+                      </div>
+                      {c.assignee && <span style={{ fontSize: 11, color: "#999", flexShrink: 0 }}>{c.assignee}</span>}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
