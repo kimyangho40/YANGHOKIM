@@ -1982,100 +1982,6 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         ))}
       </div>
 
-      {/* 📅 이번 달 진행 요약 (신규·승인·부결) */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 22 }}>
-        {[
-          { label: "이번달 신규 진행", value: monthNewCount, sub: thisMonth + "월 생성 건", color: "#4338CA" },
-          { label: "이번달 승인 완료", value: monthApprovedCount, sub: "승인·약정·완료", color: "#15803D" },
-          { label: "이번달 부결", value: monthRejectedCount, sub: "부결·반려", color: "#DC2626" },
-        ].map(function(k, i) {
-          return (
-            <div key={i} style={{ background: "#fff", borderRadius: 12, padding: "18px 20px", border: "1px solid #E8E5E0" }}>
-              <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>{k.label}</div>
-              <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.04em", color: k.color }}>{k.value}건</div>
-              <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>{k.sub}</div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* 👥 팀 활동 위젯 */}
-      <TeamActivityWidget profiles={profiles} />
-
-      {/* 📊 담당자별 업체 수 막대그래프 */}
-      <AssigneeWorkloadChart companies={companies} setView={setView} setFilterAssignee={setFilterAssignee} />
-
-      <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>파이프라인 단계별 현황</div>
-        <div style={{ display: "flex", gap: 10 }}>
-          {STAGES.map((stage, i) => {
-            const c = STAGE_COLORS[stage];
-            const count = stageCount[stage] || 0;
-            const pct = companies.length ? Math.round(count / companies.length * 100) : 0;
-            return (
-              <div key={stage} onClick={() => { setView("list"); setFilterStage(stage); }}
-                style={{ flex: 1, background: c.bg, border: `1px solid ${c.border}`, borderRadius: 10, padding: "14px 16px", cursor: "pointer" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
-                  <span style={{ fontSize: 11, fontWeight: 600, color: c.text }}>0{i+1}</span>
-                  <span style={{ fontSize: 18, fontWeight: 700, color: c.text }}>{count}</span>
-                </div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: c.text, marginBottom: 8 }}>{stage}</div>
-                <div style={{ height: 4, background: `${c.border}`, borderRadius: 99 }}>
-                  <div style={{ height: 4, background: c.text, borderRadius: 99, width: pct + "%" }} />
-                </div>
-                <div style={{ fontSize: 10, color: c.text, marginTop: 4, opacity: 0.7 }}>{pct}%</div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* 기관별 이번 달 현황 */}
-      {true && (
-        <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>기관별 이번 달 현황 <span style={{ fontSize: 12, color: "#888", fontWeight: 400 }}>{thisMonth}월</span></div>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
-            {agencyStats.map(function(g) {
-              var allCases = agencyCases.filter(function(c) { return g.ids.includes(c.agency_group); });
-              var doneCases = allCases.filter(function(c) { return DONE_STATUSES.includes(c.status) && c.contract_date; });
-              var avgDays = 0;
-              if (doneCases.length > 0) {
-                var totalDays = doneCases.reduce(function(s, c) {
-                  var contractDate = new Date(c.contract_date);
-                  var createdDate = new Date(c.created_at || c.contract_date);
-                  var diff = Math.max(0, Math.floor((contractDate - createdDate) / 86400000));
-                  return s + diff;
-                }, 0);
-                avgDays = Math.round(totalDays / doneCases.length);
-              }
-              return (
-                <div key={g.id} style={{ background: "#F7F6F3", borderRadius: 10, padding: "14px 16px", borderLeft: "3px solid " + g.color }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: g.color, marginBottom: 8 }}>{g.label}</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: "#1A1917", marginBottom: 2 }}>{g.total}건</div>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>승인 {g.approved}건</div>
-                  <div style={{ height: 4, background: "#E8E5E0", borderRadius: 99 }}>
-                    <div style={{ height: 4, background: g.color, borderRadius: 99, width: g.rate + "%" }} />
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5 }}>
-                    <span style={{ fontSize: 10, color: g.color, fontWeight: 600 }}>승인율 {g.rate}%</span>
-                    {avgDays > 0 && <span style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>평균 {avgDays}일</span>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* 🆕 미완료 업무 노트 위젯 */}
-      {(function() {
-        var today = kstDate();
-        var myTodos = companies ? [] : []; // 실제 work_notes에서 가져와야 하므로 별도 처리
-        return null; // 업무노트는 WorkNotesView에서 관리
-      })()}
-
       {/* 🆕 오늘의 할 일 위젯 */}
       {(function() {
         var today = kstDate();
@@ -2196,6 +2102,131 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         );
       })()}
 
+      {/* 📅 이번 달 진행 요약 (신규·승인·부결) */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 22 }}>
+        {[
+          { label: "이번달 신규 진행", value: monthNewCount, sub: thisMonth + "월 생성 건", color: "#4338CA" },
+          { label: "이번달 승인 완료", value: monthApprovedCount, sub: "승인·약정·완료", color: "#15803D" },
+          { label: "이번달 부결", value: monthRejectedCount, sub: "부결·반려", color: "#DC2626" },
+        ].map(function(k, i) {
+          return (
+            <div key={i} style={{ background: "#fff", borderRadius: 12, padding: "18px 20px", border: "1px solid #E8E5E0" }}>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>{k.label}</div>
+              <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.04em", color: k.color }}>{k.value}건</div>
+              <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>{k.sub}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>파이프라인 단계별 현황</div>
+        <div style={{ display: "flex", gap: 10 }}>
+          {STAGES.map((stage, i) => {
+            const c = STAGE_COLORS[stage];
+            const count = stageCount[stage] || 0;
+            const pct = companies.length ? Math.round(count / companies.length * 100) : 0;
+            return (
+              <div key={stage} onClick={() => { setView("list"); setFilterStage(stage); }}
+                style={{ flex: 1, background: c.bg, border: `1px solid ${c.border}`, borderRadius: 10, padding: "14px 16px", cursor: "pointer" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: c.text }}>0{i+1}</span>
+                  <span style={{ fontSize: 18, fontWeight: 700, color: c.text }}>{count}</span>
+                </div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: c.text, marginBottom: 8 }}>{stage}</div>
+                <div style={{ height: 4, background: `${c.border}`, borderRadius: 99 }}>
+                  <div style={{ height: 4, background: c.text, borderRadius: 99, width: pct + "%" }} />
+                </div>
+                <div style={{ fontSize: 10, color: c.text, marginTop: 4, opacity: 0.7 }}>{pct}%</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 👥 팀 활동 위젯 */}
+      <TeamActivityWidget profiles={profiles} />
+
+      {/* 📊 담당자별 업체 수 막대그래프 */}
+      <AssigneeWorkloadChart companies={companies} setView={setView} setFilterAssignee={setFilterAssignee} />
+
+      {/* 기관별 이번 달 현황 */}
+      {true && (
+        <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>기관별 이번 달 현황 <span style={{ fontSize: 12, color: "#888", fontWeight: 400 }}>{thisMonth}월</span></div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
+            {agencyStats.map(function(g) {
+              var allCases = agencyCases.filter(function(c) { return g.ids.includes(c.agency_group); });
+              var doneCases = allCases.filter(function(c) { return DONE_STATUSES.includes(c.status) && c.contract_date; });
+              var avgDays = 0;
+              if (doneCases.length > 0) {
+                var totalDays = doneCases.reduce(function(s, c) {
+                  var contractDate = new Date(c.contract_date);
+                  var createdDate = new Date(c.created_at || c.contract_date);
+                  var diff = Math.max(0, Math.floor((contractDate - createdDate) / 86400000));
+                  return s + diff;
+                }, 0);
+                avgDays = Math.round(totalDays / doneCases.length);
+              }
+              return (
+                <div key={g.id} style={{ background: "#F7F6F3", borderRadius: 10, padding: "14px 16px", borderLeft: "3px solid " + g.color }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: g.color, marginBottom: 8 }}>{g.label}</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: "#1A1917", marginBottom: 2 }}>{g.total}건</div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>승인 {g.approved}건</div>
+                  <div style={{ height: 4, background: "#E8E5E0", borderRadius: 99 }}>
+                    <div style={{ height: 4, background: g.color, borderRadius: 99, width: g.rate + "%" }} />
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5 }}>
+                    <span style={{ fontSize: 10, color: g.color, fontWeight: 600 }}>승인율 {g.rate}%</span>
+                    {avgDays > 0 && <span style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>평균 {avgDays}일</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* 🆕 미수금 / 입금 예정 위젯 */}
+      {(function() {
+        var unpaidList = companies.filter(function(c) { return c.fee_status === "계약금수령" || c.fee_status === "미수령"; });
+        var unpaidTotal = unpaidList.reduce(function(sum, c) { var amt = parseInt((c.received_amount || c.request_amount || "0").toString().replace(/[^0-9]/g, "")) || 0; return sum + amt; }, 0);
+        var paidList = companies.filter(function(c) { return c.fee_status === "수수료수령완료"; });
+        var paidTotal = paidList.reduce(function(sum, c) { var amt = parseInt((c.received_amount || "0").toString().replace(/[^0-9]/g, "")) || 0; return sum + amt; }, 0);
+        var formatAmt = function(n) { if (n >= 100000000) return (n / 100000000).toFixed(1) + "억"; if (n >= 10000) return Math.round(n / 10000) + "만"; return n + "원"; };
+        return (
+          <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>💰 수수료 현황</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
+              <div onClick={function() { setView("settlement"); }} style={{ background: "#FEF2F2", borderRadius: 10, padding: "14px 16px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
+                <div style={{ fontSize: 11, color: "#DC2626", fontWeight: 700, marginBottom: 5 }}>미수금</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: "#DC2626" }}>{formatAmt(unpaidTotal)}</div>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>{unpaidList.length}건 미입금</div>
+              </div>
+              <div onClick={function() { setView("settlement"); }} style={{ background: "#F0FDF4", borderRadius: 10, padding: "14px 16px", cursor: "pointer", borderLeft: "3px solid #15803D" }}>
+                <div style={{ fontSize: 11, color: "#15803D", fontWeight: 700, marginBottom: 5 }}>입금 완료</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: "#15803D" }}>{formatAmt(paidTotal)}</div>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>{paidList.length}건 완료</div>
+              </div>
+              <div style={{ background: "#F7F6F3", borderRadius: 10, padding: "14px 16px", borderLeft: "3px solid #4338CA" }}>
+                <div style={{ fontSize: 11, color: "#4338CA", fontWeight: 700, marginBottom: 5 }}>총 수수료</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: "#4338CA" }}>{formatAmt(unpaidTotal + paidTotal)}</div>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>전체 합계</div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* 🆕 미완료 업무 노트 위젯 */}
+      {(function() {
+        var today = kstDate();
+        var myTodos = companies ? [] : []; // 실제 work_notes에서 가져와야 하므로 별도 처리
+        return null; // 업무노트는 WorkNotesView에서 관리
+      })()}
+
       {/* 💬 카톡 자주 쓰는 문구 (클릭하면 복사) */}
       <div style={{ background: "#fff", borderRadius: 12, padding: "16px 20px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
@@ -2302,37 +2333,6 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
                   onClick={function() { onSelectCompany(od.company); }} />;
               })}
             </Group>
-          </div>
-        );
-      })()}
-
-      {/* 🆕 미수금 / 입금 예정 위젯 */}
-      {(function() {
-        var unpaidList = companies.filter(function(c) { return c.fee_status === "계약금수령" || c.fee_status === "미수령"; });
-        var unpaidTotal = unpaidList.reduce(function(sum, c) { var amt = parseInt((c.received_amount || c.request_amount || "0").toString().replace(/[^0-9]/g, "")) || 0; return sum + amt; }, 0);
-        var paidList = companies.filter(function(c) { return c.fee_status === "수수료수령완료"; });
-        var paidTotal = paidList.reduce(function(sum, c) { var amt = parseInt((c.received_amount || "0").toString().replace(/[^0-9]/g, "")) || 0; return sum + amt; }, 0);
-        var formatAmt = function(n) { if (n >= 100000000) return (n / 100000000).toFixed(1) + "억"; if (n >= 10000) return Math.round(n / 10000) + "만"; return n + "원"; };
-        return (
-          <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
-            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>💰 수수료 현황</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
-              <div onClick={function() { setView("settlement"); }} style={{ background: "#FEF2F2", borderRadius: 10, padding: "14px 16px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
-                <div style={{ fontSize: 11, color: "#DC2626", fontWeight: 700, marginBottom: 5 }}>미수금</div>
-                <div style={{ fontSize: 22, fontWeight: 700, color: "#DC2626" }}>{formatAmt(unpaidTotal)}</div>
-                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>{unpaidList.length}건 미입금</div>
-              </div>
-              <div onClick={function() { setView("settlement"); }} style={{ background: "#F0FDF4", borderRadius: 10, padding: "14px 16px", cursor: "pointer", borderLeft: "3px solid #15803D" }}>
-                <div style={{ fontSize: 11, color: "#15803D", fontWeight: 700, marginBottom: 5 }}>입금 완료</div>
-                <div style={{ fontSize: 22, fontWeight: 700, color: "#15803D" }}>{formatAmt(paidTotal)}</div>
-                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>{paidList.length}건 완료</div>
-              </div>
-              <div style={{ background: "#F7F6F3", borderRadius: 10, padding: "14px 16px", borderLeft: "3px solid #4338CA" }}>
-                <div style={{ fontSize: 11, color: "#4338CA", fontWeight: 700, marginBottom: 5 }}>총 수수료</div>
-                <div style={{ fontSize: 22, fontWeight: 700, color: "#4338CA" }}>{formatAmt(unpaidTotal + paidTotal)}</div>
-                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>전체 합계</div>
-              </div>
-            </div>
           </div>
         );
       })()}
