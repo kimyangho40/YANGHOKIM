@@ -949,8 +949,10 @@ function CRMApp({ profile, session }) {
 
   const filtered = useMemo(() => (companies || []).filter(c => {
     const s = search.toLowerCase();
+    const sDigits = s.replace(/[^0-9]/g, "");
     const matchSearch = !s || c.name?.toLowerCase().includes(s) || c.representative?.toLowerCase().includes(s)
-      || c.region?.toLowerCase().includes(s) || c.industry?.toLowerCase().includes(s);
+      || c.region?.toLowerCase().includes(s) || c.industry?.toLowerCase().includes(s)
+      || (!!sDigits && (c.phone || "").replace(/[^0-9]/g, "").includes(sDigits));
     const matchStage = filterStage === "전체" || c.stage === filterStage;
     const matchAssignee = filterAssignee === "전체" || (c.assignee || "").split(",").map(function(x) { return x.trim(); }).includes(filterAssignee);
     const matchType = filterType === "전체" || c.type === filterType;
@@ -1846,6 +1848,19 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
   const [kpiGoals, setKpiGoals] = useState([]);
   const [editingKpi, setEditingKpi] = useState(false);
   const [kpiEdits, setKpiEdits] = useState({});
+  const [copiedTpl, setCopiedTpl] = useState(null); // 카톡 템플릿/할일 복사 피드백
+  const copyToClipboard = function(text, key) {
+    navigator.clipboard?.writeText(text).then(function() {
+      setCopiedTpl(key);
+      setTimeout(function() { setCopiedTpl(function(cur) { return cur === key ? null : cur; }); }, 1500);
+    });
+  };
+  const KAKAO_TEMPLATES = [
+    { key: "tpl_docs", label: "서류 요청", text: "안녕하세요 대표님, 진행에 필요한 서류(사업자등록증·매출자료 등) 준비되시면 회신 부탁드립니다 🙏" },
+    { key: "tpl_received", label: "접수 완료", text: "대표님, 신청 접수 완료되었습니다. 결과 나오는 대로 바로 안내드리겠습니다." },
+    { key: "tpl_schedule", label: "일정 안내", text: "안녕하세요 대표님, 다음 진행 일정 안내드립니다. 확인 후 연락 부탁드립니다." },
+    { key: "tpl_supplement", label: "부결/보완", text: "대표님, 보완 요청이 있어 안내드립니다. 통화 가능하신 시간 알려주세요." },
+  ];
   const thisMonth = new Date().getMonth() + 1;
   const thisYear = 2026;
 
@@ -1915,6 +1930,36 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
           <Icon name="plus" size={15} color="#F7F6F3" /> 신규 업체 등록
         </button>
       </div>
+
+      {/* 🚨 장기 방치 알림 (30일 이상 변화 없음) */}
+      {(function() {
+        var longStale = companies.filter(function(c) { return (c.stagnant_days || 0) >= 30; })
+          .sort(function(a, b) { return (b.stagnant_days || 0) - (a.stagnant_days || 0); });
+        if (longStale.length === 0) return null;
+        return (
+          <div style={{ background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 12, padding: "16px 20px", marginBottom: 22 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <span style={{ fontSize: 16 }}>🚨</span>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#B91C1C" }}>장기 방치 업체 {longStale.length}건</div>
+              <div style={{ fontSize: 11, color: "#DC2626" }}>30일 이상 변화 없음 · 즉시 확인 필요</div>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {longStale.map(function(c) {
+                return (
+                  <div key={c.id} onClick={function() { onSelectCompany(c); }}
+                    style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", border: "1px solid #FCA5A5", borderRadius: 8, padding: "7px 11px", cursor: "pointer" }}
+                    title={c.stage + " · " + (c.assignee || "담당없음")}>
+                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#DC2626", flexShrink: 0 }} />
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "#1A1917" }}>{c.name}</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#DC2626" }}>{c.stagnant_days}일</span>
+                    {c.assignee && <span style={{ fontSize: 11, color: "#999" }}>· {c.assignee}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 22 }}>
         {[
@@ -2147,6 +2192,116 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
                 </div>
               </div>
             )}
+          </div>
+        );
+      })()}
+
+      {/* 💬 카톡 자주 쓰는 문구 (클릭하면 복사) */}
+      <div style={{ background: "#fff", borderRadius: 12, padding: "16px 20px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <span style={{ fontSize: 15 }}>💬</span>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1A1917" }}>카톡 자주 쓰는 문구</div>
+          <div style={{ fontSize: 11, color: "#999" }}>버튼 클릭 → 복사 → 카톡에 붙여넣기</div>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {KAKAO_TEMPLATES.map(function(t) {
+            var done = copiedTpl === t.key;
+            return (
+              <button key={t.key} onClick={function() { copyToClipboard(t.text, t.key); }} title={t.text}
+                style={{ display: "flex", alignItems: "center", gap: 5, background: done ? "#DCFCE7" : "#F7F6F3", color: done ? "#15803D" : "#4338CA", border: "1px solid " + (done ? "#86EFAC" : "#E8E5E0"), borderRadius: 8, padding: "8px 13px", fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}>
+                {done ? "✅ 복사됨" : "📋 " + t.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ✅ 오늘 챙길 업체 리스트 (후속연락·만기임박·서류대기) */}
+      {(function() {
+        var today = kstDate();
+        var followup = companies.filter(function(c) { return c.next_contact && c.next_contact <= today; })
+          .sort(function(a, b) { return (a.next_contact || "").localeCompare(b.next_contact || ""); });
+        var dueSoon = companies.filter(function(c) {
+          if (!c.next_action) return false;
+          var nd = nearestActionDate(c.next_action);
+          if (nd === null) return false;
+          var d = daysUntil(nd);
+          return d !== null && d <= 3;
+        }).sort(function(a, b) { return daysUntil(nearestActionDate(a.next_action)) - daysUntil(nearestActionDate(b.next_action)); });
+        var docWait = [];
+        (companies || []).forEach(function(c) {
+          var dates = c.doc_request_dates;
+          if (!dates || typeof dates !== "object") return;
+          var recv = (c.received_docs || "").split(",").map(function(s) { return s.trim(); });
+          Object.keys(dates).forEach(function(doc) {
+            if (recv.indexOf(doc) >= 0) return;
+            var dd = Math.floor((new Date().setHours(0,0,0,0) - new Date(dates[doc]).setHours(0,0,0,0)) / 86400000);
+            if (dd >= 3) docWait.push({ company: c, doc: doc, days: dd });
+          });
+        });
+        docWait.sort(function(a, b) { return b.days - a.days; });
+        if (followup.length === 0 && dueSoon.length === 0 && docWait.length === 0) return null;
+
+        var Chip = function(props) {
+          return (
+            <div onClick={props.onClick} title={props.title || ""}
+              style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", border: "1px solid " + props.border, borderRadius: 8, padding: "7px 11px", cursor: "pointer" }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: props.dot, flexShrink: 0 }} />
+              <span style={{ fontSize: 13, fontWeight: 600, color: "#1A1917" }}>{props.name}</span>
+              {props.extra && <span style={{ fontSize: 11, fontWeight: 700, color: props.dot }}>{props.extra}</span>}
+            </div>
+          );
+        };
+        var Group = function(props) {
+          if (props.items.length === 0) return null;
+          return (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: props.color }}>{props.icon} {props.title} <span style={{ color: "#999" }}>{props.items.length}건</span></div>
+                <button onClick={function() { copyToClipboard(props.copyText, props.copyKey); }}
+                  style={{ fontSize: 11, fontWeight: 600, color: copiedTpl === props.copyKey ? "#15803D" : "#666", background: copiedTpl === props.copyKey ? "#DCFCE7" : "#F7F6F3", border: "1px solid #E8E5E0", borderRadius: 6, padding: "3px 9px", cursor: "pointer" }}>
+                  {copiedTpl === props.copyKey ? "✅ 복사됨" : "📋 목록 복사"}
+                </button>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>{props.children}</div>
+            </div>
+          );
+        };
+
+        var followupCopy = "[오늘 후속연락]\n" + followup.map(function(c) { return "• " + c.name + (c.phone ? " (" + c.phone + ")" : "") + " - " + (c.assignee || "담당없음"); }).join("\n");
+        var dueSoonCopy = "[만기 임박 업무]\n" + dueSoon.map(function(c) { var d = daysUntil(nearestActionDate(c.next_action)); return "• " + c.name + " - " + (d < 0 ? Math.abs(d) + "일 지남" : d === 0 ? "오늘까지" : d + "일 남음"); }).join("\n");
+        var docWaitCopy = "[서류 대기]\n" + docWait.map(function(od) { return "• " + od.company.name + " - " + od.doc + " (" + od.days + "일째)"; }).join("\n");
+
+        return (
+          <div style={{ background: "#fff", borderRadius: 12, padding: "18px 22px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+              <span style={{ fontSize: 16 }}>✅</span>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#1A1917" }}>오늘 챙길 업체</div>
+              <div style={{ fontSize: 11, color: "#999" }}>클릭하면 업체 상세 열림</div>
+            </div>
+            <Group icon="📞" title="후속연락 필요" color="#B45309" items={followup} copyText={followupCopy} copyKey="grp_followup">
+              {followup.map(function(c) {
+                var over = c.next_contact < today;
+                return <Chip key={c.id} name={c.name} dot={over ? "#DC2626" : "#F59E0B"} border={over ? "#FCA5A5" : "#FCD34D"}
+                  extra={over ? "기한지남" : "오늘"} title={c.stage + " · " + (c.assignee || "담당없음")}
+                  onClick={function() { onSelectCompany(c); }} />;
+              })}
+            </Group>
+            <Group icon="⏰" title="만기 임박" color="#4338CA" items={dueSoon} copyText={dueSoonCopy} copyKey="grp_duesoon">
+              {dueSoon.map(function(c) {
+                var d = daysUntil(nearestActionDate(c.next_action));
+                return <Chip key={c.id} name={c.name} dot={d < 0 ? "#DC2626" : "#4338CA"} border={d < 0 ? "#FCA5A5" : "#C7D2FE"}
+                  extra={d < 0 ? Math.abs(d) + "일 지남" : d === 0 ? "오늘" : d + "일 남음"} title={c.next_action}
+                  onClick={function() { onSelectCompany(c); }} />;
+              })}
+            </Group>
+            <Group icon="📮" title="서류 대기" color="#DC2626" items={docWait} copyText={docWaitCopy} copyKey="grp_docwait">
+              {docWait.map(function(od, i) {
+                return <Chip key={od.company.id + "_" + i} name={od.company.name} dot="#DC2626" border="#FCA5A5"
+                  extra={od.doc + " " + od.days + "일"} title={"요청 " + od.days + "일째 미수령: " + od.doc}
+                  onClick={function() { onSelectCompany(od.company); }} />;
+              })}
+            </Group>
           </div>
         );
       })()}
@@ -3669,6 +3824,18 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
     navigator.clipboard?.writeText(txt).then(() => {});
   };
 
+  // 📋 카톡용 한 줄 복사: 업체명 / 신청기관 / 진행단계 / 다음액션
+  const [kakaoCopied, setKakaoCopied] = useState(false);
+  const copyKakaoLine = () => {
+    var agency = (data.agency || "").split(",").map(function(x) { return x.trim(); }).filter(Boolean)[0] || "-";
+    var action = (data.next_action || "").split("\n").map(function(x) { return x.trim(); }).filter(Boolean)[0] || "-";
+    var parts = [data.name || "-", agency, data.stage || "-", action];
+    navigator.clipboard?.writeText(parts.join(" / ")).then(function() {
+      setKakaoCopied(true);
+      setTimeout(function() { setKakaoCopied(false); }, 1500);
+    });
+  };
+
   // 기관진행 탭: agency_cases를 기관(agency_group)별로 묶어 섹션 표시
   const groupedAgency = useMemo(function() {
     var order = AGENCY_GROUPS.map(function(g) { return g.id; });
@@ -3748,7 +3915,13 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   title="클릭하여 수정">{data.phone || "전화번호 입력"}</span>
               </div>
             </div>
-            <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#888" }}><Icon name="x" size={20} color="#888" /></button>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+              <button onClick={copyKakaoLine} title="업체명 / 신청기관 / 진행단계 / 다음액션 한 줄 복사"
+                style={{ display: "flex", alignItems: "center", gap: 4, background: kakaoCopied ? "#DCFCE7" : "#fff", color: kakaoCopied ? "#15803D" : "#4338CA", border: "1px solid " + (kakaoCopied ? "#86EFAC" : "#C7D2FE"), borderRadius: 7, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                {kakaoCopied ? "✅ 복사됨" : "📋 상태 복사"}
+              </button>
+              <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#888" }}><Icon name="x" size={20} color="#888" /></button>
+            </div>
           </div>
           {/* 단계 변경 */}
           <div style={{ display: "flex", gap: 4, marginTop: 14, flexWrap: "wrap" }}>
