@@ -154,6 +154,11 @@ function teamByName(name) {
   var n = (name || "").replace(/\s+/g, "");
   return (n.indexOf("(주)") !== -1 || n.indexOf("㈜") !== -1 || n.indexOf("주식회사") !== -1) ? "법인팀" : "개인팀";
 }
+// 업체의 팀 반환: DB에 저장된 team이 있으면 우선 사용(수동 변경 반영), 없으면 업체명 기준 자동 분류
+function teamOf(co) {
+  if (co && co.team) return co.team;
+  return teamByName(co && co.name);
+}
 const TEAM_FILTER_OPTS = ["전체", "법인팀", "개인팀"];
 const DOC_LIST = ["사업자등록증","최근 3년치 재무제표 (23년~25년)","최근 3년치 부가세 증명원 (23년~25년)","법인 기업 금융거래 확인서","대표자 신용점수","4대보험 명부","월별 고용보험 가입자 명부","그 외 사업전환 필수 서류","최근 1년 수출실적 증명서","사업자 대출 금융거래 확인서","대표자 신분증","임대차 계약서","회사 소개서 또는 사업계획서","2026년 상반기 부가세 증명원","대표자 개인 대출 금융거래 확인서","직전연도 상시근로자 수 파악","기업 인증 자료 (벤처·이노비즈·연구전담 부서 등)","특허 및 상표권 관련 자료"];
 const TEAMS = ["법인전담","개인전담","관리자"];
@@ -984,7 +989,7 @@ function CRMApp({ profile, session }) {
       const has = (c.agency || "").split(",").map(function(x) { return x.trim(); }).filter(Boolean);
       return has.some(function(a) { return want.includes(a); });
     })();
-    const matchTeam = filterTeam === "전체" || teamByName(c.name) === filterTeam;
+    const matchTeam = filterTeam === "전체" || teamOf(c) === filterTeam;
     let matchCredit = true;
     if (creditFilter !== "" && !isNaN(parseInt(creditFilter))) {
       const n = parseInt(creditFilter);
@@ -1077,6 +1082,11 @@ function CRMApp({ profile, session }) {
     if (rest.doc_request_dates && typeof rest.doc_request_dates === "object") updateObj.doc_request_dates = rest.doc_request_dates;
     const { error } = await supabase.from("companies").update(updateObj).eq("id", rest.id);
     if (!error) {
+      // 팀 자동/수동 분류값 저장 (team 컬럼 미생성 시 무시 → 일반 저장은 정상 동작)
+      try {
+        var wantTeamU = rest.team || teamByName(rest.name);
+        await supabase.from("companies").update({ team: wantTeamU }).eq("id", rest.id);
+      } catch (teamErr) { /* team 컬럼 없음 등 → 무시, 화면은 업체명 기준 자동 표시 */ }
       // 🆕 stage가 "부결/반려"로 새로 바뀌면 → 사례집 자동 초안 생성
       if (rest.stage === "부결/반려" && prevData && prevData.stage !== "부결/반려") {
         try {
@@ -1300,7 +1310,10 @@ function CRMApp({ profile, session }) {
     if (!error && co) {
       // 서류 체크리스트 자동 생성
       var docsInsert = await supabase.from("documents").insert(DOC_LIST.map(d => ({ company_id: co.id, doc_name: d, received: false }))).select();
-      var newCompany = Object.assign({}, co, { documents: docsInsert.data || [] });
+      // 팀 자동/수동 분류값 저장 (team 컬럼 미생성 시 무시)
+      var wantTeamA = form.team || teamByName(form.name);
+      try { await supabase.from("companies").update({ team: wantTeamA }).eq("id", co.id); } catch (teamErr) { /* 무시 */ }
+      var newCompany = Object.assign({}, co, { documents: docsInsert.data || [], team: wantTeamA });
       showToast("신규 업체가 등록됐어요! 상세 정보를 입력하세요.");
       setShowAdd(false);
       // 등록 후 곧바로 기업 상세 화면 자동 오픈 (두 번 일 안 하도록)
@@ -3396,7 +3409,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                     ) : (
                       <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
                         <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{co.name}</span>
-                        {(function() { var tm = teamByName(co.name); return <span title="업체명 기준 자동 분류" style={{ flexShrink: 0, fontSize: 9, padding: "2px 6px", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap", background: tm === "법인팀" ? "#EEF2FF" : "#F0FDF4", color: tm === "법인팀" ? "#4338CA" : "#15803D" }}>{tm}</span>; })()}
+                        {(function() { var tm = teamOf(co); return <span title="팀 (저장값 우선 · 없으면 업체명 기준 자동)" style={{ flexShrink: 0, fontSize: 9, padding: "2px 6px", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap", background: tm === "법인팀" ? "#EEF2FF" : "#F0FDF4", color: tm === "법인팀" ? "#4338CA" : "#15803D" }}>{tm}</span>; })()}
                         {co.stagnant_days >= 7 && <span style={{ fontSize: 10, color: "#DC2626" }}>⚠</span>}
                         <button onClick={e => { e.stopPropagation(); setEditNameId(co.id); setEditNameVal(co.name); }}
                           style={{ background: "none", border: "none", cursor: "pointer", padding: 2, opacity: 0, transition: "opacity 0.15s" }}
@@ -4085,6 +4098,22 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                         <button key={t} onClick={function() { setData(function(p) { return Object.assign({}, p, { business_type: t }); }); }}
                           style={{ flex: 1, padding: "6px 8px", borderRadius: 6, fontSize: 12, fontWeight: 600,
                             background: sel ? (t === "법인사업자" ? "#4338CA" : "#0F6E56") : "#fff",
+                            color: sel ? "#fff" : "#666",
+                            border: sel ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
+                          {t}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>팀 <span style={{ color: "#AAA", fontSize: 9 }}>(업체명 기준 자동 · 수동 변경 가능)</span></div>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                    {["법인팀","개인팀"].map(function(t) {
+                      var cur = data.team || teamByName(data.name);
+                      var sel = cur === t;
+                      return (
+                        <button key={t} onClick={function() { setData(function(p) { return Object.assign({}, p, { team: t }); }); }}
+                          style={{ flex: 1, padding: "6px 8px", borderRadius: 6, fontSize: 12, fontWeight: 600,
+                            background: sel ? (t === "법인팀" ? "#4338CA" : "#0F6E56") : "#fff",
                             color: sel ? "#fff" : "#666",
                             border: sel ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
                           {t}
@@ -4975,7 +5004,7 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
     // 기본 정보
     name: "", type: "법인", representative: "", phone: "",
     stage: "상담/진단완료", assignee: "", agency_list: [],
-    business_type: "법인사업자", industry: "",
+    business_type: "법인사업자", industry: "", team: "개인팀",
     // 추가 정보
     business_number: "",
     employee_count: "",
@@ -4997,6 +5026,8 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
   const [autoFilled, setAutoFilled] = useState({});
   // 첨부 파일명 표시용
   const [attachedFile, setAttachedFile] = useState(null);
+  // 팀을 사용자가 직접 골랐는지 여부 (true면 업체명 변경해도 자동 갱신 안 함)
+  const [teamTouched, setTeamTouched] = useState(false);
 
   const set = function(k, v) { setForm(function(p) { return Object.assign({}, p, { [k]: v }); }); };
   const setMulti = function(obj) { setForm(function(p) { return Object.assign({}, p, obj); }); };
@@ -5077,7 +5108,7 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
           {/* 업체명 */}
           <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
             <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>업체명 *</div>
-            <input value={form.name} onChange={function(e) { set("name", e.target.value); }} autoFocus
+            <input value={form.name} onChange={function(e) { var v = e.target.value; set("name", v); if (!teamTouched) set("team", teamByName(v)); }} autoFocus
               style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
           </div>
 
@@ -5181,6 +5212,23 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
                   <button key={t} onClick={function() { set("business_type", t); set("type", t === "법인사업자" ? "법인" : "개인"); }}
                     style={{ flex: 1, padding: "6px 8px", borderRadius: 6, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer",
                       background: sel ? (t === "법인사업자" ? "#4338CA" : "#0F6E56") : "#fff", color: sel ? "#fff" : "#888" }}>
+                    {t}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 팀 (업체명 기준 자동 분류 · 필요 시 수동 변경) */}
+          <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>팀 {!teamTouched && <span style={{ color: "#15803D", fontSize: 9, fontWeight: 700 }}>✓ 업체명 기준 자동</span>}</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              {["법인팀","개인팀"].map(function(t) {
+                var sel = form.team === t;
+                return (
+                  <button key={t} onClick={function() { setTeamTouched(true); set("team", t); }}
+                    style={{ flex: 1, padding: "6px 8px", borderRadius: 6, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer",
+                      background: sel ? (t === "법인팀" ? "#4338CA" : "#0F6E56") : "#fff", color: sel ? "#fff" : "#888" }}>
                     {t}
                   </button>
                 );
