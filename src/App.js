@@ -852,6 +852,37 @@ function CRMApp({ profile, session }) {
     return function() { window.removeEventListener("keydown", onKey); };
   }, []);
 
+  // 📅 월별 업무 자동생성 — 매월 첫 접속 시 담당자 월 업무노트 1건 자동 생성 (중복 방지)
+  useEffect(function() {
+    if (!profile || !profile.name) return;
+    var today = kstDate();          // "YYYY-MM-DD" (KST)
+    var ym = today.slice(0, 7);     // "YYYY-MM"
+    var lsKey = "monthly_autogen_" + profile.name + "_" + ym;
+    if (localStorage.getItem(lsKey)) return; // 이번 달은 이미 처리함 (재접속 시 스킵)
+    var monthNum = parseInt(ym.slice(5, 7), 10);
+    var firstDay = ym + "-01";
+    var title = monthNum + "월 " + profile.name + " 업무";
+    var run = async function() {
+      // 중복 방지: 같은 담당자·같은 note_date·같은 제목 노트가 이미 있으면 생성 안 함
+      var dup = await supabase.from("work_notes")
+        .select("id").eq("assignee", profile.name).eq("note_date", firstDay)
+        .eq("title", title).is("deleted_at", null).limit(1);
+      if (dup.error) return; // 조회 실패 시 조용히 중단 (다음 접속에 재시도)
+      if (dup.data && dup.data.length > 0) { localStorage.setItem(lsKey, "1"); return; }
+      var ins = await supabase.from("work_notes").insert({
+        assignee: profile.name,
+        title: title,
+        content: "- [ ] \n",
+        is_todo: true,
+        pinned: false,
+        created_by: profile.name,
+        note_date: firstDay,
+      });
+      if (!ins.error) localStorage.setItem(lsKey, "1");
+    };
+    run();
+  }, [profile]);
+
   // 알림 폴링 - 내 담당 새 노트 확인 (30초마다)
   useEffect(function() {
     if (!profile) return;
@@ -4011,6 +4042,32 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               </button>
             ))}
           </div>
+        </div>
+
+        {/* 🔎 한눈 요약 (통합뷰) — 대표/기관/단계/정산 + 최근활동 */}
+        <div style={{ padding: "12px 24px", borderBottom: "1px solid #E8E5E0", background: "#F7F6F3", display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {[
+              { label: "대표", value: data.representative || "-" },
+              { label: "기관", value: agencyGrouped.length > 0 ? (agencyGrouped.length === 1 ? agencyGrouped[0].key : (agencyGrouped[0].key + " 외 " + (agencyGrouped.length - 1))) : (data.agency || "-") },
+              { label: "단계", value: data.stage || "-" },
+              { label: "정산", value: settlements.length > 0 ? (settlements.length + "건") : "-" },
+            ].map(function(it) {
+              return (
+                <div key={it.label} title={typeof it.value === "string" ? it.value : ""}
+                  style={{ display: "flex", alignItems: "center", gap: 5, background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, padding: "5px 10px", fontSize: 12, maxWidth: 200 }}>
+                  <span style={{ color: "#999", fontWeight: 600, flexShrink: 0 }}>{it.label}</span>
+                  <span style={{ color: "#1A1917", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.value}</span>
+                </div>
+              );
+            })}
+          </div>
+          {(data.next_action || data.issue) && (
+            <div style={{ fontSize: 12, color: "#555", display: "flex", gap: 6, alignItems: "flex-start" }}>
+              <span style={{ color: "#999", fontWeight: 600, flexShrink: 0 }}>최근활동</span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{data.next_action || data.issue}</span>
+            </div>
+          )}
         </div>
 
         {/* 탭 */}
