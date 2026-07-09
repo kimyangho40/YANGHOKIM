@@ -5971,19 +5971,19 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
           )}
         </div>
         {isMyNote && (
-          <div style={{ display: "flex", gap: 4 }}>
+          <div className="wn-actions" style={{ display: "flex", gap: 4 }}>
             <button onClick={function() { togglePin(note); }} title={note.pinned ? "고정 해제" : "고정"}
-              style={{ background: "none", border: "none", cursor: "pointer", padding: 4, fontSize: 14, opacity: note.pinned ? 1 : 0.4 }}>📌</button>
-            <label title="다른 날짜로 이동" style={{ position: "relative", display: "inline-flex", alignItems: "center", cursor: "pointer", padding: 4, fontSize: 14 }}>
+              style={{ background: "none", border: "none", cursor: "pointer", padding: 8, fontSize: 18, minWidth: 40, minHeight: 40, display: "inline-flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation", opacity: note.pinned ? 1 : 0.4 }}>📌</button>
+            <label title="다른 날짜로 이동" style={{ position: "relative", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 8, fontSize: 18, minWidth: 40, minHeight: 40, touchAction: "manipulation" }}>
               📅
               <input type="date" defaultValue={note.note_date || ""}
                 onChange={function(e) { if (e.target.value && moveNoteDate) moveNoteDate(note.id, e.target.value); }}
                 style={{ position: "absolute", left: 0, top: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer" }} />
             </label>
             <button onClick={function() { setEditingId(note.id); setEditNote(Object.assign({}, note)); window.scrollTo({ top: 0, behavior: "smooth" }); }}
-              style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Icon name="edit" size={14} color="#888" /></button>
+              title="수정" style={{ background: "none", border: "none", cursor: "pointer", padding: 8, minWidth: 40, minHeight: 40, display: "inline-flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation" }}><Icon name="edit" size={18} color="#888" /></button>
             <button onClick={function() { deleteNote(note.id); }}
-              style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Icon name="x" size={14} color="#CCC" /></button>
+              title="삭제" style={{ background: "none", border: "none", cursor: "pointer", padding: 8, minWidth: 40, minHeight: 40, display: "inline-flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation" }}><Icon name="x" size={18} color="#CCC" /></button>
           </div>
         )}
       </div>
@@ -6103,11 +6103,14 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       "@media(max-width:600px){",
       ".wn-root input,.wn-root textarea,.wn-root select{font-size:16px !important;}", // iOS 자동확대 방지
       ".wn-root .wn-header{flex-direction:column !important; align-items:stretch !important; gap:12px !important;}",
-      ".wn-root .wn-actions{flex-wrap:wrap !important; justify-content:flex-start !important;}",
-      ".wn-root .wn-actions button{flex:0 0 auto; min-height:42px;}", // 터치 영역 확보
       ".wn-root .wn-addform{max-width:100% !important; width:100% !important; padding:14px !important;}",
       ".wn-root .wn-card{padding:14px !important;}",
       ".wn-root{padding-bottom:90px !important;}",
+      "}",
+      // 📱 모바일·태블릿 노트 액션(고정/이동/수정/삭제) 터치 영역 확대
+      "@media(max-width:1024px){",
+      ".wn-root .wn-actions{flex-wrap:wrap !important; gap:6px !important; justify-content:flex-end !important;}",
+      ".wn-root .wn-actions button,.wn-root .wn-actions label{flex:0 0 auto !important; min-width:44px !important; min-height:44px !important; padding:10px !important;}",
       "}"
     ].join("");
     document.head.appendChild(st);
@@ -6532,7 +6535,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <button onClick={function() { setViewMode("list"); }}
               style={{ padding: "6px 12px", fontSize: 12, fontWeight: 600, background: viewMode === "list" ? "#fff" : "transparent", border: "1px solid " + (viewMode === "list" ? "#E8E5E0" : "transparent"), borderRadius: 6, color: viewMode === "list" ? "#1A1917" : "#888", cursor: "pointer" }}>📋 목록</button>
           </div>
-          <button onClick={function() { var nd = selectedDate || todayStr; var md = nd ? (parseInt(nd.slice(5,7)) + "월" + parseInt(nd.slice(8,10)) + "일") : ""; var autoTitle = (md ? md + " " : "") + (profile?.name || "") + " 업무"; setShowAdd(true); setNewNote({ title: autoTitle, content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "", note_date: nd }); }}
+          <button onClick={function() { var nd = selectedDate || todayStr; var md = nd ? (parseInt(nd.slice(5,7)) + "월" + parseInt(nd.slice(8,10)) + "일") : ""; var pickName = (filterAssignee !== "전체" ? filterAssignee : (profile?.name || "")); var autoTitle = (md ? md + " " : "") + pickName + " 업무"; setShowAdd(true); setNewNote({ title: autoTitle, content: "", is_todo: false, pinned: false, target_assignee: (filterAssignee !== "전체" ? filterAssignee : ""), checkItems: [], due_date: "", note_date: nd }); }}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             <Icon name="plus" size={15} color="#F7F6F3" /> 새 노트
           </button>
@@ -6832,7 +6835,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
                     </div>
                   </div>
                 </div>
-                <button onClick={function() { setShowAdd(true); setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "", note_date: selectedDate }); }}
+                <button onClick={function() { setShowAdd(true); setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: (filterAssignee !== "전체" ? filterAssignee : ""), checkItems: [], due_date: "", note_date: selectedDate }); }}
                   style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ 이 날짜에 노트 추가</button>
               </div>
               {/* 노트 카드들 */}
