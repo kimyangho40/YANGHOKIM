@@ -2143,6 +2143,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         );
       })()}
 
+      {/* 🕒 오늘 활동 내역 피드 (소통내역·이슈·다음액션 변경 업체) */}
+      <TodayActivityFeed companies={companies} onSelectCompany={onSelectCompany} />
+
       {/* 📅 이번 달 예정 업무 (next_action 월 표기 기준 실시간 필터) */}
       {(function() {
         var monthTasks = (companies || []).filter(function(c) { return actionHasMonth(c.next_action, thisMonth); });
@@ -7458,6 +7461,10 @@ function SettlementView() {
   const [editSource, setEditSource] = useState("auto");
   const [showAddManual, setShowAddManual] = useState(false);
   const [newManual, setNewManual] = useState({});
+  const [teamFilter, setTeamFilter] = useState("전체"); // 전체 / 법인팀 / 개인팀
+
+  // 정산 건의 팀 = 사업자명 기준 자동 분류 (기업목록과 동일 규칙)
+  var teamOfRow = function(row) { return teamByName(row && row.business_name); };
 
   useEffect(function() { fetchData(); }, []);
 
@@ -7489,6 +7496,19 @@ function SettlementView() {
     return auto.concat(manual);
   }, [filteredAuto, filteredManual]);
 
+  // 팀 필터 적용 (전체/법인팀/개인팀) — 사업자명 기준 자동 분류
+  var teamFiltered = useMemo(function() {
+    if (teamFilter === "전체") return allFiltered;
+    return allFiltered.filter(function(r) { return teamOfRow(r) === teamFilter; });
+  }, [allFiltered, teamFilter]);
+
+  // 팀별 건수 (필터 버튼 뱃지용)
+  var teamCounts = useMemo(function() {
+    var corp = 0, indi = 0;
+    allFiltered.forEach(function(r) { if (teamOfRow(r) === "법인팀") corp++; else indi++; });
+    return { 전체: allFiltered.length, 법인팀: corp, 개인팀: indi };
+  }, [allFiltered]);
+
   // 월 탭용 - 데이터 있는 월
   var monthsWithData = useMemo(function() {
     var s = new Set();
@@ -7516,20 +7536,20 @@ function SettlementView() {
   var monthSummary = useMemo(function() {
     var totalCommission = 0;
     var totalReceived = 0;
-    allFiltered.forEach(function(c) {
+    teamFiltered.forEach(function(c) {
       totalCommission += parseAmt(c.commission_fee);
       totalReceived += parseAmt(c.received_amount);
     });
     return {
-      total: allFiltered.length,
-      autoCount: filteredAuto.length,
-      manualCount: filteredManual.length,
-      commissionSet: allFiltered.filter(function(c) { return c.commission_fee; }).length,
-      depositDone: allFiltered.filter(function(c) { return c.fee_received; }).length,
+      total: teamFiltered.length,
+      autoCount: teamFiltered.filter(function(c) { return c._source === "auto"; }).length,
+      manualCount: teamFiltered.filter(function(c) { return c._source === "manual"; }).length,
+      commissionSet: teamFiltered.filter(function(c) { return c.commission_fee; }).length,
+      depositDone: teamFiltered.filter(function(c) { return c.fee_received; }).length,
       totalCommission: totalCommission,
       totalReceived: totalReceived,
     };
-  }, [allFiltered, filteredAuto, filteredManual]);
+  }, [teamFiltered]);
 
   // 자동 건 저장
   var saveEditAuto = async function() {
@@ -7628,6 +7648,9 @@ function SettlementView() {
             : <span style={{ fontWeight: 600, fontSize: 12 }}>{row.business_name}</span>}
         </td>
         <td style={{ padding: "6px 8px" }}>
+          {(function() { var tm = teamByName(isManual ? editData.business_name : row.business_name); return <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap", background: tm === "법인팀" ? "#EEF2FF" : "#F0FDF4", color: tm === "법인팀" ? "#4338CA" : "#15803D" }}>{tm}</span>; })()}
+        </td>
+        <td style={{ padding: "6px 8px" }}>
           {isManual
             ? <select value={editData.agency_group || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { agency_group: e.target.value }); }); }} style={{ width: 80, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11 }}>
                 <option value="">선택</option>
@@ -7693,6 +7716,9 @@ function SettlementView() {
             : idx + 1}
         </td>
         <td style={{ padding: "9px 8px", fontWeight: 600, whiteSpace: "nowrap" }}>{row.business_name || "-"}</td>
+        <td style={{ padding: "9px 8px" }}>
+          {(function() { var tm = teamOfRow(row); return <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap", background: tm === "법인팀" ? "#EEF2FF" : "#F0FDF4", color: tm === "법인팀" ? "#4338CA" : "#15803D" }}>{tm}</span>; })()}
+        </td>
         <td style={{ padding: "9px 8px" }}>
           <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 99, background: "#EEF2FF", color: "#4338CA", fontWeight: 600 }}>{row.agency_group || "-"}</span>
         </td>
@@ -7772,6 +7798,23 @@ function SettlementView() {
         })}
       </div>
 
+      {/* 팀 필터 (개인팀/법인팀 구분) */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center" }}>
+        <span style={{ fontSize: 11, color: "#999", marginRight: 2 }}>팀 구분</span>
+        {TEAM_FILTER_OPTS.map(function(t) {
+          var isActive = teamFilter === t;
+          var accent = t === "법인팀" ? "#4338CA" : t === "개인팀" ? "#15803D" : "#1A1917";
+          return (
+            <div key={t} onClick={function() { setTeamFilter(t); setEditingId(null); setEditData({}); }}
+              style={{ padding: "6px 14px", borderRadius: 99, cursor: "pointer", fontSize: 12, fontWeight: isActive ? 700 : 500,
+                background: isActive ? accent : "#fff", color: isActive ? "#fff" : "#666",
+                border: "1px solid " + (isActive ? accent : "#E8E5E0") }}>
+              {t} <span style={{ opacity: 0.75, fontWeight: 600 }}>{teamCounts[t] || 0}</span>
+            </div>
+          );
+        })}
+      </div>
+
       {/* KPI 카드 */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
         {[
@@ -7793,22 +7836,22 @@ function SettlementView() {
 
       {/* 테이블 */}
       <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
-        {allFiltered.length === 0 ? (
+        {teamFiltered.length === 0 ? (
           <div style={{ padding: "60px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>
-            {activeMonth}월 데이터가 없습니다. 직접 등록하거나 기관별 현황에서 승인 상태로 변경해주세요.
+            {activeMonth}월{teamFilter !== "전체" ? " · " + teamFilter : ""} 데이터가 없습니다. 직접 등록하거나 기관별 현황에서 승인 상태로 변경해주세요.
           </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ background: "#F7F6F3", borderBottom: "2px solid #E8E5E0" }}>
-                  {["#","사업자명","기관","담당자","신청금액","계약금","수수료","입금금액","계약일","세금계산서","입금완료","입금일","비고","작업"].map(function(h) {
+                  {["#","사업자명","팀","기관","담당자","신청금액","계약금","수수료","입금금액","계약일","세금계산서","입금완료","입금일","비고","작업"].map(function(h) {
                     return <th key={h} style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, whiteSpace: "nowrap" }}>{h}</th>;
                   })}
                 </tr>
               </thead>
               <tbody>
-                {allFiltered.map(function(row, idx) {
+                {teamFiltered.map(function(row, idx) {
                   return editingId === row.id ? renderEditRow(row, idx) : renderReadRow(row, idx);
                 })}
               </tbody>
@@ -11699,6 +11742,115 @@ function GlobalSearchModal({ companies, query, setQuery, onClose, onSelectCompan
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ========== 🕒 오늘 활동 내역 피드 (Dashboard용) ==========
+// activity_logs(소통내역·이슈·다음액션·단계/담당자 변경)에서 '오늘(KST)' 기록을 업체별로 모아 보여준다.
+function TodayActivityFeed({ companies, onSelectCompany }) {
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(function() { fetchToday(); }, []);
+
+  var fetchToday = async function() {
+    setLoading(true);
+    // 오늘 00:00(KST)을 UTC ISO로 변환 → created_at 비교 기준
+    var now = new Date();
+    var kst = new Date(now.getTime() + 9 * 3600000);
+    var kstMidnightUtcMs = Date.UTC(kst.getUTCFullYear(), kst.getUTCMonth(), kst.getUTCDate()) - 9 * 3600000;
+    var sinceStr = new Date(kstMidnightUtcMs).toISOString();
+    var r = await supabase.from("activity_logs")
+      .select("business_name, company_id, log_type, memo, logged_by, assignee, created_at")
+      .gte("created_at", sinceStr)
+      .order("created_at", { ascending: false });
+    if (!r.error) setLogs(r.data || []);
+    setLoading(false);
+  };
+
+  // log_type → 한글 라벨 (소통내역/이슈/다음액션 등)
+  var LOG_LABEL = {
+    manual_memo: "소통내역",
+    issue_update: "이슈",
+    action_update: "다음액션",
+    stage_change: "진행단계",
+    assignee_change: "담당자",
+  };
+  var FIELD_COLOR = {
+    소통내역: { bg: "#EEF2FF", c: "#4338CA" },
+    이슈: { bg: "#FEF2F2", c: "#DC2626" },
+    다음액션: { bg: "#F0FDF4", c: "#15803D" },
+    진행단계: { bg: "#FFF7ED", c: "#C2410C" },
+    담당자: { bg: "#F5F3FF", c: "#7C3AED" },
+  };
+
+  var fmtTime = function(iso) {
+    var d = new Date(iso);
+    var k = new Date(d.getTime() + 9 * 3600000);
+    var hh = String(k.getUTCHours()).padStart(2, "0");
+    var mm = String(k.getUTCMinutes()).padStart(2, "0");
+    return hh + ":" + mm;
+  };
+
+  // 업체별 그룹핑 (사업자명 기준 — 모든 log_type에 공통 존재)
+  var grouped = useMemo(function() {
+    var map = {};
+    (logs || []).forEach(function(l) {
+      var label = LOG_LABEL[l.log_type];
+      if (!label) return; // 알 수 없는 유형은 제외
+      var key = l.business_name || (l.company_id ? "__" + l.company_id : null);
+      if (!key) return;
+      if (!map[key]) map[key] = { name: l.business_name || "(이름없음)", company_id: l.company_id || null, fields: {}, latest: l.created_at, latestMemo: l.memo || "", by: l.logged_by || l.assignee || "" };
+      var g = map[key];
+      g.fields[label] = (g.fields[label] || 0) + 1;
+      if (l.created_at > g.latest) { g.latest = l.created_at; g.latestMemo = l.memo || g.latestMemo; g.by = l.logged_by || l.assignee || g.by; }
+      if (!g.company_id && l.company_id) g.company_id = l.company_id;
+    });
+    return Object.keys(map).map(function(k) { return map[k]; })
+      .sort(function(a, b) { return a.latest < b.latest ? 1 : -1; });
+  }, [logs]);
+
+  var openCompany = function(g) {
+    if (!companies || !onSelectCompany) return;
+    var co = companies.find(function(c) { return (g.company_id && c.id === g.company_id) || c.name === g.name; });
+    if (co) onSelectCompany(co);
+  };
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+        <span style={{ fontSize: 16 }}>🕒</span>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#1A1917" }}>오늘 활동 내역 <span style={{ color: "#999", fontWeight: 600 }}>{grouped.length}개 업체</span></div>
+        <span style={{ fontSize: 11, color: "#BBB" }}>소통내역·이슈·다음액션 변경 기준</span>
+      </div>
+      {loading ? (
+        <div style={{ textAlign: "center", color: "#CCC", fontSize: 13, padding: "20px 0" }}>불러오는 중…</div>
+      ) : grouped.length === 0 ? (
+        <div style={{ textAlign: "center", color: "#CCC", fontSize: 13, padding: "20px 0" }}>오늘 변경된 업체가 없습니다</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {grouped.map(function(g, i) {
+            return (
+              <div key={i} onClick={function() { openCompany(g); }}
+                style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", background: "#F7F6F3", borderRadius: 8, cursor: "pointer" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "#1A1917" }}>{g.name}</span>
+                    {Object.keys(g.fields).map(function(f) {
+                      var col = FIELD_COLOR[f] || { bg: "#EEE", c: "#666" };
+                      return <span key={f} style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: col.bg, color: col.c }}>{f}{g.fields[f] > 1 ? " " + g.fields[f] : ""}</span>;
+                    })}
+                  </div>
+                  {g.latestMemo && <div style={{ fontSize: 12, color: "#888", marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.latestMemo}</div>}
+                </div>
+                {g.by && <span style={{ fontSize: 11, color: "#999", flexShrink: 0 }}>{g.by}</span>}
+                <span style={{ fontSize: 11, color: "#BBB", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{fmtTime(g.latest)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
