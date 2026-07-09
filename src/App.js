@@ -8895,6 +8895,7 @@ function ManualView() {
               { name: "📁 소상공인 공단", path: "소상공인 공단" },
               { name: "📁 스크립트 가이드", path: "스크립트 가이드" },
               { name: "📁 신용보증기금", path: "신용보증기금" },
+              { name: "📁 농협신용보증기금", path: "농협신용보증기금" },
               { name: "📁 중진공", path: "중진공" },
               { name: "📁 추가업종 제안서", path: "추가업종 제안서" },
             ].map(folder => (
