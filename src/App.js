@@ -169,6 +169,288 @@ const TEAMS = ["법인전담","개인전담","관리자"];
 const ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일","양호"];
 const INDUSTRY_OPTIONS = ["제조업","농업·어업","숙박업","음식점업","전자상거래업","정보통신업","도소매업","서비스업","창고업","자동차임대업"];
 
+// ── 정책자금 신규 기능: 상수 & 계산 로직 ─────────────────────────────────────────
+const LEAD_SOURCES = ["콘텐츠(릴스/유튜브)", "네이버 블로그", "지인 소개", "DB 구매", "직접 문의", "기존 고객 재의뢰", "기타"];
+
+// 기대출 총액(원) = loans 배열 amount 합
+function totalLoanAmount(company) {
+  var loans = Array.isArray(company && company.loans) ? company.loans : [];
+  return loans.reduce(function(s, ln) {
+    var n = parseInt(String((ln && ln.amount) || "").replace(/[^0-9]/g, ""), 10);
+    return s + (isNaN(n) ? 0 : n);
+  }, 0);
+}
+// 원 → "N억/N천만/N만" 표기
+function wonToKor(won) {
+  var n = Number(won) || 0;
+  if (n >= 100000000) return (Math.round(n / 10000000) / 10).toString().replace(/\.0$/, "") + "억";
+  if (n >= 10000000) return Math.round(n / 10000000) + "천만";
+  if (n >= 10000) return Math.round(n / 10000) + "만";
+  return n.toLocaleString();
+}
+// 담당기관 문자열에 특정 기관 포함 여부
+function agencyIncludes(company, name) {
+  return (company && company.agency ? company.agency : "").split(",").map(function(s) { return s.trim(); }).indexOf(name) >= 0;
+}
+// 업종별 부채비율 상한(%) — 일반 기준
+function industryDebtCap(industry) {
+  var s = String(industry || "");
+  if (/제조|건설/.test(s)) return 400;
+  if (/도매|소매|유통|무역/.test(s)) return 500;
+  if (/음식|숙박|서비스|교육|의료/.test(s)) return 300;
+  return 400;
+}
+// 9대 약점 자동 감지 → [{level, label, logic}]
+function detectWeaknesses(company) {
+  var out = [];
+  var kcb = parseInt(company.credit_score_kcb, 10);
+  if (!isNaN(kcb) && kcb > 0 && kcb < 700) {
+    out.push({ level: "danger", label: "KCB " + kcb + " (700 미만)", logic: "신용점수가 낮아 보증·대출 심사에서 감점 요인입니다.\n\n[대응 논리]\n• 최근 6개월 무연체·성실상환 이력 강조\n• 매출 증가·수주계약서 등 상환능력 근거 첨부\n• 개인신용보다 사업성 중심으로 프레이밍\n• KCB 개선(카드 사용·한도관리) 후 재신청 타이밍 안내" });
+  }
+  var loan = totalLoanAmount(company);
+  if (loan >= 250000000) {
+    out.push({ level: "danger", label: "기대출 " + wonToKor(loan) + " (2.5억↑)", logic: "기존 대출 과다로 추가 한도 여력이 낮습니다.\n\n[대응 논리]\n• 고금리 대출 대환 목적으로 프레이밍(이자부담 경감)\n• 매출 대비 부채 적정성 강조\n• 일부 상환 후 신청 또는 정책자금 갈아타기 제안" });
+  } else if (loan >= 150000000) {
+    out.push({ level: "warn", label: "기대출 " + wonToKor(loan) + " (1.5~2.5억)", logic: "기대출이 다소 높습니다. 한도 산정 시 주의.\n\n[대응 논리]\n• 정책자금 대환·저리 전환 목적 강조\n• 상환 계획·매출 근거 제시" });
+  }
+  var r24 = Number(company.revenue_2024) || 0, r25 = Number(company.revenue_2025) || 0;
+  if (r24 > 0 && r25 > 0 && r25 < r24 * 0.85) {
+    out.push({ level: "warn", label: "매출 급감(25년<24년 85%)", logic: "전년 대비 매출 15%↑ 감소.\n\n[대응 논리]\n• 일시적 요인(업황·투자·일회성) 설명 자료\n• 26년 상반기 회복 추세·수주잔고 제시\n• 구조개선·사업전환 자금으로 포지셔닝" });
+  }
+  var icr = parseFloat(company.interest_coverage_ratio);
+  if (!isNaN(icr) && icr > 0 && icr < 1.0) {
+    out.push({ level: "danger", label: "이자보상배율 " + icr + " (1.0 미만)", logic: "영업이익으로 이자비용을 감당하지 못하는 상태.\n\n[대응 논리]\n• 영업외 손실 등 일시적 요인 분리 설명\n• 대환 시 이자부담 경감 시뮬레이션 제시\n• 향후 매출·이익 개선 계획 첨부" });
+  }
+  if (agencyIncludes(company, "중소벤처기업진흥공단")) {
+    var dr = parseFloat(company.debt_ratio);
+    var cap = industryDebtCap(company.industry);
+    if (!isNaN(dr) && dr > 0 && dr > cap) {
+      out.push({ level: "danger", label: "부채비율 " + dr + "% (상한 " + cap + "%↑)", logic: "업종 평균 대비 부채비율 과다(중진공 심사 감점).\n\n[대응 논리]\n• 자본확충(증자·이익잉여금) 계획 제시\n• 업종 특성상 정상범위임을 근거로 설명\n• 부채 구조조정 후 신청 타이밍 조정" });
+    }
+  }
+  var text = [company.issue, company.next_action, company.company_info_memo].join(" ");
+  if (/연체|체납|압류|국세.*미납|세금.*미납/.test(text)) {
+    out.push({ level: "danger", label: "연체/체납 이력 감지", logic: "연체·체납 이력은 대부분 기관에서 결격 사유.\n\n[대응 논리]\n• 완납 증명·분납 약정서 확보 후 신청\n• 체납 해소 시점·사유 소명자료 준비\n• 미해소 시 신청 보류 권고" });
+  }
+  return out;
+}
+// 기관 자동 추천 → [{agency, reason}]
+function recommendAgencies(company) {
+  var out = [];
+  var kcb = parseInt(company.credit_score_kcb, 10);
+  var emp = parseInt(company.employee_count, 10);
+  var bt = String(company.business_type || "");
+  var region = String(company.region || "");
+  var industry = String(company.industry || "");
+  var text = [industry, company.issue, company.next_action, company.company_info_memo].join(" ");
+  if (/특허|연구소|연구전담|이노비즈|벤처인증/.test(text)) out.push({ agency: "기술보증기금", reason: "특허·연구소 등 기술요소 보유" });
+  if (/법인/.test(bt) && !isNaN(kcb) && kcb >= 750) out.push({ agency: "신용보증기금", reason: "법인 + KCB 750↑" });
+  if (/제조/.test(industry) && !isNaN(emp) && emp >= 5) out.push({ agency: "중소벤처기업진흥공단", reason: "제조업 + 직원 5명↑" });
+  if (/개인/.test(bt)) out.push({ agency: "소상공인시장진흥공단", reason: "개인사업자" });
+  if (region && !/^(서울|경기|인천)/.test(region.replace(/\s/g, ""))) out.push({ agency: "신용보증재단", reason: "비수도권 소재" });
+  return out;
+}
+// 자금집행 후 사후관리(3/6/12개월) 판정
+function followupInfo(company) {
+  var executed = ["자금집행완료", "수수료대기 및 입금요청", "입금완료/사후관리"];
+  if (executed.indexOf(company.stage) < 0) return null;
+  var base = company.stage_updated_at || company.contract_date;
+  if (!base) return null;
+  var bd = new Date(base);
+  if (isNaN(bd.getTime())) return null;
+  var now = new Date();
+  var marks = [{ m: 3, label: "3개월" }, { m: 6, label: "6개월" }, { m: 12, label: "1년" }];
+  var due = null, next = null;
+  for (var i = 0; i < marks.length; i++) {
+    var d = new Date(bd); d.setMonth(d.getMonth() + marks[i].m);
+    var diffDays = Math.floor((now - d) / (1000 * 60 * 60 * 24));
+    if (diffDays >= 0 && diffDays <= 31 && !due) due = { mark: marks[i], date: d };
+    if (diffDays < 0 && !next) next = { mark: marks[i], date: d };
+  }
+  if (!due && !next) return null;
+  return { due: due, next: next };
+}
+// 예상 수수료(원)
+function expectedFee(company) {
+  var amt = parseInt(String(company.approved_amount || "").replace(/[^0-9]/g, ""), 10);
+  if (isNaN(amt) || amt <= 0) return 0;
+  var rate = parseFloat(company.fee);
+  if (isNaN(rate) || rate <= 0) rate = 5;
+  return Math.round(amt * rate / 100);
+}
+// 신보 예상 한도 매트릭스
+const SINBO_LOAN_BUCKETS = [
+  { label: "없음", won: 0 }, { label: "3천만", won: 30000000 }, { label: "5천만", won: 50000000 },
+  { label: "1억", won: 100000000 }, { label: "1.5억", won: 150000000 }, { label: "2억", won: 200000000 },
+  { label: "2.5억", won: 250000000 }, { label: "3억", won: 300000000 },
+];
+const SINBO_LIMIT_MATRIX = {
+  high: [300000000, 300000000, 250000000, 200000000, 150000000, 100000000, 50000000, 0],
+  mid:  [200000000, 200000000, 150000000, 100000000, 80000000, 50000000, 30000000, 0],
+  low:  [100000000, 80000000, 50000000, 30000000, 20000000, 10000000, 0, 0],
+};
+function sinboTier(kcb) {
+  var n = parseInt(kcb, 10);
+  if (isNaN(n)) return null;
+  if (n >= 850) return "high";
+  if (n >= 750) return "mid";
+  return "low";
+}
+
+// 자동 감지 배지(약점·추천·사후관리) + 대응논리 팝업
+function PolicyBadges({ company }) {
+  const [popup, setPopup] = useState(null);
+  var weaknesses = detectWeaknesses(company);
+  var recos = recommendAgencies(company);
+  var fu = followupInfo(company);
+  if (weaknesses.length === 0 && recos.length === 0 && !fu) return null;
+  return (
+    <div style={{ marginBottom: 10 }}>
+      {weaknesses.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
+          {weaknesses.map(function(w, i) {
+            var danger = w.level === "danger";
+            return (
+              <button key={i} onClick={function() { setPopup({ title: (danger ? "🔴 " : "🟡 ") + w.label, body: w.logic }); }}
+                style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 99, cursor: "pointer", background: danger ? "#FEE2E2" : "#FEF3C7", color: danger ? "#DC2626" : "#92400E", border: "1px solid " + (danger ? "#FCA5A5" : "#FDE68A") }}>
+                {danger ? "🔴" : "🟡"} {w.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {recos.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
+          {recos.map(function(r, i) {
+            return <span key={i} title={r.reason} style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 99, background: "#ECFDF5", color: "#047857", border: "1px solid #A7F3D0" }}>👍 추천: {r.agency}</span>;
+          })}
+        </div>
+      )}
+      {fu && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 99, background: fu.due ? "#EFF6FF" : "#F7F6F3", color: fu.due ? "#1D4ED8" : "#888", border: "1px solid " + (fu.due ? "#93C5FD" : "#E8E5E0") }}>
+            {fu.due ? "🔔 사후관리 " + fu.due.mark.label + " 도래 · 추가 상담 타이밍" : "🗓 다음 사후관리: " + fu.next.mark.label + " (" + fu.next.date.toISOString().slice(0, 10) + ")"}
+          </span>
+        </div>
+      )}
+      {popup && (
+        <div onMouseDown={function(e) { if (e.target === e.currentTarget) setPopup(null); }}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div style={{ background: "#fff", borderRadius: 12, width: 420, maxWidth: "100%", padding: "22px 24px", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 800 }}>{popup.title}</h3>
+              <button onClick={function() { setPopup(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#888" }}>✕</button>
+            </div>
+            <div style={{ fontSize: 13, color: "#333", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{popup.body}</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+// 중진공 정책우선도 자동 계산기 (기능1)
+function JunginggongCalc() {
+  const [v, setV] = useState({ innov: false, first: false, hires: "", patents: "", exportUsd: "", pref: false, kgrade: "" });
+  var set = function(k, val) { setV(function(p) { return Object.assign({}, p, { [k]: val }); }); };
+  var s1 = v.innov ? 5 : 0, s2 = v.first ? 5 : 0;
+  var s3 = Math.min(20, (parseInt(v.hires, 10) || 0) * 5);
+  var s4 = Math.min(25, (parseInt(v.patents, 10) || 0) * 5);
+  var exp = parseFloat(String(v.exportUsd).replace(/[^0-9.]/g, "")) || 0;
+  var s5 = exp >= 1000000 ? 10 : exp >= 100000 ? 7 : exp > 0 ? 4 : 0;
+  var s6 = v.pref ? 5 : 0;
+  var k = parseInt(v.kgrade, 10);
+  var s7 = (!isNaN(k) && k >= 1 && k <= 13) ? Math.round(30 * (14 - k) / 13) : 0;
+  var total = s1 + s2 + s3 + s4 + s5 + s6 + s7;
+  var color = total >= 70 ? "#15803D" : total >= 50 ? "#B45309" : "#DC2626";
+  var barBg = total >= 70 ? "#DCFCE7" : total >= 50 ? "#FEF3C7" : "#FEE2E2";
+  var chk = function(key, label, pts) {
+    return (
+      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 6, padding: "6px 9px" }}>
+        <input type="checkbox" checked={v[key]} onChange={function(e) { set(key, e.target.checked); }} style={{ accentColor: "#7C3AED" }} />
+        <span style={{ flex: 1 }}>{label}</span><span style={{ color: "#7C3AED", fontWeight: 700 }}>{pts}점</span>
+      </label>
+    );
+  };
+  var numRow = function(key, label, unit, sc, max) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", border: "1px solid #E8E5E0", borderRadius: 6, padding: "6px 9px" }}>
+        <span style={{ fontSize: 12, flex: 1 }}>{label}</span>
+        <input type="number" value={v[key]} onChange={function(e) { set(key, e.target.value); }} placeholder="0"
+          style={{ width: 64, fontSize: 12, textAlign: "right", border: "1px solid #E8E5E0", borderRadius: 5, padding: "3px 6px", outline: "none" }} />
+        <span style={{ fontSize: 11, color: "#999", width: 24 }}>{unit}</span>
+        <span style={{ color: "#7C3AED", fontWeight: 700, fontSize: 12, width: 46, textAlign: "right" }}>{sc}/{max}</span>
+      </div>
+    );
+  };
+  return (
+    <div style={{ background: "#F5F3FF", borderRadius: 10, padding: "14px 15px", marginBottom: 10, border: "1px solid #DDD6FE" }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: "#6D28D9", marginBottom: 10 }}>🎯 중진공 정책우선도 자동 계산기</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+        {chk("innov", "① 혁신성장분야", 5)}
+        {chk("first", "② 첫거래기업", 5)}
+        {numRow("hires", "③ 고용기여 (신규채용)", "명", s3, 20)}
+        {numRow("patents", "④ 기술경영혁신 (특허·인증)", "건", s4, 25)}
+        {numRow("exportUsd", "⑤ 글로벌화 (직수출)", "$", s5, 10)}
+        {chk("pref", "⑥ 정책우대기업", 5)}
+        {numRow("kgrade", "⑦ AI K등급 (1~13, 낮을수록↑)", "K", s7, 30)}
+      </div>
+      <div style={{ background: barBg, borderRadius: 8, padding: "10px 12px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: "#555" }}>총점</span>
+          <span style={{ fontSize: 20, fontWeight: 800, color: color }}>{total}<span style={{ fontSize: 12, color: "#999" }}>/100</span></span>
+        </div>
+        <div style={{ height: 10, background: "#fff", borderRadius: 99, overflow: "hidden" }}>
+          <div style={{ width: Math.min(100, total) + "%", height: "100%", background: color, borderRadius: 99, transition: "width 0.2s" }} />
+        </div>
+        <div style={{ fontSize: 11, color: color, fontWeight: 700, marginTop: 6 }}>
+          {total >= 70 ? "✅ 우수 (70점↑) — 우선지원 가능성 높음" : total >= 50 ? "⚠ 보통 (50점↑) — 보완 필요" : "🔴 미흡 (50점 미만) — 배점 항목 보강 권장"}
+        </div>
+      </div>
+    </div>
+  );
+}
+// 신보 예상 한도 계산기 (기능2)
+function SinboCalc({ company }) {
+  const [kcb, setKcb] = useState(company.credit_score_kcb || "");
+  const [bucketIdx, setBucketIdx] = useState(function() {
+    var loan = totalLoanAmount(company), idx = 0;
+    for (var i = 0; i < SINBO_LOAN_BUCKETS.length; i++) { if (loan >= SINBO_LOAN_BUCKETS[i].won) idx = i; }
+    return idx;
+  });
+  var tier = sinboTier(kcb);
+  var limit = tier ? SINBO_LIMIT_MATRIX[tier][bucketIdx] : null;
+  var tierLabel = tier === "high" ? "KCB 850↑" : tier === "mid" ? "KCB 750~849" : tier === "low" ? "KCB 749↓" : "KCB 입력";
+  return (
+    <div style={{ background: "#EFF6FF", borderRadius: 10, padding: "14px 15px", marginBottom: 10, border: "1px solid #BFDBFE" }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: "#1D4ED8", marginBottom: 10 }}>💳 신보 예상 한도 계산기</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 120 }}>
+          <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>KCB 점수</div>
+          <input type="number" value={kcb} onChange={function(e) { setKcb(e.target.value); }} placeholder="예: 820"
+            style={{ width: "100%", fontSize: 13, padding: "7px 9px", border: "1px solid #E8E5E0", borderRadius: 6, outline: "none", boxSizing: "border-box" }} />
+          <div style={{ fontSize: 10, color: "#1D4ED8", marginTop: 3, fontWeight: 700 }}>{tierLabel}</div>
+        </div>
+        <div style={{ flex: 1, minWidth: 120 }}>
+          <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>기대출 잔액</div>
+          <select value={bucketIdx} onChange={function(e) { setBucketIdx(parseInt(e.target.value, 10)); }}
+            style={{ width: "100%", fontSize: 13, padding: "7px 9px", border: "1px solid #E8E5E0", borderRadius: 6, background: "#fff", outline: "none", boxSizing: "border-box" }}>
+            {SINBO_LOAN_BUCKETS.map(function(b, i) { return <option key={i} value={i}>{b.label}</option>; })}
+          </select>
+        </div>
+      </div>
+      <div style={{ background: "#fff", borderRadius: 8, padding: "12px 14px", textAlign: "center" }}>
+        <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>예상 보증 한도</div>
+        {tier ? (
+          <div style={{ fontSize: 22, fontWeight: 800, color: limit > 0 ? "#1D4ED8" : "#DC2626" }}>
+            {limit > 0 ? wonToKor(limit) + " 원" : "한도 없음"}
+          </div>
+        ) : <div style={{ fontSize: 13, color: "#AAA" }}>KCB 점수를 입력하세요</div>}
+        <div style={{ fontSize: 10, color: "#BBB", marginTop: 4 }}>* 일반 기준 추정치 · 실제 심사 결과와 다를 수 있음</div>
+      </div>
+    </div>
+  );
+}
+
 // 기본 업종 + companies에서 추출한 커스텀 업종 통합 옵션
 // 사용자가 수동 입력한 업종도 다음 선택부터 옵션에 나타나도록 함
 function getMergedIndustryOptions(companies) {
@@ -1271,6 +1553,12 @@ function CRMApp({ profile, session }) {
       region: rest.region,
       contract_date: rest.contract_date,
       referrer: rest.referrer,
+      // 신규 기능용 컬럼
+      approved_amount: rest.approved_amount ? (parseInt(String(rest.approved_amount).replace(/[^0-9]/g, "")) || null) : null,
+      import_ratio: (rest.import_ratio === "" || rest.import_ratio === null || rest.import_ratio === undefined) ? null : (parseFloat(rest.import_ratio) || 0),
+      debt_ratio: (rest.debt_ratio === "" || rest.debt_ratio === null || rest.debt_ratio === undefined) ? null : (parseFloat(rest.debt_ratio) || 0),
+      interest_coverage_ratio: (rest.interest_coverage_ratio === "" || rest.interest_coverage_ratio === null || rest.interest_coverage_ratio === undefined) ? null : (parseFloat(rest.interest_coverage_ratio) || 0),
+      lead_source: rest.lead_source,
     };
     // stage/assignee/received_docs 등은 빈값도 의미가 있을 수 있으나, 일반 정보 필드는 빈값이면 건드리지 않음
     const keepEvenIfEmpty = { stage: 1, assignee: 1, received_docs: 1, requested_docs: 1, fee_status: 1, referrer: 1 };
@@ -1516,6 +1804,7 @@ function CRMApp({ profile, session }) {
     if (Array.isArray(form.company_info) && form.company_info.length > 0) insertData.company_info = form.company_info;
     if (form.company_info_memo) insertData.company_info_memo = form.company_info_memo;
     if (form.referrer) insertData.referrer = form.referrer;
+    if (form.lead_source) insertData.lead_source = form.lead_source;
 
     const { data: co, error } = await supabase.from("companies").insert(insertData).select().single();
     if (!error && co) {
@@ -2170,6 +2459,39 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
     setEditingKpi(false); setKpiEdits({});
   };
 
+  // 담당자별 성과 집계 (기능6)
+  const assigneeStats = useMemo(function() {
+    var IN_PROGRESS = ["기관신청완료/방문완료", "심사중/실태조사대기", "실태조사완료/약정완료"];
+    var EXECUTED = ["자금집행완료", "수수료대기 및 입금요청", "입금완료/사후관리"];
+    var map = {};
+    companies.forEach(function(c) {
+      var names = (c.assignee || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+      if (names.length === 0) names = ["미지정"];
+      names.forEach(function(n) {
+        if (!map[n]) map[n] = { name: n, total: 0, inProgress: 0, executed: 0, rejected: 0, fee: 0 };
+        map[n].total++;
+        if (IN_PROGRESS.indexOf(c.stage) >= 0) map[n].inProgress++;
+        if (EXECUTED.indexOf(c.stage) >= 0) map[n].executed++;
+        if (c.stage === "부결/반려") map[n].rejected++;
+        map[n].fee += expectedFee(c);
+      });
+    });
+    return Object.keys(map).map(function(k) { return map[k]; }).sort(function(a, b) { return b.total - a.total; });
+  }, [companies]);
+  // 월별 예상 수수료 집계 (기능5)
+  const feeStats = useMemo(function() {
+    var byMonth = {}, total = 0;
+    companies.forEach(function(c) {
+      var f = expectedFee(c);
+      if (f <= 0) return;
+      total += f;
+      var m = c.contract_date ? String(c.contract_date).slice(0, 7) : "미정";
+      byMonth[m] = (byMonth[m] || 0) + f;
+    });
+    var thisM = new Date().toISOString().slice(0, 7);
+    return { total: total, thisMonth: byMonth[thisM] || 0, byMonth: byMonth };
+  }, [companies]);
+
   return (
     <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 28 }}>
@@ -2180,6 +2502,57 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         <button onClick={onAdd} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
           <Icon name="plus" size={15} color="#F7F6F3" /> 신규 업체 등록
         </button>
+      </div>
+
+      {/* 📊 담당자별 성과 (기능6) + 💰 예상 수수료 (기능5) */}
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, marginBottom: 22 }}>
+        <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", padding: "16px 18px", overflowX: "auto" }}>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>📊 담당자별 성과</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 480 }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #E8E5E0" }}>
+                {["담당자", "총건수", "진행중", "자금집행", "부결", "예상수수료"].map(function(h, i) {
+                  return <th key={h} style={{ padding: "7px 8px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: i === 0 ? "left" : "right", whiteSpace: "nowrap" }}>{h}</th>;
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {assigneeStats.map(function(s) {
+                var doneRate = s.total > 0 ? Math.round(s.executed / s.total * 100) : 0;
+                return (
+                  <tr key={s.name} style={{ borderBottom: "1px solid #F5F3F0", cursor: "pointer" }} onClick={function() { setFilterAssignee(s.name); setView("list"); }}>
+                    <td style={{ padding: "8px", fontSize: 12.5, fontWeight: 700 }}>{s.name}</td>
+                    <td style={{ padding: "8px", fontSize: 12.5, textAlign: "right" }}>{s.total}</td>
+                    <td style={{ padding: "8px", fontSize: 12.5, textAlign: "right", color: "#7C3AED", fontWeight: 600 }}>{s.inProgress}</td>
+                    <td style={{ padding: "8px", fontSize: 12.5, textAlign: "right" }}>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
+                        <span style={{ color: "#15803D", fontWeight: 700 }}>{s.executed}</span>
+                        <div style={{ width: 60, height: 5, background: "#F0EDE8", borderRadius: 99, overflow: "hidden" }}>
+                          <div style={{ width: doneRate + "%", height: "100%", background: "#15803D", borderRadius: 99 }} />
+                        </div>
+                      </div>
+                    </td>
+                    <td style={{ padding: "8px", fontSize: 12.5, textAlign: "right", color: s.rejected > 0 ? "#DC2626" : "#CCC", fontWeight: 600 }}>{s.rejected}</td>
+                    <td style={{ padding: "8px", fontSize: 12, textAlign: "right", fontWeight: 700, color: "#15803D", whiteSpace: "nowrap" }}>{s.fee > 0 ? wonToKor(s.fee) : "-"}</td>
+                  </tr>
+                );
+              })}
+              {assigneeStats.length === 0 && <tr><td colSpan={6} style={{ padding: 16, textAlign: "center", color: "#CCC", fontSize: 12 }}>데이터 없음</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ background: "#F0FDF4", borderRadius: 12, border: "1px solid #BBF7D0", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#15803D" }}>💰 예상 수수료</div>
+          <div>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 3 }}>이번 달 (계약일 기준)</div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: "#15803D" }}>{feeStats.thisMonth > 0 ? wonToKor(feeStats.thisMonth) + " 원" : "-"}</div>
+          </div>
+          <div style={{ borderTop: "1px solid #BBF7D0", paddingTop: 10 }}>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 3 }}>전체 파이프라인 합계</div>
+            <div style={{ fontSize: 17, fontWeight: 800, color: "#166534" }}>{feeStats.total > 0 ? wonToKor(feeStats.total) + " 원" : "-"}</div>
+          </div>
+          <div style={{ fontSize: 10, color: "#9CA3AF", marginTop: "auto" }}>* 승인금액 × 수수료율(기본 5%) 기준 추정</div>
+        </div>
       </div>
 
       {/* 🚨 장기 방치 알림 (30일 이상 변화 없음) */}
@@ -4339,6 +4712,39 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 </div>
                 {data.agency && <div style={{ fontSize: 11, color: "#4338CA", marginTop: 8, fontWeight: 600 }}>선택: {data.agency}</div>}
               </div>
+              {/* 🚨 보증기관 중복 경고 (기능9) */}
+              {agencyIncludes(data, "신용보증기금") && agencyIncludes(data, "신용보증재단") && (
+                <div style={{ background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 8, padding: "10px 13px", marginBottom: 10, color: "#DC2626", fontSize: 12.5, fontWeight: 700 }}>
+                  🚨 보증기관 중복 불가: 신용보증기금과 신용보증재단은 동시 진행할 수 없습니다. 하나만 선택하세요.
+                </div>
+              )}
+              {/* 자동 감지 배지: 약점(기능3)·기관추천(기능4)·사후관리(기능10) */}
+              <PolicyBadges company={data} />
+              {/* 재무 지표 (약점 감지 입력용) */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>부채비율 (%)</div>
+                  <input type="number" value={data.debt_ratio == null ? "" : data.debt_ratio} placeholder="예: 350" onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { debt_ratio: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+                </div>
+                <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>이자보상배율</div>
+                  <input type="number" step="0.1" value={data.interest_coverage_ratio == null ? "" : data.interest_coverage_ratio} placeholder="예: 1.5" onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { interest_coverage_ratio: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+                </div>
+              </div>
+              {/* 🌪 고환율 긴급 트랙 (기능7) — 중진공 선택 시 */}
+              {agencyIncludes(data, "중소벤처기업진흥공단") && (
+                <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>수입 비중 (%) <span style={{ color: "#BBB" }}>· 고환율 긴급 트랙 판정</span></div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <input type="number" value={data.import_ratio == null ? "" : data.import_ratio} placeholder="예: 25" onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { import_ratio: v }); }); }} style={{ flex: 1, fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+                    {parseFloat(data.import_ratio) >= 20 && <span style={{ fontSize: 11, fontWeight: 700, background: "#FEE2E2", color: "#DC2626", border: "1px solid #FCA5A5", borderRadius: 99, padding: "4px 10px", whiteSpace: "nowrap" }}>🌪 고환율 긴급 트랙 해당</span>}
+                  </div>
+                </div>
+              )}
+              {/* 🎯 중진공 정책우선도 계산기 (기능1) */}
+              {(agencyIncludes(data, "중소벤처기업진흥공단") || agencyIncludes(data, "구조혁신&사업전환")) && <JunginggongCalc />}
+              {/* 💳 신보 예상 한도 계산기 (기능2) */}
+              {agencyIncludes(data, "신용보증기금") && <SinboCalc company={data} />}
               <div style={{ background: "#FBF7F0", borderRadius: 8, padding: "10px 13px", marginBottom: 10, border: "1px solid #F0E6D6" }}>
                 <div style={{ fontSize: 11, color: "#B45309", marginBottom: 6, fontWeight: 600 }}>🤝 소개자 (협업 담당자)</div>
                 <select value={data.referrer || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { referrer: v }); }); }}
@@ -4534,6 +4940,30 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                         style={{ width: "100%", fontSize: 11, textAlign: "center", border: "1px solid #E8E5E0", borderRadius: 5, padding: "4px", outline: "none", boxSizing: "border-box" }} />
                     </div>
                   ))}
+                </div>
+              </div>
+              {/* 💰 수수료 계산기 (기능5) */}
+              <div style={{ background: "#F0FDF4", borderRadius: 10, padding: "13px 15px", marginBottom: 10, border: "1px solid #BBF7D0" }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: "#15803D", marginBottom: 10 }}>💰 수수료 계산기</div>
+                <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+                  <div style={{ flex: 2, minWidth: 140 }}>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>승인(예상) 금액 (원)</div>
+                    <input type="number" value={data.approved_amount == null ? "" : data.approved_amount} placeholder="예: 100000000"
+                      onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { approved_amount: v }); }); }}
+                      style={{ width: "100%", fontSize: 13, padding: "7px 9px", border: "1px solid #E8E5E0", borderRadius: 6, outline: "none", boxSizing: "border-box" }} />
+                    {data.approved_amount ? <div style={{ fontSize: 10, color: "#15803D", marginTop: 3, fontWeight: 700 }}>{wonToKor(parseInt(String(data.approved_amount).replace(/[^0-9]/g, ""), 10) || 0)} 원</div> : null}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 90 }}>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>수수료율 (%)</div>
+                    <select value={data.fee || 5} onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { fee: v }); }); }}
+                      style={{ width: "100%", fontSize: 13, padding: "7px 9px", border: "1px solid #E8E5E0", borderRadius: 6, background: "#fff", outline: "none", boxSizing: "border-box" }}>
+                      {[1,2,3,4,5].map(function(r) { return <option key={r} value={r}>{r}%</option>; })}
+                    </select>
+                  </div>
+                </div>
+                <div style={{ background: "#fff", borderRadius: 8, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>예상 수수료</span>
+                  <span style={{ fontSize: 20, fontWeight: 800, color: "#15803D" }}>{expectedFee(data) > 0 ? expectedFee(data).toLocaleString() + " 원" : "-"}</span>
                 </div>
               </div>
               <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "13px 15px" }}>
@@ -5607,6 +6037,12 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
                 );
               })}
             </div>
+            {/* 🚨 보증기관 중복 경고 (기능9) */}
+            {(form.agency_list || []).includes("신용보증기금") && (form.agency_list || []).includes("신용보증재단") && (
+              <div style={{ background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 7, padding: "8px 11px", marginTop: 8, color: "#DC2626", fontSize: 12, fontWeight: 700 }}>
+                🚨 보증기관 중복 불가: 신용보증기금과 신용보증재단은 동시 진행할 수 없어요. 하나만 선택하세요.
+              </div>
+            )}
           </div>
 
           {/* 담당자 (복수 선택) */}
@@ -5622,6 +6058,16 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
                 );
               })}
             </div>
+          </div>
+
+          {/* 📣 리드 출처 (기능8) */}
+          <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 14 }}>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>리드 출처 (어떻게 유입됐나요?)</div>
+            <select value={form.lead_source || ""} onChange={function(e) { set("lead_source", e.target.value); }}
+              style={{ width: "100%", fontSize: 13, padding: "8px 10px", border: "1px solid #E8E5E0", borderRadius: 6, background: "#fff", outline: "none", boxSizing: "border-box" }}>
+              <option value="">— 선택 —</option>
+              {LEAD_SOURCES.map(function(s) { return <option key={s} value={s}>{s}</option>; })}
+            </select>
           </div>
 
           <div style={{ background: "#DBEAFE", borderRadius: 8, padding: "10px 13px", marginBottom: 12, fontSize: 11, color: "#1E40AF", lineHeight: 1.5 }}>
