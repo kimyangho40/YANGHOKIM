@@ -620,6 +620,109 @@ function ExportButton({ rows, filenamePrefix, label, canExport }) {
     </button>
   );
 }
+// 테이블 전체를 서버에서 직접 조회해 CSV로 내려받는 백업 버튼 (부분 로드와 무관하게 전체 백업)
+function ExportTableButton({ table, filenamePrefix, label }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <button disabled={busy} onClick={async function() {
+      setBusy(true);
+      try {
+        var r = await supabase.from(table).select("*");
+        if (r.error) { alert("백업 실패(" + table + "): " + r.error.message); return; }
+        if (!r.data || r.data.length === 0) { alert("데이터가 없어요: " + table); return; }
+        exportToCsv((filenamePrefix || table) + "_" + csvDateStamp() + ".csv", r.data);
+      } catch (e) { alert("백업 실패: " + (e && e.message ? e.message : e)); }
+      finally { setBusy(false); }
+    }}
+      style={{ display: "flex", alignItems: "center", gap: 6, background: busy ? "#F0EDE8" : "#fff", color: "#15803D", border: "1px solid #86EFAC", borderRadius: 8, padding: "7px 13px", fontSize: 12, fontWeight: 700, cursor: busy ? "default" : "pointer", whiteSpace: "nowrap" }}>
+      {busy ? "내보내는 중..." : "⬇️ " + (label || "CSV")}
+    </button>
+  );
+}
+
+// ── 데이터 백업 화면 (지정 계정 전용) ─────────────────────────────────────────────
+const BACKUP_TABLES = [
+  { t: "companies", n: "기업목록" }, { t: "db_leads", n: "DB리스트" },
+  { t: "agency_cases", n: "기관진행" }, { t: "settlement_manual", n: "정산" },
+  { t: "work_notes", n: "업무노트" }, { t: "team_notes", n: "팀노트" },
+  { t: "approval_cases", n: "승인·부결사례" }, { t: "activity_logs", n: "활동로그" },
+  { t: "leave_requests", n: "연차·휴가" }, { t: "partners", n: "협업담당자" },
+  { t: "quick_links", n: "바로가기" }, { t: "calendar_events", n: "캘린더" },
+  { t: "kpi_goals", n: "KPI목표" }, { t: "documents", n: "서류현황" },
+  { t: "branch_contacts", n: "지점연락처" }, { t: "call_logs", n: "콜로그" },
+  { t: "profiles", n: "팀원" },
+];
+function BackupView({ canExport }) {
+  const [allBusy, setAllBusy] = useState(false);
+  const [counts, setCounts] = useState({});
+  useEffect(function() {
+    BACKUP_TABLES.forEach(function(tb) {
+      supabase.from(tb.t).select("id", { count: "exact", head: true }).then(function(r) {
+        if (!r.error) setCounts(function(p) { var n = Object.assign({}, p); n[tb.t] = r.count; return n; });
+      });
+    });
+  }, []);
+  if (!canExport) {
+    return <div style={{ padding: 40, textAlign: "center", color: "#888", fontSize: 14 }}>이 화면에 접근할 권한이 없습니다.</div>;
+  }
+  async function exportAll() {
+    setAllBusy(true);
+    for (var i = 0; i < BACKUP_TABLES.length; i++) {
+      var tb = BACKUP_TABLES[i];
+      try {
+        var r = await supabase.from(tb.t).select("*");
+        if (!r.error && r.data && r.data.length) {
+          exportToCsv(tb.n + "_" + csvDateStamp() + ".csv", r.data);
+          await new Promise(function(res) { setTimeout(res, 500); }); // 다중 다운로드 간격
+        }
+      } catch (e) { /* 개별 실패는 건너뜀 */ }
+    }
+    setAllBusy(false);
+  }
+  return (
+    <>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8, gap: 10, flexWrap: "wrap" }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>데이터 백업</h1>
+          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>각 테이블 전체를 CSV로 내려받아요 (엑셀에서 열기 가능 · UTF-8)</p>
+        </div>
+        <button onClick={exportAll} disabled={allBusy}
+          style={{ display: "flex", alignItems: "center", gap: 6, background: allBusy ? "#F0EDE8" : "#15803D", color: allBusy ? "#888" : "#fff", border: "none", borderRadius: 8, padding: "10px 16px", fontSize: 13, fontWeight: 700, cursor: allBusy ? "default" : "pointer" }}>
+          {allBusy ? "전체 백업 중..." : "⬇️ 전체 백업 (" + BACKUP_TABLES.length + "개)"}
+        </button>
+      </div>
+      <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "12px 16px", fontSize: 12.5, color: "#92400E", marginBottom: 16 }}>
+        💡 “전체 백업”을 누르면 표의 모든 테이블이 각각 CSV 파일로 순서대로 다운로드됩니다. 브라우저가 “여러 파일 다운로드 허용”을 물으면 허용해주세요.
+      </div>
+      <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ background: "#F7F6F3", borderBottom: "1px solid #E8E5E0" }}>
+              {["테이블", "행 수", "내보내기"].map(function(h) {
+                return <th key={h} style={{ padding: "11px 16px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: h === "내보내기" ? "right" : "left" }}>{h}</th>;
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {BACKUP_TABLES.map(function(tb) {
+              return (
+                <tr key={tb.t} style={{ borderBottom: "1px solid #F0EDE8" }}>
+                  <td style={{ padding: "12px 16px", fontSize: 13, fontWeight: 600 }}>{tb.n} <span style={{ color: "#BBB", fontWeight: 400, fontSize: 11 }}>{tb.t}</span></td>
+                  <td style={{ padding: "12px 16px", fontSize: 13, color: "#555" }}>{counts[tb.t] == null ? "…" : counts[tb.t].toLocaleString() + "행"}</td>
+                  <td style={{ padding: "10px 16px" }}>
+                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                      <ExportTableButton table={tb.t} filenamePrefix={tb.n} label="CSV" />
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -1663,6 +1766,7 @@ function CRMApp({ profile, session }) {
                 { id: "manual",      label: "자료실",      icon: "folder" },
                 { id: "settlement",  label: "정산관리",    icon: "money" },
                 ...(profile.role === "admin" ? [{ id: "members", label: "팀원 관리", icon: "users" }] : []),
+                ...(session?.user?.email === EXPORT_OWNER_EMAIL ? [{ id: "backup", label: "데이터 백업", icon: "save" }] : []),
               ].map(({ id, label, icon, badge }) => (
                 <div key={id} onClick={() => setView(id)}
                   style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 8, cursor: "pointer", marginBottom: 2, background: view === id ? "#2E2C29" : "transparent", color: view === id ? "#F7F6F3" : "#666", fontSize: 13, fontWeight: view === id ? 600 : 400 }}>
@@ -1786,6 +1890,7 @@ function CRMApp({ profile, session }) {
             {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} filterAgency={filterAgency} setFilterAgency={setFilterAgency} filterTeam={filterTeam} setFilterTeam={setFilterTeam} creditFilter={creditFilter} setCreditFilter={setCreditFilter} creditMode={creditMode} setCreditMode={setCreditMode} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
             {view === "stagnant" && <StagnantView stagnant={stagnant} onSelect={setSelectedCompany} />}
             {view === "members" && profile.role === "admin" && <MembersView profiles={profiles} onRefresh={fetchAll} showToast={showToast} />}
+            {view === "backup" && <BackupView canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
           </>
         )}
       </div>
