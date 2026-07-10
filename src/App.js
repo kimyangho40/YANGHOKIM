@@ -10775,44 +10775,22 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                 var totalItems = 0;
                 var checkedItems = 0;
                 PRIORITY_CHECKLIST.forEach(function(cat) { cat.items.forEach(function(item) { totalItems++; if (priorityChecks[item]) checkedItems++; }); });
-                var ps = calcPriorityScore(priorityChecks);
-                var col = priorityScoreColor(ps.score);
-                var bg = priorityScoreBg(ps.score);
                 return (
-                  <div style={{ marginBottom: 20 }}>
-                    {/* 점수 계산 섹션 */}
-                    <div style={{ background: bg, borderRadius: 10, padding: "14px 16px", marginBottom: 12 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
-                        <span style={{ fontSize: 13, fontWeight: 800, color: "#555" }}>🎯 정책우선도 점수</span>
-                        <span style={{ fontSize: 26, fontWeight: 800, color: col }}>{ps.score}<span style={{ fontSize: 13, color: "#999", fontWeight: 700 }}>/100</span></span>
-                      </div>
-                      <div style={{ height: 10, background: "#fff", borderRadius: 99, overflow: "hidden" }}>
-                        <div style={{ width: Math.min(100, ps.score) + "%", height: "100%", background: col, borderRadius: 99, transition: "width 0.3s" }} />
-                      </div>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: col, marginTop: 7 }}>
-                        {ps.score >= 70 ? "✅ 우수 (70점↑) — 우선지원 가능성 높음" : ps.score >= 50 ? "⚠ 보통 (50점↑) — 우대항목 보강 권장" : "🔴 미흡 (50점 미만) — 배점 항목 보강 필요"}
-                      </div>
-                    </div>
-                    {/* 해당 항목 수 */}
-                    <div style={{ background: "#F3F0FF", borderRadius: 10, padding: "12px 16px", display: "flex", gap: 20, alignItems: "center" }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: "#7C3AED", whiteSpace: "nowrap" }}>총 {totalItems}개 항목 중 <span style={{ fontSize: 18 }}>{checkedItems}</span>개 해당 <span style={{ fontSize: 11, color: "#9F7AEA", fontWeight: 600 }}>({ps.qualified}개 분야)</span></div>
-                      <div style={{ flex: 1, background: "#DDD6FE", borderRadius: 99, height: 8, overflow: "hidden" }}>
-                        <div style={{ width: (checkedItems / totalItems * 100) + "%", background: "#7C3AED", height: "100%", borderRadius: 99, transition: "width 0.3s" }} />
-                      </div>
+                  <div style={{ background: "#F3F0FF", borderRadius: 10, padding: "12px 16px", marginBottom: 20, display: "flex", gap: 20, alignItems: "center" }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#7C3AED" }}>총 {totalItems}개 항목 중 <span style={{ fontSize: 18 }}>{checkedItems}</span>개 해당</div>
+                    <div style={{ flex: 1, background: "#DDD6FE", borderRadius: 99, height: 8, overflow: "hidden" }}>
+                      <div style={{ width: (checkedItems / totalItems * 100) + "%", background: "#7C3AED", height: "100%", borderRadius: 99, transition: "width 0.3s" }} />
                     </div>
                   </div>
                 );
               })()}
               {PRIORITY_CHECKLIST.map(function(cat) {
                 var catChecked = cat.items.filter(function(item) { return priorityChecks[item]; }).length;
-                var catWeight = PRIORITY_WEIGHTS[cat.category] || 0;
-                var catEarned = catChecked > 0 ? catWeight : 0;
                 return (
                   <div key={cat.category} style={{ marginBottom: 20 }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 8, display: "flex", alignItems: "center", gap: 8 }}>
                       <span style={{ background: catChecked > 0 ? "#EDE9FE" : "#F7F6F3", color: catChecked > 0 ? "#7C3AED" : "#AAA", padding: "2px 10px", borderRadius: 6 }}>{cat.category}</span>
                       <span style={{ fontSize: 11, color: "#AAA" }}>{catChecked}/{cat.items.length}</span>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: catEarned > 0 ? "#7C3AED" : "#CCC", marginLeft: "auto" }}>{catEarned}/{catWeight}점</span>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
                       {cat.items.map(function(item) {
