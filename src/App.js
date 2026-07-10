@@ -604,7 +604,36 @@ export default function App() {
   if (loading) return <Splash />;
   if (!session) return <AuthScreen />;
   if (!profile) return <SetupProfile userId={session.user.id} email={session.user.email} onDone={(p) => setProfile(p)} />;
+  // 🔐 회원가입 승인제: 승인 대기/거절 상태면 데이터 접근 차단
+  // (status 컬럼이 아직 없는 기존 환경에서는 undefined → 통과하여 잠기지 않음)
+  if (profile.status === "pending" || profile.status === "rejected") {
+    return <PendingApproval email={session.user.email} name={profile.name} rejected={profile.status === "rejected"} />;
+  }
   return <CRMApp profile={profile} session={session} />;
+}
+
+// ── 승인 대기 화면 ─────────────────────────────────────────────────────────────
+function PendingApproval({ email, name, rejected }) {
+  return (
+    <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#1A1917", padding: 24 }}>
+      <div style={{ background: "#fff", borderRadius: 16, padding: "44px 40px", width: 420, maxWidth: "100%", boxShadow: "0 24px 80px rgba(0,0,0,0.4)", textAlign: "center" }}>
+        <div style={{ fontSize: 44, marginBottom: 18 }}>{rejected ? "🚫" : "⏳"}</div>
+        <h2 style={{ fontSize: 20, fontWeight: 800, margin: "0 0 10px", letterSpacing: "-0.03em" }}>
+          {rejected ? "가입이 거절되었어요" : "승인 대기 중이에요"}
+        </h2>
+        <p style={{ fontSize: 13.5, color: "#666", lineHeight: 1.7, margin: "0 0 6px" }}>
+          {rejected
+            ? "계정 접근이 거절되었습니다. 관리자에게 문의해주세요."
+            : <>가입 신청이 접수됐어요.<br />관리자가 승인하면 바로 이용할 수 있어요.</>}
+        </p>
+        <div style={{ fontSize: 12, color: "#AAA", margin: "14px 0 26px" }}>{name ? name + " · " : ""}{email}</div>
+        <button onClick={() => supabase.auth.signOut()}
+          style={{ width: "100%", padding: "12px", background: "#F7F6F3", color: "#555", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}>
+          로그아웃
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // ── 스플래시 ──────────────────────────────────────────────────────────────────
@@ -1695,7 +1724,7 @@ function CRMApp({ profile, session }) {
           </div>
         ) : (
           <>
-            {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setFilterAssignee={setFilterAssignee} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} />}
+            {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setFilterAssignee={setFilterAssignee} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} isAdmin={profile.role === "admin"} />}
             {view === "agency" && <AgencyView jumpToMonth={agencyJumpMonth} jumpToGroup={agencyJumpGroup} />}
             {view === "dbleads" && <DBLeadsView />}
             {view === "settlement" && <SettlementView />}
@@ -1909,7 +1938,7 @@ function AiSearchModal({ companies, onClose, onSelectCompany }) {
 }
 
 // ── 대시보드 ──────────────────────────────────────────────────────────────────
-function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, setFilterAssignee, setDashboardFilter, onAdd }) {
+function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, setFilterAssignee, setDashboardFilter, onAdd, isAdmin }) {
   const contractDone = companies.filter(c => c.fee_status === "수수료수령완료").length;
   const contracted = companies.filter(c => c.fee_status !== "미수령").length;
   // const thisWeek = companies.filter(c => c.next_contact && c.next_contact <= "2026-05-15").length;
@@ -2397,10 +2426,17 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
             <div style={{ marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                 <div style={{ fontSize: 12.5, fontWeight: 700, color: props.color }}>{props.icon} {props.title} <span style={{ color: "#999" }}>{props.items.length}건</span></div>
-                <button onClick={function() { copyToClipboard(props.copyText, props.copyKey); }}
-                  style={{ fontSize: 11, fontWeight: 600, color: copiedTpl === props.copyKey ? "#15803D" : "#666", background: copiedTpl === props.copyKey ? "#DCFCE7" : "#F7F6F3", border: "1px solid #E8E5E0", borderRadius: 6, padding: "3px 9px", cursor: "pointer" }}>
-                  {copiedTpl === props.copyKey ? "✅ 복사됨" : "📋 목록 복사"}
-                </button>
+                {isAdmin ? (
+                  <button onClick={function() { copyToClipboard(props.copyText, props.copyKey); }}
+                    style={{ fontSize: 11, fontWeight: 600, color: copiedTpl === props.copyKey ? "#15803D" : "#666", background: copiedTpl === props.copyKey ? "#DCFCE7" : "#F7F6F3", border: "1px solid #E8E5E0", borderRadius: 6, padding: "3px 9px", cursor: "pointer" }}>
+                    {copiedTpl === props.copyKey ? "✅ 복사됨" : "📋 목록 복사"}
+                  </button>
+                ) : (
+                  <span title="관리자만 목록을 내보낼 수 있어요"
+                    style={{ fontSize: 11, fontWeight: 600, color: "#BBB", background: "#F7F6F3", border: "1px solid #EDEBE8", borderRadius: 6, padding: "3px 9px", cursor: "not-allowed" }}>
+                    🔒 관리자 전용
+                  </span>
+                )}
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>{props.children}</div>
             </div>
@@ -3640,33 +3676,61 @@ function StagnantView({ stagnant, onSelect }) {
 // ── 팀원 관리 (관리자 전용) ───────────────────────────────────────────────────
 function MembersView({ profiles, onRefresh, showToast }) {
   const updateRole = async (id, role) => {
-    await supabase.from("profiles").update({ role }).eq("id", id);
+    const { error } = await supabase.from("profiles").update({ role }).eq("id", id);
+    if (error) { showToast("변경 실패: " + error.message, "error"); return; }
     showToast("권한이 변경됐어요");
     onRefresh();
   };
+  const updateStatus = async (id, status) => {
+    const { error } = await supabase.from("profiles").update({ status }).eq("id", id);
+    if (error) { showToast("변경 실패: " + error.message, "error"); return; }
+    showToast(status === "approved" ? "승인 완료" : status === "rejected" ? "거절 처리됨" : "변경됐어요");
+    onRefresh();
+  };
+
+  const STATUS_META = {
+    pending:  { label: "승인 대기", bg: "#FEF3C7", color: "#92400E" },
+    approved: { label: "승인됨",   bg: "#DCFCE7", color: "#15803D" },
+    rejected: { label: "거절됨",   bg: "#FEE2E2", color: "#DC2626" },
+  };
+  const pendingCount = profiles.filter(p => p.status === "pending").length;
 
   return (
     <>
-      <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: "0 0 22px" }}>팀원 관리</h1>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 0 22px" }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>팀원 관리</h1>
+        {pendingCount > 0 && (
+          <span style={{ fontSize: 12, fontWeight: 700, background: "#FEF3C7", color: "#92400E", borderRadius: 99, padding: "4px 11px" }}>
+            승인 대기 {pendingCount}명
+          </span>
+        )}
+      </div>
       <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ background: "#F7F6F3", borderBottom: "1px solid #E8E5E0" }}>
-              {["이름","소속팀","권한","가입일"].map(h => (
+              {["이름","소속팀","상태","권한","가입일","승인"].map(h => (
                 <th key={h} style={{ padding: "11px 16px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left" }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {profiles.map(p => (
-              <tr key={p.id} style={{ borderBottom: "1px solid #F0EDE8" }}>
+            {profiles.map(p => {
+              const st = STATUS_META[p.status] || (p.status ? { label: p.status, bg: "#F0EDE8", color: "#888" } : null);
+              return (
+              <tr key={p.id} style={{ borderBottom: "1px solid #F0EDE8", background: p.status === "pending" ? "#FFFDF5" : "#fff" }}>
                 <td style={{ padding: "13px 16px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#1A1917", color: "#F7F6F3", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>{p.name[0]}</div>
+                    <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#1A1917", color: "#F7F6F3", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>{(p.name || "?")[0]}</div>
                     <span style={{ fontSize: 13, fontWeight: 600 }}>{p.name}</span>
                   </div>
                 </td>
                 <td style={{ padding: "13px 16px", fontSize: 13, color: "#555" }}>{p.team}</td>
+                <td style={{ padding: "13px 16px" }}>
+                  {st
+                    ? <span style={{ fontSize: 11, fontWeight: 700, background: st.bg, color: st.color, borderRadius: 99, padding: "3px 10px" }}>{st.label}</span>
+                    : <span style={{ fontSize: 11, color: "#CCC" }}>-</span>}
+                </td>
                 <td style={{ padding: "13px 16px" }}>
                   <select value={p.role} onChange={e => updateRole(p.id, e.target.value)}
                     style={{ padding: "5px 9px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 12, background: "#fff", cursor: "pointer" }}>
@@ -3675,13 +3739,26 @@ function MembersView({ profiles, onRefresh, showToast }) {
                   </select>
                 </td>
                 <td style={{ padding: "13px 16px", fontSize: 12, color: "#888" }}>{p.created_at?.slice(0,10)}</td>
+                <td style={{ padding: "13px 16px" }}>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {p.status !== "approved" && (
+                      <button onClick={() => updateStatus(p.id, "approved")}
+                        style={{ background: "#DCFCE7", color: "#15803D", border: "none", borderRadius: 6, padding: "5px 11px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>승인</button>
+                    )}
+                    {p.status !== "rejected" && (
+                      <button onClick={() => updateStatus(p.id, "rejected")}
+                        style={{ background: "#FEF2F2", color: "#DC2626", border: "none", borderRadius: 6, padding: "5px 11px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>거절</button>
+                    )}
+                  </div>
+                </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
       <div style={{ marginTop: 16, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "14px 18px", fontSize: 13, color: "#92400E" }}>
-        💡 새 팀원 추가: 팀원에게 앱 주소를 공유하고 이메일로 회원가입하게 해주세요. 가입 후 이 화면에 자동으로 나타나요.
+        💡 새 팀원 추가: 팀원에게 앱 주소를 공유하고 이메일로 회원가입하게 하세요. 가입하면 이 화면에 <b>승인 대기</b>로 나타나고, <b>승인</b> 버튼을 눌러야 로그인·데이터 접근이 가능해요.
       </div>
     </>
   );
@@ -4049,7 +4126,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
             {[
               { label: "대표", value: data.representative || "-" },
-              { label: "기관", value: agencyGrouped.length > 0 ? (agencyGrouped.length === 1 ? agencyGrouped[0].key : (agencyGrouped[0].key + " 외 " + (agencyGrouped.length - 1))) : (data.agency || "-") },
+              { label: "기관", value: groupedAgency.length > 0 ? (groupedAgency.length === 1 ? groupedAgency[0].key : (groupedAgency[0].key + " 외 " + (groupedAgency.length - 1))) : (data.agency || "-") },
               { label: "단계", value: data.stage || "-" },
               { label: "정산", value: settlements.length > 0 ? (settlements.length + "건") : "-" },
             ].map(function(it) {
