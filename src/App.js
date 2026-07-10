@@ -3,6 +3,8 @@ import { useState, useMemo, useEffect, useCallback, useRef, Fragment } from "rea
 import { createClient } from "@supabase/supabase-js";
 
 // ── Supabase 설정 ─────────────────────────────────────────────────────────────
+// 내보내기(목록 복사) 권한을 가진 계정 이메일 — 이 계정만 내보내기 버튼이 보임
+const EXPORT_OWNER_EMAIL = "kimyangho000@gmail.com";
 const SUPABASE_URL = "https://ujdrjvnihxjvbkezjvwc.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVqZHJqdm5paHhqdmJrZXpqdndjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzOTgzODIsImV4cCI6MjA5Mzk3NDM4Mn0.K0zbRGT8SrDBeZoDyc_VM61xAHZye8V0p0m2PemNUWM";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -1724,7 +1726,7 @@ function CRMApp({ profile, session }) {
           </div>
         ) : (
           <>
-            {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setFilterAssignee={setFilterAssignee} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} isAdmin={profile.role === "admin"} />}
+            {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setFilterAssignee={setFilterAssignee} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
             {view === "agency" && <AgencyView jumpToMonth={agencyJumpMonth} jumpToGroup={agencyJumpGroup} />}
             {view === "dbleads" && <DBLeadsView />}
             {view === "settlement" && <SettlementView />}
@@ -1938,7 +1940,7 @@ function AiSearchModal({ companies, onClose, onSelectCompany }) {
 }
 
 // ── 대시보드 ──────────────────────────────────────────────────────────────────
-function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, setFilterAssignee, setDashboardFilter, onAdd, isAdmin }) {
+function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, setFilterAssignee, setDashboardFilter, onAdd, canExport }) {
   const contractDone = companies.filter(c => c.fee_status === "수수료수령완료").length;
   const contracted = companies.filter(c => c.fee_status !== "미수령").length;
   // const thisWeek = companies.filter(c => c.next_contact && c.next_contact <= "2026-05-15").length;
@@ -2426,16 +2428,11 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
             <div style={{ marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                 <div style={{ fontSize: 12.5, fontWeight: 700, color: props.color }}>{props.icon} {props.title} <span style={{ color: "#999" }}>{props.items.length}건</span></div>
-                {isAdmin ? (
+                {canExport && (
                   <button onClick={function() { copyToClipboard(props.copyText, props.copyKey); }}
                     style={{ fontSize: 11, fontWeight: 600, color: copiedTpl === props.copyKey ? "#15803D" : "#666", background: copiedTpl === props.copyKey ? "#DCFCE7" : "#F7F6F3", border: "1px solid #E8E5E0", borderRadius: 6, padding: "3px 9px", cursor: "pointer" }}>
                     {copiedTpl === props.copyKey ? "✅ 복사됨" : "📋 목록 복사"}
                   </button>
-                ) : (
-                  <span title="관리자만 목록을 내보낼 수 있어요"
-                    style={{ fontSize: 11, fontWeight: 600, color: "#BBB", background: "#F7F6F3", border: "1px solid #EDEBE8", borderRadius: 6, padding: "3px 9px", cursor: "not-allowed" }}>
-                    🔒 관리자 전용
-                  </span>
                 )}
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>{props.children}</div>
