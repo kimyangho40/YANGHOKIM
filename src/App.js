@@ -9813,7 +9813,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   const DEFAULT_COL_WIDTHS = {
     num: 40, business_name: 160, representative: 80, assignee: 80, amount: 70,
     product: 140, industry: 70, region: 80, contact: 130, status: 110, dup: 56, docs: 200,
-    credit: 60, notes: 140, action: 120
+    credit: 60, notes: 140, action: 120, priority: 84
   };
   const [colWidths, setColWidths] = useState(function() {
     try {
@@ -10191,6 +10191,37 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     { category: "사회적 경제기업", items: ["사회적기업","예비사회적기업","마을기업","자활기업","협동조합(협동조합기본법에 근거한 협동조합만 해당)","소셜벤처기업"] },
   ];
 
+  // 중진공 정책우선도 점수 계산 (카테고리별 배점, 합 100) — 위 60개 체크리스트를 근거로 점수화
+  // 해당 카테고리에서 1개 이상 체크되면 그 카테고리 배점을 부여 (우선도 평가 = 우대항목 자격 충족 방식)
+  var PRIORITY_WEIGHTS = {
+    "고용지표": 15,
+    "기술지표(양산 후 3년 이내)": 20,
+    "경영지표": 10,
+    "기업공개": 8,
+    "수출실적": 10,
+    "그린기술": 8,
+    "스마트화": 7,
+    "재기지원": 7,
+    "정책우대": 8,
+    "창업준비": 4,
+    "사회적 경제기업": 3,
+  };
+  var calcPriorityScore = function(checks) {
+    var c = checks;
+    if (typeof c === "string") { try { c = JSON.parse(c || "{}"); } catch (e) { c = {}; } }
+    if (!c || typeof c !== "object") c = {};
+    var score = 0, qualified = 0, checkedTotal = 0;
+    PRIORITY_CHECKLIST.forEach(function(cat) {
+      var w = PRIORITY_WEIGHTS[cat.category] || 0;
+      var n = cat.items.filter(function(it) { return c[it]; }).length;
+      checkedTotal += n;
+      if (n > 0) { score += w; qualified++; }
+    });
+    return { score: score, qualified: qualified, checked: checkedTotal };
+  };
+  var priorityScoreColor = function(s) { return s >= 70 ? "#15803D" : s >= 50 ? "#B45309" : "#DC2626"; };
+  var priorityScoreBg = function(s) { return s >= 70 ? "#DCFCE7" : s >= 50 ? "#FEF3C7" : "#FEE2E2"; };
+
   const [showPriorityModal, setShowPriorityModal] = useState(false);
   const [priorityTarget, setPriorityTarget] = useState(null);
   const [priorityChecks, setPriorityChecks] = useState({});
@@ -10434,6 +10465,9 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
               <tr style={{ background: "#F7F6F3", borderBottom: "2px solid #E8E5E0", position: "sticky", top: 0, zIndex: 2 }}>
                 <th style={headerCellStyle("num", { width: colWidths.num })}>#<ResizeHandle colKey="num" /></th>
                 <th style={headerCellStyle("business_name")}>사업자명<ResizeHandle colKey="business_name" /></th>
+                {activeGroup === "중소벤처기업진흥공단" && (
+                  <th style={headerCellStyle("priority", { color: "#7C3AED", textAlign: "center" })}>우선도 점수<ResizeHandle colKey="priority" /></th>
+                )}
                 <th style={headerCellStyle("representative")}>대표자<ResizeHandle colKey="representative" /></th>
                 <th style={headerCellStyle("assignee")}>담당자<ResizeHandle colKey="assignee" /></th>
                 <th style={headerCellStyle("amount")}>금액<ResizeHandle colKey="amount" /></th>
@@ -10478,6 +10512,20 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                           </div>
                         )}
                     </td>
+                    {activeGroup === "중소벤처기업진흥공단" && (
+                      <td style={{ padding: "10px 12px", textAlign: "center" }} onClick={function(e) { e.stopPropagation(); openPriority(row); }}>
+                        {(function() {
+                          var ps = calcPriorityScore(row.priority_checks);
+                          if (ps.checked === 0) return <span style={{ fontSize: 11, color: "#BBB" }}>미평가</span>;
+                          return (
+                            <span title={ps.checked + "개 항목 · " + ps.qualified + "개 카테고리 해당"}
+                              style={{ display: "inline-block", minWidth: 40, fontSize: 12, fontWeight: 800, padding: "3px 8px", borderRadius: 99, color: priorityScoreColor(ps.score), background: priorityScoreBg(ps.score), cursor: "pointer" }}>
+                              {ps.score}
+                            </span>
+                          );
+                        })()}
+                      </td>
+                    )}
                     <td style={{ padding: "10px 12px" }}>
                       {isEditing
                         ? <input value={editData.representative || ""} onChange={function(e) { var v = e.target.value; setEditData(function(p) { return Object.assign({}, p, { representative: v }); }); }}
@@ -10727,22 +10775,44 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                 var totalItems = 0;
                 var checkedItems = 0;
                 PRIORITY_CHECKLIST.forEach(function(cat) { cat.items.forEach(function(item) { totalItems++; if (priorityChecks[item]) checkedItems++; }); });
+                var ps = calcPriorityScore(priorityChecks);
+                var col = priorityScoreColor(ps.score);
+                var bg = priorityScoreBg(ps.score);
                 return (
-                  <div style={{ background: "#F3F0FF", borderRadius: 10, padding: "12px 16px", marginBottom: 20, display: "flex", gap: 20, alignItems: "center" }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: "#7C3AED" }}>총 {totalItems}개 항목 중 <span style={{ fontSize: 18 }}>{checkedItems}</span>개 해당</div>
-                    <div style={{ flex: 1, background: "#DDD6FE", borderRadius: 99, height: 8, overflow: "hidden" }}>
-                      <div style={{ width: (checkedItems / totalItems * 100) + "%", background: "#7C3AED", height: "100%", borderRadius: 99, transition: "width 0.3s" }} />
+                  <div style={{ marginBottom: 20 }}>
+                    {/* 점수 계산 섹션 */}
+                    <div style={{ background: bg, borderRadius: 10, padding: "14px 16px", marginBottom: 12 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+                        <span style={{ fontSize: 13, fontWeight: 800, color: "#555" }}>🎯 정책우선도 점수</span>
+                        <span style={{ fontSize: 26, fontWeight: 800, color: col }}>{ps.score}<span style={{ fontSize: 13, color: "#999", fontWeight: 700 }}>/100</span></span>
+                      </div>
+                      <div style={{ height: 10, background: "#fff", borderRadius: 99, overflow: "hidden" }}>
+                        <div style={{ width: Math.min(100, ps.score) + "%", height: "100%", background: col, borderRadius: 99, transition: "width 0.3s" }} />
+                      </div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: col, marginTop: 7 }}>
+                        {ps.score >= 70 ? "✅ 우수 (70점↑) — 우선지원 가능성 높음" : ps.score >= 50 ? "⚠ 보통 (50점↑) — 우대항목 보강 권장" : "🔴 미흡 (50점 미만) — 배점 항목 보강 필요"}
+                      </div>
+                    </div>
+                    {/* 해당 항목 수 */}
+                    <div style={{ background: "#F3F0FF", borderRadius: 10, padding: "12px 16px", display: "flex", gap: 20, alignItems: "center" }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#7C3AED", whiteSpace: "nowrap" }}>총 {totalItems}개 항목 중 <span style={{ fontSize: 18 }}>{checkedItems}</span>개 해당 <span style={{ fontSize: 11, color: "#9F7AEA", fontWeight: 600 }}>({ps.qualified}개 분야)</span></div>
+                      <div style={{ flex: 1, background: "#DDD6FE", borderRadius: 99, height: 8, overflow: "hidden" }}>
+                        <div style={{ width: (checkedItems / totalItems * 100) + "%", background: "#7C3AED", height: "100%", borderRadius: 99, transition: "width 0.3s" }} />
+                      </div>
                     </div>
                   </div>
                 );
               })()}
               {PRIORITY_CHECKLIST.map(function(cat) {
                 var catChecked = cat.items.filter(function(item) { return priorityChecks[item]; }).length;
+                var catWeight = PRIORITY_WEIGHTS[cat.category] || 0;
+                var catEarned = catChecked > 0 ? catWeight : 0;
                 return (
                   <div key={cat.category} style={{ marginBottom: 20 }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 8, display: "flex", alignItems: "center", gap: 8 }}>
                       <span style={{ background: catChecked > 0 ? "#EDE9FE" : "#F7F6F3", color: catChecked > 0 ? "#7C3AED" : "#AAA", padding: "2px 10px", borderRadius: 6 }}>{cat.category}</span>
                       <span style={{ fontSize: 11, color: "#AAA" }}>{catChecked}/{cat.items.length}</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: catEarned > 0 ? "#7C3AED" : "#CCC", marginLeft: "auto" }}>{catEarned}/{catWeight}점</span>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
                       {cat.items.map(function(item) {
