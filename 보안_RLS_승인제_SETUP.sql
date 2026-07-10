@@ -108,7 +108,7 @@ declare
     'companies','agency_cases','work_notes','db_leads','activity_logs',
     'team_notes','approval_cases','leave_requests','settlement_manual',
     'partners','quick_links','calendar_events','push_subscriptions',
-    'kpi_goals','documents','branch_contacts'
+    'kpi_goals','documents','branch_contacts','call_logs'
   ];
 begin
   foreach t in array tbls loop
