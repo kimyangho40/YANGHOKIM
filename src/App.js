@@ -578,6 +578,49 @@ const docRate = (docs) => {
 };
 
 // ── 메인 앱 ──────────────────────────────────────────────────────────────────
+// ── CSV 내보내기(백업) 유틸 ────────────────────────────────────────────────────
+function csvDateStamp() {
+  var d = new Date();
+  var p = function(n) { return String(n).padStart(2, "0"); };
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate());
+}
+function exportToCsv(filename, rows) {
+  if (!rows || rows.length === 0) { alert("내보낼 데이터가 없어요."); return; }
+  // 모든 행의 키를 합쳐 컬럼 구성 (행마다 필드가 달라도 누락 없이)
+  var cols = [], seen = {};
+  rows.forEach(function(r) {
+    Object.keys(r || {}).forEach(function(k) { if (!seen[k]) { seen[k] = true; cols.push(k); } });
+  });
+  var esc = function(v) {
+    if (v === null || v === undefined) return "";
+    if (typeof v === "object") v = JSON.stringify(v);
+    v = String(v);
+    if (/[",\n\r]/.test(v)) v = '"' + v.replace(/"/g, '""') + '"';
+    return v;
+  };
+  var lines = [cols.join(",")];
+  rows.forEach(function(r) { lines.push(cols.map(function(c) { return esc(r ? r[c] : ""); }).join(",")); });
+  // 한글 엑셀 호환을 위해 UTF-8 BOM 추가
+  var blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+}
+// 내보내기 버튼 (백업) — 지정 계정(canExport)만 노출
+function ExportButton({ rows, filenamePrefix, label, canExport }) {
+  if (!canExport) return null;
+  var count = Array.isArray(rows) ? rows.length : 0;
+  return (
+    <button onClick={function() { exportToCsv((filenamePrefix || "export") + "_" + csvDateStamp() + ".csv", rows); }}
+      title="전체 데이터를 CSV 파일로 내려받아 백업합니다 (엑셀에서 열기 가능)"
+      style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#15803D", border: "1px solid #86EFAC", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+      ⬇️ {label || "내보내기"}{count ? " (" + count + ")" : ""}
+    </button>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
@@ -1728,7 +1771,7 @@ function CRMApp({ profile, session }) {
           <>
             {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setFilterAssignee={setFilterAssignee} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
             {view === "agency" && <AgencyView jumpToMonth={agencyJumpMonth} jumpToGroup={agencyJumpGroup} />}
-            {view === "dbleads" && <DBLeadsView />}
+            {view === "dbleads" && <DBLeadsView canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
             {view === "settlement" && <SettlementView />}
             {view === "activitylog" && <ActivityLogView />}
             {view === "worknotes" && <WorkNotesView profile={profile} onBadgeUpdate={function() { fetchWorkNotesBadge(profile?.name); }} />}
@@ -1740,7 +1783,7 @@ function CRMApp({ profile, session }) {
             {view === "pipeline" && <PipelineView filtered={filtered} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setCompanies={setCompanies} />}
             {view === "cases" && <ApprovalCasesView profile={profile} />}
             {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={profile?.role === "admin" || profile?.name === "양호"} onSelectCompany={setSelectedCompany} setView={setView} companies={companies} />}
-            {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} filterAgency={filterAgency} setFilterAgency={setFilterAgency} filterTeam={filterTeam} setFilterTeam={setFilterTeam} creditFilter={creditFilter} setCreditFilter={setCreditFilter} creditMode={creditMode} setCreditMode={setCreditMode} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} />}
+            {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} filterAgency={filterAgency} setFilterAgency={setFilterAgency} filterTeam={filterTeam} setFilterTeam={setFilterTeam} creditFilter={creditFilter} setCreditFilter={setCreditFilter} creditMode={creditMode} setCreditMode={setCreditMode} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
             {view === "stagnant" && <StagnantView stagnant={stagnant} onSelect={setSelectedCompany} />}
             {view === "members" && profile.role === "admin" && <MembersView profiles={profiles} onRefresh={fetchAll} showToast={showToast} />}
           </>
@@ -3228,7 +3271,7 @@ function IndustryCell({ co, setCompanies, companies }) {
   );
 }
 
-function ListView({ filtered, companies, search, setSearch, filterStage, setFilterStage, filterAssignee, setFilterAssignee, filterType, setFilterType, filterAgency, setFilterAgency, filterTeam, setFilterTeam, creditFilter, setCreditFilter, creditMode, setCreditMode, assignees, onSelect, onAdd, setCompanies, showToast, dashboardFilter, setDashboardFilter }) {
+function ListView({ filtered, companies, search, setSearch, filterStage, setFilterStage, filterAssignee, setFilterAssignee, filterType, setFilterType, filterAgency, setFilterAgency, filterTeam, setFilterTeam, creditFilter, setCreditFilter, creditMode, setCreditMode, assignees, onSelect, onAdd, setCompanies, showToast, dashboardFilter, setDashboardFilter, canExport }) {
   const [showCompanyTrash, setShowCompanyTrash] = useState(false);
   const [trashedCompanies, setTrashedCompanies] = useState([]);
 
@@ -3404,6 +3447,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
           <button onClick={onAdd} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             <Icon name="plus" size={15} color="#F7F6F3" /> 신규 등록
           </button>
+          <ExportButton rows={companies} filenamePrefix="기업목록" label="내보내기" canExport={canExport} />
           <button onClick={openTrash} style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
             🗑️ 휴지통{trashedCompanies.length > 0 ? " (" + trashedCompanies.length + ")" : ""}
           </button>
@@ -10594,7 +10638,7 @@ const LEAD_STATUS_COLORS = {
   "계약": { bg: "#ECFDF5", text: "#047857" },
 };
 
-function DBLeadsView() {
+function DBLeadsView({ canExport }) {
   const [leads, setLeads] = useState([]);
   const [companiesForDup, setCompaniesForDup] = useState([]);
   const [dupCandidates, setDupCandidates] = useState([]);
@@ -10813,6 +10857,7 @@ function DBLeadsView() {
         <div><h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>DB리스트</h1><p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>신규 고객 상담 · 콜 관리</p></div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={openAddLead} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}><Icon name="plus" size={15} color="#F7F6F3" /> 신규 등록</button>
+          <ExportButton rows={leads} filenamePrefix="DB리스트" label="내보내기" canExport={canExport} />
           <button onClick={function() { fetchTrashedLeads(); setShowLeadTrash(true); }} style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>🗑️ 휴지통{trashedLeads.length > 0 ? " (" + trashedLeads.length + ")" : ""}</button>
           <button onClick={fetchLeads} style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#555", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}><Icon name="refresh" size={13} color="#555" /> 새로고침</button>
         </div>
