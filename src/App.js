@@ -11002,10 +11002,34 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                     var isApproved = s === "사업전환 승인";
                     return (
                       <button key={s} onClick={async function() {
+                        var prevStatus = selectedCase.status || "";
                         var r = await supabase.from("agency_cases").update({ status: s, updated_at: new Date().toISOString() }).eq("id", selectedCase.id);
                         if (!r.error) {
                           setCases(function(prev) { return prev.map(function(c) { return c.id === selectedCase.id ? Object.assign({}, c, { status: s }) : c; }); });
                           setSelectedCase(function(p) { return Object.assign({}, p, { status: s }); });
+                          // 활동 로그 자동 기록 (실제로 상태가 바뀐 경우만) — 컬럼 미생성 시 최소 필드로 재시도
+                          if (prevStatus !== s) {
+                            var memoTxt = "상태: " + (prevStatus || "없음") + " → " + s;
+                            var full = {
+                              case_id: selectedCase.id, case_type: "agency",
+                              business_name: selectedCase.business_name || "",
+                              agency_group: selectedCase.agency_group || activeGroup || null,
+                              assignee: selectedCase.assignee || null,
+                              log_type: "status_change",
+                              old_status: prevStatus || null, new_status: s,
+                              memo: memoTxt, logged_by: selectedCase.assignee || null,
+                            };
+                            var logRes = await supabase.from("activity_logs").insert(full);
+                            if (logRes.error) {
+                              await supabase.from("activity_logs").insert({
+                                business_name: selectedCase.business_name || "",
+                                agency_group: selectedCase.agency_group || activeGroup || null,
+                                assignee: selectedCase.assignee || null,
+                                log_type: "status_change", memo: memoTxt,
+                                logged_by: selectedCase.assignee || null,
+                              });
+                            }
+                          }
                         }
                       }} style={{ padding: "5px 12px", borderRadius: 99, border: isActive ? (isApproved ? "2px solid #0F6E56" : "2px solid " + sc.text) : "1px solid #E8E5E0", background: isActive ? sc.bg : "#fff", color: isActive ? sc.text : "#888", fontSize: 12, fontWeight: isActive ? 700 : 400, cursor: "pointer" }}>{isApproved ? "✓ " + s : s}</button>
                     );
