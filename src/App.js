@@ -445,7 +445,7 @@ function SinboCalc({ company }) {
             {limit > 0 ? wonToKor(limit) + " 원" : "한도 없음"}
           </div>
         ) : <div style={{ fontSize: 13, color: "#AAA" }}>KCB 점수를 입력하세요</div>}
-        <div style={{ fontSize: 10, color: "#BBB", marginTop: 4 }}>* 일반 기준 추정치 · 실제 심사 결과와 다를 수 있음</div>
+        <div style={{ fontSize: 10, color: "#888", marginTop: 4 }}>* 일반 기준 추정치 · 실제 심사 결과와 다를 수 있음</div>
       </div>
     </div>
   );
@@ -989,7 +989,7 @@ function BackupView({ canExport }) {
             {BACKUP_TABLES.map(function(tb) {
               return (
                 <tr key={tb.t} style={{ borderBottom: "1px solid #F0EDE8" }}>
-                  <td style={{ padding: "12px 16px", fontSize: 13, fontWeight: 600 }}>{tb.n} <span style={{ color: "#BBB", fontWeight: 400, fontSize: 11 }}>{tb.t}</span></td>
+                  <td style={{ padding: "12px 16px", fontSize: 13, fontWeight: 600 }}>{tb.n} <span style={{ color: "#888", fontWeight: 400, fontSize: 11 }}>{tb.t}</span></td>
                   <td style={{ padding: "12px 16px", fontSize: 13, color: "#555" }}>{counts[tb.t] == null ? "…" : counts[tb.t].toLocaleString() + "행"}</td>
                   <td style={{ padding: "10px 16px" }}>
                     <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -1121,7 +1121,7 @@ function AuthScreen() {
           </h1>
 
           {/* 슬로건 */}
-          <p style={{ color: "#BBB", fontSize: 17, lineHeight: 1.7, maxWidth: 420, fontWeight: 400, margin: "0 0 12px" }}>
+          <p style={{ color: "#888", fontSize: 17, lineHeight: 1.7, maxWidth: 420, fontWeight: 400, margin: "0 0 12px" }}>
             기업에 필요한 모든 것을 자문하고 공급하는<br />
             <span style={{ color: "#F7F6F3", fontWeight: 600 }}>전문가로 구성된 기업</span>
           </p>
@@ -1160,7 +1160,7 @@ function AuthScreen() {
                   <div style={{ width: 4, height: 4, borderRadius: "50%", background: "#F59E0B" }}></div>
                   <span style={{ color: "#F59E0B", fontWeight: 600, fontSize: 13, letterSpacing: "0.02em", minWidth: 80 }}>{it.title}</span>
                   <span style={{ color: "#888", fontSize: 12, letterSpacing: "0.03em" }}>|</span>
-                  <span style={{ color: "#CCC", fontSize: 13 }}>{it.desc}</span>
+                  <span style={{ color: "#888", fontSize: 13 }}>{it.desc}</span>
                 </div>
               );
             })}
@@ -2129,7 +2129,7 @@ function CRMApp({ profile, session }) {
             </div>
             <div style={{ padding: "12px 16px" }}>
               {notifications.length === 0 ? (
-                <div style={{ padding: "40px 0", textAlign: "center", color: "#CCC", fontSize: 13 }}>
+                <div style={{ padding: "40px 0", textAlign: "center", color: "#888", fontSize: 13 }}>
                   <div style={{ fontSize: 32, marginBottom: 8 }}>🔔</div>
                   새로운 알림이 없어요
                 </div>
@@ -2338,7 +2338,7 @@ function AiSearchModal({ companies, onClose, onSelectCompany }) {
         {/* 대화 */}
         <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
           {msgs.length === 0 ? (
-            <div style={{ textAlign: "center", padding: "50px 0", color: "#CCC", fontSize: 13 }}>
+            <div style={{ textAlign: "center", padding: "50px 0", color: "#888", fontSize: 13 }}>
               <div style={{ fontSize: 32, marginBottom: 10 }}>💬</div>
               전체 업체·기관진행·정산 데이터로 답합니다.<br />예: "이번달 부결 정리해줘"
             </div>
@@ -2537,7 +2537,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
                   </tr>
                 );
               })}
-              {assigneeStats.length === 0 && <tr><td colSpan={6} style={{ padding: 16, textAlign: "center", color: "#CCC", fontSize: 12 }}>데이터 없음</td></tr>}
+              {assigneeStats.length === 0 && <tr><td colSpan={6} style={{ padding: 16, textAlign: "center", color: "#888", fontSize: 12 }}>데이터 없음</td></tr>}
             </tbody>
           </table>
         </div>
@@ -2739,7 +2739,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
               <div style={{ fontSize: 14, fontWeight: 700, color: "#1A1917" }}>이번 달({thisMonth}월) 예정 업무 <span style={{ color: "#999", fontWeight: 600 }}>{monthTasks.length}건</span></div>
             </div>
             {monthTasks.length === 0 ? (
-              <div style={{ textAlign: "center", color: "#CCC", fontSize: 13, padding: "20px 0" }}>이번 달 예정 업무 없음</div>
+              <div style={{ textAlign: "center", color: "#888", fontSize: 13, padding: "20px 0" }}>이번 달 예정 업무 없음</div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {monthTasks.map(function(c) {
@@ -3031,7 +3031,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
             })}
           </div>
         ) : assigneeKpi.length === 0 ? (
-          <div style={{ textAlign: "center", color: "#CCC", fontSize: 13, padding: "20px 0" }}>
+          <div style={{ textAlign: "center", color: "#888", fontSize: 13, padding: "20px 0" }}>
             이번 달 데이터가 없어요. 목표 설정 버튼을 눌러 KPI를 설정해주세요.
           </div>
         ) : (
@@ -3097,7 +3097,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
             </div>
           ))}
           {companies.filter(c => c.stagnant_days >= 7 || (c.next_contact && c.next_contact <= kstDate())).length === 0 && (
-            <div style={{ textAlign: "center", color: "#CCC", fontSize: 13, padding: "30px 0" }}>오늘 이슈가 없어요 👍</div>
+            <div style={{ textAlign: "center", color: "#888", fontSize: 13, padding: "30px 0" }}>오늘 이슈가 없어요 👍</div>
           )}
         </div>
       </div>
@@ -4032,7 +4032,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                         {co.region ? (function() {
                           var rc = getRegionColor(co.region);
                           return <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, fontWeight: 600, background: rc.bg, color: rc.text, whiteSpace: "nowrap" }}>{co.region}</span>;
-                        })() : <span style={{ color: "#CCC" }}>+ 입력</span>}
+                        })() : <span style={{ color: "#888" }}>+ 입력</span>}
                         <Icon name="edit" size={10} color="#AAA" />
                       </span>
                     )}
@@ -4055,7 +4055,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                         if (!prev || (c.year * 12 + c.month) > (prev.year * 12 + prev.month)) byGroup[g] = c;
                       });
                       var groups = Object.keys(byGroup);
-                      if (groups.length === 0) return <span style={{ color: "#CCC" }}>-</span>;
+                      if (groups.length === 0) return <span style={{ color: "#888" }}>-</span>;
                       return <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
                         {groups.map(function(g) {
                           var c = byGroup[g];
@@ -4109,7 +4109,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
           </tbody>
         </table>
         </div>
-        {filtered.length === 0 && <div style={{ padding: "40px", textAlign: "center", color: "#CCC", fontSize: 13 }}>검색 결과가 없어요</div>}
+        {filtered.length === 0 && <div style={{ padding: "40px", textAlign: "center", color: "#888", fontSize: 13 }}>검색 결과가 없어요</div>}
       </div>
 
       {/* 기업목록 휴지통 모달 */}
@@ -4123,7 +4123,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
             </div>
             <div style={{ padding: "16px 24px" }}>
               {trashedCompanies.length === 0 ? (
-                <div style={{ padding: "40px 0", textAlign: "center", color: "#CCC", fontSize: 13 }}>휴지통이 비어 있습니다</div>
+                <div style={{ padding: "40px 0", textAlign: "center", color: "#888", fontSize: 13 }}>휴지통이 비어 있습니다</div>
               ) : (
                 trashedCompanies.map(function(co) {
                   var deletedAt = co.deleted_at ? new Date(co.deleted_at).toLocaleDateString("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
@@ -4248,7 +4248,7 @@ function MembersView({ profiles, onRefresh, showToast }) {
                 <td style={{ padding: "13px 16px" }}>
                   {st
                     ? <span style={{ fontSize: 11, fontWeight: 700, background: st.bg, color: st.color, borderRadius: 99, padding: "3px 10px" }}>{st.label}</span>
-                    : <span style={{ fontSize: 11, color: "#CCC" }}>-</span>}
+                    : <span style={{ fontSize: 11, color: "#888" }}>-</span>}
                 </td>
                 <td style={{ padding: "13px 16px" }}>
                   <select value={p.role} onChange={e => updateRole(p.id, e.target.value)}
@@ -4734,7 +4734,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               {/* 🌪 고환율 긴급 트랙 (기능7) — 중진공 선택 시 */}
               {agencyIncludes(data, "중소벤처기업진흥공단") && (
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>수입 비중 (%) <span style={{ color: "#BBB" }}>· 고환율 긴급 트랙 판정</span></div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>수입 비중 (%) <span style={{ color: "#888" }}>· 고환율 긴급 트랙 판정</span></div>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <input type="number" value={data.import_ratio == null ? "" : data.import_ratio} placeholder="예: 25" onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { import_ratio: v }); }); }} style={{ flex: 1, fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
                     {parseFloat(data.import_ratio) >= 20 && <span style={{ fontSize: 11, fontWeight: 700, background: "#FEE2E2", color: "#DC2626", border: "1px solid #FCA5A5", borderRadius: 99, padding: "4px 10px", whiteSpace: "nowrap" }}>🌪 고환율 긴급 트랙 해당</span>}
@@ -4880,7 +4880,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   <input type="text" value={data.region || ""} placeholder="예: 서울_강남, 경기_안산" onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { region: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
                   {/* 🔐 계정·인증 정보 (지역 칸 빈 공간 활용, 세로 배치) */}
                   <div style={{ marginTop: 12, borderTop: "1px solid #E8E5E0", paddingTop: 10 }}>
-                    <div style={{ fontSize: 11, color: "#888", marginBottom: 8, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>🔐 계정·인증 정보 <span style={{ color: "#BBB", fontSize: 10 }}>(소진공·중진공·홈택스·계좌·아이핀 등 자유)</span></div>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 8, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>🔐 계정·인증 정보 <span style={{ color: "#888", fontSize: 10 }}>(소진공·중진공·홈택스·계좌·아이핀 등 자유)</span></div>
                     {(Array.isArray(data.accounts) ? data.accounts : []).map(function(acc, ai) {
                       return (
                         <div key={ai} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: "1px solid #E8E5E0" }}>
@@ -4889,7 +4889,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                               onChange={function(e) { var v = e.target.value; setData(function(p) { var a = (p.accounts || []).slice(); a[ai] = Object.assign({}, a[ai], { label: v }); return Object.assign({}, p, { accounts: a }); }); }}
                               style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, padding: "5px 7px", border: "1px solid #E8E5E0", borderRadius: 5, boxSizing: "border-box", outline: "none" }} />
                             <button onClick={function() { setData(function(p) { return Object.assign({}, p, { accounts: (p.accounts || []).filter(function(_, i) { return i !== ai; }) }); }); }}
-                              style={{ border: "none", background: "transparent", color: "#CCC", cursor: "pointer", fontSize: 15, padding: "0 2px" }}>✕</button>
+                              style={{ border: "none", background: "transparent", color: "#888", cursor: "pointer", fontSize: 15, padding: "0 2px" }}>✕</button>
                           </div>
                           <input value={acc.id || ""} placeholder="아이디 / 내용"
                             onChange={function(e) { var v = e.target.value; setData(function(p) { var a = (p.accounts || []).slice(); a[ai] = Object.assign({}, a[ai], { id: v }); return Object.assign({}, p, { accounts: a }); }); }}
@@ -5029,13 +5029,13 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                           <td style={cellStyle}><input value={ln.end || ""} placeholder="31.01.13" onChange={function(e) { updateLoan("end", e.target.value); }} style={inStyle} /></td>
                           <td style={{ border: "1px solid #E8E5E0", textAlign: "center" }}>
                             <button onClick={function() { setData(function(p) { var arr = (Array.isArray(p.loans) ? p.loans : []).slice(); arr.splice(li, 1); return Object.assign({}, p, { loans: arr }); }); }}
-                              style={{ background: "none", border: "none", cursor: "pointer", color: "#CCC", padding: 3 }}><Icon name="x" size={11} color="#CCC" /></button>
+                              style={{ background: "none", border: "none", cursor: "pointer", color: "#888", padding: 3 }}><Icon name="x" size={11} color="#CCC" /></button>
                           </td>
                         </tr>
                       );
                     })}
                     {(!Array.isArray(data.loans) || data.loans.length === 0) && (
-                      <tr><td colSpan={6} style={{ border: "1px solid #E8E5E0", padding: "10px", textAlign: "center", color: "#BBB", fontSize: 11 }}>기대출 내역 없음</td></tr>
+                      <tr><td colSpan={6} style={{ border: "1px solid #E8E5E0", padding: "10px", textAlign: "center", color: "#888", fontSize: 11 }}>기대출 내역 없음</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -5156,7 +5156,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                         {noneList.map(function(doc) {
                           return <button key={doc} onClick={function() { cycleDoc(doc); }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: "1px solid #D1D5DB", background: "#fff", color: "#6B7280", cursor: "pointer" }}>{doc}</button>;
                         })}
-                        {noneList.length === 0 && <span style={{ fontSize: 11, color: "#BBB" }}>모두 요청했어요</span>}
+                        {noneList.length === 0 && <span style={{ fontSize: 11, color: "#888" }}>모두 요청했어요</span>}
                       </div>
                     </div>
 
@@ -5174,7 +5174,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                           var overdue = days !== null && days >= 3;
                           return <button key={doc} onClick={function() { cycleDoc(doc); }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: overdue ? "1px solid #DC2626" : "1px solid #FBBF24", background: overdue ? "#FEE2E2" : "#FEF3C7", color: overdue ? "#DC2626" : "#B45309", cursor: "pointer", fontWeight: 600 }}>{overdue ? "🔴" : "⏳"} {doc}{days !== null ? " (" + (days === 0 ? "오늘" : days + "일째") + ")" : ""}</button>;
                         })}
-                        {reqedList.length === 0 && <span style={{ fontSize: 11, color: "#BBB" }}>요청 대기 중인 서류가 없어요</span>}
+                        {reqedList.length === 0 && <span style={{ fontSize: 11, color: "#888" }}>요청 대기 중인 서류가 없어요</span>}
                       </div>
                     </div>
 
@@ -5185,7 +5185,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                         {recedList.map(function(doc) {
                           return <button key={doc} onClick={function() { cycleDoc(doc); }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: "1px solid #15803D", background: "#15803D", color: "#fff", cursor: "pointer", fontWeight: 700 }}>✓ {doc}</button>;
                         })}
-                        {recedList.length === 0 && <span style={{ fontSize: 11, color: "#BBB" }}>아직 수령된 서류가 없어요</span>}
+                        {recedList.length === 0 && <span style={{ fontSize: 11, color: "#888" }}>아직 수령된 서류가 없어요</span>}
                       </div>
                     </div>
                   </>
@@ -5199,7 +5199,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               <div style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                   <div style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>현재 이슈</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}><OcrButton target="issue" /><div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 자유 형식</div></div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}><OcrButton target="issue" /><div style={{ fontSize: 10, color: "#888" }}>줄바꿈 가능 · 자유 형식</div></div>
                 </div>
                 <textarea value={data.issue || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return { ...p, issue: v }; }); }}
                   placeholder={"예시:\n- 신용점수 부족 (685점)\n- 매출 감소 추세\n- 5/30까지 보완서류 제출 필요"}
@@ -5208,7 +5208,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               <div style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                   <div style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>차기 업무 / 다음 액션</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}><OcrButton target="next_action" /><div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 자유 형식</div></div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}><OcrButton target="next_action" /><div style={{ fontSize: 10, color: "#888" }}>줄바꿈 가능 · 자유 형식</div></div>
                 </div>
                 <textarea value={data.next_action || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return { ...p, next_action: v }; }); }}
                   placeholder={"예시:\n1. 5/28 화요일 14시 - 추가서류 안내\n2. 5/30 금요일 - 기관 방문 동행\n3. 6/3 - 결과 확인 및 다음 단계 안내"}
@@ -5223,7 +5223,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                       {kakaoLoading ? "요약 중..." : "📷 카톡요약"}
                       <input type="file" accept="image/*" style={{ display: "none" }} disabled={kakaoLoading} onChange={function(e) { var f = e.target.files && e.target.files[0]; e.target.value = ""; handleKakaoImage(f); }} />
                     </label>
-                    <div style={{ fontSize: 10, color: "#BBB" }}>붙여넣기·드래그 가능</div>
+                    <div style={{ fontSize: 10, color: "#888" }}>붙여넣기·드래그 가능</div>
                   </div>
                 </div>
                 {kakaoLoading && <div style={{ fontSize: 11, color: "#B45309", marginBottom: 6, padding: "6px 10px", background: "#FEF9EC", borderRadius: 6 }}>🤖 카톡 대화를 읽고 요약하는 중입니다... (몇 초 걸려요)</div>}
@@ -5270,7 +5270,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                                 <button onClick={function() { startEditLog(log); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 11, padding: "0 4px" }} title="수정">✏️</button>
                               )}
                               <button onClick={function() { if (confirm("이 소통 내역을 삭제할까요?")) deleteCommLog(log.id); }}
-                                style={{ background: "none", border: "none", cursor: "pointer", color: "#CCC", fontSize: 11, padding: "0 4px" }} title="삭제">🗑</button>
+                                style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 11, padding: "0 4px" }} title="삭제">🗑</button>
                             </div>
                           </div>
                           {isEditingThis ? (
@@ -5300,7 +5300,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               {loadingExtra ? (
                 <div style={{ textAlign: "center", padding: "40px 0", color: "#AAA", fontSize: 13 }}>불러오는 중...</div>
               ) : agencyCases.length === 0 ? (
-                <div style={{ textAlign: "center", padding: "40px 0", color: "#CCC", fontSize: 13 }}>
+                <div style={{ textAlign: "center", padding: "40px 0", color: "#888", fontSize: 13 }}>
                   <div style={{ fontSize: 32, marginBottom: 10 }}>📋</div>
                   기관별 진행 데이터가 없어요
                 </div>
@@ -5366,7 +5366,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               {loadingExtra ? (
                 <div style={{ textAlign: "center", padding: "40px 0", color: "#AAA", fontSize: 13 }}>불러오는 중...</div>
               ) : settlements.length === 0 ? (
-                <div style={{ textAlign: "center", padding: "40px 0", color: "#CCC", fontSize: 13 }}>
+                <div style={{ textAlign: "center", padding: "40px 0", color: "#888", fontSize: 13 }}>
                   <div style={{ fontSize: 32, marginBottom: 10 }}>💰</div>
                   정산 데이터가 없어요
                 </div>
@@ -5434,7 +5434,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               )}
               <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, minHeight: 200, marginBottom: 12 }}>
                 {aiMsgs.length === 0 ? (
-                  <div style={{ textAlign: "center", padding: "40px 0", color: "#CCC", fontSize: 13 }}>
+                  <div style={{ textAlign: "center", padding: "40px 0", color: "#888", fontSize: 13 }}>
                     <div style={{ fontSize: 32, marginBottom: 10 }}>💬</div>
                     이 업체에 대해 궁금한 걸 물어보세요
                   </div>
@@ -5474,7 +5474,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               <div style={{ background: "#F7F6F3", borderRadius: 10, padding: "14px", marginBottom: 16, border: "1px solid #E8E5E0" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: "#555" }}>소통 내용 기록</div>
-                  <div style={{ fontSize: 10, color: "#BBB" }}>줄바꿈 가능 · 여러 줄 OK</div>
+                  <div style={{ fontSize: 10, color: "#888" }}>줄바꿈 가능 · 여러 줄 OK</div>
                 </div>
                 <textarea value={commInput} onChange={function(e) { var v = e.target.value; setCommInput(v); }}
                   placeholder={"예시:\n- 10:30 통화 - 대표 부재중\n- 11:15 다시 통화\n- 다음 주 월요일 방문 예약"}
@@ -5488,7 +5488,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               {loadingExtra ? (
                 <div style={{ textAlign: "center", padding: "20px 0", color: "#AAA", fontSize: 13 }}>불러오는 중...</div>
               ) : commLogs.length === 0 ? (
-                <div style={{ textAlign: "center", padding: "30px 0", color: "#CCC", fontSize: 13 }}>아직 소통 내역이 없어요</div>
+                <div style={{ textAlign: "center", padding: "30px 0", color: "#888", fontSize: 13 }}>아직 소통 내역이 없어요</div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   {commLogs.map(function(log, i) {
@@ -5563,7 +5563,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                         <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, padding: "6px 10px", background: "#F7F6F3", borderRadius: 6 }}>
                           <span style={{ color: "#888", width: 86, flexShrink: 0, fontWeight: 600 }}>{FIELD_LABELS_X[k]}</span>
                           {hasOld
-                            ? <span style={{ flex: 1 }}><span style={{ color: "#BBB", textDecoration: "line-through" }}>{fmt(k, oldV)}</span> <span style={{ color: "#B45309" }}>→</span> <b>{fmt(k, u[k])}</b></span>
+                            ? <span style={{ flex: 1 }}><span style={{ color: "#888", textDecoration: "line-through" }}>{fmt(k, oldV)}</span> <span style={{ color: "#B45309" }}>→</span> <b>{fmt(k, u[k])}</b></span>
                             : <b style={{ flex: 1 }}>{fmt(k, u[k])}</b>}
                         </div>
                       );
@@ -6601,7 +6601,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
                   onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { dueDate: v }); return Object.assign({}, p, { checkItems: items }); }); setTimeout(autoSaveEditNow, 0); }}
                   style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, color: "#4338CA", outline: "none", width: 130 }} />
                 <button onClick={function() { setEditNote(function(p) { var items = (p.checkItems || []).filter(function(_, i) { return i !== idx; }); return Object.assign({}, p, { checkItems: items }); }); setTimeout(autoSaveEditNow, 0); }}
-                  style={{ background: "none", border: "none", cursor: "pointer", color: "#CCC", fontSize: 16, padding: "0 4px", lineHeight: 1 }}>×</button>
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 16, padding: "0 4px", lineHeight: 1 }}>×</button>
               </div>
             );
           })}
@@ -6683,7 +6683,7 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
           )}
           {note.pinned && <span style={{ fontSize: 14 }}>📌</span>}
           <span style={{ fontSize: 14, fontWeight: 700, color: "#1A1917", textDecoration: note.is_done ? "line-through" : "none" }}>
-            {note.title || <span style={{ color: "#CCC", fontWeight: 400 }}>제목 없음</span>}
+            {note.title || <span style={{ color: "#888", fontWeight: 400 }}>제목 없음</span>}
           </span>
           {note.is_todo && (
             <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 99, background: note.is_done ? "#ECFDF5" : "#EEF2FF", color: note.is_done ? "#047857" : "#4338CA", fontWeight: 600 }}>
@@ -6761,7 +6761,7 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
           <div style={{ width: 20, height: 20, borderRadius: "50%", background: "#1A1917", color: "#F7F6F3", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700 }}>{(note.assignee || "?")[0]}</div>
           <span style={{ fontSize: 11, color: "#AAA" }}>{note.assignee}</span>
         </div>
-        <span style={{ fontSize: 11, color: "#CCC" }}>{fmtDate(note.updated_at || note.created_at)}</span>
+        <span style={{ fontSize: 11, color: "#888" }}>{fmtDate(note.updated_at || note.created_at)}</span>
       </div>
     </div>
   );
@@ -7362,7 +7362,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
                       onChange={function(e) { var v = e.target.value; setNewNote(function(p) { var items = p.checkItems.slice(); items[idx] = Object.assign({}, items[idx], { dueDate: v }); return Object.assign({}, p, { checkItems: items }); }); }}
                       style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, color: "#4338CA", outline: "none", width: 130 }} />
                     <button onClick={function() { setNewNote(function(p) { var items = p.checkItems.filter(function(_, i) { return i !== idx; }); return Object.assign({}, p, { checkItems: items }); }); }}
-                      style={{ background: "none", border: "none", cursor: "pointer", color: "#CCC", fontSize: 16, padding: "0 4px", lineHeight: 1 }}>×</button>
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 16, padding: "0 4px", lineHeight: 1 }}>×</button>
                   </div>
                 );
               })}
@@ -7511,7 +7511,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
               {calendarCells.map(function(cell, i) {
                 if (!cell.currentMonth) {
-                  return <div key={i} style={{ aspectRatio: "1", display: "flex", alignItems: "center", justifyContent: "center", color: "#CCC", fontSize: 14 }}>{cell.day}</div>;
+                  return <div key={i} style={{ aspectRatio: "1", display: "flex", alignItems: "center", justifyContent: "center", color: "#888", fontSize: 14 }}>{cell.day}</div>;
                 }
                 var noteCount = (notesByDate[cell.dateStr] || []).length;
                 var isToday = cell.dateStr === todayStr;
@@ -7624,7 +7624,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
           </div>
         )
       ) : filtered.length === 0 ? (
-        <div style={{ textAlign: "center", color: "#CCC", fontSize: 14, padding: "80px 0" }}>
+        <div style={{ textAlign: "center", color: "#888", fontSize: 14, padding: "80px 0" }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>📝</div>
           아직 작성된 노트가 없어요.<br />
           <span style={{ fontSize: 13 }}>"새 노트" 버튼을 눌러 첫 메모를 남겨보세요!</span>
@@ -7665,7 +7665,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             </div>
             <div style={{ padding: "16px 24px" }}>
               {trashedNotes.length === 0 ? (
-                <div style={{ textAlign: "center", padding: "40px 0", color: "#CCC", fontSize: 14 }}>
+                <div style={{ textAlign: "center", padding: "40px 0", color: "#888", fontSize: 14 }}>
                   <div style={{ fontSize: 36, marginBottom: 10 }}>🗑️</div>
                   휴지통이 비어 있습니다
                 </div>
@@ -7787,7 +7787,7 @@ function PartnersView() {
       {loading ? (
         <div style={{ padding: 40, textAlign: "center", color: "#888" }}>불러오는 중...</div>
       ) : filtered.length === 0 ? (
-        <div style={{ padding: 40, textAlign: "center", color: "#BBB", background: "#FAFAF8", borderRadius: 10 }}>{partners.length === 0 ? "아직 등록된 협업 담당자가 없어요. [+ 담당자 추가]를 눌러보세요." : "검색 결과가 없어요."}</div>
+        <div style={{ padding: 40, textAlign: "center", color: "#888", background: "#FAFAF8", borderRadius: 10 }}>{partners.length === 0 ? "아직 등록된 협업 담당자가 없어요. [+ 담당자 추가]를 눌러보세요." : "검색 결과가 없어요."}</div>
       ) : (
         <div style={{ overflowX: "auto", border: "1px solid #EEE", borderRadius: 10 }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
@@ -7818,7 +7818,7 @@ function PartnersView() {
                     <td style={Object.assign({}, tdStyle, { textAlign: "center" })}>
                       {intros.length > 0 ? (
                         <button onClick={function() { setExpandedId(isExpanded ? null : pt.id); }} style={{ background: "#EEF2FF", color: "#4338CA", border: "none", borderRadius: 99, padding: "3px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{intros.length}건 {isExpanded ? "▲" : "▼"}</button>
-                      ) : <span style={{ fontSize: 12, color: "#CCC" }}>-</span>}
+                      ) : <span style={{ fontSize: 12, color: "#888" }}>-</span>}
                     </td>
                     <td style={Object.assign({}, tdStyle, { color: "#888", fontSize: 12, whiteSpace: "pre-wrap" })}>{pt.memo || "-"}</td>
                     <td style={Object.assign({}, tdStyle, { textAlign: "center", whiteSpace: "nowrap" })}>
@@ -8053,7 +8053,7 @@ function LeaveView({ profile, profiles }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 6 }}>
         <div style={{ background: "#F7F6F3", borderRadius: 8, padding: 14 }}>
           <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>총 연차</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: "#BBB" }}>— 일</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: "#888" }}>— 일</div>
         </div>
         <div style={{ background: "#F7F6F3", borderRadius: 8, padding: 14 }}>
           <div style={{ fontSize: 12, color: "#888", marginBottom: 4 }}>사용 (승인됨)</div>
@@ -8064,7 +8064,7 @@ function LeaveView({ profile, profiles }) {
           <div style={{ fontSize: 22, fontWeight: 700, color: "#0F6E56" }}>— 일</div>
         </div>
       </div>
-      <div style={{ fontSize: 11, color: "#BBB", marginBottom: 20 }}>※ 총 연차 일수는 협의 후 입력 예정</div>
+      <div style={{ fontSize: 11, color: "#888", marginBottom: 20 }}>※ 총 연차 일수는 협의 후 입력 예정</div>
 
       {/* 승인권자: 승인 대기 */}
       {isApprover && (
@@ -8073,7 +8073,7 @@ function LeaveView({ profile, profiles }) {
             승인 대기 {pending.length > 0 && <span style={{ background: "#FAEEDA", color: "#854F0B", fontSize: 11, padding: "1px 7px", borderRadius: 6 }}>{pending.length}건</span>}
           </div>
           {pending.length === 0 ? (
-            <div style={{ fontSize: 12, color: "#BBB", padding: "12px", background: "#FAFAF8", borderRadius: 8, textAlign: "center" }}>대기 중인 신청이 없습니다.</div>
+            <div style={{ fontSize: 12, color: "#888", padding: "12px", background: "#FAFAF8", borderRadius: 8, textAlign: "center" }}>대기 중인 신청이 없습니다.</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {pending.map(function(r) { return renderRequestRow(r, true, true); })}
@@ -8118,7 +8118,7 @@ function LeaveView({ profile, profiles }) {
       <div>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>내 신청 내역</div>
         {myRequests.length === 0 ? (
-          <div style={{ fontSize: 12, color: "#BBB", padding: "12px", background: "#FAFAF8", borderRadius: 8, textAlign: "center" }}>아직 신청한 휴가가 없어요.</div>
+          <div style={{ fontSize: 12, color: "#888", padding: "12px", background: "#FAFAF8", borderRadius: 8, textAlign: "center" }}>아직 신청한 휴가가 없어요.</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {myRequests.map(function(r) { return renderRequestRow(r, false, false); })}
@@ -8152,7 +8152,7 @@ function LeaveView({ profile, profiles }) {
 
             {newReq.type !== "반차" && (
               <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 12, color: "#888", marginBottom: 6, fontWeight: 600 }}>종료일 <span style={{ color: "#BBB", fontWeight: 400 }}>(하루면 비워두세요)</span></div>
+                <div style={{ fontSize: 12, color: "#888", marginBottom: 6, fontWeight: 600 }}>종료일 <span style={{ color: "#888", fontWeight: 400 }}>(하루면 비워두세요)</span></div>
                 <input type="date" value={newReq.end_date} onChange={function(e) { var v = e.target.value; setNewReq(function(p) { return Object.assign({}, p, { end_date: v }); }); }}
                   style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 14, boxSizing: "border-box", outline: "none" }} />
               </div>
@@ -8163,7 +8163,7 @@ function LeaveView({ profile, profiles }) {
             </div>
 
             <div style={{ marginBottom: 18 }}>
-              <div style={{ fontSize: 12, color: "#888", marginBottom: 6, fontWeight: 600 }}>사유 <span style={{ color: "#BBB", fontWeight: 400 }}>(선택)</span></div>
+              <div style={{ fontSize: 12, color: "#888", marginBottom: 6, fontWeight: 600 }}>사유 <span style={{ color: "#888", fontWeight: 400 }}>(선택)</span></div>
               <input value={newReq.reason} onChange={function(e) { var v = e.target.value; setNewReq(function(p) { return Object.assign({}, p, { reason: v }); }); }}
                 placeholder="예: 개인 일정, 병원 진료" style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 14, boxSizing: "border-box", outline: "none" }} />
             </div>
@@ -8454,13 +8454,13 @@ function SettlementView() {
         <td style={{ padding: "9px 8px", fontSize: 12, color: "#555" }}>{row.assignee || "-"}</td>
         <td style={{ padding: "9px 8px", fontSize: 12, color: "#555" }}>{row.request_amount || "-"}</td>
         <td style={{ padding: "9px 8px" }}>
-          {row.contract_fee ? <span style={{ fontSize: 12, fontWeight: 700, color: "#333" }}>{row.contract_fee}</span> : <span style={{ fontSize: 11, color: "#CCC" }}>미입력</span>}
+          {row.contract_fee ? <span style={{ fontSize: 12, fontWeight: 700, color: "#333" }}>{row.contract_fee}</span> : <span style={{ fontSize: 11, color: "#888" }}>미입력</span>}
         </td>
         <td style={{ padding: "9px 8px" }}>
-          {row.commission_fee ? <span style={{ fontSize: 12, fontWeight: 700, color: "#7C3AED" }}>{row.commission_fee}</span> : <span style={{ fontSize: 11, color: "#CCC" }}>미입력</span>}
+          {row.commission_fee ? <span style={{ fontSize: 12, fontWeight: 700, color: "#7C3AED" }}>{row.commission_fee}</span> : <span style={{ fontSize: 11, color: "#888" }}>미입력</span>}
         </td>
         <td style={{ padding: "9px 8px" }}>
-          {row.received_amount ? <span style={{ fontSize: 12, fontWeight: 700, color: "#047857" }}>{row.received_amount}</span> : <span style={{ fontSize: 11, color: "#CCC" }}>미입력</span>}
+          {row.received_amount ? <span style={{ fontSize: 12, fontWeight: 700, color: "#047857" }}>{row.received_amount}</span> : <span style={{ fontSize: 11, color: "#888" }}>미입력</span>}
         </td>
         <td style={{ padding: "9px 8px", fontSize: 11, color: "#888" }}>{row.contract_date || "-"}</td>
         <td style={{ padding: "9px 8px", textAlign: "center" }}>
@@ -9134,7 +9134,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
               {selectedDate && <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{selectedCrmEvents.length + selectedGoogleEvents.length}건</div>}
             </div>
             <div style={{ padding: "12px", maxHeight: 500, overflowY: "auto" }}>
-              {!selectedDate && <div style={{ textAlign: "center", padding: "40px 0", color: "#CCC", fontSize: 13 }}>📅<br/>날짜를 클릭하세요</div>}
+              {!selectedDate && <div style={{ textAlign: "center", padding: "40px 0", color: "#888", fontSize: 13 }}>📅<br/>날짜를 클릭하세요</div>}
               {selectedGoogleEvents.map((ev, i) => {
                 var gcol = getColorById(ev.color || "9");
                 return (
@@ -9174,7 +9174,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
                 );
               })}
               {selectedDate && selectedCrmEvents.length === 0 && selectedGoogleEvents.length === 0 && customEvents.filter(e => e.date === selectedDateStr && e.sheet === calSheet).length === 0 && (
-                <div style={{ textAlign: "center", padding: "30px 0", color: "#CCC", fontSize: 13 }}>이 날 일정이 없어요</div>
+                <div style={{ textAlign: "center", padding: "30px 0", color: "#888", fontSize: 13 }}>이 날 일정이 없어요</div>
               )}
               {/* 커스텀 일정 */}
               {selectedDate && customEvents.filter(e => e.date === selectedDateStr && e.sheet === calSheet).map(function(ev) {
@@ -9223,7 +9223,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
             </div>
           </div>
           {followupList.length === 0 ? (
-            <div style={{ textAlign: "center", padding: "60px 0", color: "#CCC", fontSize: 13 }}>
+            <div style={{ textAlign: "center", padding: "60px 0", color: "#888", fontSize: 13 }}>
               <div style={{ fontSize: 36, marginBottom: 12 }}>🎉</div>
               팔로업이 필요한 업체가 없어요!
             </div>
@@ -9576,7 +9576,7 @@ function ManualView() {
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
         {breadcrumb.map((crumb, idx) => (
           <span key={crumb.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            {idx > 0 && <span style={{ color: "#CCC", fontSize: 13 }}>›</span>}
+            {idx > 0 && <span style={{ color: "#888", fontSize: 13 }}>›</span>}
             <span
               onClick={() => goToBreadcrumb(idx)}
               style={{ fontSize: 13, fontWeight: idx === breadcrumb.length - 1 ? 700 : 400, color: idx === breadcrumb.length - 1 ? "#1A1917" : "#4338CA", cursor: idx === breadcrumb.length - 1 ? "default" : "pointer", textDecoration: idx === breadcrumb.length - 1 ? "none" : "underline" }}>
@@ -10516,7 +10516,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                       <td style={{ padding: "10px 12px", textAlign: "center" }} onClick={function(e) { e.stopPropagation(); openPriority(row); }}>
                         {(function() {
                           var ps = calcPriorityScore(row.priority_checks);
-                          if (ps.checked === 0) return <span style={{ fontSize: 11, color: "#BBB" }}>미평가</span>;
+                          if (ps.checked === 0) return <span style={{ fontSize: 11, color: "#888" }}>미평가</span>;
                           return (
                             <span title={ps.checked + "개 항목 · " + ps.qualified + "개 카테고리 해당"}
                               style={{ display: "inline-block", minWidth: 40, fontSize: 12, fontWeight: 800, padding: "3px 8px", borderRadius: 99, color: priorityScoreColor(ps.score), background: priorityScoreBg(ps.score), cursor: "pointer" }}>
@@ -10562,7 +10562,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                         ) : row.fund_product ? (function() {
                             var col = getProductColor(row.fund_product);
                             return <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, fontWeight: 600, background: col.bg, color: col.text, whiteSpace: "nowrap" }}>{row.fund_product}</span>;
-                          })() : <span style={{ fontSize: 11, color: "#CCC" }}>-</span>
+                          })() : <span style={{ fontSize: 11, color: "#888" }}>-</span>
                         }
                       </td>
                     )}
@@ -10582,7 +10582,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                             {row.region ? (function() {
                               var rc = getRegionColor(row.region);
                               return <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, fontWeight: 600, background: rc.bg, color: rc.text, whiteSpace: "nowrap", display: "inline-block" }}>{row.region}</span>;
-                            })() : <span style={{ fontSize: 12, color: "#CCC" }}>-</span>}
+                            })() : <span style={{ fontSize: 12, color: "#888" }}>-</span>}
                             {(activeGroup === "중소벤처기업진흥공단" || activeGroup === "구조혁신&사업전환") && row.region && findJungingongBranch(row.region) && (
                               <div style={{ fontSize: 10, color: "#7C3AED", marginTop: 2, fontWeight: 600 }}>{findJungingongBranch(row.region)}</div>
                             )}
@@ -10599,7 +10599,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                           var excluded = row.contact_phones || {};
                           branches = branches.filter(function(b) { return !excluded["_excluded_" + b]; });
                           if (branches.length === 0) {
-                            return <span style={{ fontSize: 11, color: "#CCC" }}>-</span>;
+                            return <span style={{ fontSize: 11, color: "#888" }}>-</span>;
                           }
                           return (
                             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -10711,7 +10711,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                               ? row.delivered_docs.map(function(doc) {
                                   return <span key={doc} style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "#EAF3DE", color: "#173404" }}>{doc}</span>;
                                 })
-                              : <span style={{ fontSize: 11, color: "#CCC" }}>-</span>}
+                              : <span style={{ fontSize: 11, color: "#888" }}>-</span>}
                           </div>
                         )}
                       </td>
@@ -10719,7 +10719,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                     <td style={{ padding: "10px 12px" }}>
                       {(function() {
                         var matchedCo = companiesList.find(function(c) { return c.name === row.business_name; });
-                        if (!matchedCo || (!matchedCo.credit_score_kcb && !matchedCo.credit_score_nice)) return <span style={{ fontSize: 12, color: "#CCC" }}>-</span>;
+                        if (!matchedCo || (!matchedCo.credit_score_kcb && !matchedCo.credit_score_nice)) return <span style={{ fontSize: 12, color: "#888" }}>-</span>;
                         return <span style={{ fontSize: 12, color: "#555", fontWeight: 600 }}>{(matchedCo.credit_score_kcb || "-") + " / " + (matchedCo.credit_score_nice || "-")}</span>;
                       })()}
                     </td>
@@ -10822,7 +10822,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
             </div>
             <div style={{ padding: "16px 24px" }}>
               {trashedCases.length === 0 ? (
-                <div style={{ padding: "40px 0", textAlign: "center", color: "#CCC", fontSize: 13 }}>휴지통이 비어 있습니다</div>
+                <div style={{ padding: "40px 0", textAlign: "center", color: "#888", fontSize: 13 }}>휴지통이 비어 있습니다</div>
               ) : (
                 trashedCases.map(function(row) {
                   return (
@@ -11875,7 +11875,7 @@ function DBLeadsView({ canExport }) {
             </div>
             <div style={{ padding: "16px 24px" }}>
               {trashedLeads.length === 0 ? (
-                <div style={{ padding: "40px 0", textAlign: "center", color: "#CCC", fontSize: 13 }}>휴지통이 비어 있습니다</div>
+                <div style={{ padding: "40px 0", textAlign: "center", color: "#888", fontSize: 13 }}>휴지통이 비어 있습니다</div>
               ) : (
                 trashedLeads.map(function(lead) {
                   var deletedAt = lead.deleted_at ? new Date(lead.deleted_at).toLocaleDateString("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
@@ -12601,12 +12601,12 @@ function TodayActivityFeed({ companies, onSelectCompany }) {
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
         <span style={{ fontSize: 16 }}>🕒</span>
         <div style={{ fontSize: 14, fontWeight: 700, color: "#1A1917" }}>오늘 활동 내역 <span style={{ color: "#999", fontWeight: 600 }}>{grouped.length}개 업체</span></div>
-        <span style={{ fontSize: 11, color: "#BBB" }}>소통내역·이슈·다음액션 변경 기준</span>
+        <span style={{ fontSize: 11, color: "#888" }}>소통내역·이슈·다음액션 변경 기준</span>
       </div>
       {loading ? (
-        <div style={{ textAlign: "center", color: "#CCC", fontSize: 13, padding: "20px 0" }}>불러오는 중…</div>
+        <div style={{ textAlign: "center", color: "#888", fontSize: 13, padding: "20px 0" }}>불러오는 중…</div>
       ) : grouped.length === 0 ? (
-        <div style={{ textAlign: "center", color: "#CCC", fontSize: 13, padding: "20px 0" }}>오늘 변경된 업체가 없습니다</div>
+        <div style={{ textAlign: "center", color: "#888", fontSize: 13, padding: "20px 0" }}>오늘 변경된 업체가 없습니다</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {grouped.map(function(g, i) {
@@ -12624,7 +12624,7 @@ function TodayActivityFeed({ companies, onSelectCompany }) {
                   {g.latestMemo && <div style={{ fontSize: 12, color: "#888", marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.latestMemo}</div>}
                 </div>
                 {g.by && <span style={{ fontSize: 11, color: "#999", flexShrink: 0 }}>{g.by}</span>}
-                <span style={{ fontSize: 11, color: "#BBB", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{fmtTime(g.latest)}</span>
+                <span style={{ fontSize: 11, color: "#888", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{fmtTime(g.latest)}</span>
               </div>
             );
           })}
@@ -13620,7 +13620,7 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
                   {newNote.checklist.map(function(item, idx) {
                     return (
                       <div key={item.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                        <span style={{ color: "#CCC", fontSize: 12 }}>☐</span>
+                        <span style={{ color: "#888", fontSize: 12 }}>☐</span>
                         <input type="text" value={item.text}
                           onChange={function(e) {
                             var v = e.target.value;
