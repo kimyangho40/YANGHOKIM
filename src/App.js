@@ -823,6 +823,121 @@ async function parseHyeonhwangpyo(file) {
   return { updates: updates, auto: auto };
 }
 
+// SheetJS(XLSX) 라이브러리 로더 - 여러 파서에서 공용
+async function ensureXLSX() {
+  if (typeof window.XLSX === "undefined") {
+    await new Promise(function(resolve, reject) {
+      var script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+      script.onload = resolve;
+      script.onerror = function() { reject(new Error("SheetJS 라이브러리 로드 실패. 인터넷 연결을 확인해주세요.")); };
+      document.head.appendChild(script);
+    });
+  }
+  return window.XLSX;
+}
+
+// 라벨 기반 범용 시트지 파서 - 표준 기업현황표가 아닌 임의 양식(상담 시트지 등)에서
+//  · 인식되는 항목 → 기업정보 필드 자동 채움 (updates/auto)
+//  · 나머지 모든 내용 → 소통내역에 넣을 텍스트로 정리 (commText)
+function parseSheetGeneric(rows) {
+  var cellStr = function(v) {
+    if (v === null || v === undefined) return "";
+    if (v instanceof Date) { return v.getFullYear() + "-" + String(v.getMonth() + 1).padStart(2, "0") + "-" + String(v.getDate()).padStart(2, "0"); }
+    return String(v).trim();
+  };
+  var norm = function(s) { return String(s || "").replace(/\s/g, "").replace(/[:：\-()（）]/g, ""); };
+  var digitsOnly = function(s) { return String(s).replace(/[^0-9]/g, ""); };
+  var parseRegionG = function(addr) {
+    if (!addr) return "";
+    var s = String(addr);
+    var doMap = { "서울특별시": "서울", "서울": "서울", "부산광역시": "부산", "부산": "부산", "대구광역시": "대구", "대구": "대구", "인천광역시": "인천", "인천": "인천", "광주광역시": "광주", "광주": "광주", "대전광역시": "대전", "대전": "대전", "울산광역시": "울산", "울산": "울산", "세종특별자치시": "세종", "세종": "세종", "경기도": "경기", "경기": "경기", "강원도": "강원", "강원특별자치도": "강원", "강원": "강원", "충청북도": "충북", "충북": "충북", "충청남도": "충남", "충남": "충남", "전라북도": "전북", "전북": "전북", "전북특별자치도": "전북", "전라남도": "전남", "전남": "전남", "경상북도": "경북", "경북": "경북", "경상남도": "경남", "경남": "경남", "제주특별자치도": "제주", "제주도": "제주", "제주": "제주" };
+    var firstWord = s.split(/\s+/)[0];
+    var doName = doMap[firstWord] || firstWord;
+    var secondWord = s.split(/\s+/)[1] || "";
+    var siGuGun = secondWord.replace(/시$|군$|구$/, "");
+    return doName + (siGuGun ? "_" + siGuGun : "");
+  };
+  var parseFoundedG = function(s) {
+    var m = String(s || "").match(/(\d{4})[-/.년\s]*(\d{1,2})?/);
+    if (m) return { year: m[1], month: m[2] ? parseInt(m[2], 10) : "" };
+    return { year: "", month: "" };
+  };
+  // 라벨(정규화된 키) → 회사 필드 매핑 규칙
+  var MATCHERS = [
+    { field: "name", keys: ["업체명", "회사명", "기업명", "상호", "상호명", "법인명", "사업체명"] },
+    { field: "representative", keys: ["대표자", "대표", "대표이사", "대표자명", "대표이사명", "성명", "대표성명"], clean: function(v) { return String(v).replace(/대표(이사)?$/, "").trim(); } },
+    { field: "phone", keys: ["연락처", "전화", "전화번호", "휴대폰", "핸드폰", "연락", "대표번호", "휴대전화", "핸드폰번호"], clean: function(v) { return String(v).replace(/[^0-9-]/g, ""); } },
+    { field: "business_number", keys: ["사업자등록번호", "사업자번호", "사업자", "등록번호"] },
+    { field: "region", keys: ["주소", "소재지", "사업장주소", "사업장소재지", "본점소재지", "사업장", "사업장위치"], transform: parseRegionG },
+    { field: "industry", keys: ["업종", "업태", "종목", "주업종", "업종업태", "사업내용", "주요업종"] },
+    { field: "employee_count", keys: ["직원수", "종업원수", "상시근로자", "근로자수", "고용인원", "인원", "종업원", "직원"], clean: digitsOnly },
+    { field: "credit_score_kcb", keys: ["kcb", "kcb점수", "올크레딧"], clean: digitsOnly },
+    { field: "credit_score_nice", keys: ["nice", "nice점수", "나이스"], clean: digitsOnly },
+    { field: "founded", keys: ["설립일", "설립연도", "설립년도", "개업일", "창업일", "설립", "설립일자", "개업연월일"], transform: parseFoundedG },
+  ];
+  var lookup = {};
+  MATCHERS.forEach(function(m) { m.keys.forEach(function(k) { lookup[norm(k).toLowerCase()] = m; }); });
+
+  // 각 행을 (라벨, 값) 쌍으로 정리 — 2열 폼(라벨|값) 및 다열 모두 대응
+  var pairs = [];
+  rows.forEach(function(row) {
+    if (!row) return;
+    var nonEmpty = [];
+    row.forEach(function(c) { var v = cellStr(c); if (v) nonEmpty.push(v); });
+    if (nonEmpty.length === 0) return;
+    if (nonEmpty.length === 1) { pairs.push({ label: "", value: nonEmpty[0] }); }
+    else { pairs.push({ label: nonEmpty[0], value: nonEmpty.slice(1).join(" ") }); }
+  });
+
+  var updates = {}, auto = {};
+  var leftover = [];
+  pairs.forEach(function(p) {
+    var key = norm(p.label).toLowerCase();
+    var m = p.label ? lookup[key] : null;
+    if (m && p.value) {
+      if (m.field === "founded") {
+        var f = m.transform(p.value);
+        if (f.year && !updates.founded_year) { updates.founded_year = f.year; auto.founded_year = true; }
+        if (f.month && !updates.founded_month) { updates.founded_month = f.month; auto.founded_month = true; }
+        return;
+      }
+      var val = m.clean ? m.clean(p.value) : (m.transform ? m.transform(p.value) : p.value);
+      if (val && !updates[m.field]) { updates[m.field] = val; auto[m.field] = true; return; }
+    }
+    // 인식 안 된 내용 → 소통내역 텍스트로 보존
+    if (p.label && p.value) leftover.push(p.label + ": " + p.value);
+    else if (p.value) leftover.push(p.value);
+  });
+
+  // 법인/개인 유형 추정
+  if (updates.name && (/^\(주\)|^㈜|주식회사/.test(updates.name))) { updates.business_type = "법인사업자"; updates.type = "법인"; }
+  else if (updates.name) { updates.business_type = "개인사업자"; updates.type = "개인"; }
+
+  return { updates: updates, auto: auto, commText: leftover.join("\n") };
+}
+
+// 업로드 파일 디스패처 - 표준 기업현황표면 기존 파서, 아니면 범용 시트지 파서
+//  공통 반환: { updates, auto, commText, kind }
+async function parseUploadedSheet(file) {
+  var XLSX = await ensureXLSX();
+  var data = await file.arrayBuffer();
+  var wb = XLSX.read(data, { type: "array", cellDates: true });
+  var hasGaeyo = wb.SheetNames.some(function(n) { return n.indexOf("기업개요") >= 0; });
+  if (hasGaeyo) {
+    // 표준 기업현황표: 기존 파서 그대로 사용(기업정보 항목은 기업정보 탭으로), 비고 메모는 소통내역 텍스트로도 제공
+    var res = await parseHyeonhwangpyo(file);
+    var commParts = [];
+    if (res.updates.company_info_memo) commParts.push(res.updates.company_info_memo);
+    return { updates: res.updates, auto: res.auto, commText: commParts.join("\n"), kind: "기업현황표" };
+  }
+  // 그 외: 첫 시트를 범용 파싱
+  var ws = wb.Sheets[wb.SheetNames[0]];
+  var rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+  var g = parseSheetGeneric(rows);
+  return { updates: g.updates, auto: g.auto, commText: g.commText, kind: "시트지" };
+}
+
 const Icon = ({ name, size = 16, color = "currentColor" }) => {
   const p = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" };
   const icons = {
@@ -4301,7 +4416,8 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
     });
   }, []);
   const [commInput, setCommInput] = useState("");
-  const [xlsxPreview, setXlsxPreview] = useState(null); // 기업현황표 첨부 미리보기 {updates, auto}
+  const [xlsxPreview, setXlsxPreview] = useState(null); // 기업현황표/시트지 첨부 미리보기 {updates, auto, commText, kind}
+  const [xlsxCommDraft, setXlsxCommDraft] = useState(""); // 업로드 시 소통내역에 넣을 초안(수정 가능)
   const [kakaoLoading, setKakaoLoading] = useState(false); // 카톡 캡처 AI 요약 중
   async function handleKakaoImage(file) {
     if (!file || file.type.indexOf("image") !== 0) { alert("이미지 파일만 가능합니다."); return; }
@@ -4331,10 +4447,14 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   const FIELD_LABELS_X = { name: "업체명", representative: "대표자", phone: "연락처", region: "지역", industry: "업종", employee_count: "직원수", credit_score_kcb: "KCB점수", credit_score_nice: "NICE점수", founded_year: "설립연도", founded_month: "설립월", revenue_2025: "2025년 매출", revenue_2024: "2024년 매출", revenue_2023: "2023년 매출", revenue_2026_h1: "2026년 상반기 매출", business_number: "사업자번호", business_type: "사업자유형", type: "유형" };
   async function handleXlsxAttach(file) {
     if (!file) return;
-    try { var res = await parseHyeonhwangpyo(file); setXlsxPreview(res); }
-    catch (err) { alert("❌ 엑셀 읽기 실패: " + err.message + "\n\n양식이 표준 기업현황표인지 확인해주세요."); }
+    try {
+      var res = await parseUploadedSheet(file);
+      setXlsxCommDraft(res.commText || "");
+      setXlsxPreview(res);
+    }
+    catch (err) { alert("❌ 엑셀 읽기 실패: " + err.message + "\n\n엑셀(.xlsx) 파일이 맞는지 확인해주세요."); }
   }
-  function applyXlsxPreview() {
+  async function applyXlsxPreview() {
     if (!xlsxPreview) return;
     var u = xlsxPreview.updates;
     setData(function(p) {
@@ -4350,8 +4470,23 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
       });
       return merged;
     });
+    // 소통내역 자동 저장(사용자가 초안을 비우면 건너뜀). 즉시 DB 반영 + 목록 새로고침
+    var commSaved = false;
+    var draft = (xlsxCommDraft || "").trim();
+    if (draft) {
+      var prefix = "📄 " + (xlsxPreview.kind === "시트지" ? "시트지" : "기업현황표") + " 업로드 자동 기록\n";
+      var r = await insertCommLog(prefix + draft);
+      if (r.error) {
+        alert("기업정보는 적용됐지만 소통내역 저장은 실패했어요: " + r.error.message);
+      } else {
+        commSaved = true;
+        await refreshCommLogs();
+      }
+    }
     setXlsxPreview(null);
-    alert("✅ 적용됐어요. 내용 확인 후 저장 버튼을 눌러주세요.");
+    setXlsxCommDraft("");
+    alert("✅ 기업정보가 적용됐어요. 내용 확인 후 저장 버튼을 눌러주세요."
+      + (commSaved ? "\n📨 나머지 내용은 소통내역에 자동 기록됐습니다." : ""));
   }
   // 📷 카톡 캡처 OCR (무료 Tesseract.js, 시간 패턴 제거하고 대화 내용만 추출)
   const [ocrBusy, setOcrBusy] = useState(null);
@@ -4450,41 +4585,42 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
     });
   }, [company.id, company.name]);
 
-  var saveCommLog = async function() {
-    if (!commInput.trim()) return;
-    // 1차 시도: 가능한 한 많은 정보 포함
+  // 소통내역 1건 저장(스키마 컬럼 불일치 대비 단계적 재시도). 성공 시 { error:null } 반환
+  var insertCommLog = async function(text) {
+    if (!text || !text.trim()) return { error: null };
     var payload = {
       company_id: company.id,
       business_name: company.name,
       assignee: currentUser?.name || null,
       log_type: "manual_memo",
-      memo: commInput.trim(),
+      memo: text.trim(),
       logged_by: currentUser?.name || null,
     };
     var r = await supabase.from("activity_logs").insert(payload);
-    // 1차 실패하면 최소 컬럼만으로 재시도 (스키마 컬럼 불일치 대비)
     if (r.error) {
       console.warn("activity_logs 1차 insert 실패:", r.error.message);
-      var minimal = {
-        company_id: company.id,
-        memo: commInput.trim(),
-      };
-      // 추가로 log_type만 시도
-      minimal.log_type = "manual_memo";
+      var minimal = { company_id: company.id, memo: text.trim(), log_type: "manual_memo" };
       r = await supabase.from("activity_logs").insert(minimal);
       if (r.error) {
-        // 2차 실패: log_type 빼고 메모만
         delete minimal.log_type;
         r = await supabase.from("activity_logs").insert(minimal);
       }
     }
+    return r;
+  };
+  var refreshCommLogs = async function() {
+    var r2 = await supabase.from("activity_logs").select("*").eq("company_id", company.id).order("created_at", { ascending: false });
+    if (!r2.error) { setCommLogs(r2.data || []); }
+  };
+  var saveCommLog = async function() {
+    if (!commInput.trim()) return;
+    var r = await insertCommLog(commInput);
     if (r.error) {
       alert("저장 실패: " + r.error.message + "\n\n관리자에게 이 메시지를 알려주세요.");
       return;
     }
     setCommInput("");
-    var r2 = await supabase.from("activity_logs").select("*").eq("company_id", company.id).order("created_at", { ascending: false });
-    if (!r2.error) { setCommLogs(r2.data || []); }
+    await refreshCommLogs();
   };
 
   // 수정 시작
@@ -4690,7 +4826,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
             <>
               <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 4, background: "#FEF3C7", color: "#B45309", border: "none", borderRadius: 7, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                  📎 기업현황표 첨부 (자동 입력)
+                  📎 기업현황표·시트지 첨부 (자동 입력)
                   <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={function(e) { var f = e.target.files && e.target.files[0]; e.target.value = ""; handleXlsxAttach(f); }} />
                 </label>
               </div>
@@ -5543,15 +5679,18 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
 
         {/* 기업현황표 자동입력 미리보기 모달 */}
         {xlsxPreview && (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={function() { setXlsxPreview(null); }}>
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={function() { setXlsxPreview(null); setXlsxCommDraft(""); }}>
             <div onClick={function(e) { e.stopPropagation(); }} style={{ background: "#fff", borderRadius: 12, maxWidth: 460, width: "100%", maxHeight: "80vh", overflow: "auto", padding: 22, boxSizing: "border-box" }}>
-              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>📄 기업현황표 자동 입력 미리보기</div>
-              <div style={{ fontSize: 11.5, color: "#888", marginBottom: 14, lineHeight: 1.5 }}>아래 내용으로 채워집니다. 기존 값이 있으면 <b style={{ color: "#B45309" }}>덮어쓰기</b> 됩니다. (기업정보 항목은 같은 이름만 갱신, 나머지는 추가)</div>
+              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>📄 {xlsxPreview.kind === "시트지" ? "시트지" : "기업현황표"} 자동 입력 미리보기</div>
+              <div style={{ fontSize: 11.5, color: "#888", marginBottom: 14, lineHeight: 1.5 }}>인식된 항목은 기업정보로 채워지고, <b style={{ color: "#075985" }}>나머지 내용은 소통내역에 자동 기록</b>됩니다. 기존 값이 있으면 <b style={{ color: "#B45309" }}>덮어쓰기</b> 됩니다.</div>
               {(function() {
                 var u = xlsxPreview.updates;
                 var basicKeys = Object.keys(u).filter(function(k) { return FIELD_LABELS_X[k]; });
                 var fmt = function(k, v) { return (String(k).indexOf("revenue") === 0 && v) ? Number(v).toLocaleString() + "원" : String(v == null ? "" : v); };
                 if (basicKeys.length === 0 && !u.loans && !u.company_info && !u.company_info_memo) {
+                  if ((xlsxCommDraft || "").trim()) {
+                    return <div style={{ fontSize: 12.5, color: "#075985", padding: "8px 10px", background: "#F0F9FF", borderRadius: 6 }}>인식된 기업정보 항목은 없지만, 아래 내용이 소통내역에 기록됩니다.</div>;
+                  }
                   return <div style={{ fontSize: 13, color: "#888", padding: "10px 0" }}>추출된 정보가 없습니다. 양식을 확인해주세요.</div>;
                 }
                 return (
@@ -5574,9 +5713,16 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   </div>
                 );
               })()}
+              {/* 📨 소통내역에 자동 기록될 내용 (수정 가능, 비우면 기록 안 함) */}
+              <div style={{ marginTop: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#075985", marginBottom: 5 }}>📨 소통내역에 기록될 내용 <span style={{ fontSize: 10.5, color: "#888", fontWeight: 500 }}>(수정 가능 · 비우면 기록 안 함)</span></div>
+                <textarea value={xlsxCommDraft} onChange={function(e) { setXlsxCommDraft(e.target.value); }}
+                  placeholder="기업정보로 인식되지 않은 나머지 내용이 여기에 정리됩니다."
+                  style={{ width: "100%", minHeight: 90, boxSizing: "border-box", fontSize: 12, lineHeight: 1.5, padding: "8px 10px", border: "1px solid #BAE6FD", borderRadius: 7, background: "#F0F9FF", resize: "vertical", fontFamily: "inherit" }} />
+              </div>
               <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
                 <button onClick={applyXlsxPreview} style={{ flex: 1, background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>✓ 적용하기</button>
-                <button onClick={function() { setXlsxPreview(null); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "11px 18px", fontSize: 13, cursor: "pointer" }}>취소</button>
+                <button onClick={function() { setXlsxPreview(null); setXlsxCommDraft(""); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "11px 18px", fontSize: 13, cursor: "pointer" }}>취소</button>
               </div>
               <div style={{ fontSize: 11, color: "#AAA", marginTop: 10, textAlign: "center" }}>적용 후 반드시 저장 버튼을 눌러야 DB에 반영됩니다</div>
             </div>
@@ -5793,14 +5939,14 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
         <div style={{ padding: "12px 24px", background: "#FFFBEB", borderBottom: "1px solid #E8E5E0" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
             <span style={{ fontSize: 14 }}>📄</span>
-            <span style={{ fontSize: 12, fontWeight: 700, color: "#92400E" }}>기업현황표 첨부 (자동 입력)</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: "#92400E" }}>기업현황표·시트지 첨부 (자동 입력)</span>
             {attachedFile && (
               <span style={{ fontSize: 10, color: "#15803D", fontWeight: 700, marginLeft: "auto" }}>✓ {attachedFile}</span>
             )}
           </div>
           <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", background: "#fff", border: "1px dashed #FDE68A", borderRadius: 7, cursor: "pointer" }}>
             <span style={{ fontSize: 14, color: "#B45309" }}>📎</span>
-            <span style={{ fontSize: 11, color: "#888", flex: 1 }}>{attachedFile || "기업현황표.xlsx 파일 선택"}</span>
+            <span style={{ fontSize: 11, color: "#888", flex: 1 }}>{attachedFile || "기업현황표.xlsx 또는 시트지 파일 선택"}</span>
             <span style={{ fontSize: 10, padding: "3px 10px", background: "#B45309", color: "#fff", borderRadius: 4, fontWeight: 700 }}>파일 선택</span>
             <input type="file" accept=".xlsx,.xls" style={{ display: "none" }}
               onChange={async function(e) {
@@ -5808,18 +5954,31 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
                 if (!file) return;
                 setAttachedFile(file.name);
                 try {
-                  var res = await parseHyeonhwangpyo(file);
-                  setMulti(res.updates);
+                  var res = await parseUploadedSheet(file);
+                  var upd = Object.assign({}, res.updates);
+                  var extra = (res.commText || "").trim();
+                  if (extra) {
+                    // 신규등록엔 아직 소통내역이 없으므로 나머지 내용을 비고 메모에 보존 (등록 후 소통내역에서 이어쓰기 가능)
+                    setForm(function(p) {
+                      var prev = (p.company_info_memo || "").trim();
+                      var addition = "📄 " + res.kind + " 업로드 내용\n" + extra;
+                      return Object.assign({}, p, upd, { company_info_memo: prev ? prev + "\n\n" + addition : addition });
+                    });
+                  } else {
+                    setMulti(upd);
+                  }
                   setAutoFilled(function(p) { return Object.assign({}, p, res.auto); });
-                  alert("📄 자동 입력 " + Object.keys(res.auto).length + "개 완료!\n확인 후 빈 칸 보완해서 등록하세요.");
+                  var msg = "📄 자동 입력 " + Object.keys(res.auto).length + "개 완료!";
+                  if (extra) msg += "\n📝 인식 안 된 나머지 내용은 '비고'에 담았어요.";
+                  alert(msg + "\n확인 후 빈 칸 보완해서 등록하세요.");
                 } catch (err) {
-                  console.error("기업현황표 파싱 오류:", err);
-                  alert("❌ 엑셀 읽기 실패: " + err.message + "\n\n양식이 표준 기업현황표인지 확인해주세요.");
+                  console.error("시트 파싱 오류:", err);
+                  alert("❌ 엑셀 읽기 실패: " + err.message + "\n\n엑셀(.xlsx) 파일이 맞는지 확인해주세요.");
                   setAttachedFile(null);
                 }
               }} />
           </label>
-          <div style={{ fontSize: 10, color: "#888", marginTop: 5, lineHeight: 1.5 }}>엑셀 첨부하면 회사명·대표자·매출·신용점수 등이 자동 채워집니다. 첨부 안 해도 직접 입력 가능.</div>
+          <div style={{ fontSize: 10, color: "#888", marginTop: 5, lineHeight: 1.5 }}>기업현황표·시트지 첨부하면 회사명·대표자·매출·신용점수 등이 자동 채워지고, 나머지 내용은 비고에 담깁니다. 첨부 안 해도 직접 입력 가능.</div>
         </div>
 
         <div style={{ padding: "18px 24px" }}>
