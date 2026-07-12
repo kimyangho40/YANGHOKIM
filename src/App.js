@@ -4478,7 +4478,10 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
       var getVal = function(keys) {
         for (var r = 0; r < rows.length; r++) {
           if (!rows[r]) continue;
-          var a = norm(rows[r][0]);
+          var rawA = rows[r][0] == null ? "" : String(rows[r][0]).trim();
+          // 섹션 헤더·범례·사용법 행은 건너뜀 ("1.", "8." 시작 / "초록칸=" / "사용법:") → 짧은 키의 헤더 오매칭 방지
+          if (/^\d+\s*\./.test(rawA) || rawA.indexOf("초록칸") === 0 || rawA.indexOf("사용법") === 0) continue;
+          var a = norm(rawA);
           if (!a) continue;
           for (var k = 0; k < keys.length; k++) {
             var key = norm(keys[k]);
@@ -4494,7 +4497,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
       var SECTIONS = [
         { title: "1. 기본 정보", items: [
           ["기업체명", ["기업체명", "기업명", "업체명", "상호"]],
-          ["대표자명/생년월일", ["대표자명/생년월일", "대표자명", "대표자", "대표"]],
+          ["대표자명/생년월일", ["대표자명/생년월일", "대표자명", "대표자"]],
           ["지역", ["지역", "소재지", "주소"]],
           ["업태/종목", ["업태/종목", "업태", "종목"]],
           ["설립일자/업력", ["설립일자/업력", "설립일자", "설립일", "업력"]],
@@ -4515,9 +4518,8 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           ["이자보상배율", ["이자보상배율"]],
         ] },
         { title: "4. 매출 추이", items: [
-          ["2023년 매출", ["2023년매출", "2023매출", "23년매출"]],
-          ["2024년 매출", ["2024년매출", "2024매출", "24년매출"]],
-          ["2025년 매출", ["2025년매출", "2025매출", "25년매출"]],
+          // 실제 양식은 3개 연도를 한 셀에 합쳐둠("2023 / 2024 / 2025년 매출"). 분리 양식도 대비해 개별 연도 키 포함
+          ["2023/2024/2025년 매출", ["2023/2024/2025년매출", "2023/2024/2025매출", "2025년매출", "2024년매출", "2023년매출", "연도별매출"]],
           ["26년 상반기 매출", ["26년상반기매출", "2026년상반기매출", "상반기매출"]],
           ["올해 예상 매출", ["올해예상매출", "예상매출", "금년예상매출"]],
         ] },
@@ -4534,7 +4536,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           ["폐업 이력", ["폐업이력", "폐업"]],
         ] },
         { title: "7. 기대출 현황", items: [
-          ["기존 대출", ["기존대출", "기대출", "현재대출"]],
+          ["기존 대출", ["기존대출", "현재대출"]],
           ["2026년 신규 융자", ["2026년신규융자", "신규융자", "26년신규융자"]],
           ["카드론·현금서비스", ["카드론·현금서비스", "카드론현금서비스", "카드론", "현금서비스"]],
         ] },
