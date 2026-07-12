@@ -2619,108 +2619,6 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         </button>
       </div>
 
-      {/* 📊 담당자별 성과 (기능6) + 💰 예상 수수료 (기능5) */}
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, marginBottom: 22 }}>
-        <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", padding: "16px 18px", overflowX: "auto" }}>
-          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>📊 담당자별 성과</div>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 480 }}>
-            <thead>
-              <tr style={{ borderBottom: "1px solid #E8E5E0" }}>
-                {["담당자", "총건수", "진행중", "자금집행", "부결", "예상수수료"].map(function(h, i) {
-                  return <th key={h} style={{ padding: "7px 8px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: i === 0 ? "left" : "right", whiteSpace: "nowrap" }}>{h}</th>;
-                })}
-              </tr>
-            </thead>
-            <tbody>
-              {assigneeStats.map(function(s) {
-                var doneRate = s.total > 0 ? Math.round(s.executed / s.total * 100) : 0;
-                return (
-                  <tr key={s.name} style={{ borderBottom: "1px solid #F5F3F0", cursor: "pointer" }} onClick={function() { setFilterAssignee(s.name); setView("list"); }}>
-                    <td style={{ padding: "8px", fontSize: 12.5, fontWeight: 700 }}>{s.name}</td>
-                    <td style={{ padding: "8px", fontSize: 12.5, textAlign: "right" }}>{s.total}</td>
-                    <td style={{ padding: "8px", fontSize: 12.5, textAlign: "right", color: "#7C3AED", fontWeight: 600 }}>{s.inProgress}</td>
-                    <td style={{ padding: "8px", fontSize: 12.5, textAlign: "right" }}>
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
-                        <span style={{ color: "#15803D", fontWeight: 700 }}>{s.executed}</span>
-                        <div style={{ width: 60, height: 5, background: "#F0EDE8", borderRadius: 99, overflow: "hidden" }}>
-                          <div style={{ width: doneRate + "%", height: "100%", background: "#15803D", borderRadius: 99 }} />
-                        </div>
-                      </div>
-                    </td>
-                    <td style={{ padding: "8px", fontSize: 12.5, textAlign: "right", color: s.rejected > 0 ? "#DC2626" : "#CCC", fontWeight: 600 }}>{s.rejected}</td>
-                    <td style={{ padding: "8px", fontSize: 12, textAlign: "right", fontWeight: 700, color: "#15803D", whiteSpace: "nowrap" }}>{s.fee > 0 ? wonToKor(s.fee) : "-"}</td>
-                  </tr>
-                );
-              })}
-              {assigneeStats.length === 0 && <tr><td colSpan={6} style={{ padding: 16, textAlign: "center", color: "#888", fontSize: 12 }}>데이터 없음</td></tr>}
-            </tbody>
-          </table>
-        </div>
-        <div style={{ background: "#F0FDF4", borderRadius: 12, border: "1px solid #BBF7D0", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "#15803D" }}>💰 예상 수수료</div>
-          <div>
-            <div style={{ fontSize: 11, color: "#888", marginBottom: 3 }}>이번 달 (계약일 기준)</div>
-            <div style={{ fontSize: 24, fontWeight: 800, color: "#15803D" }}>{feeStats.thisMonth > 0 ? wonToKor(feeStats.thisMonth) + " 원" : "-"}</div>
-          </div>
-          <div style={{ borderTop: "1px solid #BBF7D0", paddingTop: 10 }}>
-            <div style={{ fontSize: 11, color: "#888", marginBottom: 3 }}>전체 파이프라인 합계</div>
-            <div style={{ fontSize: 17, fontWeight: 800, color: "#166534" }}>{feeStats.total > 0 ? wonToKor(feeStats.total) + " 원" : "-"}</div>
-          </div>
-          <div style={{ fontSize: 10, color: "#9CA3AF", marginTop: "auto" }}>* 승인금액 × 수수료율(기본 5%) 기준 추정</div>
-        </div>
-      </div>
-
-      {/* 🚨 장기 방치 알림 (30일 이상 변화 없음) */}
-      {(function() {
-        var longStale = companies.filter(function(c) { return (c.stagnant_days || 0) >= 30; })
-          .sort(function(a, b) { return (b.stagnant_days || 0) - (a.stagnant_days || 0); });
-        if (longStale.length === 0) return null;
-        return (
-          <div style={{ background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 12, padding: "16px 20px", marginBottom: 22 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-              <span style={{ fontSize: 16 }}>🚨</span>
-              <div style={{ fontSize: 14, fontWeight: 700, color: "#B91C1C" }}>장기 방치 업체 {longStale.length}건</div>
-              <div style={{ fontSize: 11, color: "#DC2626" }}>30일 이상 변화 없음 · 즉시 확인 필요</div>
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {longStale.map(function(c) {
-                return (
-                  <div key={c.id} onClick={function() { onSelectCompany(c); }}
-                    style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", border: "1px solid #FCA5A5", borderRadius: 8, padding: "7px 11px", cursor: "pointer" }}
-                    title={c.stage + " · " + (c.assignee || "담당없음")}>
-                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#DC2626", flexShrink: 0 }} />
-                    <span style={{ fontSize: 13, fontWeight: 600, color: "#1A1917" }}>{c.name}</span>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: "#DC2626" }}>{c.stagnant_days}일</span>
-                    {c.assignee && <span style={{ fontSize: 11, color: "#999" }}>· {c.assignee}</span>}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })()}
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 22 }}>
-        {[
-          { label: "전체 관리 업체", value: companies.length, sub: "법인 " + companies.filter(c=>c.type==="법인").length + " · 개인 " + companies.filter(c=>c.type==="개인").length, color: "#4338CA", viewId: "list" },
-          { label: "계약 완료", value: contracted + "건", sub: "수수료 완납 " + contractDone + "건", color: "#15803D", viewId: "settlement" },
-          { label: "대기 건", value: companies.filter(c=>["상담/진단완료","필수서류 및 인증서요청","기관신청대기/방문예정","스크립트 전달 완료"].includes(c.stage)).length + "건", sub: "신청 전 단계", color: "#B45309", viewId: "pipeline" },
-          { label: "진행중", value: companies.filter(c=>["기관신청완료/방문완료","심사중/실태조사대기","실태조사완료/약정완료","자금집행완료"].includes(c.stage)).length + "건", sub: "기관 신청 이후", color: "#7C3AED", viewId: "agency" },
-        ].map((k, i) => (
-          <div key={i} onClick={() => setView(k.viewId)}
-            style={{ background: "#fff", borderRadius: 12, padding: "18px 20px", border: "1px solid #E8E5E0", cursor: "pointer", transition: "box-shadow 0.15s" }}
-            onMouseEnter={e => e.currentTarget.style.boxShadow = "0 4px 16px rgba(0,0,0,0.08)"}
-            onMouseLeave={e => e.currentTarget.style.boxShadow = "none"}>
-            <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>{k.label}</div>
-            <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.04em", color: k.color }}>{k.value}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4, marginBottom: 8 }}>{k.sub}</div>
-            <div style={{ fontSize: 11, color: k.color, fontWeight: 600, display: "flex", alignItems: "center", gap: 3 }}>
-              바로가기 <Icon name="chevronR" size={12} color={k.color} />
-            </div>
-          </div>
-        ))}
-      </div>
-
       {/* 🆕 오늘의 할 일 위젯 */}
       {(function() {
         var today = kstDate();
@@ -2841,9 +2739,6 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         );
       })()}
 
-      {/* 🕒 오늘 활동 내역 피드 (소통내역·이슈·다음액션 변경 업체) */}
-      <TodayActivityFeed companies={companies} onSelectCompany={onSelectCompany} />
-
       {/* 📅 이번 달 예정 업무 (next_action 월 표기 기준 실시간 필터) */}
       {(function() {
         var monthTasks = (companies || []).filter(function(c) { return actionHasMonth(c.next_action, thisMonth); });
@@ -2876,6 +2771,111 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
           </div>
         );
       })()}
+
+      {/* 📊 담당자별 성과 (기능6) + 💰 예상 수수료 (기능5) */}
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, marginBottom: 22 }}>
+        <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", padding: "16px 18px", overflowX: "auto" }}>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>📊 담당자별 성과</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 480 }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #E8E5E0" }}>
+                {["담당자", "총건수", "진행중", "자금집행", "부결", "예상수수료"].map(function(h, i) {
+                  return <th key={h} style={{ padding: "7px 8px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: i === 0 ? "left" : "right", whiteSpace: "nowrap" }}>{h}</th>;
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {assigneeStats.map(function(s) {
+                var doneRate = s.total > 0 ? Math.round(s.executed / s.total * 100) : 0;
+                return (
+                  <tr key={s.name} style={{ borderBottom: "1px solid #F5F3F0", cursor: "pointer" }} onClick={function() { setFilterAssignee(s.name); setView("list"); }}>
+                    <td style={{ padding: "8px", fontSize: 12.5, fontWeight: 700 }}>{s.name}</td>
+                    <td style={{ padding: "8px", fontSize: 12.5, textAlign: "right" }}>{s.total}</td>
+                    <td style={{ padding: "8px", fontSize: 12.5, textAlign: "right", color: "#7C3AED", fontWeight: 600 }}>{s.inProgress}</td>
+                    <td style={{ padding: "8px", fontSize: 12.5, textAlign: "right" }}>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
+                        <span style={{ color: "#15803D", fontWeight: 700 }}>{s.executed}</span>
+                        <div style={{ width: 60, height: 5, background: "#F0EDE8", borderRadius: 99, overflow: "hidden" }}>
+                          <div style={{ width: doneRate + "%", height: "100%", background: "#15803D", borderRadius: 99 }} />
+                        </div>
+                      </div>
+                    </td>
+                    <td style={{ padding: "8px", fontSize: 12.5, textAlign: "right", color: s.rejected > 0 ? "#DC2626" : "#CCC", fontWeight: 600 }}>{s.rejected}</td>
+                    <td style={{ padding: "8px", fontSize: 12, textAlign: "right", fontWeight: 700, color: "#15803D", whiteSpace: "nowrap" }}>{s.fee > 0 ? wonToKor(s.fee) : "-"}</td>
+                  </tr>
+                );
+              })}
+              {assigneeStats.length === 0 && <tr><td colSpan={6} style={{ padding: 16, textAlign: "center", color: "#888", fontSize: 12 }}>데이터 없음</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ background: "#F0FDF4", borderRadius: 12, border: "1px solid #BBF7D0", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#15803D" }}>💰 예상 수수료</div>
+          <div>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 3 }}>이번 달 (계약일 기준)</div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: "#15803D" }}>{feeStats.thisMonth > 0 ? wonToKor(feeStats.thisMonth) + " 원" : "-"}</div>
+          </div>
+          <div style={{ borderTop: "1px solid #BBF7D0", paddingTop: 10 }}>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 3 }}>전체 파이프라인 합계</div>
+            <div style={{ fontSize: 17, fontWeight: 800, color: "#166534" }}>{feeStats.total > 0 ? wonToKor(feeStats.total) + " 원" : "-"}</div>
+          </div>
+          <div style={{ fontSize: 10, color: "#9CA3AF", marginTop: "auto" }}>* 승인금액 × 수수료율(기본 5%) 기준 추정</div>
+        </div>
+      </div>
+
+      {/* 🚨 장기 방치 알림 (30일 이상 변화 없음) */}
+      {(function() {
+        var longStale = companies.filter(function(c) { return (c.stagnant_days || 0) >= 30; })
+          .sort(function(a, b) { return (b.stagnant_days || 0) - (a.stagnant_days || 0); });
+        if (longStale.length === 0) return null;
+        return (
+          <div style={{ background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 12, padding: "16px 20px", marginBottom: 22 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <span style={{ fontSize: 16 }}>🚨</span>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#B91C1C" }}>장기 방치 업체 {longStale.length}건</div>
+              <div style={{ fontSize: 11, color: "#DC2626" }}>30일 이상 변화 없음 · 즉시 확인 필요</div>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {longStale.map(function(c) {
+                return (
+                  <div key={c.id} onClick={function() { onSelectCompany(c); }}
+                    style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", border: "1px solid #FCA5A5", borderRadius: 8, padding: "7px 11px", cursor: "pointer" }}
+                    title={c.stage + " · " + (c.assignee || "담당없음")}>
+                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#DC2626", flexShrink: 0 }} />
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "#1A1917" }}>{c.name}</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#DC2626" }}>{c.stagnant_days}일</span>
+                    {c.assignee && <span style={{ fontSize: 11, color: "#999" }}>· {c.assignee}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 22 }}>
+        {[
+          { label: "전체 관리 업체", value: companies.length, sub: "법인 " + companies.filter(c=>c.type==="법인").length + " · 개인 " + companies.filter(c=>c.type==="개인").length, color: "#4338CA", viewId: "list" },
+          { label: "계약 완료", value: contracted + "건", sub: "수수료 완납 " + contractDone + "건", color: "#15803D", viewId: "settlement" },
+          { label: "대기 건", value: companies.filter(c=>["상담/진단완료","필수서류 및 인증서요청","기관신청대기/방문예정","스크립트 전달 완료"].includes(c.stage)).length + "건", sub: "신청 전 단계", color: "#B45309", viewId: "pipeline" },
+          { label: "진행중", value: companies.filter(c=>["기관신청완료/방문완료","심사중/실태조사대기","실태조사완료/약정완료","자금집행완료"].includes(c.stage)).length + "건", sub: "기관 신청 이후", color: "#7C3AED", viewId: "agency" },
+        ].map((k, i) => (
+          <div key={i} onClick={() => setView(k.viewId)}
+            style={{ background: "#fff", borderRadius: 12, padding: "18px 20px", border: "1px solid #E8E5E0", cursor: "pointer", transition: "box-shadow 0.15s" }}
+            onMouseEnter={e => e.currentTarget.style.boxShadow = "0 4px 16px rgba(0,0,0,0.08)"}
+            onMouseLeave={e => e.currentTarget.style.boxShadow = "none"}>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>{k.label}</div>
+            <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.04em", color: k.color }}>{k.value}</div>
+            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4, marginBottom: 8 }}>{k.sub}</div>
+            <div style={{ fontSize: 11, color: k.color, fontWeight: 600, display: "flex", alignItems: "center", gap: 3 }}>
+              바로가기 <Icon name="chevronR" size={12} color={k.color} />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* 🕒 오늘 활동 내역 피드 (소통내역·이슈·다음액션 변경 업체) */}
+      <TodayActivityFeed companies={companies} onSelectCompany={onSelectCompany} />
 
       {/* 📅 이번 달 진행 요약 (신규·승인·부결) */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 22 }}>
@@ -4419,6 +4419,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   const [xlsxPreview, setXlsxPreview] = useState(null); // 기업현황표/시트지 첨부 미리보기 {updates, auto, commText, kind}
   const [xlsxCommDraft, setXlsxCommDraft] = useState(""); // 업로드 시 소통내역에 넣을 초안(수정 가능)
   const [kakaoLoading, setKakaoLoading] = useState(false); // 카톡 캡처 AI 요약 중
+  const [infoSheetLoading, setInfoSheetLoading] = useState(false); // 정보시트 첨부 파싱 중
   async function handleKakaoImage(file) {
     if (!file || file.type.indexOf("image") !== 0) { alert("이미지 파일만 가능합니다."); return; }
     setKakaoLoading(true);
@@ -4444,6 +4445,125 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
       setKakaoLoading(false);
     }
   }
+  // 📋 스크립트 정보시트(xlsx) 첨부 → 소통 내역 입력창 자동 작성 (저장은 사용자가 직접)
+  async function handleInfoSheetAttach(file) {
+    if (!file) return;
+    if (!/\.(xlsx|xls)$/i.test(file.name || "")) { alert("xlsx 파일만 첨부할 수 있습니다."); return; }
+    setInfoSheetLoading(true);
+    try {
+      if (typeof window.XLSX === "undefined") {
+        await new Promise(function(resolve, reject) {
+          var script = document.createElement("script");
+          script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+          script.onload = resolve;
+          script.onerror = function() { reject(new Error("SheetJS 라이브러리 로드 실패. 인터넷 연결을 확인해주세요.")); };
+          document.head.appendChild(script);
+        });
+      }
+      var XLSX = window.XLSX;
+      var data = await file.arrayBuffer();
+      var wb = XLSX.read(data, { type: "array", cellDates: true });
+      var sheetName = wb.SheetNames.find(function(n) { return n.indexOf("스크립트 정보시트") >= 0; })
+        || wb.SheetNames.find(function(n) { return n.indexOf("정보시트") >= 0; })
+        || wb.SheetNames[0];
+      var ws = wb.Sheets[sheetName];
+      var rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+      var norm = function(v) { return String(v == null ? "" : v).replace(/\s/g, ""); };
+      var cellToStr = function(v) {
+        if (v === null || v === undefined) return "";
+        if (v instanceof Date) { return v.getFullYear() + "-" + String(v.getMonth() + 1).padStart(2, "0") + "-" + String(v.getDate()).padStart(2, "0"); }
+        return String(v).trim();
+      };
+      // A열(0)=항목명, B열(1)=입력값. 항목명을 A열 텍스트와 매칭해 같은 행 B열 값을 읽음
+      var getVal = function(keys) {
+        for (var r = 0; r < rows.length; r++) {
+          if (!rows[r]) continue;
+          var a = norm(rows[r][0]);
+          if (!a) continue;
+          for (var k = 0; k < keys.length; k++) {
+            var key = norm(keys[k]);
+            if (key && (a === key || a.indexOf(key) >= 0 || key.indexOf(a) >= 0)) {
+              var b = cellToStr(rows[r][1]);
+              if (b) return b;
+            }
+          }
+        }
+        return "";
+      };
+      var SECTIONS = [
+        { title: "1. 기본 정보", items: [
+          ["기업체명", ["기업체명", "기업명", "업체명", "상호"]],
+          ["대표자명/생년월일", ["대표자명/생년월일", "대표자명", "대표자", "대표"]],
+          ["지역", ["지역", "소재지", "주소"]],
+          ["업태/종목", ["업태/종목", "업태", "종목"]],
+          ["설립일자/업력", ["설립일자/업력", "설립일자", "설립일", "업력"]],
+          ["상시근로자", ["상시근로자", "상시근로자수", "근로자수", "직원수"]],
+          ["주요 취급품목", ["주요취급품목", "취급품목", "주요품목", "주요제품"]],
+        ] },
+        { title: "2. 신청 정보", items: [
+          ["신청 희망 기관", ["신청희망기관", "희망기관", "신청기관"]],
+          ["신청 희망 금액", ["신청희망금액", "희망금액", "신청금액"]],
+          ["자금 사용 용도", ["자금사용용도", "사용용도", "자금용도"]],
+        ] },
+        { title: "3. 재무 핵심", items: [
+          ["부채총계", ["부채총계"]],
+          ["자본총계", ["자본총계"]],
+          ["부채비율", ["부채비율"]],
+          ["영업이익", ["영업이익"]],
+          ["이자비용", ["이자비용"]],
+          ["이자보상배율", ["이자보상배율"]],
+        ] },
+        { title: "4. 매출 추이", items: [
+          ["2023년 매출", ["2023년매출", "2023매출", "23년매출"]],
+          ["2024년 매출", ["2024년매출", "2024매출", "24년매출"]],
+          ["2025년 매출", ["2025년매출", "2025매출", "25년매출"]],
+          ["26년 상반기 매출", ["26년상반기매출", "2026년상반기매출", "상반기매출"]],
+          ["올해 예상 매출", ["올해예상매출", "예상매출", "금년예상매출"]],
+        ] },
+        { title: "5. 강점 요소", items: [
+          ["수출 실적", ["수출실적", "수출"]],
+          ["기업 인증", ["기업인증", "인증"]],
+          ["연구소/전담부서", ["연구소/전담부서", "연구소", "전담부서", "기업부설연구소"]],
+          ["특허·상표·디자인", ["특허·상표·디자인", "특허상표디자인", "특허", "지식재산권", "산업재산권"]],
+          ["주요 거래처", ["주요거래처", "거래처"]],
+        ] },
+        { title: "6. 신용 관련", items: [
+          ["대표자 신용 KCB/NICE", ["대표자신용KCB/NICE", "대표자신용", "신용점수", "KCB/NICE", "신용등급"]],
+          ["세금·4대보험·금융 연체", ["세금·4대보험·금융연체", "세금4대보험금융연체", "연체", "세금체납"]],
+          ["폐업 이력", ["폐업이력", "폐업"]],
+        ] },
+        { title: "7. 기대출 현황", items: [
+          ["기존 대출", ["기존대출", "기대출", "현재대출"]],
+          ["2026년 신규 융자", ["2026년신규융자", "신규융자", "26년신규융자"]],
+          ["카드론·현금서비스", ["카드론·현금서비스", "카드론현금서비스", "카드론", "현금서비스"]],
+        ] },
+        { title: "8. 대표자만 아는 것", items: [
+          ["가장 불리한 약점", ["가장불리한약점", "약점", "불리한점"]],
+          ["최근 호재·특이사항", ["최근호재·특이사항", "최근호재특이사항", "호재", "특이사항"]],
+        ] },
+      ];
+      var d = new Date();
+      var dateStr = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+      var lines = [];
+      lines.push("📋 정보시트 접수 (" + dateStr + ")");
+      lines.push("━━━━━━━━━━━━━━━━━━");
+      SECTIONS.forEach(function(sec) {
+        lines.push("[" + sec.title + "]");
+        sec.items.forEach(function(it) {
+          var v = getVal(it[1]);
+          lines.push("- " + it[0] + ": " + (v ? v : "미입력"));
+        });
+        lines.push("");
+      });
+      var block = lines.join("\n").replace(/\n+$/, "");
+      setCommInput(function(prev) { return prev && prev.trim() ? (prev.trimEnd() + "\n\n" + block) : block; });
+    } catch (err) {
+      alert("❌ 정보시트 첨부 실패: " + (err && err.message ? err.message : err));
+    } finally {
+      setInfoSheetLoading(false);
+    }
+  }
+
   const FIELD_LABELS_X = { name: "업체명", representative: "대표자", phone: "연락처", region: "지역", industry: "업종", employee_count: "직원수", credit_score_kcb: "KCB점수", credit_score_nice: "NICE점수", founded_year: "설립연도", founded_month: "설립월", revenue_2025: "2025년 매출", revenue_2024: "2024년 매출", revenue_2023: "2023년 매출", revenue_2026_h1: "2026년 상반기 매출", business_number: "사업자번호", business_type: "사업자유형", type: "유형" };
   async function handleXlsxAttach(file) {
     if (!file) return;
@@ -5349,6 +5469,15 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 <textarea value={data.next_action || ""} onChange={function(e) { var v = e.target.value; setData(function(p) { return { ...p, next_action: v }; }); }}
                   placeholder={"예시:\n1. 5/28 화요일 14시 - 추가서류 안내\n2. 5/30 금요일 - 기관 방문 동행\n3. 6/3 - 결과 확인 및 다음 단계 안내"}
                   style={{ width: "100%", padding: "13px 15px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.8, resize: "vertical", minHeight: 220, boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+              </div>
+              {/* 📋 정보시트 첨부 → 소통 내역 자동 입력 (저장은 사용자가 직접) */}
+              <div style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", padding: "8px 14px", borderRadius: 8, cursor: infoSheetLoading ? "wait" : "pointer" }}>
+                  {infoSheetLoading ? "정보시트 읽는 중..." : "📋 정보시트 첨부"}
+                  <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} disabled={infoSheetLoading}
+                    onChange={function(e) { var f = e.target.files && e.target.files[0]; e.target.value = ""; handleInfoSheetAttach(f); }} />
+                </label>
+                <span style={{ fontSize: 10, color: "#AAA" }}>스크립트 정보시트(xlsx) → 아래 소통 내역에 자동 작성 (확인 후 저장)</span>
               </div>
               {/* 소통내역 박스 (이슈·액션 안에 통합) */}
               <div style={{ marginBottom: 16 }}>
