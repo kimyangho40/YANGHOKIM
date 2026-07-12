@@ -4482,7 +4482,8 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           if (!a) continue;
           for (var k = 0; k < keys.length; k++) {
             var key = norm(keys[k]);
-            if (key && (a === key || a.indexOf(key) >= 0 || key.indexOf(a) >= 0)) {
+            // A열 셀이 항목 라벨과 같거나 라벨을 포함할 때만 매칭 (짧은 값의 역방향 오매칭 방지)
+            if (key && key.length >= 2 && (a === key || a.indexOf(key) >= 0)) {
               var b = cellToStr(rows[r][1]);
               if (b) return b;
             }
