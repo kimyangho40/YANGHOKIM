@@ -1880,6 +1880,8 @@ function CRMApp({ profile, session }) {
     if (Array.isArray(rest.company_info)) updateObj.company_info = rest.company_info;
     if (rest.company_info_memo !== undefined && rest.company_info_memo !== null) updateObj.company_info_memo = rest.company_info_memo;
     if (rest.doc_request_dates && typeof rest.doc_request_dates === "object") updateObj.doc_request_dates = rest.doc_request_dates;
+    // 진행단계(stage)가 실제로 바뀌면 상태변경일 갱신 → 정체일수·청년창업 6개월 재신청 판정 기준
+    if (prevData && rest.stage !== prevData.stage) updateObj.stage_updated_at = kstDate();
     const { error } = await supabase.from("companies").update(updateObj).eq("id", rest.id);
     if (!error) {
       // 팀 자동/수동 분류값 저장 (team 컬럼 미생성 시 무시 → 일반 저장은 정상 동작)
@@ -3497,13 +3499,14 @@ function PipelineView({ filtered, filterAssignee, setFilterAssignee, assignees, 
     if (!co) return;
     if (!confirm("'" + co.name + "' 단계를 '" + oldStage + "' → '" + newStage + "'(으)로 변경할까요?")) return;
     // Supabase 업데이트
-    var r = await supabase.from("companies").update({ stage: newStage, stagnant_days: 0, updated_at: new Date().toISOString() }).eq("id", droppedId);
+    var stageChangedAt = kstDate();
+    var r = await supabase.from("companies").update({ stage: newStage, stagnant_days: 0, stage_updated_at: stageChangedAt, updated_at: new Date().toISOString() }).eq("id", droppedId);
     if (r.error) { alert("단계 변경 실패: " + r.error.message); return; }
     // 로컬 상태 업데이트
     if (setCompanies) {
       setCompanies(function(prev) {
         return prev.map(function(x) {
-          if (x.id === droppedId) return Object.assign({}, x, { stage: newStage, stagnant_days: 0 });
+          if (x.id === droppedId) return Object.assign({}, x, { stage: newStage, stagnant_days: 0, stage_updated_at: stageChangedAt });
           return x;
         });
       });
