@@ -297,6 +297,52 @@ function sinboTier(kcb) {
   return "low";
 }
 
+// ── 중진공 정책우선도 배점표(선택형) ─────────────────────────────────────────────
+// agency_cases.priority_checks 에 { [key]: 점수 } 형태로 배점 선택값을 함께 저장 (기존 60개 체크값은 그대로 유지)
+// ①혁신성장분야·첫거래는 기존 체크리스트에 항목이 없어 배점 섹션에서 직접 선택, ⑤정책우대는 기존 '정책우대' 카테고리 체크로 자동 반영
+const JUNGINGONG_SCORE_FORM = [
+  { cat: "① 중점지원 (10점)", items: [
+    { key: "innov", label: "혁신성장분야", opts: [{ t: "해당", p: 5 }, { t: "미해당", p: 0 }] },
+    { key: "firstDeal", label: "첫거래 여부", opts: [{ t: "첫거래기업", p: 5 }, { t: "기지원", p: 0 }] },
+  ] },
+  { cat: "② 고용기여 (20점)", items: [
+    { key: "hireNew", label: "고용창출 실적", opts: [{ t: "10명 초과", p: 15 }, { t: "6~10명", p: 13 }, { t: "2~5명", p: 10 }, { t: "1명", p: 7 }, { t: "고용유지", p: 3 }, { t: "고용감소", p: 0 }] },
+    { key: "hireKeep", label: "고용유지 실적", opts: [{ t: "인재육성·가족친화", p: 5 }, { t: "내일채움공제", p: 3 }, { t: "미해당", p: 0 }] },
+  ] },
+  { cat: "③ 기술경영혁신 (25점)", items: [
+    { key: "ip", label: "3년내 지식재산권", opts: [{ t: "4건 이상", p: 10 }, { t: "1~3건", p: 7 }, { t: "0건", p: 3 }] },
+    { key: "techInno", label: "기술경영혁신분야", opts: [{ t: "3건 이상", p: 15 }, { t: "2건", p: 13 }, { t: "1건", p: 10 }, { t: "0건", p: 5 }] },
+  ] },
+  { cat: "④ 글로벌화 (10점)", items: [
+    { key: "exportUsd", label: "직수출 실적", opts: [{ t: "100만불 초과", p: 10 }, { t: "100만불 이하", p: 7 }, { t: "10만불 이하", p: 5 }, { t: "내수기업", p: 0 }] },
+  ] },
+  { cat: "⑥ 성장잠재력 AI평가 (30점)", items: [
+    { key: "kgrade", label: "AI K등급", opts: [{ t: "K1~K3", p: 30 }, { t: "K4~K6", p: 25 }, { t: "K7~K9", p: 20 }, { t: "K10~K11", p: 15 }, { t: "K12~K13", p: 10 }] },
+  ] },
+];
+const JUNGINGONG_SCORE_KEYS = (function() {
+  var ks = []; JUNGINGONG_SCORE_FORM.forEach(function(c) { c.items.forEach(function(it) { ks.push(it.key); }); }); return ks;
+})();
+// ⑤ 정책우대(5점): 기존 체크리스트 '정책우대' 카테고리 항목 (하나라도 체크 시 5점)
+const JUNGINGONG_POLICY_PREF_ITEMS = ["소부장 강소기업 100·스타트업100·경쟁력위원회 추천기업", "아기유니콘 200", "지역혁신 선도기업 선정", "글로벌 강소기업", "여성기업", "무명의 수출용사", "튼튼한 내수기업", "글로벌 강소기업 1000+(강소이상)", "수출국 다변화", "수출다변화 계획보유"];
+function junginggongPolicyPref(checks) { return JUNGINGONG_POLICY_PREF_ITEMS.some(function(i) { return checks && checks[i]; }) ? 5 : 0; }
+// priority_checks(문자열/객체) → 총점(배점 미입력이면 null)
+function calcJunginggongScore(priorityChecks) {
+  var checks = priorityChecks;
+  if (typeof checks === "string") { try { checks = JSON.parse(checks || "{}"); } catch (e) { checks = {}; } }
+  if (!checks || typeof checks !== "object") return null;
+  var formHas = JUNGINGONG_SCORE_KEYS.some(function(k) { return checks[k] !== undefined && checks[k] !== null; });
+  var prefChecked = junginggongPolicyPref(checks) > 0;
+  if (!formHas && !prefChecked) return null;
+  var total = 0;
+  JUNGINGONG_SCORE_KEYS.forEach(function(k) { var v = Number(checks[k]); if (!isNaN(v)) total += v; });
+  total += junginggongPolicyPref(checks); // ⑤ 정책우대(기존 체크리스트 연동)
+  return total;
+}
+function priorityScoreColor(total) {
+  return total >= 70 ? "#15803D" : total >= 50 ? "#B45309" : "#DC2626";
+}
+
 // 자동 감지 배지(약점·추천·사후관리) + 대응논리 팝업
 function PolicyBadges({ company }) {
   const [popup, setPopup] = useState(null);
@@ -10762,6 +10808,9 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                 <th style={headerCellStyle("representative")}>대표자<ResizeHandle colKey="representative" /></th>
                 <th style={headerCellStyle("assignee")}>담당자<ResizeHandle colKey="assignee" /></th>
                 <th style={headerCellStyle("amount")}>금액<ResizeHandle colKey="amount" /></th>
+                {activeGroup === "중소벤처기업진흥공단" && (
+                  <th style={headerCellStyle("priority", { textAlign: "center", color: "#7C3AED", width: 70, minWidth: 70, maxWidth: 70 })}>우선도</th>
+                )}
                 {(activeGroup === "중소벤처기업진흥공단" || activeGroup === "소상공인시장진흥공단") && (
                   <th style={headerCellStyle("product")}>신청상품<ResizeHandle colKey="product" /></th>
                 )}
@@ -10838,6 +10887,15 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                             style={{ padding: "4px 8px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, width: 70, boxSizing: "border-box" }} />
                         : <span style={{ fontSize: 12, color: "#555" }}>{row.request_amount || "-"}</span>}
                     </td>
+                    {activeGroup === "중소벤처기업진흥공단" && (
+                      <td style={{ padding: "10px 12px", textAlign: "center" }} onClick={function(e) { e.stopPropagation(); openPriority(row); }} title="클릭하면 배점 입력">
+                        {(function() {
+                          var s = calcJunginggongScore(row.priority_checks);
+                          if (s == null) return <span style={{ fontSize: 12, color: "#CCC" }}>-</span>;
+                          return <span style={{ fontSize: 13, fontWeight: 800, color: priorityScoreColor(s), cursor: "pointer" }}>{s}</span>;
+                        })()}
+                      </td>
+                    )}
                     {(activeGroup === "중소벤처기업진흥공단" || activeGroup === "소상공인시장진흥공단") && (
                       <td style={{ padding: "10px 12px" }}>
                         {isEditing ? (
@@ -11097,6 +11155,51 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                   </div>
                 );
               })}
+              {/* ── 배점표 입력 섹션 (기존 체크리스트와 별개 · 우선도 점수 자동계산) ── */}
+              <div style={{ marginTop: 10, paddingTop: 18, borderTop: "2px dashed #DDD6FE" }}>
+                {(function() {
+                  var score = calcJunginggongScore(priorityChecks);
+                  var sc = score == null ? 0 : score;
+                  var col = priorityScoreColor(sc);
+                  return (
+                    <div style={{ display: "flex", alignItems: "center", gap: 14, background: "#F5F3FF", borderRadius: 10, padding: "12px 16px", marginBottom: 8 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: "#6D28D9", whiteSpace: "nowrap" }}>🎯 정책우선도 점수</div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: col, whiteSpace: "nowrap" }}>{score == null ? "-" : sc}<span style={{ fontSize: 12, color: "#999" }}>/100</span></div>
+                      <div style={{ flex: 1, background: "#DDD6FE", borderRadius: 99, height: 8, overflow: "hidden" }}>
+                        <div style={{ width: Math.min(100, sc) + "%", background: col, height: "100%", borderRadius: 99, transition: "width 0.2s" }} />
+                      </div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: col, whiteSpace: "nowrap" }}>{sc >= 70 ? "우수" : sc >= 50 ? "보통" : "미흡"}</div>
+                    </div>
+                  );
+                })()}
+                <div style={{ fontSize: 11, color: "#999", marginBottom: 14 }}>⑤ 정책우대(5점)는 위 '정책우대' 카테고리 체크로 자동 반영됩니다.</div>
+                {JUNGINGONG_SCORE_FORM.map(function(cat) {
+                  return (
+                    <div key={cat.cat} style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "#6D28D9", marginBottom: 8 }}>{cat.cat}</div>
+                      {cat.items.map(function(it) {
+                        var cur = priorityChecks[it.key];
+                        return (
+                          <div key={it.key} style={{ marginBottom: 8 }}>
+                            <div style={{ fontSize: 12, color: "#555", marginBottom: 5 }}>{it.label}</div>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                              {it.opts.map(function(o) {
+                                var sel = cur !== undefined && cur !== null && Number(cur) === o.p;
+                                return (
+                                  <button key={o.t} onClick={function() { setPriorityChecks(function(p) { var n = Object.assign({}, p); n[it.key] = o.p; return n; }); }}
+                                    style={{ fontSize: 11, fontWeight: sel ? 700 : 500, padding: "5px 11px", borderRadius: 99, cursor: "pointer", background: sel ? "#7C3AED" : "#fff", color: sel ? "#fff" : "#666", border: "1px solid " + (sel ? "#7C3AED" : "#E8E5E0") }}>
+                                    {o.t} <span style={{ opacity: 0.7 }}>{o.p}점</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </div>
