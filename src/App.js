@@ -2722,6 +2722,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
               {/* 📋 내 할일 위젯 - work_notes 체크박스 기반 (항상 표시) */}
               <MyTodoWidget setView={setView} />
 
+              {/* 📋 팀 업무 대기 - team_notes 기반 (법인팀/개인팀 · 전체는 양쪽 모두) */}
+              <TeamTodoWidget setView={setView} />
+
               {/* 📅 차기 업무 마감 요약 (next_action 날짜 자동 집계) */}
               {(function() {
                 var acts = (companies || []).filter(function(c) { return c.next_action && nearestActionDate(c.next_action) !== null; }).map(function(c) { return daysUntil(nearestActionDate(c.next_action)); });
@@ -3826,6 +3829,51 @@ function MyTodoWidget({ setView }) {
         {count.total === 0 && <span>업무 노트에서 추가하세요</span>}
       </div>
     </div>
+  );
+}
+
+// 📋 팀 업무 대기 위젯 - team_notes 기반 (법인팀/개인팀 · "전체(공통)"은 양쪽 모두 집계)
+function TeamTodoWidget({ setView }) {
+  const [counts, setCounts] = useState({ corporate: 0, individual: 0 });
+
+  useEffect(function() {
+    async function load() {
+      var res = await supabase.from("team_notes")
+        .select("team, status")
+        .is("deleted_at", null)
+        .eq("status", "open");
+      if (res.error || !res.data) return;
+      var corp = 0, indi = 0;
+      res.data.forEach(function(n) {
+        // "all"(전체·공통) 업무는 법인팀·개인팀 양쪽 카운트에 모두 포함
+        if (n.team === "corporate" || n.team === "all") corp++;
+        if (n.team === "individual" || n.team === "all") indi++;
+      });
+      setCounts({ corporate: corp, individual: indi });
+    }
+    load();
+  }, []);
+
+  // 대기 팀 업무가 하나도 없으면 카드 표시 안 함
+  if (counts.corporate === 0 && counts.individual === 0) return null;
+
+  return (
+    <>
+      {counts.corporate > 0 && (
+        <div onClick={function() { setView("worknotes"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #4338CA" }}>
+          <div style={{ fontSize: 10, color: "#4338CA", fontWeight: 700, marginBottom: 4 }}>🏢 법인팀 업무</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: "#4338CA" }}>{counts.corporate}건</div>
+          <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>팀 업무 공간 대기 · 전체(공통) 포함</div>
+        </div>
+      )}
+      {counts.individual > 0 && (
+        <div onClick={function() { setView("worknotes"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #15803D" }}>
+          <div style={{ fontSize: 10, color: "#15803D", fontWeight: 700, marginBottom: 4 }}>👤 개인팀 업무</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: "#15803D" }}>{counts.individual}건</div>
+          <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>팀 업무 공간 대기 · 전체(공통) 포함</div>
+        </div>
+      )}
+    </>
   );
 }
 
