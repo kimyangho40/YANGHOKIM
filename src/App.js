@@ -278,24 +278,7 @@ function expectedFee(company) {
   if (isNaN(rate) || rate <= 0) rate = 5;
   return Math.round(amt * rate / 100);
 }
-// 신보 예상 한도 매트릭스
-const SINBO_LOAN_BUCKETS = [
-  { label: "없음", won: 0 }, { label: "3천만", won: 30000000 }, { label: "5천만", won: 50000000 },
-  { label: "1억", won: 100000000 }, { label: "1.5억", won: 150000000 }, { label: "2억", won: 200000000 },
-  { label: "2.5억", won: 250000000 }, { label: "3억", won: 300000000 },
-];
-const SINBO_LIMIT_MATRIX = {
-  high: [300000000, 300000000, 250000000, 200000000, 150000000, 100000000, 50000000, 0],
-  mid:  [200000000, 200000000, 150000000, 100000000, 80000000, 50000000, 30000000, 0],
-  low:  [100000000, 80000000, 50000000, 30000000, 20000000, 10000000, 0, 0],
-};
-function sinboTier(kcb) {
-  var n = parseInt(kcb, 10);
-  if (isNaN(n)) return null;
-  if (n >= 850) return "high";
-  if (n >= 750) return "mid";
-  return "low";
-}
+// (구 매트릭스 방식 신보 한도표 제거 — 매출 기반 계산으로 대체, SinboCalc 참고)
 
 // ── 중진공 정책우선도 배점표(선택형) ─────────────────────────────────────────────
 // agency_cases.priority_checks 에 { [key]: 점수 } 형태로 배점 선택값을 함께 저장 (기존 60개 체크값은 그대로 유지)
@@ -455,43 +438,80 @@ function JunginggongCalc() {
     </div>
   );
 }
-// 신보 예상 한도 계산기 (기능2)
+// 신보 예상 한도 계산기 (기능2) — 매출 기반
+// 기본 한도 = 최근 매출액 ÷ 3 (최대 8억) → KCB 조정(700↑ 100% / 650~699 80% / 650미만 50%) → 기존 신보대출 잔액 차감
+function sinboLoanBalance(company) {
+  var loans = Array.isArray(company && company.loans) ? company.loans : [];
+  return loans.reduce(function(s, ln) {
+    var who = (((ln && ln.inst) || "") + " " + ((ln && ln.bank) || ""));
+    if (!/신보|신용보증기금/.test(who)) return s; // 신보 관련 대출만 합산
+    var n = parseInt(String((ln && ln.amount) || "").replace(/[^0-9]/g, ""), 10);
+    return s + (isNaN(n) ? 0 : n);
+  }, 0);
+}
+function latestFullYearRevenue(company) {
+  var keys = ["revenue_2025", "revenue_2024", "revenue_2023"]; // 최근 연도 우선
+  for (var i = 0; i < keys.length; i++) {
+    var raw = company[keys[i]];
+    var n = parseInt(String(raw == null ? "" : raw).replace(/[^0-9]/g, ""), 10);
+    if (!isNaN(n) && n > 0) return { won: n, year: keys[i].replace("revenue_", "") };
+  }
+  return { won: 0, year: null };
+}
 function SinboCalc({ company }) {
-  const [kcb, setKcb] = useState(company.credit_score_kcb || "");
-  const [bucketIdx, setBucketIdx] = useState(function() {
-    var loan = totalLoanAmount(company), idx = 0;
-    for (var i = 0; i < SINBO_LOAN_BUCKETS.length; i++) { if (loan >= SINBO_LOAN_BUCKETS[i].won) idx = i; }
-    return idx;
-  });
-  var tier = sinboTier(kcb);
-  var limit = tier ? SINBO_LIMIT_MATRIX[tier][bucketIdx] : null;
-  var tierLabel = tier === "high" ? "KCB 850↑" : tier === "mid" ? "KCB 750~849" : tier === "low" ? "KCB 749↓" : "KCB 입력";
+  var initRev = latestFullYearRevenue(company);
+  const [kcb, setKcb] = useState(company.credit_score_kcb == null ? "" : String(company.credit_score_kcb));
+  const [revenue, setRevenue] = useState(initRev.won ? String(initRev.won) : "");
+  const [sinboLoan, setSinboLoan] = useState(function() { var b = sinboLoanBalance(company); return b ? String(b) : ""; });
+
+  var digits = function(v) { var n = parseInt(String(v == null ? "" : v).replace(/[^0-9]/g, ""), 10); return isNaN(n) ? 0 : n; };
+  var revNum = digits(revenue), kcbNum = digits(kcb), loanNum = digits(sinboLoan);
+
+  var CAP = 800000000; // 최대 8억
+  var rawBase = Math.floor(revNum / 3);
+  var capped = rawBase > CAP;
+  var base = Math.min(rawBase, CAP);
+  var kcbRate = kcbNum >= 700 ? 1 : kcbNum >= 650 ? 0.8 : kcbNum > 0 ? 0.5 : null;
+  var adjusted = kcbRate == null ? null : Math.floor(base * kcbRate);
+  var finalLimit = adjusted == null ? null : adjusted - loanNum;
+  var canCalc = revNum > 0 && kcbRate != null;
+  var soldOut = canCalc && finalLimit <= 0;
+
+  var inputBox = function(label, val, setter, hint) {
+    return (
+      <div style={{ flex: 1, minWidth: 110 }}>
+        <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>{label}</div>
+        <input type="number" value={val} onChange={function(e) { setter(e.target.value); }}
+          style={{ width: "100%", fontSize: 13, padding: "7px 9px", border: "1px solid #E8E5E0", borderRadius: 6, outline: "none", boxSizing: "border-box" }} />
+        <div style={{ fontSize: 10, color: "#1D4ED8", marginTop: 3, fontWeight: 700, minHeight: 13 }}>{hint}</div>
+      </div>
+    );
+  };
+
   return (
     <div style={{ background: "#EFF6FF", borderRadius: 10, padding: "14px 15px", marginBottom: 10, border: "1px solid #BFDBFE" }}>
-      <div style={{ fontSize: 13, fontWeight: 800, color: "#1D4ED8", marginBottom: 10 }}>💳 신보 예상 한도 계산기</div>
+      <div style={{ fontSize: 13, fontWeight: 800, color: "#1D4ED8", marginBottom: 3 }}>💳 신보 예상 한도 계산기</div>
+      <div style={{ fontSize: 10.5, color: "#64748B", marginBottom: 10 }}>기업 데이터에서 자동 입력 · 값을 직접 수정할 수 있어요</div>
       <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-        <div style={{ flex: 1, minWidth: 120 }}>
-          <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>KCB 점수</div>
-          <input type="number" value={kcb} onChange={function(e) { setKcb(e.target.value); }} placeholder="예: 820"
-            style={{ width: "100%", fontSize: 13, padding: "7px 9px", border: "1px solid #E8E5E0", borderRadius: 6, outline: "none", boxSizing: "border-box" }} />
-          <div style={{ fontSize: 10, color: "#1D4ED8", marginTop: 3, fontWeight: 700 }}>{tierLabel}</div>
-        </div>
-        <div style={{ flex: 1, minWidth: 120 }}>
-          <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>기대출 잔액</div>
-          <select value={bucketIdx} onChange={function(e) { setBucketIdx(parseInt(e.target.value, 10)); }}
-            style={{ width: "100%", fontSize: 13, padding: "7px 9px", border: "1px solid #E8E5E0", borderRadius: 6, background: "#fff", outline: "none", boxSizing: "border-box" }}>
-            {SINBO_LOAN_BUCKETS.map(function(b, i) { return <option key={i} value={i}>{b.label}</option>; })}
-          </select>
-        </div>
+        {inputBox("KCB 점수", kcb, setKcb, kcbRate != null ? (Math.round(kcbRate * 100) + "% 반영") : "점수 입력")}
+        {inputBox("최근 매출 (원)", revenue, setRevenue, revNum > 0 ? (wonToKor(revNum) + (initRev.year ? " · " + initRev.year + "년" : "")) : "매출 입력")}
+        {inputBox("기존 신보대출 잔액 (원)", sinboLoan, setSinboLoan, loanNum > 0 ? wonToKor(loanNum) : "없으면 0")}
       </div>
       <div style={{ background: "#fff", borderRadius: 8, padding: "12px 14px", textAlign: "center" }}>
         <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>예상 보증 한도</div>
-        {tier ? (
-          <div style={{ fontSize: 22, fontWeight: 800, color: limit > 0 ? "#1D4ED8" : "#DC2626" }}>
-            {limit > 0 ? wonToKor(limit) + " 원" : "한도 없음"}
+        {canCalc ? (
+          <div style={{ fontSize: 22, fontWeight: 800, color: soldOut ? "#DC2626" : "#1D4ED8" }}>
+            {soldOut ? "한도 소진" : wonToKor(finalLimit) + " 원"}
           </div>
-        ) : <div style={{ fontSize: 13, color: "#AAA" }}>KCB 점수를 입력하세요</div>}
-        <div style={{ fontSize: 10, color: "#888", marginTop: 4 }}>* 일반 기준 추정치 · 실제 심사 결과와 다를 수 있음</div>
+        ) : <div style={{ fontSize: 13, color: "#AAA" }}>KCB 점수와 매출을 입력하세요</div>}
+        {canCalc && (
+          <div style={{ fontSize: 10.5, color: "#64748B", marginTop: 8, lineHeight: 1.7, textAlign: "left", background: "#F8FAFC", borderRadius: 6, padding: "8px 10px" }}>
+            <div>· 기본: 매출 {wonToKor(revNum)} ÷ 3 = {wonToKor(rawBase)}{capped ? " → 최대 8억 적용" : ""}</div>
+            <div>· KCB {kcbNum} → {Math.round(kcbRate * 100)}% 반영 = {wonToKor(adjusted)}</div>
+            <div>· 기존 신보대출 {wonToKor(loanNum)} 차감 = {soldOut ? "한도 소진" : wonToKor(finalLimit)}</div>
+          </div>
+        )}
+        <div style={{ fontSize: 10, color: "#888", marginTop: 6 }}>* 참고용 추정치입니다. 실제 한도는 심사에 따라 다를 수 있습니다.</div>
       </div>
     </div>
   );
