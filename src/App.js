@@ -13361,6 +13361,7 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showDone, setShowDone] = useState(false); // 가져간/완료된 것도 볼지
   const [newNote, setNewNote] = useState({ title: "", content: "", priority: "normal", due_date: "", tags: [], checklist: [] });
+  const [newNoteTeam, setNewNoteTeam] = useState("corporate"); // 새 업무 대상 팀: "corporate" | "individual" | "all"(전체·공통)
   const [collapsed, setCollapsed] = useState(false); // 섹션 전체 접기
   const [editingNoteId, setEditingNoteId] = useState(null); // 수정 중인 팀 노트 ID
   const [editingDraft, setEditingDraft] = useState(null); // 수정 작업 중인 임시 데이터
@@ -13377,16 +13378,18 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
   // 탭별 노트 (열린 것 우선, 가져간 것은 토글에 따라)
   var displayNotes = useMemo(function() {
     return allTeamNotes.filter(function(n) {
-      if (n.team !== activeTab) return false;
+      // "all"(전체·공통) 업무는 법인팀·개인팀 양쪽 탭 모두에 표시
+      if (n.team !== activeTab && n.team !== "all") return false;
       if (!showDone && n.status !== "open") return false;
       return true;
     });
   }, [allTeamNotes, activeTab, showDone]);
 
   var openCount = useMemo(function() {
+    // 전체(공통) 대기 업무는 양쪽 팀 카운트에 모두 포함
     return {
-      corporate: allTeamNotes.filter(function(n) { return n.team === "corporate" && n.status === "open"; }).length,
-      individual: allTeamNotes.filter(function(n) { return n.team === "individual" && n.status === "open"; }).length,
+      corporate: allTeamNotes.filter(function(n) { return (n.team === "corporate" || n.team === "all") && n.status === "open"; }).length,
+      individual: allTeamNotes.filter(function(n) { return (n.team === "individual" || n.team === "all") && n.status === "open"; }).length,
     };
   }, [allTeamNotes]);
 
@@ -13408,7 +13411,7 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
       };
     });
     var payload = {
-      team: activeTab,
+      team: newNoteTeam, // "corporate" | "individual" | "all"(전체·공통)
       title: newNote.title.trim() || null,
       content: newNote.content.trim() || null,
       priority: newNote.priority || "normal",
@@ -13442,7 +13445,7 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
     var assigneeName = normalizeName(profile.name);
     // work_notes에 새 노트 생성
     var todayStr = kstDate();
-    var teamLabel = teamNote.team === "corporate" ? "[법인팀]" : "[개인팀]";
+    var teamLabel = teamNote.team === "corporate" ? "[법인팀]" : teamNote.team === "all" ? "[전체]" : "[개인팀]";
     var workNotePayload = {
       assignee: assigneeName,
       title: teamLabel + " " + (teamNote.title || "팀 노트에서 가져온 업무"),
@@ -13482,7 +13485,7 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
     if (!item) return;
     if (item.taken_by) { alert("이미 " + item.taken_by + "님이 가져간 항목입니다."); return; }
 
-    var teamLabel = teamNote.team === "corporate" ? "[법인팀]" : "[개인팀]";
+    var teamLabel = teamNote.team === "corporate" ? "[법인팀]" : teamNote.team === "all" ? "[전체]" : "[개인팀]";
     var todayStr = kstDate();
     var noteTitle = teamLabel + " " + (teamNote.title || "팀 노트");
 
@@ -13738,7 +13741,7 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
               <input type="checkbox" checked={showDone} onChange={function(e) { setShowDone(e.target.checked); }} />
               가져간 것도 보기
             </label>
-            <button onClick={function() { setShowAdd(true); }}
+            <button onClick={function() { setNewNoteTeam(activeTab); setShowAdd(true); }}
               style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ 새 업무</button>
           </div>
         )}
@@ -13883,6 +13886,9 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
                       <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                         <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: ss.bg, color: ss.color }}>{ss.label}</span>
+                        {note.team === "all" && (
+                          <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: "#F3E8FF", color: "#7C3AED" }}>🌐 전체</span>
+                        )}
                         {note.priority !== "normal" && (
                           <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: ps.bg, color: ps.color }}>{ps.label}</span>
                         )}
@@ -13995,11 +14001,16 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
             <div style={{ marginBottom: 10 }}>
               <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>대상 팀</label>
               <div style={{ display: "flex", gap: 6 }}>
-                <button onClick={function() { setActiveTab("corporate"); }}
-                  style={{ flex: 1, padding: "8px", background: activeTab === "corporate" ? "#1A1917" : "#fff", color: activeTab === "corporate" ? "#fff" : "#666", border: "1px solid " + (activeTab === "corporate" ? "#1A1917" : "#E8E5E0"), borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🏢 법인팀</button>
-                <button onClick={function() { setActiveTab("individual"); }}
-                  style={{ flex: 1, padding: "8px", background: activeTab === "individual" ? "#1A1917" : "#fff", color: activeTab === "individual" ? "#fff" : "#666", border: "1px solid " + (activeTab === "individual" ? "#1A1917" : "#E8E5E0"), borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>👤 개인팀</button>
+                <button onClick={function() { setNewNoteTeam("corporate"); }}
+                  style={{ flex: 1, padding: "8px", background: newNoteTeam === "corporate" ? "#1A1917" : "#fff", color: newNoteTeam === "corporate" ? "#fff" : "#666", border: "1px solid " + (newNoteTeam === "corporate" ? "#1A1917" : "#E8E5E0"), borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🏢 법인팀</button>
+                <button onClick={function() { setNewNoteTeam("individual"); }}
+                  style={{ flex: 1, padding: "8px", background: newNoteTeam === "individual" ? "#1A1917" : "#fff", color: newNoteTeam === "individual" ? "#fff" : "#666", border: "1px solid " + (newNoteTeam === "individual" ? "#1A1917" : "#E8E5E0"), borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>👤 개인팀</button>
+                <button onClick={function() { setNewNoteTeam("all"); }}
+                  style={{ flex: 1, padding: "8px", background: newNoteTeam === "all" ? "#7C3AED" : "#fff", color: newNoteTeam === "all" ? "#fff" : "#666", border: "1px solid " + (newNoteTeam === "all" ? "#7C3AED" : "#E8E5E0"), borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🌐 전체(공통)</button>
               </div>
+              {newNoteTeam === "all" && (
+                <div style={{ fontSize: 10, color: "#7C3AED", marginTop: 4 }}>전체(공통)로 등록하면 법인팀·개인팀 양쪽 목록에 모두 표시됩니다.</div>
+              )}
             </div>
             <div style={{ marginBottom: 10 }}>
               <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>제목 (선택)</label>
