@@ -8873,10 +8873,10 @@ function SettlementView() {
           <input value={editData.contract_fee || ""} placeholder="계약금" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { contract_fee: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
         </td>
         <td style={{ padding: "6px 8px" }}>
-          <input value={editData.approval_amount || ""} placeholder="승인금액" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { approval_amount: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
+          <input value={editData.approval_amount || ""} placeholder="승인금액" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { approval_amount: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #FCD34D", background: "#FFFBEB", borderRadius: 4, fontSize: 12 }} />
         </td>
         <td style={{ padding: "6px 8px" }}>
-          <input type="date" value={editData.approval_date || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { approval_date: e.target.value }); }); }} style={{ width: 115, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
+          <input type="date" value={editData.approval_date || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { approval_date: e.target.value }); }); }} style={{ width: 130, padding: "4px 6px", border: "1px solid #FCD34D", background: "#FFFBEB", borderRadius: 4, fontSize: 12 }} />
         </td>
         <td style={{ padding: "6px 8px" }}>
           <input value={editData.commission_fee || ""} placeholder="수수료" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { commission_fee: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
@@ -9054,7 +9054,8 @@ function SettlementView() {
               <thead>
                 <tr style={{ background: "#F7F6F3", borderBottom: "2px solid #E8E5E0" }}>
                   {["#","사업자명","팀","기관","담당자","신청금액","계약금","승인금액","승인일시","수수료","입금금액","계약일","세금계산서","입금완료","입금일","비고","작업"].map(function(h) {
-                    return <th key={h} style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, whiteSpace: "nowrap" }}>{h}</th>;
+                    var isApproval = h === "승인금액" || h === "승인일시";
+                    return <th key={h} style={{ textAlign: "left", padding: "10px 8px", fontWeight: isApproval ? 700 : 600, color: isApproval ? "#B45309" : "#888", fontSize: 11, whiteSpace: "nowrap" }}>{h}</th>;
                   })}
                 </tr>
               </thead>
@@ -9126,14 +9127,14 @@ function SettlementView() {
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 13 }}>
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>승인금액</label>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#B45309", display: "block", marginBottom: 5 }}>승인금액</label>
                   <input value={newManual.approval_amount || ""} placeholder="예: 300만" onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { approval_amount: e.target.value }); }); }}
-                    style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+                    style={{ width: "100%", padding: "10px 13px", border: "1px solid #FCD34D", background: "#FFFBEB", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
                 </div>
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>승인일시</label>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#B45309", display: "block", marginBottom: 5 }}>승인일시</label>
                   <input type="date" value={newManual.approval_date || ""} onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { approval_date: e.target.value }); }); }}
-                    style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+                    style={{ width: "100%", padding: "10px 13px", border: "1px solid #FCD34D", background: "#FFFBEB", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
                 </div>
               </div>
               <div style={{ display: "flex", gap: 20, marginBottom: 13 }}>
