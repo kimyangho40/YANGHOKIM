@@ -234,6 +234,109 @@ function detectWeaknesses(company) {
   }
   return out;
 }
+
+// ── 재무 문자열 → 숫자 파싱 (억/천만/백만/만/천 단위 및 회계 음수표기 지원) ─────
+// 부채비율·이자보상배율은 비율이라 두 값의 단위 스케일이 일치해야 정확 → 한글 단위까지 해석
+function parseFinanceNum(raw) {
+  if (raw === null || raw === undefined) return null;
+  var s = String(raw).trim();
+  if (!s) return null;
+  var neg = /^\(.*\)$/.test(s) || s.indexOf("△") >= 0 || s.indexOf("▲") >= 0 || s.trim().indexOf("-") === 0;
+  s = s.replace(/[(),\s원△▲\-]/g, "");
+  if (!s) return null;
+  var units = [["억", 1e8], ["천만", 1e7], ["백만", 1e6], ["만", 1e4], ["천", 1e3]];
+  var total = 0, hasUnit = false, remaining = s;
+  for (var u = 0; u < units.length; u++) {
+    var name = units[u][0], mult = units[u][1];
+    var idx = remaining.indexOf(name);
+    if (idx >= 0) {
+      var numPart = remaining.slice(0, idx);
+      var n = parseFloat(numPart);
+      if (isNaN(n)) n = numPart === "" ? 1 : NaN;
+      if (!isNaN(n)) { total += n * mult; hasUnit = true; }
+      remaining = remaining.slice(idx + name.length);
+    }
+  }
+  if (hasUnit) {
+    if (remaining) { var r = parseFloat(remaining); if (!isNaN(r)) total += r; }
+    return neg ? -total : total;
+  }
+  var plain = parseFloat(s);
+  if (isNaN(plain)) return null;
+  return neg ? -Math.abs(plain) : plain;
+}
+// company_info 배열에서 라벨(공백 무시, 부분일치)로 값 조회
+function getCompanyInfoVal(infoArr, label) {
+  var arr = Array.isArray(infoArr) ? infoArr : [];
+  var want = String(label).replace(/\s/g, "");
+  for (var i = 0; i < arr.length; i++) {
+    var lbl = (arr[i] && arr[i].label ? arr[i].label : "").replace(/\s/g, "");
+    if (lbl && lbl.indexOf(want) >= 0) return arr[i].value;
+  }
+  return null;
+}
+// 소진공·중진공 재무비율 자동 계산 (부채총계/자본총계/영업이익/이자비용 기반, 프론트 계산만)
+// 반환: { debtRatio, icr, debtText, icrText, sojinFit, jungjinFit, lackData }
+function computeFinanceRatios(company) {
+  var info = company && company.company_info;
+  var debt = parseFinanceNum(getCompanyInfoVal(info, "부채총계"));
+  var capital = parseFinanceNum(getCompanyInfoVal(info, "자본총계"));
+  var op = parseFinanceNum(getCompanyInfoVal(info, "영업이익"));
+  var interest = parseFinanceNum(getCompanyInfoVal(info, "이자비용"));
+
+  // 부채비율 = 부채총계 / 자본총계 × 100
+  var debtRatio = null, debtText = "데이터 부족", capitalImpaired = false;
+  if (debt !== null && capital !== null) {
+    if (capital <= 0) { capitalImpaired = true; debtText = "자본잠식"; }
+    else { debtRatio = (debt / capital) * 100; debtText = (Math.round(debtRatio * 10) / 10) + "%"; }
+  }
+  // 이자보상배율 = 영업이익 / 이자비용
+  var icr = null, icrText = "데이터 부족", noInterest = false;
+  if (op !== null && interest !== null) {
+    if (interest === 0) { noInterest = true; icrText = "이자비용 0"; icr = op >= 0 ? Infinity : -Infinity; }
+    else { icr = op / interest; icrText = (Math.round(icr * 100) / 100) + "배"; }
+  }
+
+  var hasDebtRatio = debtRatio !== null || capitalImpaired;
+  var hasIcr = icr !== null;
+  var lackData = !(hasDebtRatio && hasIcr);
+
+  // 적합 판정: 부채비율 200% 이하 + 이자보상배율(소진공 1.0↑ / 중진공 1.5↑)
+  var debtOk = debtRatio !== null && debtRatio <= 200;
+  function fit(icrMin) {
+    if (lackData) return "데이터 부족";
+    return (debtOk && icr !== null && icr >= icrMin) ? "적합" : "부적합";
+  }
+  return {
+    debtRatio: debtRatio, icr: icr, debtText: debtText, icrText: icrText,
+    capitalImpaired: capitalImpaired, noInterest: noInterest, lackData: lackData,
+    sojinFit: fit(1.0), jungjinFit: fit(1.5),
+  };
+}
+
+// ── 청년창업 탈락기업 6개월 후 재신청 판정 (프론트 날짜 계산만, DB 변경 없음) ──
+// 청년창업 관련 여부: 회사 텍스트 + (선택) 기관케이스 상품명에서 "청년창업" 탐지
+function isYouthStartupCompany(company, productStrings) {
+  var hay = [company && company.agency, company && company.issue, company && company.next_action,
+             company && company.company_info_memo, company && company.business_type,
+             company && company.name].join(" ");
+  if (Array.isArray(productStrings)) hay += " " + productStrings.join(" ");
+  return hay.indexOf("청년창업") >= 0;
+}
+// 부결/반려 + 청년창업 + 상태변경일(stage_updated_at) 6개월 경과 → 배지 정보, 아니면 null
+function youthReapplyStatus(company, productStrings) {
+  if (!company || company.stage !== "부결/반려") return null;
+  if (!isYouthStartupCompany(company, productStrings)) return null;
+  var raw = company.stage_updated_at || company.updated_at || company.contract_date;
+  if (!raw) return null;
+  var base = new Date(String(raw).slice(0, 10) + "T00:00:00");
+  if (isNaN(base.getTime())) return null;
+  var reapply = new Date(base.getTime());
+  reapply.setMonth(reapply.getMonth() + 6);
+  var today = new Date(); today.setHours(0, 0, 0, 0);
+  var fmt = function(d) { return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
+  return { eligible: today.getTime() >= reapply.getTime(), rejectedDate: fmt(base), reapplyDate: fmt(reapply) };
+}
 // 기관 자동 추천 → [{agency, reason}]
 function recommendAgencies(company) {
   var out = [];
@@ -4084,7 +4187,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
   // 기관별 현황(agency_cases) 자체 로드 → 업체명별 매핑 (기업목록 한 곳에서 신청기관 현황 표시)
   const [agencyByName, setAgencyByName] = useState({});
   useEffect(function() {
-    supabase.from("agency_cases").select("business_name, agency_group, status, month, year").is("deleted_at", null).limit(10000).then(function(r) {
+    supabase.from("agency_cases").select("business_name, agency_group, status, month, year, product").is("deleted_at", null).limit(10000).then(function(r) {
       if (!r.error && r.data) {
         var map = {};
         r.data.forEach(function(c) {
@@ -4282,6 +4385,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                         <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{co.name}</span>
                         {(function() { var tm = teamOf(co); return <span title="팀 (저장값 우선 · 없으면 업체명 기준 자동)" style={{ flexShrink: 0, fontSize: 9, padding: "2px 6px", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap", background: tm === "법인팀" ? "#EEF2FF" : "#F0FDF4", color: tm === "법인팀" ? "#4338CA" : "#15803D" }}>{tm}</span>; })()}
                         {co.stagnant_days >= 7 && <span style={{ fontSize: 10, color: "#DC2626" }}>⚠</span>}
+                        {(function() { var yr = youthReapplyStatus(co, (agencyByName[co.name] || []).map(function(x) { return x.product; })); return yr && yr.eligible ? <span title={"청년창업 부결 " + yr.rejectedDate + " · 6개월 경과(재신청 가능일 " + yr.reapplyDate + ")"} style={{ flexShrink: 0, fontSize: 9, padding: "2px 6px", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap", background: "#DCFCE7", color: "#15803D", border: "1px solid #86EFAC" }}>재신청 가능</span> : null; })()}
                         <button onClick={e => { e.stopPropagation(); setEditNameId(co.id); setEditNameVal(co.name); }}
                           style={{ background: "none", border: "none", cursor: "pointer", padding: 2, opacity: 0, transition: "opacity 0.15s" }}
                           onMouseEnter={e => e.currentTarget.style.opacity = 1}
@@ -5010,6 +5114,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#fff", color: data.type === "법인" ? "#4338CA" : "#15803D", fontWeight: 700 }}>{data.type}</span>
                 <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: sc.text, color: "#fff", fontWeight: 600 }}>{data.stage}</span>
                 {data.stagnant_days >= 7 && <span style={{ fontSize: 11, color: "#DC2626", fontWeight: 700, background: "#FEF2F2", padding: "2px 8px", borderRadius: 99 }}>⚠ {data.stagnant_days}일 정체</span>}
+                {(function() { var yr = youthReapplyStatus(data, (agencyCases || []).map(function(x) { return x.product; })); return yr && yr.eligible ? <span title={"부결일 " + yr.rejectedDate + " 기준 6개월 경과 (재신청 가능일 " + yr.reapplyDate + ")"} style={{ fontSize: 11, color: "#15803D", fontWeight: 700, background: "#DCFCE7", border: "1px solid #86EFAC", padding: "2px 8px", borderRadius: 99 }}>🌱 청년창업 재신청 가능 (6개월 경과)</span> : null; })()}
               </div>
               {editingName ? (
                 <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 2 }}>
@@ -5404,6 +5509,43 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
 
           {tab === "bizinfo" && (
             <div>
+              {/* 💹 소진공·중진공 재무비율 자동 계산 (부채총계/자본총계/영업이익/이자비용 기반, 실시간) */}
+              {(function() {
+                var fr = computeFinanceRatios(data);
+                var fitStyle = function(fit) {
+                  if (fit === "적합") return { bg: "#DCFCE7", text: "#15803D", border: "#BBF7D0" };
+                  if (fit === "부적합") return { bg: "#FEE2E2", text: "#DC2626", border: "#FCA5A5" };
+                  return { bg: "#F3F4F6", text: "#888", border: "#E5E7EB" };
+                };
+                var sj = fitStyle(fr.sojinFit), jj = fitStyle(fr.jungjinFit);
+                return (
+                  <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 4 }}>💹 재무비율 자동 계산</div>
+                    <div style={{ fontSize: 10, color: "#94A3B8", marginBottom: 10 }}>부채총계·자본총계·영업이익·이자비용 값으로 실시간 계산 (기업정보 항목 기준)</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                      <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 8, padding: "9px 11px" }}>
+                        <div style={{ fontSize: 10.5, color: "#888", marginBottom: 3 }}>부채비율 <span style={{ color: "#CBD5E1" }}>(부채/자본×100)</span></div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: fr.debtText === "데이터 부족" ? "#CBD5E1" : (fr.debtRatio !== null && fr.debtRatio <= 200 ? "#15803D" : "#DC2626") }}>{fr.debtText}</div>
+                      </div>
+                      <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 8, padding: "9px 11px" }}>
+                        <div style={{ fontSize: 10.5, color: "#888", marginBottom: 3 }}>이자보상배율 <span style={{ color: "#CBD5E1" }}>(영업이익/이자)</span></div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: fr.icrText === "데이터 부족" ? "#CBD5E1" : "#334155" }}>{fr.icrText}</div>
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div style={{ background: sj.bg, border: "1px solid " + sj.border, borderRadius: 8, padding: "8px 11px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontSize: 11.5, fontWeight: 700, color: sj.text }}>소진공</span>
+                        <span style={{ fontSize: 12.5, fontWeight: 800, color: sj.text }}>{fr.sojinFit}</span>
+                      </div>
+                      <div style={{ background: jj.bg, border: "1px solid " + jj.border, borderRadius: 8, padding: "8px 11px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontSize: 11.5, fontWeight: 700, color: jj.text }}>중진공</span>
+                        <span style={{ fontSize: 12.5, fontWeight: 800, color: jj.text }}>{fr.jungjinFit}</span>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 9.5, color: "#94A3B8", marginTop: 7 }}>기준 · 소진공: 부채비율 200%↓ &amp; 이자보상배율 1.0↑ · 중진공: 부채비율 200%↓ &amp; 이자보상배율 1.5↑</div>
+                  </div>
+                );
+              })()}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 8, flexWrap: "wrap" }}>
                 <div style={{ fontSize: 11, color: "#888" }}>기업현황표에서 자동 추출 · 직접 수정 가능</div>
                 <div style={{ display: "flex", gap: 6 }}>
