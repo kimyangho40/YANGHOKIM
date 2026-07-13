@@ -3854,25 +3854,19 @@ function TeamTodoWidget({ setView }) {
     load();
   }, []);
 
-  // 대기 팀 업무가 하나도 없으면 카드 표시 안 함
-  if (counts.corporate === 0 && counts.individual === 0) return null;
-
+  // 대기 0건이어도 카드는 항상 표시 (위젯 존재를 항상 확인 가능하게)
   return (
     <>
-      {counts.corporate > 0 && (
-        <div onClick={function() { setView("worknotes"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #4338CA" }}>
-          <div style={{ fontSize: 10, color: "#4338CA", fontWeight: 700, marginBottom: 4 }}>🏢 법인팀 업무</div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: "#4338CA" }}>{counts.corporate}건</div>
-          <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>팀 업무 공간 대기 · 전체(공통) 포함</div>
-        </div>
-      )}
-      {counts.individual > 0 && (
-        <div onClick={function() { setView("worknotes"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #15803D" }}>
-          <div style={{ fontSize: 10, color: "#15803D", fontWeight: 700, marginBottom: 4 }}>👤 개인팀 업무</div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: "#15803D" }}>{counts.individual}건</div>
-          <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>팀 업무 공간 대기 · 전체(공통) 포함</div>
-        </div>
-      )}
+      <div onClick={function() { setView("worknotes"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #4338CA", opacity: counts.corporate > 0 ? 1 : 0.6 }}>
+        <div style={{ fontSize: 10, color: "#4338CA", fontWeight: 700, marginBottom: 4 }}>🏢 법인팀 업무</div>
+        <div style={{ fontSize: 20, fontWeight: 700, color: "#4338CA" }}>{counts.corporate}건</div>
+        <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>{counts.corporate > 0 ? "팀 업무 공간 대기 · 전체(공통) 포함" : "대기중인 팀 업무 없음"}</div>
+      </div>
+      <div onClick={function() { setView("worknotes"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #15803D", opacity: counts.individual > 0 ? 1 : 0.6 }}>
+        <div style={{ fontSize: 10, color: "#15803D", fontWeight: 700, marginBottom: 4 }}>👤 개인팀 업무</div>
+        <div style={{ fontSize: 20, fontWeight: 700, color: "#15803D" }}>{counts.individual}건</div>
+        <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>{counts.individual > 0 ? "팀 업무 공간 대기 · 전체(공통) 포함" : "대기중인 팀 업무 없음"}</div>
+      </div>
     </>
   );
 }
