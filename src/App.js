@@ -4686,6 +4686,15 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
     });
   }, []);
   const [commInput, setCommInput] = useState("");
+  // 🎙️ 음성 메모 녹음 / 📁 녹음 파일 업로드 상태
+  const [recording, setRecording] = useState(false);      // 녹음 중 여부
+  const [recSeconds, setRecSeconds] = useState(0);         // 경과 시간(초)
+  const [voiceUploading, setVoiceUploading] = useState(false); // 음성 메모 업로드 중
+  const [callUploading, setCallUploading] = useState(false);   // 녹음 파일 업로드 중
+  const mediaRecorderRef = useRef(null);
+  const recChunksRef = useRef([]);
+  const recTimerRef = useRef(null);
+  const recStartRef = useRef(0);
   const [xlsxPreview, setXlsxPreview] = useState(null); // 기업현황표/시트지 첨부 미리보기 {updates, auto, commText, kind}
   const [xlsxCommDraft, setXlsxCommDraft] = useState(""); // 업로드 시 소통내역에 넣을 초안(수정 가능)
   const [kakaoLoading, setKakaoLoading] = useState(false); // 카톡 캡처 AI 요약 중
@@ -5014,6 +5023,140 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
     }
     setCommInput("");
     await refreshCommLogs();
+  };
+
+  // ── 🎙️ 음성 메모 & 📁 녹음 파일 ─────────────────────────────────────────────
+  var fmtDur = function(sec) {
+    var m = Math.floor(sec / 60);
+    var s = sec % 60;
+    return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+  };
+  // 브라우저가 지원하는 녹음 포맷 선택 (webm 우선, 없으면 mp4/ogg)
+  var pickRecMime = function() {
+    if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported) return "";
+    var candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"];
+    for (var i = 0; i < candidates.length; i++) {
+      if (MediaRecorder.isTypeSupported(candidates[i])) return candidates[i];
+    }
+    return "";
+  };
+  // Storage 업로드 공통 함수 → 공개 URL 반환. 경로: {company_id}/{timestamp}_{filename}
+  var uploadToStorage = async function(bucket, file) {
+    var ts = Date.now();
+    var base = (file.name || "audio").replace(/[^\w.\-]+/g, "_");
+    var path = company.id + "/" + ts + "_" + base;
+    var up = await supabase.storage.from(bucket).upload(path, file, { contentType: file.type || undefined, upsert: false });
+    if (up.error) throw up.error;
+    var pub = supabase.storage.from(bucket).getPublicUrl(path);
+    return pub.data.publicUrl;
+  };
+  // 녹음 완료된 blob 업로드 → 소통내역 자동 기록
+  var handleVoiceUpload = async function(blob, seconds) {
+    setVoiceUploading(true);
+    try {
+      var type = blob.type || "audio/webm";
+      var ext = type.indexOf("mp4") >= 0 ? "mp4" : (type.indexOf("ogg") >= 0 ? "ogg" : "webm");
+      var fileName = "voice_" + Date.now() + "." + ext;
+      var file = new File([blob], fileName, { type: type });
+      var url = await uploadToStorage("voice-memos", file);
+      var text = "🎙️ 음성 메모 (" + fmtDur(seconds) + ")\n" + url;
+      var r = await insertCommLog(text);
+      if (r.error) { alert("음성 메모 저장 실패: " + r.error.message); return; }
+      await refreshCommLogs();
+    } catch (err) {
+      alert("음성 메모 업로드 실패: " + (err && err.message ? err.message : err) + "\n\n(Supabase에 voice-memos 버킷이 생성되어 있는지 확인해주세요)");
+    } finally {
+      setVoiceUploading(false);
+      setRecSeconds(0);
+    }
+  };
+  // 녹음 시작
+  var startRecording = async function() {
+    if (recording) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
+      alert("이 브라우저는 마이크 녹음을 지원하지 않아요.\n크롬 또는 엣지 최신 버전을 사용해주세요.");
+      return;
+    }
+    try {
+      var stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      var mime = pickRecMime();
+      var mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      recChunksRef.current = [];
+      mr.ondataavailable = function(e) { if (e.data && e.data.size > 0) recChunksRef.current.push(e.data); };
+      mr.onstop = function() {
+        stream.getTracks().forEach(function(t) { t.stop(); });
+        var seconds = Math.round((Date.now() - recStartRef.current) / 1000);
+        var blob = new Blob(recChunksRef.current, { type: mr.mimeType || "audio/webm" });
+        handleVoiceUpload(blob, seconds);
+      };
+      mediaRecorderRef.current = mr;
+      recStartRef.current = Date.now();
+      mr.start();
+      setRecording(true);
+      setRecSeconds(0);
+      recTimerRef.current = setInterval(function() {
+        setRecSeconds(Math.round((Date.now() - recStartRef.current) / 1000));
+      }, 500);
+    } catch (err) {
+      if (err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError")) {
+        alert("🎙️ 마이크 권한이 거부되었어요.\n\n브라우저 주소창의 자물쇠(🔒) 아이콘 → 마이크 → '허용'으로 바꾼 뒤 다시 시도해주세요.");
+      } else if (err && err.name === "NotFoundError") {
+        alert("🎙️ 마이크를 찾을 수 없어요. 마이크가 연결되어 있는지 확인해주세요.");
+      } else {
+        alert("녹음을 시작할 수 없어요: " + (err && err.message ? err.message : err));
+      }
+    }
+  };
+  // 녹음 중지 (onstop 핸들러가 업로드 처리)
+  var stopRecording = function() {
+    if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null; }
+    setRecording(false);
+    var mr = mediaRecorderRef.current;
+    if (mr && mr.state !== "inactive") mr.stop();
+  };
+  // 📁 통화 녹음 파일 업로드
+  var handleCallUpload = async function(file) {
+    if (!file) return;
+    if (!/\.(mp3|m4a|wav|webm|ogg)$/i.test(file.name || "")) {
+      alert("mp3, m4a, wav, webm, ogg 파일만 첨부할 수 있어요.");
+      return;
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      alert("파일 크기는 50MB 이하만 가능해요. (현재 " + (file.size / 1024 / 1024).toFixed(1) + "MB)");
+      return;
+    }
+    setCallUploading(true);
+    try {
+      var url = await uploadToStorage("call-recordings", file);
+      var text = "📞 통화 녹음 (" + file.name + ")\n" + url;
+      var r = await insertCommLog(text);
+      if (r.error) { alert("녹음 파일 저장 실패: " + r.error.message); return; }
+      await refreshCommLogs();
+    } catch (err) {
+      alert("녹음 파일 업로드 실패: " + (err && err.message ? err.message : err) + "\n\n(Supabase에 call-recordings 버킷이 생성되어 있는지 확인해주세요)");
+    } finally {
+      setCallUploading(false);
+    }
+  };
+  // 소통내역 메모 렌더링 — 오디오 URL이 있으면 인라인 플레이어로 표시
+  var renderMemoContent = function(memo) {
+    var text = memo || "";
+    var audioUrls = [];
+    var display = text.replace(/https?:\/\/[^\s]+/g, function(u) {
+      if (/voice-memos|call-recordings/.test(u) || /\.(mp3|m4a|wav|webm|ogg)(\?|$)/i.test(u)) {
+        audioUrls.push(u);
+        return "";
+      }
+      return u;
+    }).replace(/\n{2,}/g, "\n").trim();
+    return (
+      <>
+        {display && <span>{display}</span>}
+        {audioUrls.map(function(u, idx) {
+          return <audio key={idx} controls preload="none" src={u} style={{ display: "block", width: "100%", marginTop: 6, height: 36 }} />;
+        })}
+      </>
+    );
   };
 
   // 수정 시작
@@ -5794,14 +5937,35 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               <div style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                   <div style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>💬 소통 내역</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
                     <label style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11, fontWeight: 700, color: "#B45309", background: "#FEF3C7", padding: "4px 9px", borderRadius: 6, cursor: kakaoLoading ? "wait" : "pointer" }}>
                       {kakaoLoading ? "요약 중..." : "📷 카톡요약"}
                       <input type="file" accept="image/*" style={{ display: "none" }} disabled={kakaoLoading} onChange={function(e) { var f = e.target.files && e.target.files[0]; e.target.value = ""; handleKakaoImage(f); }} />
                     </label>
+                    {/* 🎙️ 음성 메모 녹음 */}
+                    {recording ? (
+                      <button onClick={stopRecording}
+                        style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700, color: "#fff", background: "#DC2626", padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer" }}>
+                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#fff", display: "inline-block", animation: "recblink 1s ease-in-out infinite" }} />
+                        {fmtDur(recSeconds)} ⏹ 중지
+                        <style>{"@keyframes recblink{0%,100%{opacity:1}50%{opacity:0.15}}"}</style>
+                      </button>
+                    ) : (
+                      <button onClick={startRecording} disabled={voiceUploading}
+                        style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11, fontWeight: 700, color: voiceUploading ? "#AAA" : "#B91C1C", background: "#FEE2E2", padding: "4px 9px", borderRadius: 6, border: "none", cursor: voiceUploading ? "wait" : "pointer" }}>
+                        {voiceUploading ? "업로드 중..." : "🎙️ 음성 메모"}
+                      </button>
+                    )}
+                    {/* 📁 녹음 파일 첨부 */}
+                    <label style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11, fontWeight: 700, color: callUploading ? "#AAA" : "#4338CA", background: "#EEF2FF", padding: "4px 9px", borderRadius: 6, cursor: callUploading ? "wait" : "pointer" }}>
+                      {callUploading ? "업로드 중..." : "📁 녹음 파일"}
+                      <input type="file" accept=".mp3,.m4a,.wav,.webm,.ogg,audio/*" style={{ display: "none" }} disabled={callUploading} onChange={function(e) { var f = e.target.files && e.target.files[0]; e.target.value = ""; handleCallUpload(f); }} />
+                    </label>
                     <div style={{ fontSize: 10, color: "#888" }}>붙여넣기·드래그 가능</div>
                   </div>
                 </div>
+                {voiceUploading && <div style={{ fontSize: 11, color: "#B91C1C", marginBottom: 6, padding: "6px 10px", background: "#FEF2F2", borderRadius: 6 }}>🎙️ 음성 메모를 업로드하는 중입니다...</div>}
+                {callUploading && <div style={{ fontSize: 11, color: "#4338CA", marginBottom: 6, padding: "6px 10px", background: "#EEF2FF", borderRadius: 6 }}>📁 녹음 파일을 업로드하는 중입니다...</div>}
                 {kakaoLoading && <div style={{ fontSize: 11, color: "#B45309", marginBottom: 6, padding: "6px 10px", background: "#FEF9EC", borderRadius: 6 }}>🤖 카톡 대화를 읽고 요약하는 중입니다... (몇 초 걸려요)</div>}
                 <textarea value={commInput}
                   onChange={function(e) { var v = e.target.value; setCommInput(v); }}
@@ -5859,7 +6023,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                               </div>
                             </div>
                           ) : (
-                            <div style={{ fontSize: 12, color: "#444", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{log.memo}</div>
+                            <div style={{ fontSize: 12, color: "#444", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{renderMemoContent(log.memo)}</div>
                           )}
                         </div>
                       );
@@ -6104,7 +6268,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                             </div>
                           ) : (
                             <div style={{ fontSize: 13, color: "#333", lineHeight: 1.7, background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", whiteSpace: "pre-wrap" }}>
-                              {log.memo || log.note || "-"}
+                              {renderMemoContent(log.memo || log.note || "-")}
                             </div>
                           )}
                         </div>
