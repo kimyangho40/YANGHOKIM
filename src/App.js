@@ -1034,6 +1034,24 @@ const Icon = ({ name, size = 16, color = "currentColor" }) => {
   return icons[name] || null;
 };
 
+// 사이드바 메뉴 항목 - 비활성 글씨/아이콘 가시성 개선 + 호버 밝아짐
+function SideNavItem({ icon, label, active, onClick, rightSlot }) {
+  const [hover, setHover] = useState(false);
+  // 활성: 가장 밝게 / 비활성: rgba(255,255,255,0.85) / 호버 시 완전 흰색
+  var color = active ? "#F7F6F3" : hover ? "#FFFFFF" : "rgba(255,255,255,0.85)";
+  var bg = active ? "#2E2C29" : hover ? "#242220" : "transparent";
+  return (
+    <div onClick={onClick}
+      onMouseEnter={function() { setHover(true); }}
+      onMouseLeave={function() { setHover(false); }}
+      style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 8, cursor: "pointer", marginBottom: 2, background: bg, color: color, fontSize: 13, fontWeight: active ? 600 : 400 }}>
+      <Icon name={icon} size={15} color={color} />
+      {label}
+      {rightSlot}
+    </div>
+  );
+}
+
 // ── 유틸 ─────────────────────────────────────────────────────────────────────
 const docRate = (docs) => {
   if (!docs || docs.length === 0) return 0;
@@ -2178,7 +2196,7 @@ function CRMApp({ profile, session }) {
             <span style={{ fontSize: 10, background: "#1A1917", padding: "2px 6px", borderRadius: 4, color: "#A5B4FC" }}>질문</span>
           </div>
           {/* 자주 쓰는 메뉴 */}
-          <div style={{ fontSize: 10, color: "#444", letterSpacing: "0.08em", padding: "4px 12px 6px", fontWeight: 600 }}>주요 메뉴</div>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.55)", letterSpacing: "0.08em", padding: "4px 12px 6px", fontWeight: 600 }}>주요 메뉴</div>
           {[
             { id: "dashboard",  label: "대시보드",   icon: "dashboard" },
             { id: "mytodo",     label: "내 할일",     icon: "check" },
@@ -2189,23 +2207,20 @@ function CRMApp({ profile, session }) {
             { id: "cases",      label: "사례집",      icon: "folder" },
             { id: "quicklinks", label: "바로가기",    icon: "link" },
           ].map(({ id, label, icon }) => (
-            <div key={id} onClick={() => setView(id)}
-              style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 8, cursor: "pointer", marginBottom: 2, background: view === id ? "#2E2C29" : "transparent", color: view === id ? "#F7F6F3" : "#666", fontSize: 13, fontWeight: view === id ? 600 : 400 }}>
-              <Icon name={icon} size={15} color={view === id ? "#F7F6F3" : "#666"} />
-              {label}
-              {id === "worknotes" && workNotesBadge > 0 && (
-                <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{workNotesBadge}</span>
-              )}
-              {id === "list" && stagnant.filter(function(c) { return c.stagnant_days >= 14; }).length > 0 && (
-                <span style={{ marginLeft: "auto", background: "#B45309", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>⚠</span>
-              )}
-            </div>
+            <SideNavItem key={id} icon={icon} label={label} active={view === id} onClick={() => setView(id)}
+              rightSlot={
+                (id === "worknotes" && workNotesBadge > 0) ? (
+                  <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{workNotesBadge}</span>
+                ) : (id === "list" && stagnant.filter(function(c) { return c.stagnant_days >= 14; }).length > 0) ? (
+                  <span style={{ marginLeft: "auto", background: "#B45309", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>⚠</span>
+                ) : null
+              } />
           ))}
 
           {/* 더보기 접기 */}
           <div onClick={() => setMenuExpanded(m => !m)}
-            style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", cursor: "pointer", color: "#555", fontSize: 12, marginTop: 4, marginBottom: 2 }}>
-            <Icon name={menuExpanded ? "chevronL" : "chevronR"} size={12} color="#555" />
+            style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", cursor: "pointer", color: "rgba(255,255,255,0.7)", fontSize: 12, marginTop: 4, marginBottom: 2 }}>
+            <Icon name={menuExpanded ? "chevronL" : "chevronR"} size={12} color="rgba(255,255,255,0.7)" />
             {menuExpanded ? "접기" : "더보기"}
             {stagnant.length > 0 && !menuExpanded && (
               <span style={{ background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 6px" }}>{stagnant.length}</span>
@@ -2214,7 +2229,7 @@ function CRMApp({ profile, session }) {
 
           {menuExpanded && (
             <>
-              <div style={{ fontSize: 10, color: "#444", letterSpacing: "0.08em", padding: "4px 12px 6px", fontWeight: 600 }}>추가 메뉴</div>
+              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.55)", letterSpacing: "0.08em", padding: "4px 12px 6px", fontWeight: 600 }}>추가 메뉴</div>
               {/* DB리스트 + 캘린더 위아래 */}
               {[
                 { id: "leave", label: "연차/휴가", icon: "calendar" },
@@ -2223,11 +2238,7 @@ function CRMApp({ profile, session }) {
                 { id: "calendar", label: "캘린더", icon: "calendar" },
               ].map(function({ id, label, icon }) {
                 return (
-                  <div key={id} onClick={function() { setView(id); }}
-                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 8, cursor: "pointer", marginBottom: 2, background: view === id ? "#2E2C29" : "transparent", color: view === id ? "#F7F6F3" : "#666", fontSize: 13, fontWeight: view === id ? 600 : 400 }}>
-                    <Icon name={icon} size={15} color={view === id ? "#F7F6F3" : "#666"} />
-                    {label}
-                  </div>
+                  <SideNavItem key={id} icon={icon} label={label} active={view === id} onClick={function() { setView(id); }} />
                 );
               })}
               {[
@@ -2238,14 +2249,10 @@ function CRMApp({ profile, session }) {
                 ...(profile.role === "admin" ? [{ id: "members", label: "팀원 관리", icon: "users" }] : []),
                 ...(session?.user?.email === EXPORT_OWNER_EMAIL ? [{ id: "backup", label: "데이터 백업", icon: "save" }] : []),
               ].map(({ id, label, icon, badge }) => (
-                <div key={id} onClick={() => setView(id)}
-                  style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 8, cursor: "pointer", marginBottom: 2, background: view === id ? "#2E2C29" : "transparent", color: view === id ? "#F7F6F3" : "#666", fontSize: 13, fontWeight: view === id ? 600 : 400 }}>
-                  <Icon name={icon} size={15} color={view === id ? "#F7F6F3" : "#666"} />
-                  {label}
-                  {badge > 0 && (
+                <SideNavItem key={id} icon={icon} label={label} active={view === id} onClick={() => setView(id)}
+                  rightSlot={badge > 0 ? (
                     <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{badge}</span>
-                  )}
-                </div>
+                  ) : null} />
               ))}
             </>
           )}
@@ -2837,6 +2844,54 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
                 })}
               </div>
             )}
+          </div>
+        );
+      })()}
+
+      {/* 📌 이슈·액션 차기 업무 (이번 달) — CompanyModal 이슈·액션 탭의 '차기 업무/다음 액션' 반영 */}
+      {(function() {
+        var now = new Date();
+        var curY = now.getFullYear();
+        var curM = now.getMonth() + 1;
+        var inThisMonth = function(dateStr) {
+          if (!dateStr) return false;
+          var d = new Date(dateStr);
+          return !isNaN(d) && d.getFullYear() === curY && (d.getMonth() + 1) === curM;
+        };
+        // 위 '이번 달 예정 업무'(next_action 텍스트에 월 표기)와 중복되지 않는 건만 추가로 수집.
+        // 이번 달 판단: 차기업무 텍스트 안의 날짜(7/15 등) 또는 기한(next_contact)이 이번 달인 경우.
+        var actionTasks = (companies || []).filter(function(c) {
+          if (!c.next_action || !c.next_action.trim()) return false;
+          if (actionHasMonth(c.next_action, thisMonth)) return false; // 이미 위 목록에 표시됨
+          var dts = parseActionDates(c.next_action);
+          var hitAction = dts.some(function(d) { return d.getFullYear() === curY && (d.getMonth() + 1) === curM; });
+          return hitAction || inThisMonth(c.next_contact);
+        });
+        if (actionTasks.length === 0) return null;
+        return (
+          <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <span style={{ fontSize: 16 }}>📌</span>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#1A1917" }}>이슈·액션 차기 업무 <span style={{ color: "#999", fontWeight: 600 }}>{actionTasks.length}건</span></div>
+            </div>
+            <div style={{ fontSize: 11, color: "#AAA", marginBottom: 12 }}>이슈·액션 탭의 차기 업무/기한이 이번 달({curM}월)에 해당하는 건</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {actionTasks.map(function(c) {
+                var action = (c.next_action || "").split("\n").map(function(s) { return s.trim(); }).filter(Boolean).join(" · ");
+                return (
+                  <div key={c.id} onClick={function() { onSelectCompany(c); }}
+                    style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "9px 12px", background: "#F7F6F3", borderRadius: 8, cursor: "pointer" }}>
+                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#B45309", marginTop: 5, flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "#1A1917" }}>{c.name}</span>
+                      <span style={{ fontSize: 12.5, color: "#666" }}> — {action}</span>
+                      {c.next_contact && inThisMonth(c.next_contact) && <span style={{ fontSize: 11, color: "#B45309", marginLeft: 6 }}>· 기한 {c.next_contact}</span>}
+                    </div>
+                    {c.assignee && <span style={{ fontSize: 11, color: "#999", flexShrink: 0 }}>{c.assignee}</span>}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         );
       })()}
@@ -8681,7 +8736,7 @@ function SettlementView() {
 
   // 자동 건 저장
   var saveEditAuto = async function() {
-    var updates = {
+    var base = {
       contract_fee: editData.contract_fee || null,
       contract_date: editData.contract_date || null,
       commission_fee: editData.commission_fee || null,
@@ -8693,7 +8748,11 @@ function SettlementView() {
       settlement_notes: editData.settlement_notes || null,
       updated_at: new Date().toISOString(),
     };
+    var approvalFields = { approval_amount: editData.approval_amount || null, approval_date: editData.approval_date || null };
+    var updates = Object.assign({}, base, approvalFields);
     var r = await supabase.from("agency_cases").update(updates).eq("id", editData.id);
+    // 승인 컬럼 미생성(SQL 미실행) 시 → 승인 필드 빼고 재시도해 나머지는 정상 저장
+    if (r.error) r = await supabase.from("agency_cases").update(base).eq("id", editData.id);
     if (!r.error) {
       setCases(function(prev) { return prev.map(function(c) { return c.id === editData.id ? Object.assign({}, c, updates) : c; }); });
       setEditingId(null); setEditData({});
@@ -8702,7 +8761,7 @@ function SettlementView() {
 
   // 수동 건 저장
   var saveEditManual = async function() {
-    var updates = {
+    var base = {
       business_name: editData.business_name || null,
       agency_group: editData.agency_group || null,
       assignee: editData.assignee || null,
@@ -8717,7 +8776,11 @@ function SettlementView() {
       settlement_notes: editData.settlement_notes || null,
       updated_at: new Date().toISOString(),
     };
+    var approvalFields = { approval_amount: editData.approval_amount || null, approval_date: editData.approval_date || null };
+    var updates = Object.assign({}, base, approvalFields);
     var r = await supabase.from("settlement_manual").update(updates).eq("id", editData.id);
+    // 승인 컬럼 미생성(SQL 미실행) 시 → 승인 필드 빼고 재시도
+    if (r.error) r = await supabase.from("settlement_manual").update(base).eq("id", editData.id);
     if (!r.error) {
       setManuals(function(prev) { return prev.map(function(m) { return m.id === editData.id ? Object.assign({}, m, updates) : m; }); });
       setEditingId(null); setEditData({});
@@ -8738,7 +8801,7 @@ function SettlementView() {
 
   // 수동 신규 등록
   var openAddManual = function() {
-    setNewManual({ year: 2026, month: activeMonth, business_name: "", agency_group: "", assignee: "", request_amount: "", contract_fee: "", commission_fee: "", received_amount: "", contract_date: "", invoice_issued: false, fee_received: false, fee_received_date: "", settlement_notes: "" });
+    setNewManual({ year: 2026, month: activeMonth, business_name: "", agency_group: "", assignee: "", request_amount: "", contract_fee: "", approval_amount: "", approval_date: "", commission_fee: "", received_amount: "", contract_date: "", invoice_issued: false, fee_received: false, fee_received_date: "", settlement_notes: "" });
     setShowAddManual(true);
   };
 
@@ -8746,9 +8809,16 @@ function SettlementView() {
     if (!newManual.business_name) { alert("사업자명은 필수입니다."); return; }
     var dataToSave = Object.assign({}, newManual, {
       contract_date: newManual.contract_date || null,
+      approval_date: newManual.approval_date || null,
       fee_received_date: newManual.fee_received_date || null,
     });
     var r = await supabase.from("settlement_manual").insert(dataToSave).select().single();
+    // 승인 컬럼 미생성(SQL 미실행) 시 → 승인 필드 빼고 재시도
+    if (r.error) {
+      var fallback = Object.assign({}, dataToSave);
+      delete fallback.approval_amount; delete fallback.approval_date;
+      r = await supabase.from("settlement_manual").insert(fallback).select().single();
+    }
     if (!r.error && r.data) {
       setManuals(function(prev) { return prev.concat([r.data]); });
       setShowAddManual(false);
@@ -8803,6 +8873,12 @@ function SettlementView() {
           <input value={editData.contract_fee || ""} placeholder="계약금" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { contract_fee: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
         </td>
         <td style={{ padding: "6px 8px" }}>
+          <input value={editData.approval_amount || ""} placeholder="승인금액" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { approval_amount: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
+        </td>
+        <td style={{ padding: "6px 8px" }}>
+          <input type="date" value={editData.approval_date || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { approval_date: e.target.value }); }); }} style={{ width: 115, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
+        </td>
+        <td style={{ padding: "6px 8px" }}>
           <input value={editData.commission_fee || ""} placeholder="수수료" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { commission_fee: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
         </td>
         <td style={{ padding: "6px 8px" }}>
@@ -8855,6 +8931,10 @@ function SettlementView() {
         <td style={{ padding: "9px 8px" }}>
           {row.contract_fee ? <span style={{ fontSize: 12, fontWeight: 700, color: "#333" }}>{row.contract_fee}</span> : <span style={{ fontSize: 11, color: "#888" }}>미입력</span>}
         </td>
+        <td style={{ padding: "9px 8px" }}>
+          {row.approval_amount ? <span style={{ fontSize: 12, fontWeight: 700, color: "#B45309" }}>{row.approval_amount}</span> : <span style={{ fontSize: 11, color: "#888" }}>미입력</span>}
+        </td>
+        <td style={{ padding: "9px 8px", fontSize: 11, color: "#888" }}>{row.approval_date || "-"}</td>
         <td style={{ padding: "9px 8px" }}>
           {row.commission_fee ? <span style={{ fontSize: 12, fontWeight: 700, color: "#7C3AED" }}>{row.commission_fee}</span> : <span style={{ fontSize: 11, color: "#888" }}>미입력</span>}
         </td>
@@ -8973,7 +9053,7 @@ function SettlementView() {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ background: "#F7F6F3", borderBottom: "2px solid #E8E5E0" }}>
-                  {["#","사업자명","팀","기관","담당자","신청금액","계약금","수수료","입금금액","계약일","세금계산서","입금완료","입금일","비고","작업"].map(function(h) {
+                  {["#","사업자명","팀","기관","담당자","신청금액","계약금","승인금액","승인일시","수수료","입금금액","계약일","세금계산서","입금완료","입금일","비고","작업"].map(function(h) {
                     return <th key={h} style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, whiteSpace: "nowrap" }}>{h}</th>;
                   })}
                 </tr>
@@ -9041,6 +9121,18 @@ function SettlementView() {
                 <div>
                   <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>계약일</label>
                   <input type="date" value={newManual.contract_date || ""} onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { contract_date: e.target.value }); }); }}
+                    style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 13 }}>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>승인금액</label>
+                  <input value={newManual.approval_amount || ""} placeholder="예: 300만" onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { approval_amount: e.target.value }); }); }}
+                    style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>승인일시</label>
+                  <input type="date" value={newManual.approval_date || ""} onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { approval_date: e.target.value }); }); }}
                     style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
                 </div>
               </div>
