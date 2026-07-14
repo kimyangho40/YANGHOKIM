@@ -4928,6 +4928,8 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   const [loadingExtra, setLoadingExtra] = useState(false);
   const [editingLogId, setEditingLogId] = useState(null);
   const [editingLogText, setEditingLogText] = useState("");
+  const [showCommTrash, setShowCommTrash] = useState(false);   // 소통 내역 휴지통 모달
+  const [trashedCommLogs, setTrashedCommLogs] = useState([]);  // 휴지통(삭제된) 소통 내역
 
   // ── 업체별 AI 상담 ──
   const [aiMsgs, setAiMsgs] = useState([]); // { role: "user"|"assistant", content }
@@ -4983,7 +4985,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
     Promise.all([
       supabase.from("agency_cases").select("*").eq("business_name", company.name).order("created_at", { ascending: false }),
       supabase.from("settlement_manual").select("*").eq("business_name", company.name).is("deleted_at", null).order("created_at", { ascending: false }),
-      supabase.from("activity_logs").select("*").eq("company_id", company.id).order("created_at", { ascending: false }),
+      supabase.from("activity_logs").select("*").eq("company_id", company.id).is("deleted_at", null).order("created_at", { ascending: false }),
     ]).then(function([r1, r2, r3]) {
       if (!r1.error) setAgencyCases(r1.data || []);
       if (!r2.error) setSettlements(r2.data || []);
@@ -5016,7 +5018,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
     return r;
   };
   var refreshCommLogs = async function() {
-    var r2 = await supabase.from("activity_logs").select("*").eq("company_id", company.id).order("created_at", { ascending: false });
+    var r2 = await supabase.from("activity_logs").select("*").eq("company_id", company.id).is("deleted_at", null).order("created_at", { ascending: false });
     if (!r2.error) { setCommLogs(r2.data || []); }
   };
   var saveCommLog = async function() {
@@ -5255,7 +5257,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
     setEditingLogId(null);
     setEditingLogText("");
     // 목록 새로고침
-    var r2 = await supabase.from("activity_logs").select("*").eq("company_id", company.id).order("created_at", { ascending: false });
+    var r2 = await supabase.from("activity_logs").select("*").eq("company_id", company.id).is("deleted_at", null).order("created_at", { ascending: false });
     if (!r2.error) { setCommLogs(r2.data || []); }
   };
   // 수정 취소
@@ -5263,13 +5265,33 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
     setEditingLogId(null);
     setEditingLogText("");
   };
-  // 삭제
+  // 삭제 → 휴지통 이동 (소프트 삭제, 기업목록과 동일 방식)
   var deleteCommLog = async function(logId) {
-    if (!confirm("이 소통 내역을 삭제할까요? 되돌릴 수 없습니다.")) return;
-    var r = await supabase.from("activity_logs").delete().eq("id", logId);
+    if (!confirm("이 소통 내역을 휴지통으로 옮길까요? (휴지통에서 복구 가능)")) return;
+    var r = await supabase.from("activity_logs").update({ deleted_at: new Date().toISOString() }).eq("id", logId);
     if (r.error) { alert("삭제 실패: " + r.error.message); return; }
-    // 즉시 UI 반영
+    // 즉시 UI 반영 (목록에서 제거)
     setCommLogs(function(prev) { return prev.filter(function(l) { return l.id !== logId; }); });
+  };
+  // 휴지통(삭제된 소통 내역) 불러오기
+  var fetchTrashedCommLogs = async function() {
+    var r = await supabase.from("activity_logs").select("*").eq("company_id", company.id).not("deleted_at", "is", null).order("deleted_at", { ascending: false });
+    if (!r.error) setTrashedCommLogs(r.data || []);
+  };
+  var openCommTrash = function() { fetchTrashedCommLogs(); setShowCommTrash(true); };
+  // 복구 → deleted_at 비우고 목록으로 되돌림
+  var restoreCommLog = async function(logId) {
+    var r = await supabase.from("activity_logs").update({ deleted_at: null }).eq("id", logId);
+    if (r.error) { alert("복구 실패: " + r.error.message); return; }
+    setTrashedCommLogs(function(prev) { return prev.filter(function(l) { return l.id !== logId; }); });
+    await refreshCommLogs();
+  };
+  // 영구 삭제 → 실제 DB 삭제 (복구 불가)
+  var permanentDeleteCommLog = async function(logId) {
+    if (!window.confirm("영구 삭제합니다. 복구할 수 없습니다.")) return;
+    var r = await supabase.from("activity_logs").delete().eq("id", logId);
+    if (r.error) { alert("영구 삭제 실패: " + r.error.message); return; }
+    setTrashedCommLogs(function(prev) { return prev.filter(function(l) { return l.id !== logId; }); });
   };
   // 권한 체크 - 본인이 작성한 거 또는 관리자(role==admin 또는 이름이 양호)
   var canEditLog = function(log) {
@@ -6082,7 +6104,10 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 {/* 누적 소통 내역 표시 */}
                 {commLogs.length > 0 && (
                   <div style={{ marginTop: 10, padding: "10px 12px", background: "#FAFAF8", borderRadius: 8, border: "1px solid #E8E5E0", maxHeight: 280, overflowY: "auto" }}>
-                    <div style={{ fontSize: 11, color: "#888", fontWeight: 600, marginBottom: 8 }}>📋 누적 내역 ({commLogs.length}건)</div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <div style={{ fontSize: 11, color: "#888", fontWeight: 600 }}>📋 누적 내역 ({commLogs.length}건)</div>
+                      <button onClick={openCommTrash} title="삭제된 소통 내역 (휴지통)" style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 11, padding: "0 4px" }}>🗑️ 휴지통</button>
+                    </div>
                     {commLogs.map(function(log, i) {
                       var isEditingThis = editingLogId === log.id;
                       var canEditThis = canEditLog(log);
@@ -6094,7 +6119,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                               {canEditThis && !isEditingThis && (
                                 <button onClick={function() { startEditLog(log); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 11, padding: "0 4px" }} title="수정">✏️</button>
                               )}
-                              <button onClick={function() { if (confirm("이 소통 내역을 삭제할까요?")) deleteCommLog(log.id); }}
+                              <button onClick={function() { deleteCommLog(log.id); }}
                                 style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 11, padding: "0 4px" }} title="삭제">🗑</button>
                             </div>
                           </div>
@@ -6299,7 +6324,10 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               <div style={{ background: "#F7F6F3", borderRadius: 10, padding: "14px", marginBottom: 16, border: "1px solid #E8E5E0" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: "#555" }}>소통 내용 기록</div>
-                  <div style={{ fontSize: 10, color: "#888" }}>줄바꿈 가능 · 여러 줄 OK</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 10, color: "#888" }}>줄바꿈 가능 · 여러 줄 OK</span>
+                    <button onClick={openCommTrash} title="삭제된 소통 내역 (휴지통)" style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 11, padding: "0 2px" }}>🗑️ 휴지통</button>
+                  </div>
                 </div>
                 <textarea value={commInput} onChange={function(e) { var v = e.target.value; setCommInput(v); }}
                   placeholder={"예시:\n- 10:30 통화 - 대표 부재중\n- 11:15 다시 통화\n- 다음 주 월요일 방문 예약"}
@@ -6414,6 +6442,40 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 <button onClick={function() { setXlsxPreview(null); setXlsxCommDraft(""); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "11px 18px", fontSize: 13, cursor: "pointer" }}>취소</button>
               </div>
               <div style={{ fontSize: 11, color: "#AAA", marginTop: 10, textAlign: "center" }}>적용 후 반드시 저장 버튼을 눌러야 DB에 반영됩니다</div>
+            </div>
+          </div>
+        )}
+
+        {/* 🗑️ 소통 내역 휴지통 모달 (기업목록 휴지통과 동일 UX) */}
+        {showCommTrash && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+            onMouseDown={function(e) { if (e.target === e.currentTarget) setShowCommTrash(false); }}>
+            <div style={{ background: "#fff", borderRadius: 14, width: 640, maxWidth: "100%", maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+              <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
+                <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ 소통 내역 휴지통 ({trashedCommLogs.length}건)</h2>
+                <button onClick={function() { setShowCommTrash(false); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#888" }}>✕</button>
+              </div>
+              <div style={{ padding: "16px 24px" }}>
+                {trashedCommLogs.length === 0 ? (
+                  <div style={{ padding: "40px 0", textAlign: "center", color: "#888", fontSize: 13 }}>휴지통이 비어 있습니다</div>
+                ) : (
+                  trashedCommLogs.map(function(log) {
+                    var deletedAt = log.deleted_at ? new Date(log.deleted_at).toLocaleString("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+                    return (
+                      <div key={log.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, padding: "12px 0", borderBottom: "1px solid #F0EDE8" }}>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ fontSize: 13, color: "#333", whiteSpace: "pre-wrap", lineHeight: 1.5, wordBreak: "break-word" }}>{renderMemoContent(log.memo || log.note || "-")}</div>
+                          <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>삭제일: {deletedAt} · {log.logged_by || log.assignee || "-"}</div>
+                        </div>
+                        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                          <button onClick={function() { restoreCommLog(log.id); }} style={{ background: "#EEF2FF", color: "#4338CA", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>복구</button>
+                          <button onClick={function() { permanentDeleteCommLog(log.id); }} style={{ background: "#FEE2E2", color: "#DC2626", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>영구삭제</button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -6960,7 +7022,7 @@ function ActivityLogView() {
 
   var fetchAll = async function() {
     setLoading(true);
-    var r1 = await supabase.from("activity_logs").select("*").order("created_at", { ascending: false }).limit(200);
+    var r1 = await supabase.from("activity_logs").select("*").is("deleted_at", null).order("created_at", { ascending: false }).limit(200);
     var r2 = await supabase.from("agency_cases").select("id,business_name,agency_group,assignee").is("deleted_at", null).limit(10000);
     if (!r1.error) setLogs(r1.data || []);
     if (!r2.error) setCases(r2.data || []);
@@ -13520,6 +13582,7 @@ function TodayActivityFeed({ companies, onSelectCompany }) {
     var sinceStr = new Date(kstMidnightUtcMs).toISOString();
     var r = await supabase.from("activity_logs")
       .select("business_name, company_id, log_type, memo, logged_by, assignee, created_at")
+      .is("deleted_at", null)
       .gte("created_at", sinceStr)
       .order("created_at", { ascending: false });
     if (!r.error) setLogs(r.data || []);
@@ -13637,7 +13700,7 @@ function TeamActivityWidget({ profiles }) {
     var [notesRes, agencyRes, logsRes, approvalRes] = await Promise.all([
       supabase.from("work_notes").select("assignee,created_at,updated_at").is("deleted_at", null).gte("updated_at", sinceStr),
       supabase.from("agency_cases").select("assignee,status,updated_at").is("deleted_at", null).gte("updated_at", sinceStr),
-      supabase.from("activity_logs").select("assignee,logged_by,created_at").gte("created_at", sinceStr),
+      supabase.from("activity_logs").select("assignee,logged_by,created_at").is("deleted_at", null).gte("created_at", sinceStr),
       supabase.from("approval_cases").select("created_by,created_at,result").is("deleted_at", null).gte("created_at", sinceStr),
     ]);
 
