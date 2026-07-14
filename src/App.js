@@ -4695,6 +4695,11 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   const recChunksRef = useRef([]);
   const recTimerRef = useRef(null);
   const recStartRef = useRef(0);
+  // 🗣️ 음성 → 텍스트 (브라우저 내장 Web Speech API, 무료·키 불필요)
+  const recognitionRef = useRef(null);       // SpeechRecognition 인스턴스
+  const transcriptRef = useRef("");          // 이번 녹음 세션 누적 인식 텍스트
+  const recordingActiveRef = useRef(false);  // 사용자가 녹음 중인지(인식 조기종료 시 재시작 판단용)
+  const [speechMsg, setSpeechMsg] = useState(""); // 음성인식 안내 메시지(미지원 등)
   const [xlsxPreview, setXlsxPreview] = useState(null); // 기업현황표/시트지 첨부 미리보기 {updates, auto, commText, kind}
   const [xlsxCommDraft, setXlsxCommDraft] = useState(""); // 업로드 시 소통내역에 넣을 초안(수정 가능)
   const [kakaoLoading, setKakaoLoading] = useState(false); // 카톡 캡처 AI 요약 중
@@ -5070,6 +5075,65 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
       setRecSeconds(0);
     }
   };
+  // 🗣️ 음성 인식(STT) 시작 — 녹음과 동시에 실행. 미지원 브라우저는 안내만 하고 조용히 패스.
+  var startSpeech = function() {
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      setSpeechMsg("이 브라우저는 음성 인식을 지원하지 않습니다. (녹음은 정상 저장됩니다)");
+      recognitionRef.current = null;
+      return;
+    }
+    setSpeechMsg("");
+    transcriptRef.current = "";
+    try {
+      var rec = new SR();
+      rec.lang = "ko-KR";
+      rec.continuous = true;
+      rec.interimResults = false;
+      rec.onresult = function(e) {
+        for (var i = e.resultIndex; i < e.results.length; i++) {
+          if (e.results[i].isFinal && e.results[i][0]) {
+            transcriptRef.current += e.results[i][0].transcript;
+          }
+        }
+      };
+      rec.onerror = function(ev) {
+        // no-speech/aborted 등은 무시하고 녹음은 계속. 권한 거부만 안내.
+        if (ev && (ev.error === "not-allowed" || ev.error === "service-not-allowed")) {
+          setSpeechMsg("마이크 권한이 없어 음성 인식을 사용할 수 없습니다. (녹음은 정상 저장됩니다)");
+        }
+      };
+      rec.onend = function() {
+        if (recordingActiveRef.current) {
+          // 아직 녹음 중인데 인식이 끊긴 경우(무음 타임아웃 등) → 재시작
+          try { rec.start(); } catch (_) {}
+        } else {
+          // 사용자가 녹음 종료 → 누적 텍스트를 소통 내역 입력창에 이어붙이기
+          flushTranscript();
+        }
+      };
+      recognitionRef.current = rec;
+      rec.start();
+    } catch (err) {
+      recognitionRef.current = null;
+      setSpeechMsg("음성 인식을 시작할 수 없습니다. (녹음은 정상 저장됩니다)");
+    }
+  };
+  // 인식된 텍스트를 소통 내역 입력창에 이어붙임(덮어쓰지 않음). 저장은 사용자가 직접.
+  var flushTranscript = function() {
+    var t = (transcriptRef.current || "").trim();
+    transcriptRef.current = "";
+    if (!t) return;
+    setCommInput(function(prev) {
+      var base = prev || "";
+      return base.trim() ? (base.replace(/\s+$/, "") + "\n" + t) : t;
+    });
+  };
+  // 인식 중지 — onend 핸들러가 flushTranscript 처리
+  var stopSpeech = function() {
+    var rec = recognitionRef.current;
+    if (rec) { try { rec.stop(); } catch (_) {} }
+  };
   // 녹음 시작
   var startRecording = async function() {
     if (recording) return;
@@ -5094,6 +5158,9 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
       mr.start();
       setRecording(true);
       setRecSeconds(0);
+      // 녹음과 동시에 음성 인식 시작
+      recordingActiveRef.current = true;
+      startSpeech();
       recTimerRef.current = setInterval(function() {
         setRecSeconds(Math.round((Date.now() - recStartRef.current) / 1000));
       }, 500);
@@ -5111,6 +5178,9 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   var stopRecording = function() {
     if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null; }
     setRecording(false);
+    // 음성 인식 종료 → onend에서 인식 텍스트를 입력창에 채움
+    recordingActiveRef.current = false;
+    stopSpeech();
     var mr = mediaRecorderRef.current;
     if (mr && mr.state !== "inactive") mr.stop();
   };
@@ -5965,6 +6035,8 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   </div>
                 </div>
                 {voiceUploading && <div style={{ fontSize: 11, color: "#B91C1C", marginBottom: 6, padding: "6px 10px", background: "#FEF2F2", borderRadius: 6 }}>🎙️ 음성 메모를 업로드하는 중입니다...</div>}
+                {recording && recognitionRef.current && <div style={{ fontSize: 11, color: "#B91C1C", marginBottom: 6, padding: "6px 10px", background: "#FEF2F2", borderRadius: 6 }}>🗣️ 말하는 내용을 텍스트로 변환하고 있어요. 중지하면 아래 입력창에 자동으로 채워집니다.</div>}
+                {speechMsg && <div style={{ fontSize: 11, color: "#92400E", marginBottom: 6, padding: "6px 10px", background: "#FEF9EC", borderRadius: 6 }}>ℹ️ {speechMsg}</div>}
                 {callUploading && <div style={{ fontSize: 11, color: "#4338CA", marginBottom: 6, padding: "6px 10px", background: "#EEF2FF", borderRadius: 6 }}>📁 녹음 파일을 업로드하는 중입니다...</div>}
                 {kakaoLoading && <div style={{ fontSize: 11, color: "#B45309", marginBottom: 6, padding: "6px 10px", background: "#FEF9EC", borderRadius: 6 }}>🤖 카톡 대화를 읽고 요약하는 중입니다... (몇 초 걸려요)</div>}
                 <textarea value={commInput}
