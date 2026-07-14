@@ -3682,7 +3682,7 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView, companies 
         items.push({
           lineIdx: idx,
           checked: match[2].toLowerCase() === "x",
-          text: displayText,
+          text: decodeItemText(displayText),
           itemDueDate: itemDueDate,
           rawLine: line
         });
@@ -8522,7 +8522,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
                         <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
                           <span style={{ fontSize: 11, marginTop: 1 }}>☐</span>
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 12, color: "#1A1917", lineHeight: 1.4, wordBreak: "break-word" }}>{item.text}</div>
+                            <div style={{ fontSize: 12, color: "#1A1917", lineHeight: 1.4, wordBreak: "break-word", whiteSpace: "pre-wrap" }}>{item.text}</div>
                             <div style={{ display: "flex", gap: 6, marginTop: 4, fontSize: 10, color: "#888", flexWrap: "wrap" }}>
                               {item.assignee && <span>👤 {item.assignee}</span>}
                               {item.dueDate && (
@@ -14128,7 +14128,7 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
         existingWorkNoteId = null;
       } else {
         var existingContent = fetchRes.data.content || "";
-        var newContent = existingContent + (existingContent ? "\n" : "") + "- [ ] " + item.text;
+        var newContent = existingContent + (existingContent ? "\n" : "") + "- [ ] " + encodeItemText(item.text);
         var upd = await supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", existingWorkNoteId).select().single();
         if (upd.error) { alert("기존 노트 갱신 실패: " + upd.error.message); return; }
         workNoteId = existingWorkNoteId;
@@ -14142,7 +14142,7 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
       var workNotePayload = {
         assignee: assigneeName,
         title: noteTitle,
-        content: "- [ ] " + item.text,
+        content: "- [ ] " + encodeItemText(item.text),
         is_todo: true,
         pinned: false,
         created_by: assigneeName,
@@ -14212,8 +14212,8 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
         var lines = oldContent.split("\n");
         var newLines = lines.filter(function(line) {
           var trimmed = line.trim();
-          var matchUnchecked = "- [ ] " + item.text;
-          var matchChecked = "- [x] " + item.text;
+          var matchUnchecked = "- [ ] " + encodeItemText(item.text);
+          var matchChecked = "- [x] " + encodeItemText(item.text);
           // 마감일 [YYYY-MM-DD] 포함된 형태도 매칭
           return trimmed !== matchUnchecked && trimmed !== matchChecked &&
                  !trimmed.startsWith(matchUnchecked + " [") && !trimmed.startsWith(matchChecked + " [");
@@ -14457,9 +14457,10 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
                             {editingDraft.checklist.map(function(item, idx) {
                               var locked = !!item.taken_by; // 이미 가져간 항목은 수정/삭제 불가
                               return (
-                                <div key={item.id || idx} style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                                  <span style={{ color: locked ? "#AAA" : "#CCC", fontSize: 11 }}>☐</span>
-                                  <input type="text" value={item.text} disabled={locked}
+                                <div key={item.id || idx} style={{ display: "flex", gap: 4, alignItems: "flex-start" }}>
+                                  <span style={{ color: locked ? "#AAA" : "#CCC", fontSize: 11, marginTop: 5 }}>☐</span>
+                                  <textarea value={item.text} disabled={locked}
+                                    rows={Math.max(1, (item.text || "").split("\n").length)}
                                     onChange={function(e) {
                                       var v = e.target.value;
                                       setEditingDraft(function(p) {
@@ -14468,9 +14469,9 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
                                         return Object.assign({}, p, { checklist: arr });
                                       });
                                     }}
-                                    placeholder="항목 내용"
+                                    placeholder="항목 내용 (Enter로 줄바꿈)"
                                     title={locked ? item.taken_by + "님이 가져간 항목은 수정 불가" : ""}
-                                    style={{ flex: 1, padding: "4px 8px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, boxSizing: "border-box", outline: "none", background: locked ? "#F0EDE8" : "#fff", color: locked ? "#888" : "#1A1917", textDecoration: locked ? "line-through" : "none" }} />
+                                    style={{ flex: 1, padding: "4px 8px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, boxSizing: "border-box", outline: "none", background: locked ? "#F0EDE8" : "#fff", color: locked ? "#888" : "#1A1917", textDecoration: locked ? "line-through" : "none", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, overflow: "hidden" }} />
                                   {locked ? (
                                     <span style={{ fontSize: 9, color: "#1E40AF", fontWeight: 700, padding: "2px 5px", background: "#DBEAFE", borderRadius: 3, whiteSpace: "nowrap" }}>👤 {item.taken_by}</span>
                                   ) : (
@@ -14547,9 +14548,9 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
                               var mine = item.taken_by === profile?.name;
                               return (
                                 <div key={item.id}
-                                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", background: taken ? "#F7F6F3" : "#fff", borderRadius: 6, border: "0.5px solid " + (taken ? "transparent" : "#E8E5E0") }}>
-                                  <span style={{ fontSize: 11, color: taken ? "#888" : "#CCC" }}>☐</span>
-                                  <span style={{ flex: 1, fontSize: 11, color: taken ? "#888" : "#1A1917", textDecoration: taken ? "line-through" : "none", lineHeight: 1.4 }}>
+                                  style={{ display: "flex", alignItems: "flex-start", gap: 6, padding: "5px 8px", background: taken ? "#F7F6F3" : "#fff", borderRadius: 6, border: "0.5px solid " + (taken ? "transparent" : "#E8E5E0") }}>
+                                  <span style={{ fontSize: 11, color: taken ? "#888" : "#CCC", marginTop: 1 }}>☐</span>
+                                  <span style={{ flex: 1, fontSize: 11, color: taken ? "#888" : "#1A1917", textDecoration: taken ? "line-through" : "none", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                                     {item.text}
                                   </span>
                                   {taken ? (
@@ -14671,9 +14672,10 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   {newNote.checklist.map(function(item, idx) {
                     return (
-                      <div key={item.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                        <span style={{ color: "#888", fontSize: 12 }}>☐</span>
-                        <input type="text" value={item.text}
+                      <div key={item.id} style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+                        <span style={{ color: "#888", fontSize: 12, marginTop: 6 }}>☐</span>
+                        <textarea value={item.text}
+                          rows={Math.max(1, (item.text || "").split("\n").length)}
                           onChange={function(e) {
                             var v = e.target.value;
                             setNewNote(function(p) {
@@ -14682,18 +14684,8 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
                               return Object.assign({}, p, { checklist: arr });
                             });
                           }}
-                          placeholder="예: 사업자등록증 받기"
-                          onKeyDown={function(e) {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              setNewNote(function(p) {
-                                var arr = (p.checklist || []).slice();
-                                arr.splice(idx + 1, 0, { id: "tmp_" + Math.random().toString(36).slice(2, 11), text: "" });
-                                return Object.assign({}, p, { checklist: arr });
-                              });
-                            }
-                          }}
-                          style={{ flex: 1, padding: "5px 10px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 12, boxSizing: "border-box", outline: "none", background: "#fff" }} />
+                          placeholder="예: 사업자등록증 받기 (Enter로 줄바꿈 · 새 항목은 + 버튼)"
+                          style={{ flex: 1, padding: "5px 10px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 12, boxSizing: "border-box", outline: "none", background: "#fff", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, overflow: "hidden" }} />
                         <button onClick={function() {
                           setNewNote(function(p) {
                             var arr = (p.checklist || []).filter(function(_, i) { return i !== idx; });
