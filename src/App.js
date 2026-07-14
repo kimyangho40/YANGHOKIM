@@ -2247,6 +2247,8 @@ function CRMApp({ profile, session }) {
     if (form.business_number) insertData.business_number = form.business_number;
     if (form.business_type) insertData.business_type = form.business_type;
     if (form.industry) insertData.industry = form.industry;
+    // 혁신성장·초격차·신산업 분야 (중진공 예외 판정용) — 체크된 경우만 전송(미체크는 DB DEFAULT false)
+    if (form.innovation_field === true) insertData.innovation_field = true;
     if (form.region) insertData.region = form.region;
     if (form.revenue_2023) insertData.revenue_2023 = parseInt(form.revenue_2023) || null;
     if (form.revenue_2024) insertData.revenue_2024 = parseInt(form.revenue_2024) || null;
@@ -6792,6 +6794,7 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
     name: "", type: "법인", representative: "", phone: "",
     stage: "상담/진단완료", assignee: "", agency_list: [],
     business_type: "법인사업자", industry: "", team: "개인팀",
+    innovation_field: false, // 혁신성장·초격차·신산업 분야 (중진공 예외 판정용 수동 체크)
     // 추가 정보
     business_number: "",
     employee_count: "",
@@ -7095,6 +7098,14 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
                 e.target.value = "";
               }}
               style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, outline: "none", boxSizing: "border-box" }} />
+            {/* 중진공 예외 판정용 수동 플래그 (업종 텍스트로는 추정 불가) */}
+            <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, paddingTop: 8, borderTop: "1px solid #E8E5E0", fontSize: 11, color: "#555", cursor: "pointer" }}>
+              <input type="checkbox" checked={form.innovation_field === true}
+                onChange={function(e) { set("innovation_field", e.target.checked); }}
+                style={{ accentColor: "#7C3AED", flexShrink: 0 }} />
+              <span style={{ fontWeight: 600 }}>혁신성장·초격차·신산업 분야 해당</span>
+              <span style={{ color: "#888", fontSize: 10 }}>(소상공인이어도 중진공 신청 가능)</span>
+            </label>
           </div>
 
           {/* 진행 단계 */}
