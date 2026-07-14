@@ -7237,6 +7237,15 @@ function ActivityLogView() {
   );
 }
 
+// 체크리스트 항목은 "- [ ] 텍스트" 한 줄로 저장되므로, 항목 안의 줄바꿈은
+// 저장 시 리터럴 "\n"(백슬래시+n)로 인코딩하고, 파싱/표시 시 실제 개행으로 복원한다.
+function encodeItemText(t) {
+  return String(t == null ? "" : t).trim().replace(/\r\n/g, "\n").replace(/\n/g, "\\n");
+}
+function decodeItemText(t) {
+  return String(t == null ? "" : t).replace(/\\n/g, "\n");
+}
+
 // ── 업무노트 수정 카드 (독립 컴포넌트 - 입력버그 방지) ─────────────────────────
 function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
   // content가 변경되면 checkItems와 freeText로 분리
@@ -7266,7 +7275,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
           }
           displayText = textFull.replace(/\[\d{4}-\d{2}-\d{2}\]|\[\d{1,2}\/\d{1,2}\]/, "").replace(/→\s*\d{4}-\d{2}-\d{2}\s*$|→\s*\d{1,2}\/\d{1,2}\s*$/, "").trim();
         }
-        items.push({ checked: m[2].toLowerCase() === "x", text: displayText, dueDate: dateStr || "" });
+        items.push({ checked: m[2].toLowerCase() === "x", text: decodeItemText(displayText), dueDate: dateStr || "" });
       } else {
         freeLines.push(line);
       }
@@ -7295,7 +7304,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
     setEditNote(function(p) {
       if (!p || !p.id) return p;
       var items = (p.checkItems || []).filter(function(i) { return (i.text || "").trim(); }).map(function(i) {
-        var line = "- [" + (i.checked ? "x" : " ") + "] " + i.text.trim();
+        var line = "- [" + (i.checked ? "x" : " ") + "] " + encodeItemText(i.text);
         if (i.dueDate) line += " [" + i.dueDate + "]";
         return line;
       });
@@ -7336,7 +7345,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
         <div style={{ border: "1px solid #86EFAC", borderRadius: 8, padding: "10px 12px", marginBottom: 8, background: "#fff" }}>
           {checkItems.map(function(item, idx) {
             return (
-              <div key={idx} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+              <div key={idx} style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 8 }}>
                 <input type="checkbox" checked={item.checked || false} onChange={function(e) {
                   var ck = e.target.checked;
                   // state 업데이트
@@ -7345,7 +7354,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
                   setEditNote(function(p) { return Object.assign({}, p, { checkItems: newItems }); });
                   // 즉시 DB 저장 (저장 안 누르고 이탈해도 체크 상태 유지)
                   var lines = newItems.filter(function(i) { return (i.text || "").trim(); }).map(function(i) {
-                    var line = "- [" + (i.checked ? "x" : " ") + "] " + i.text.trim();
+                    var line = "- [" + (i.checked ? "x" : " ") + "] " + encodeItemText(i.text);
                     if (i.dueDate) line += " [" + i.dueDate + "]";
                     return line;
                   });
@@ -7355,16 +7364,17 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
                   if (ft) parts.push(ft);
                   var newContent = parts.join("\n");
                   supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", editNote.id);
-                }} style={{ width: 15, height: 15, flexShrink: 0, cursor: "pointer" }} />
-                <input type="text" value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성)"}
+                }} style={{ width: 15, height: 15, flexShrink: 0, cursor: "pointer", marginTop: 6 }} />
+                <textarea value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성 / Enter로 줄바꿈)"}
+                  rows={Math.max(1, (item.text || "").split("\n").length)}
                   onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); }}
                   onBlur={autoSaveEditNow}
-                  style={{ flex: 1, border: "none", outline: "none", fontSize: 13, background: "transparent", textDecoration: item.checked ? "line-through" : "none", color: item.checked ? "#AAA" : "#333" }} />
+                  style={{ flex: 1, border: "none", outline: "none", fontSize: 13, lineHeight: 1.7, background: "transparent", resize: "vertical", fontFamily: "inherit", overflow: "hidden", padding: "3px 0", textDecoration: item.checked ? "line-through" : "none", color: item.checked ? "#AAA" : "#333" }} />
                 <input type="date" value={item.dueDate || ""} title="이 항목의 마감일 (선택)"
                   onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { dueDate: v }); return Object.assign({}, p, { checkItems: items }); }); setTimeout(autoSaveEditNow, 0); }}
-                  style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, color: "#4338CA", outline: "none", width: 130 }} />
+                  style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, color: "#4338CA", outline: "none", width: 130, marginTop: 4 }} />
                 <button onClick={function() { setEditNote(function(p) { var items = (p.checkItems || []).filter(function(_, i) { return i !== idx; }); return Object.assign({}, p, { checkItems: items }); }); setTimeout(autoSaveEditNow, 0); }}
-                  style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 16, padding: "0 4px", lineHeight: 1 }}>×</button>
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 16, padding: "2px 4px", lineHeight: 1, marginTop: 4 }}>×</button>
               </div>
             );
           })}
@@ -7410,7 +7420,7 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
     if (!hasChecklist) return null;
     return lines.map(function(line, idx) {
       var m = line.trim().match(/^- \[([ x])\] (.+)/);
-      if (m) return { idx: idx, checked: m[1] === "x", text: m[2], isCheck: true };
+      if (m) return { idx: idx, checked: m[1] === "x", text: decodeItemText(m[2]), isCheck: true };
       return { idx: idx, text: line, isCheck: false };
     });
   };
@@ -7504,10 +7514,10 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
                 ) : null;
               }
               return (
-                <label key={item.idx} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "4px 0", cursor: "pointer" }}>
+                <label key={item.idx} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 0", cursor: "pointer" }}>
                   <input type="checkbox" checked={item.checked} onChange={function() { toggleCheckItem(item.idx); }}
-                    style={{ width: 15, height: 15, marginTop: 2, cursor: "pointer", accentColor: "#1A1917", flexShrink: 0 }} />
-                  <span style={{ fontSize: 13, color: item.checked ? "#AAA" : "#333", textDecoration: item.checked ? "line-through" : "none", lineHeight: 1.6 }}>{item.text}</span>
+                    style={{ width: 15, height: 15, marginTop: 3, cursor: "pointer", accentColor: "#1A1917", flexShrink: 0 }} />
+                  <span style={{ fontSize: 13, color: item.checked ? "#AAA" : "#333", textDecoration: item.checked ? "line-through" : "none", lineHeight: 1.8, whiteSpace: "pre-wrap" }}>{item.text}</span>
                 </label>
               );
             })}
@@ -7835,7 +7845,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     // checkItems가 있으면 content로 변환해서 합치기 (마감일 [YYYY-MM-DD] 포함, 체크 상태도 반영)
     var checkContent = (newNote.checkItems && newNote.checkItems.length > 0)
       ? newNote.checkItems.filter(function(i) { return i.text.trim(); }).map(function(i) {
-          var line = "- [" + (i.checked ? "x" : " ") + "] " + i.text.trim();
+          var line = "- [" + (i.checked ? "x" : " ") + "] " + encodeItemText(i.text);
           if (i.dueDate) line += " [" + i.dueDate + "]";
           return line;
         }).join("\n")
@@ -7925,7 +7935,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     var finalContent = editNote.content || "";
     if (editNote.checkItems !== undefined) {
       var checkLines = (editNote.checkItems || []).filter(function(i) { return (i.text || "").trim(); }).map(function(i) {
-        var line = "- [" + (i.checked ? "x" : " ") + "] " + i.text.trim();
+        var line = "- [" + (i.checked ? "x" : " ") + "] " + encodeItemText(i.text);
         if (i.dueDate) line += " [" + i.dueDate + "]";
         return line;
       });
@@ -8116,16 +8126,17 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div style={{ border: "1px solid #86EFAC", borderRadius: 8, padding: "10px 12px", marginBottom: 8, background: "#fff" }}>
               {newNote.checkItems.map(function(item, idx) {
                 return (
-                  <div key={idx} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-                    <input type="checkbox" disabled style={{ width: 15, height: 15, flexShrink: 0 }} />
-                    <input type="text" value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성)"}
+                  <div key={idx} style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 8 }}>
+                    <input type="checkbox" disabled style={{ width: 15, height: 15, flexShrink: 0, marginTop: 6 }} />
+                    <textarea value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성 / Enter로 줄바꿈)"}
+                      rows={Math.max(1, (item.text || "").split("\n").length)}
                       onChange={function(e) { var v = e.target.value; setNewNote(function(p) { var items = p.checkItems.slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); }}
-                      style={{ flex: 1, border: "none", outline: "none", fontSize: 13, background: "transparent" }} autoFocus={idx === newNote.checkItems.length - 1} />
+                      style={{ flex: 1, border: "none", outline: "none", fontSize: 13, lineHeight: 1.7, background: "transparent", resize: "vertical", fontFamily: "inherit", overflow: "hidden", padding: "3px 0" }} autoFocus={idx === newNote.checkItems.length - 1} />
                     <input type="date" value={item.dueDate || ""} title="이 항목의 마감일 (선택)"
                       onChange={function(e) { var v = e.target.value; setNewNote(function(p) { var items = p.checkItems.slice(); items[idx] = Object.assign({}, items[idx], { dueDate: v }); return Object.assign({}, p, { checkItems: items }); }); }}
-                      style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, color: "#4338CA", outline: "none", width: 130 }} />
+                      style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, color: "#4338CA", outline: "none", width: 130, marginTop: 4 }} />
                     <button onClick={function() { setNewNote(function(p) { var items = p.checkItems.filter(function(_, i) { return i !== idx; }); return Object.assign({}, p, { checkItems: items }); }); }}
-                      style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 16, padding: "0 4px", lineHeight: 1 }}>×</button>
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 16, padding: "2px 4px", lineHeight: 1, marginTop: 4 }}>×</button>
                   </div>
                 );
               })}
