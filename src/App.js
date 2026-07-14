@@ -1828,6 +1828,27 @@ function CRMApp({ profile, session }) {
     var params = new URLSearchParams(window.location.search);
     return params.get("group") || null;
   });
+  // 기관별현황 이동 요청 번호 — 올릴 때마다 AgencyView가 다시 마운트된다(key로 사용).
+  // jumpToMonth/jumpToGroup은 AgencyView에서 useState 초기값으로만 쓰여 다시 마운트해야 반영되고,
+  // 같은 기관/월에 연속 등록하면 값이 안 바뀌어도 새 케이스를 다시 조회해야 하므로 별도 번호가 필요하다.
+  const [agencyJumpKey, setAgencyJumpKey] = useState(0);
+  // 기관별현황 등록 완료 → 페이지 리로드 없이 해당 기관/월로 이동.
+  // 전에는 window.location.href로 앱 전체를 새로고침해 SPA 상태(필터·스크롤·열려있던 것)가 전부 날아갔다.
+  const handleAgencyRegistered = function(target) {
+    if (target && target.group) setAgencyJumpGroup(target.group);
+    if (target && target.month) setAgencyJumpMonth(target.month);
+    setAgencyJumpKey(function(k) { return k + 1; }); // 이미 기관별현황을 보고 있어도 다시 마운트 → 새 케이스 반영
+    setSelectedCompany(null); // 등록은 업체 상세에서 시작되므로 모달을 닫아야 이동한 화면이 보인다
+    setSelectedTab(null);
+    setView("agency");
+    // 새로고침해도 같은 화면이 뜨도록 URL도 맞춰둔다 (리로드 없이 주소만 교체)
+    if (target && target.group && target.month) {
+      try {
+        window.history.replaceState(null, "",
+          window.location.pathname + "?view=agency&month=" + target.month + "&group=" + encodeURIComponent(target.group));
+      } catch (e) { /* 주소 교체 실패는 이동 자체에 영향 없음 */ }
+    }
+  };
   const [companies, setCompanies] = useState([]);
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -2731,7 +2752,7 @@ function CRMApp({ profile, session }) {
         ) : (
           <>
             {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setFilterAssignee={setFilterAssignee} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
-            {view === "agency" && <AgencyView jumpToMonth={agencyJumpMonth} jumpToGroup={agencyJumpGroup} />}
+            {view === "agency" && <AgencyView key={agencyJumpKey} jumpToMonth={agencyJumpMonth} jumpToGroup={agencyJumpGroup} />}
             {view === "dbleads" && <DBLeadsView canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
             {view === "settlement" && <SettlementView />}
             {view === "activitylog" && <ActivityLogView />}
@@ -2780,7 +2801,7 @@ function CRMApp({ profile, session }) {
           onSave={saveCompany}
           onToggleDoc={toggleDoc}
           currentUser={profile}
-          onAgencyRegistered={function() {}}
+          onAgencyRegistered={handleAgencyRegistered}
           companies={companies}
         />
       )}
@@ -6908,10 +6929,12 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
             if (!msg) { alert("등록된 건이 없어요 (모두 중복)"); return; }
             msg += "\n확인을 누르면 기관별 현황으로 이동합니다.";
             alert(msg);
-            // 약간 기다린 후 페이지 이동 (DB 반영 대기)
+            // 약간 기다린 후 이동 (DB 반영 대기)
             await new Promise(function(r) { setTimeout(r, 300); });
-            if (registeredGroups.length > 0) {
-              window.location.href = window.location.origin + "?view=agency&month=" + registeredGroups[0].month + "&group=" + encodeURIComponent(registeredGroups[0].group);
+            if (registeredGroups.length > 0 && onAgencyRegistered) {
+              // 등록한 기관/월로 이동 (모달 닫기·화면 전환은 상위에서 처리).
+              // 전에는 여기서 window.location.href로 앱을 통째로 새로고침했다 → SPA 상태 전부 손실
+              onAgencyRegistered({ group: registeredGroups[0].group, month: registeredGroups[0].month });
             }
           }}
             style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, background: "#4338CA", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
