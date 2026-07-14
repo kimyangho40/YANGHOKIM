@@ -102,17 +102,18 @@ function sosangEmpLimit(industry) {
 }
 
 // 소상공인 여부: 상시근로자수 < 업종군 기준
-// ⚠️ 위계 준수 — 소상공인 ⊂ 소기업. 소기업(judgeSmallBiz)이 "yes"가 아니면
-//    소상공인일 수 없으므로 무조건 "no" (소기업 판정 불가 시엔 배지가 공란 처리됨)
+// ⚠️ 위계 준수 — 소상공인 ⊂ 소기업. 소기업이 아니면 소상공인일 수 없다.
+// ⚠️ "판정 불가(unknown)"를 "아님(no)"으로 뭉개지 말 것 — no는 "확실히 아님"이라
+//    judgeJunginggong이 이를 "소상공인 아님 → 중진공 가능"으로 읽어 오판정한다.
 function judgeSososang(company) {
   var limit = sosangEmpLimit(company && company.industry);
   var groupLabel = limit === 10 ? "광업·제조·건설·운수" : "그 외 업종";
   var small = judgeSmallBiz(company);
-  if (small.status !== "yes") {
-    return {
-      status: "no", limit: limit,
-      reason: (small.status === "no" ? "소기업 아님" : "소기업 규모 판정 불가") + " → 소상공인 아님 (소상공인 ⊂ 소기업)\n" + small.reason,
-    };
+  if (small.status === "unknown") {
+    return { status: "unknown", limit: limit, reason: "소기업 규모 판정 불가 → 소상공인 여부도 판정 불가\n" + small.reason };
+  }
+  if (small.status === "no") {
+    return { status: "no", limit: limit, reason: "소기업 아님 → 소상공인 아님 (소상공인 ⊂ 소기업)\n" + small.reason };
   }
   var emp = parseInt(company && company.employee_count, 10);
   if (isNaN(emp)) return { status: "unknown", limit: limit, reason: "상시근로자수 미입력 · 기준 " + limit + "명 미만 (" + groupLabel + ")" };
@@ -123,6 +124,16 @@ function judgeSososang(company) {
   };
 }
 
+// 기관(중진공·소진공) 판정의 전제: 규모 판정이 확실해야 한다.
+// 소기업·소상공인 중 하나라도 unknown이면 기관 판정도 불가(eligible: null) — 사유 문자열 반환, 아니면 null.
+// ※ 규모 배지는 공란인데 기관 배지만 확신 있게 뜨는 모순을 막기 위한 단일 관문.
+function bizUnknownReason(company, so) {
+  var small = judgeSmallBiz(company);
+  if (small.status === "unknown") return "규모 판정 불가 → 기관 판정 불가\n" + small.reason;
+  if (so.status === "unknown") return "규모 판정 불가 → 기관 판정 불가\n" + so.reason;
+  return null;
+}
+
 // 중진공 신청가능 추정: 소상공인 아니면 가능 / 소상공인이면 원칙 제한(⑨)이나 예외 확인
 // ※ 광업·건설·운수는 여기서 예외가 아님 — 그 업종군은 sosangEmpLimit(상시근로자 10명)에서
 //   "소상공인 여부"를 가릴 때만 쓰인다. 혼동 금지.
@@ -131,8 +142,9 @@ function judgeJunginggong(company, so) {
   var s = String(company && company.industry || "");
   var hasExport = Number(company && company.export_usd) > 0;
   var isInnovation = (company && company.innovation_field) === true;
+  var un = bizUnknownReason(company, so);
+  if (un) return { eligible: null, reason: un };
   if (so.status === "no") return { eligible: true, reason: "소상공인 아님 → 중진공 신청 가능" };
-  if (so.status === "unknown") return { eligible: null, reason: "소상공인 여부 확인 필요 (상시근로자수 입력)" };
   var ex = [];
   if (/제조/.test(s)) ex.push("제조업 (업종 자동판정)");
   if (isInnovation) ex.push("혁신성장·초격차·신산업 분야 (수동 체크)");
@@ -144,8 +156,9 @@ function judgeJunginggong(company, so) {
 // 소진공 신청가능 추정: 소상공인이면 일반형 기본 / 수출 1천불↑이면 혁신형(수출)도
 function judgeSojinggong(company, so) {
   var exportUsd = Number(company && company.export_usd) || 0;
+  var un = bizUnknownReason(company, so);
+  if (un) return { eligible: null, reason: un };
   if (so.status === "no") return { eligible: false, reason: "소상공인 아님 → 소진공 원칙 대상 아님" };
-  if (so.status === "unknown") return { eligible: null, reason: "소상공인 여부 확인 필요 (상시근로자수 입력)" };
   var tiers = ["일반형"];
   if (exportUsd >= 1000) tiers.push("혁신형(수출)");
   return {
