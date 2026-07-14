@@ -91,8 +91,24 @@ function bizScaleCap(industry) {
   return null;
 }
 
+// ── 규모/기관 배지 수동 보정 ───────────────────────────────────────────────
+// biz_match_override(JSONB): { grade: "소상공인"|"중소기업", jg: "가능"|"불가", sj: "불가"|"일반형"|"혁신형" }
+// 키가 없으면 그 항목은 자동판정. 빈 객체 {} = 사용자가 보정을 모두 해제한 상태(저장 시 null로 기록).
+// 수동값은 언제나 자동판정보다 우선한다.
+function bizOverride(company) {
+  var v = company && company.biz_match_override;
+  if (!v) return {};
+  if (typeof v === "string") { try { v = JSON.parse(v); } catch (e) { return {}; } }
+  return (v && typeof v === "object" && !Array.isArray(v)) ? v : {};
+}
+var MANUAL_TAG = "✎ 사람이 직접 수정함 (자동판정 무시)";
+
 // 소기업 여부: 평균매출액 ≤ 업종별 규모기준
+// ※ 규모 보정이 있으면 위계(소상공인 ⊂ 소기업)에 따라 소기업 여부도 그 값으로 확정된다.
 function judgeSmallBiz(company) {
+  var ov = bizOverride(company);
+  if (ov.grade === "소상공인") return { status: "yes", manual: true, reason: MANUAL_TAG + "\n규모: 소상공인 → 소기업에 포함 (소상공인 ⊂ 소기업)" };
+  if (ov.grade === "중소기업") return { status: "no", manual: true, reason: MANUAL_TAG + "\n규모: 중소기업 → 소기업 아님" };
   var cap = bizScaleCap(company && company.industry);
   var avg = bizAvgRevenue(company);
   if (!cap) return { status: "unknown", reason: "업종 미매칭 → 규모기준 확인 필요 (업종 입력/공고 대조)" };
@@ -115,8 +131,11 @@ function sosangEmpLimit(industry) {
 // ⚠️ "판정 불가(unknown)"를 "아님(no)"으로 뭉개지 말 것 — no는 "확실히 아님"이라
 //    judgeJunginggong이 이를 "소상공인 아님 → 중진공 가능"으로 읽어 오판정한다.
 function judgeSososang(company) {
+  var ov = bizOverride(company);
   var limit = sosangEmpLimit(company && company.industry);
   var groupLabel = limit === 10 ? "광업·제조·건설·운수" : "그 외 업종";
+  if (ov.grade === "소상공인") return { status: "yes", limit: limit, manual: true, reason: MANUAL_TAG + "\n규모: 소상공인" };
+  if (ov.grade === "중소기업") return { status: "no", limit: limit, manual: true, reason: MANUAL_TAG + "\n규모: 중소기업 → 소상공인 아님" };
   var small = judgeSmallBiz(company);
   if (small.status === "unknown") {
     return { status: "unknown", limit: limit, reason: "소기업 규모 판정 불가 → 소상공인 여부도 판정 불가\n" + small.reason };
@@ -151,6 +170,10 @@ function judgeJunginggong(company, so) {
   var s = String(company && company.industry || "");
   var hasExport = Number(company && company.export_usd) > 0;
   var isInnovation = (company && company.innovation_field) === true;
+  var ov = bizOverride(company);
+  // 수동 보정은 자동판정보다 우선 — 규모 판정 불가 가드보다도 먼저 적용한다
+  if (ov.jg === "가능") return { eligible: true, manual: true, reason: MANUAL_TAG + "\n중진공 신청 가능" };
+  if (ov.jg === "불가") return { eligible: false, manual: true, reason: MANUAL_TAG + "\n중진공 신청 불가" };
   var un = bizUnknownReason(company, so);
   if (un) return { eligible: null, reason: un };
   if (so.status === "no") return { eligible: true, reason: "소상공인 아님 → 중진공 신청 가능" };
@@ -165,6 +188,12 @@ function judgeJunginggong(company, so) {
 // 소진공 신청가능 추정: 소상공인이면 일반형 기본 / 수출 1천불↑이면 혁신형(수출)도
 function judgeSojinggong(company, so) {
   var exportUsd = Number(company && company.export_usd) || 0;
+  var ov = bizOverride(company);
+  // 수동 보정은 자동판정보다 우선 — 일반형/혁신형까지 직접 지정 가능
+  if (ov.sj === "불가") return { eligible: false, manual: true, reason: MANUAL_TAG + "\n소진공 신청 불가" };
+  if (ov.sj === "일반형" || ov.sj === "혁신형") {
+    return { eligible: true, tiers: [ov.sj], manual: true, reason: MANUAL_TAG + "\n소진공 " + ov.sj + " 신청 가능" };
+  }
   var un = bizUnknownReason(company, so);
   if (un) return { eligible: null, reason: un };
   if (so.status === "no") return { eligible: false, reason: "소상공인 아님 → 소진공 원칙 대상 아님" };
@@ -177,15 +206,23 @@ function judgeSojinggong(company, so) {
 }
 
 // 규모/기관 판정 배지 (참고용 · 마우스 오버 시 근거 tooltip)
-function BizScaleBadges({ company, size }) {
+// editable=true 이면 "✎ 보정" 버튼으로 수동 보정 패널을 연다 (기업목록은 자리가 좁아 읽기전용 유지).
+// onChange(next)로 biz_match_override 객체를 올려보낸다. 빈 객체 {} = 보정 전부 해제.
+function BizScaleBadges({ company, size, editable, onChange }) {
+  var [editing, setEditing] = useState(false);
   var small = judgeSmallBiz(company);
   var so = judgeSososang(company);
   var jg = judgeJunginggong(company, so);
   var sj = judgeSojinggong(company, so);
+  var ov = bizOverride(company);
   var fs = size === "sm" ? 9 : 10;      // 1줄: 규모 배지
   var fsAgency = size === "sm" ? 8 : 9; // 2줄: 기관 배지 (살짝 작게)
-  var chip = function (key, text, tip, bg, color, fontSize) {
-    return <span key={key} title={tip} style={{ fontSize: fontSize, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: bg, color: color, whiteSpace: "nowrap", cursor: "help", lineHeight: 1.5 }}>{text}</span>;
+  var chip = function (key, text, tip, bg, color, fontSize, manual) {
+    return (
+      <span key={key} title={tip} style={{ fontSize: fontSize, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: bg, color: color, whiteSpace: "nowrap", cursor: "help", lineHeight: 1.5 }}>
+        {manual ? "✎ " : ""}{text}
+      </span>
+    );
   };
   // 위계(소상공인 ⊂ 소기업 ⊂ 중소기업) → 최종 등급 하나만 산출
   // 소기업·소상공인 중 하나라도 unknown(정보부족)이면 null → 배지 렌더 안 함(공란)
@@ -195,19 +232,65 @@ function BizScaleBadges({ company, size }) {
     else if (so.status === "yes") grade = { text: "소상공인", bg: "#EFF6FF", color: "#1D4ED8", tip: small.reason + "\n" + so.reason };
     else grade = { text: "소기업", bg: "#ECFDF5", color: "#047857", tip: small.reason + "\n" + so.reason };
   }
+  // 소진공 등급 표기 — tiers에 혁신형이 있으면 혁신형 (보정으로 ["혁신형"] 1개만 올 수도 있음)
+  var sjLabel = (sj.tiers || []).some(function (t) { return String(t).indexOf("혁신형") >= 0; }) ? "혁신형" : "일반형";
+
+  var setOv = function (key, val) {
+    var next = Object.assign({}, ov);
+    if (val === null) delete next[key]; else next[key] = val;
+    if (onChange) onChange(next); // {} 이면 보정 전부 해제 → 저장 시 null
+  };
+  var ovRow = function (label, key, opts) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 3, marginBottom: 5, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 10, color: "#888", width: 70, flexShrink: 0 }}>{label}</span>
+        {opts.map(function (o) {
+          var sel = (ov[key] === undefined ? null : ov[key]) === o.v;
+          return (
+            <button key={String(o.v)} onClick={function () { setOv(key, o.v); }}
+              style={{ padding: "3px 8px", borderRadius: 99, fontSize: 10, fontWeight: sel ? 700 : 400, cursor: "pointer",
+                background: sel ? (o.v === null ? "#6B7280" : "#4338CA") : "#fff",
+                color: sel ? "#fff" : "#666", border: sel ? "none" : "1px solid #E8E5E0" }}>
+              {o.label}
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+  var hasOv = Object.keys(ov).length > 0;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 3, alignItems: "flex-start" }}>
-      {/* 1줄: 규모 배지 — 위계상 최종 등급 하나만 (정보부족이면 공란) */}
-      {grade && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 3, alignItems: "center" }}>
-          {chip("grade", grade.text, grade.tip, grade.bg, grade.color, fs)}
-        </div>
-      )}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 3, alignItems: "center" }}>
+        {/* 1줄: 규모 배지 — 위계상 최종 등급 하나만 (정보부족이면 공란) */}
+        {grade && chip("grade", grade.text, grade.tip, grade.bg, grade.color, fs, small.manual || so.manual)}
+        {editable && (
+          <button onClick={function () { setEditing(!editing); }}
+            title={hasOv ? "수동 보정됨 — 클릭해서 수정" : "자동판정 결과를 직접 고치기"}
+            style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 99, cursor: "pointer",
+              background: hasOv ? "#FEF3C7" : "#fff", color: hasOv ? "#92400E" : "#888",
+              border: "1px solid " + (hasOv ? "#FDE68A" : "#E8E5E0") }}>
+            ✎ 보정{hasOv ? " 중" : ""}
+          </button>
+        )}
+      </div>
       {/* 2줄: 기관 배지 — eligible === true 인 것만 표시 (불가/모름은 렌더 안 함, 둘 다 아니면 공란) */}
       {(jg.eligible === true || sj.eligible === true) && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 3, alignItems: "center" }}>
-          {jg.eligible === true && chip("jg", "중진공 가능", jg.reason, "#F5F3FF", "#6D28D9", fsAgency)}
-          {sj.eligible === true && chip("sj", "소진공 " + (sj.tiers.length > 1 ? "혁신형" : "일반형"), sj.reason, "#FFF7ED", "#C2410C", fsAgency)}
+          {jg.eligible === true && chip("jg", "중진공 가능", jg.reason, "#F5F3FF", "#6D28D9", fsAgency, jg.manual)}
+          {sj.eligible === true && chip("sj", "소진공 " + sjLabel, sj.reason, "#FFF7ED", "#C2410C", fsAgency, sj.manual)}
+        </div>
+      )}
+      {/* 보정 패널 — 자동판정보다 항상 우선. "자동판정"을 고르면 원래 로직으로 복귀 */}
+      {editable && editing && (
+        <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, padding: "9px 10px", marginTop: 3, width: "100%", boxSizing: "border-box" }}>
+          {ovRow("규모", "grade", [{ label: "자동판정", v: null }, { label: "소상공인", v: "소상공인" }, { label: "중소기업", v: "중소기업" }])}
+          {ovRow("중진공", "jg", [{ label: "자동판정", v: null }, { label: "가능", v: "가능" }, { label: "불가", v: "불가" }])}
+          {ovRow("소진공", "sj", [{ label: "자동판정", v: null }, { label: "불가", v: "불가" }, { label: "일반형", v: "일반형" }, { label: "혁신형", v: "혁신형" }])}
+          <div style={{ fontSize: 9, color: "#888", lineHeight: 1.5, borderTop: "1px solid #F0EEE9", paddingTop: 6 }}>
+            수동값은 자동판정보다 항상 우선해요. 저장 버튼을 눌러야 반영됩니다.
+          </div>
         </div>
       )}
     </div>
@@ -2052,6 +2135,12 @@ function CRMApp({ profile, session }) {
     // → innovation_field 컬럼 생성 전에도 기존 저장이 깨지지 않는다.
     if (typeof rest.innovation_field === "boolean") {
       updateObj.innovation_field = rest.innovation_field;
+    }
+    // 규모/기관 배지 수동 보정(biz_match_override, JSONB)도 사용자가 손댔을 때만 저장.
+    // 손대지 않은 기업은 DB값이 null/undefined라 여기 안 걸림 → 컬럼 미생성 시에도 일반 저장이 안 깨진다.
+    // 보정을 전부 해제하면 빈 객체 {} 가 오는데, 이때는 null로 기록해 자동판정으로 되돌린다.
+    if (rest.biz_match_override && typeof rest.biz_match_override === "object") {
+      updateObj.biz_match_override = Object.keys(rest.biz_match_override).length > 0 ? rest.biz_match_override : null;
     }
     // 기업정보 탭: 기대출 내역(loans), 기업정보 항목(company_info), 기타 메모(company_info_memo)
     if (Array.isArray(rest.loans)) updateObj.loans = rest.loans;
@@ -5622,7 +5711,8 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           {/* 규모/기관 판정 배지 (목록과 동일 로직 · 마우스오버 근거) */}
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ color: "#999", fontWeight: 600, fontSize: 12, flexShrink: 0 }}>규모/기관</span>
-            <BizScaleBadges company={data} />
+            <BizScaleBadges company={data} editable
+              onChange={function(next) { setData(function(p) { return Object.assign({}, p, { biz_match_override: next }); }); }} />
           </div>
           {(data.next_action || data.issue) && (
             <div style={{ fontSize: 12, color: "#555", display: "flex", gap: 6, alignItems: "flex-start" }}>
