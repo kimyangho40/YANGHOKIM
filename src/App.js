@@ -4059,6 +4059,17 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView, companies 
     return { c: c, date: dt, days: daysUntil(dt) };
   }).sort(function(a, b) { return a.date - b.date; });
 
+  // 노트의 업체 태그(tagged_company)는 업체명 "문자열"이라 실제 업체 레코드를 찾아서 넘겨야 한다.
+  // ⚠️ { name: 태그 } 같은 가짜 객체를 넘기면 id가 없어 CompanyModal이 빈 껍데기로 열린다
+  //    (소통내역·이슈가 company.id로 조회돼 아무것도 안 뜨고, 저장은 .eq("id", undefined)가
+  //     uuid 파싱 오류로 실패 → 노트 태그로 연 업체는 수정 자체가 불가).
+  // 못 찾으면 null → 칩을 클릭 불가로 렌더한다(이름 변경/삭제된 업체).
+  var findCompanyByName = function(name) {
+    var key = String(name || "").trim();
+    if (!key) return null;
+    return (companies || []).find(function(c) { return String(c.name || "").trim() === key; }) || null;
+  };
+
   // 카테고리 렌더 헬퍼
   function renderSection(title, items, color, bgColor, icon) {
     if (items.length === 0) return null;
@@ -4077,12 +4088,17 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView, companies 
                 <input type="checkbox" checked={item.checked}
                   onChange={function() { toggleCheckbox(item.noteId, item.lineIdx, item.checked); }}
                   style={{ margin: 0, width: 16, height: 16, cursor: "pointer", flexShrink: 0 }} />
-                {item.taggedCompany && (
-                  <span style={{ background: "#EEF2FF", color: "#4338CA", padding: "2px 7px", borderRadius: 4, fontSize: 10, fontWeight: 600, flexShrink: 0, cursor: "pointer" }}
-                    onClick={function() { onSelectCompany && onSelectCompany({ name: item.taggedCompany }); }}>
-                    {item.taggedCompany}
-                  </span>
-                )}
+                {item.taggedCompany && (function() {
+                  var tagged = findCompanyByName(item.taggedCompany);
+                  var canOpen = !!(tagged && onSelectCompany);
+                  return (
+                    <span onClick={canOpen ? function() { onSelectCompany(tagged); } : undefined}
+                      title={canOpen ? item.taggedCompany + " 상세 열기" : "'" + item.taggedCompany + "' 업체를 기업목록에서 찾을 수 없어요 (이름이 바뀌었거나 삭제된 업체일 수 있어요)"}
+                      style={{ background: "#EEF2FF", color: "#4338CA", padding: "2px 7px", borderRadius: 4, fontSize: 10, fontWeight: 600, flexShrink: 0, cursor: canOpen ? "pointer" : "default", opacity: canOpen ? 1 : 0.5 }}>
+                      {item.taggedCompany}
+                    </span>
+                  );
+                })()}
                 <span style={{ fontSize: 12, color: "#333", flex: 1, lineHeight: 1.5 }}>{item.text}</span>
                 {isAdmin && viewMode === "all" && item.assignee && (
                   <span style={{ background: "#F5F3FF", color: "#6D28D9", padding: "1px 6px", borderRadius: 4, fontSize: 10, flexShrink: 0 }}>
