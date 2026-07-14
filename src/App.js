@@ -102,10 +102,19 @@ function sosangEmpLimit(industry) {
 }
 
 // 소상공인 여부: 상시근로자수 < 업종군 기준
+// ⚠️ 위계 준수 — 소상공인 ⊂ 소기업. 소기업(judgeSmallBiz)이 "yes"가 아니면
+//    소상공인일 수 없으므로 무조건 "no" (소기업 판정 불가 시엔 배지가 공란 처리됨)
 function judgeSososang(company) {
   var limit = sosangEmpLimit(company && company.industry);
-  var emp = parseInt(company && company.employee_count, 10);
   var groupLabel = limit === 10 ? "광업·제조·건설·운수" : "그 외 업종";
+  var small = judgeSmallBiz(company);
+  if (small.status !== "yes") {
+    return {
+      status: "no", limit: limit,
+      reason: (small.status === "no" ? "소기업 아님" : "소기업 규모 판정 불가") + " → 소상공인 아님 (소상공인 ⊂ 소기업)\n" + small.reason,
+    };
+  }
+  var emp = parseInt(company && company.employee_count, 10);
   if (isNaN(emp)) return { status: "unknown", limit: limit, reason: "상시근로자수 미입력 · 기준 " + limit + "명 미만 (" + groupLabel + ")" };
   var isSo = emp < limit;
   return {
@@ -115,16 +124,21 @@ function judgeSososang(company) {
 }
 
 // 중진공 신청가능 추정: 소상공인 아니면 가능 / 소상공인이면 원칙 제한(⑨)이나 예외 확인
+// ※ 광업·건설·운수는 여기서 예외가 아님 — 그 업종군은 sosangEmpLimit(상시근로자 10명)에서
+//   "소상공인 여부"를 가릴 때만 쓰인다. 혼동 금지.
+// ※ 혁신성장·초격차·신산업은 업종 텍스트로 추정하지 않고 innovation_field 체크박스(수동 확인)로만 판정.
 function judgeJunginggong(company, so) {
   var s = String(company && company.industry || "");
   var hasExport = Number(company && company.export_usd) > 0;
+  var isInnovation = (company && company.innovation_field) === true;
   if (so.status === "no") return { eligible: true, reason: "소상공인 아님 → 중진공 신청 가능" };
   if (so.status === "unknown") return { eligible: null, reason: "소상공인 여부 확인 필요 (상시근로자수 입력)" };
   var ex = [];
-  if (/제조/.test(s)) ex.push("제조업");
+  if (/제조/.test(s)) ex.push("제조업 (업종 자동판정)");
+  if (isInnovation) ex.push("혁신성장·초격차·신산업 분야 (수동 체크)");
   if (hasExport) ex.push("수출실적 보유 → 신시장진출지원자금");
-  if (ex.length) return { eligible: true, reason: "소상공인이나 예외 해당: " + ex.join(", ") + "\n(혁신성장업종·제주 예외업종은 별도 확인)" };
-  return { eligible: false, reason: "소상공인 → 중진공 원칙 제한(⑨)\n예외(제조업·혁신성장업종·수출실적·제주 예외업종) 시 가능" };
+  if (ex.length) return { eligible: true, reason: "소상공인이나 예외 해당:\n· " + ex.join("\n· ") + "\n(제주 예외업종 등은 별도 확인)" };
+  return { eligible: false, reason: "소상공인 → 중진공 원칙 제한(⑨)\n예외 없음: 제조업 아님 · 혁신성장 분야 미체크 · 수출실적 없음\n(해당되면 기본정보 탭에서 '혁신성장·초격차·신산업 분야' 체크)" };
 }
 
 // 소진공 신청가능 추정: 소상공인이면 일반형 기본 / 수출 1천불↑이면 혁신형(수출)도
@@ -148,21 +162,25 @@ function BizScaleBadges({ company, size }) {
   var sj = judgeSojinggong(company, so);
   var fs = size === "sm" ? 9 : 10;      // 1줄: 규모 배지
   var fsAgency = size === "sm" ? 8 : 9; // 2줄: 기관 배지 (살짝 작게)
-  var mark = function (status) { return status === "yes" ? "O" : status === "no" ? "X" : "?"; };
   var chip = function (key, text, tip, bg, color, fontSize) {
     return <span key={key} title={tip} style={{ fontSize: fontSize, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: bg, color: color, whiteSpace: "nowrap", cursor: "help", lineHeight: 1.5 }}>{text}</span>;
   };
+  // 위계(소상공인 ⊂ 소기업 ⊂ 중소기업) → 최종 등급 하나만 산출
+  // 소기업·소상공인 중 하나라도 unknown(정보부족)이면 null → 배지 렌더 안 함(공란)
+  var grade = null;
+  if (small.status !== "unknown" && so.status !== "unknown") {
+    if (small.status === "no") grade = { text: "중소기업", bg: "#FEF2F2", color: "#B91C1C", tip: small.reason };
+    else if (so.status === "yes") grade = { text: "소상공인", bg: "#EFF6FF", color: "#1D4ED8", tip: small.reason + "\n" + so.reason };
+    else grade = { text: "소기업", bg: "#ECFDF5", color: "#047857", tip: small.reason + "\n" + so.reason };
+  }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 3, alignItems: "flex-start" }}>
-      {/* 1줄: 규모 배지 (소기업 / 소상공인) */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 3, alignItems: "center" }}>
-        {chip("small", "소기업" + mark(small.status), small.reason,
-          small.status === "yes" ? "#ECFDF5" : small.status === "no" ? "#FEF2F2" : "#F3F4F6",
-          small.status === "yes" ? "#047857" : small.status === "no" ? "#B91C1C" : "#6B7280", fs)}
-        {chip("so", "소상공인" + mark(so.status), so.reason,
-          so.status === "yes" ? "#EFF6FF" : so.status === "no" ? "#FEF2F2" : "#F3F4F6",
-          so.status === "yes" ? "#1D4ED8" : so.status === "no" ? "#B91C1C" : "#6B7280", fs)}
-      </div>
+      {/* 1줄: 규모 배지 — 위계상 최종 등급 하나만 (정보부족이면 공란) */}
+      {grade && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 3, alignItems: "center" }}>
+          {chip("grade", grade.text, grade.tip, grade.bg, grade.color, fs)}
+        </div>
+      )}
       {/* 2줄: 기관 배지 — eligible === true 인 것만 표시 (불가/모름은 렌더 안 함, 둘 다 아니면 공란) */}
       {(jg.eligible === true || sj.eligible === true) && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 3, alignItems: "center" }}>
@@ -2006,6 +2024,12 @@ function CRMApp({ profile, session }) {
     // 계정정보(accounts)는 항목이 1개 이상 입력됐을 때만 저장 (컬럼 미생성 시 일반 저장이 깨지지 않도록 안전 처리)
     if (Array.isArray(rest.accounts) && rest.accounts.length > 0) {
       updateObj.accounts = rest.accounts;
+    }
+    // 혁신성장·초격차·신산업 분야(중진공 예외 판정용 수동 플래그)도 boolean으로 명시된 경우에만 저장.
+    // false도 의미가 있어 빈값 필터를 태울 수 없으므로 여기서 처리 — 미입력(undefined)이면 전송 안 함
+    // → innovation_field 컬럼 생성 전에도 기존 저장이 깨지지 않는다.
+    if (typeof rest.innovation_field === "boolean") {
+      updateObj.innovation_field = rest.innovation_field;
     }
     // 기업정보 탭: 기대출 내역(loans), 기업정보 항목(company_info), 기타 메모(company_info_memo)
     if (Array.isArray(rest.loans)) updateObj.loans = rest.loans;
@@ -5571,6 +5595,11 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               );
             })}
           </div>
+          {/* 규모/기관 판정 배지 (목록과 동일 로직 · 마우스오버 근거) */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ color: "#999", fontWeight: 600, fontSize: 12, flexShrink: 0 }}>규모/기관</span>
+            <BizScaleBadges company={data} />
+          </div>
           {(data.next_action || data.issue) && (
             <div style={{ fontSize: 12, color: "#555", display: "flex", gap: 6, alignItems: "flex-start" }}>
               <span style={{ color: "#999", fontWeight: 600, flexShrink: 0 }}>최근활동</span>
@@ -5787,6 +5816,14 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                       e.target.value = "";
                     }}
                     style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, outline: "none", boxSizing: "border-box" }} />
+                  {/* 중진공 예외 판정용 수동 플래그 (업종 텍스트로는 추정 불가) */}
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, paddingTop: 8, borderTop: "1px solid #E8E5E0", fontSize: 11, color: "#555", cursor: "pointer" }}>
+                    <input type="checkbox" checked={data.innovation_field === true}
+                      onChange={function(e) { var v = e.target.checked; setData(function(p) { return Object.assign({}, p, { innovation_field: v }); }); }}
+                      style={{ accentColor: "#7C3AED", flexShrink: 0 }} />
+                    <span style={{ fontWeight: 600 }}>혁신성장·초격차·신산업 분야 해당</span>
+                    <span style={{ color: "#888", fontSize: 10 }}>(소상공인이어도 중진공 신청 가능)</span>
+                  </label>
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>지역</div>
