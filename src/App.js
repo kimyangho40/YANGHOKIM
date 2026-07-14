@@ -163,15 +163,13 @@ function BizScaleBadges({ company, size }) {
           so.status === "yes" ? "#EFF6FF" : so.status === "no" ? "#FEF2F2" : "#F3F4F6",
           so.status === "yes" ? "#1D4ED8" : so.status === "no" ? "#B91C1C" : "#6B7280", fs)}
       </div>
-      {/* 2줄: 기관 배지 (중진공 / 소진공) */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 3, alignItems: "center" }}>
-        {chip("jg", "중진공 " + (jg.eligible === true ? "가능" : jg.eligible === false ? "제한" : "?"), jg.reason,
-          jg.eligible === true ? "#F5F3FF" : jg.eligible === false ? "#FEF3C7" : "#F3F4F6",
-          jg.eligible === true ? "#6D28D9" : jg.eligible === false ? "#B45309" : "#6B7280", fsAgency)}
-        {chip("sj", "소진공 " + (sj.eligible === true ? (sj.tiers.length > 1 ? "혁신형" : "일반형") : sj.eligible === false ? "대상X" : "?"), sj.reason,
-          sj.eligible === true ? "#FFF7ED" : "#F3F4F6",
-          sj.eligible === true ? "#C2410C" : "#6B7280", fsAgency)}
-      </div>
+      {/* 2줄: 기관 배지 — eligible === true 인 것만 표시 (불가/모름은 렌더 안 함, 둘 다 아니면 공란) */}
+      {(jg.eligible === true || sj.eligible === true) && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 3, alignItems: "center" }}>
+          {jg.eligible === true && chip("jg", "중진공 가능", jg.reason, "#F5F3FF", "#6D28D9", fsAgency)}
+          {sj.eligible === true && chip("sj", "소진공 " + (sj.tiers.length > 1 ? "혁신형" : "일반형"), sj.reason, "#FFF7ED", "#C2410C", fsAgency)}
+        </div>
+      )}
     </div>
   );
 }
