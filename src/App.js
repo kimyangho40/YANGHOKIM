@@ -224,13 +224,15 @@ function BizScaleBadges({ company, size, editable, onChange }) {
       </span>
     );
   };
-  // 위계(소상공인 ⊂ 소기업 ⊂ 중소기업) → 최종 등급 하나만 산출
+  // 위계(소상공인 ⊂ 소기업 ⊂ 중소기업) → 배지는 2단계로만 표기: [소상공인] 또는 [중소기업]
+  // ⚠️ "소기업" 배지는 만들지 말 것 — 소기업은 중소기업에 포함되므로 소상공인이 아니면 전부 [중소기업]이다.
+  //    (소기업 여부는 소상공인 판정의 중간단계로만 쓰고 tooltip 근거에만 남긴다)
   // 소기업·소상공인 중 하나라도 unknown(정보부족)이면 null → 배지 렌더 안 함(공란)
   var grade = null;
   if (small.status !== "unknown" && so.status !== "unknown") {
-    if (small.status === "no") grade = { text: "중소기업", bg: "#FEF2F2", color: "#B91C1C", tip: small.reason };
-    else if (so.status === "yes") grade = { text: "소상공인", bg: "#EFF6FF", color: "#1D4ED8", tip: small.reason + "\n" + so.reason };
-    else grade = { text: "소기업", bg: "#ECFDF5", color: "#047857", tip: small.reason + "\n" + so.reason };
+    if (so.status === "yes") grade = { text: "소상공인", bg: "#EFF6FF", color: "#1D4ED8", tip: small.reason + "\n" + so.reason };
+    // 소기업이지만 소상공인은 아닌 기업(small=yes, so=no)도 여기로 → [중소기업]
+    else grade = { text: "중소기업", bg: "#FEF2F2", color: "#B91C1C", tip: small.status === "no" ? small.reason : small.reason + "\n" + so.reason };
   }
   // 소진공 등급 표기 — tiers에 혁신형이 있으면 혁신형 (보정으로 ["혁신형"] 1개만 올 수도 있음)
   var sjLabel = (sj.tiers || []).some(function (t) { return String(t).indexOf("혁신형") >= 0; }) ? "혁신형" : "일반형";
@@ -1830,6 +1832,10 @@ function CRMApp({ profile, session }) {
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedCompany, setSelectedCompany] = useState(null);
+  // 업체 상세를 열 때 처음 보여줄 탭 (기업목록 "작업" 버튼이 용도별로 지정 · 없으면 기본정보)
+  const [selectedTab, setSelectedTab] = useState(null);
+  // tab을 안 넘기면 항상 null로 초기화 → 직전에 연 탭이 남아 엉뚱한 탭으로 열리지 않게 함
+  const openCompany = function(c, tab) { setSelectedCompany(c); setSelectedTab(tab || null); };
   const [showAdd, setShowAdd] = useState(false);
   const [search, setSearch] = useState("");
   const [filterStage, setFilterStage] = useState("전체");
@@ -2738,7 +2744,7 @@ function CRMApp({ profile, session }) {
             {view === "pipeline" && <PipelineView filtered={filtered} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setCompanies={setCompanies} />}
             {view === "cases" && <ApprovalCasesView profile={profile} />}
             {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={profile?.role === "admin" || profile?.name === "양호"} onSelectCompany={setSelectedCompany} setView={setView} companies={companies} />}
-            {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} filterAgency={filterAgency} setFilterAgency={setFilterAgency} filterTeam={filterTeam} setFilterTeam={setFilterTeam} creditFilter={creditFilter} setCreditFilter={setCreditFilter} creditMode={creditMode} setCreditMode={setCreditMode} assignees={assignees} onSelect={setSelectedCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
+            {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} filterAgency={filterAgency} setFilterAgency={setFilterAgency} filterTeam={filterTeam} setFilterTeam={setFilterTeam} creditFilter={creditFilter} setCreditFilter={setCreditFilter} creditMode={creditMode} setCreditMode={setCreditMode} assignees={assignees} onSelect={openCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
             {view === "stagnant" && <StagnantView stagnant={stagnant} onSelect={setSelectedCompany} />}
             {view === "members" && profile.role === "admin" && <MembersView profiles={profiles} onRefresh={fetchAll} showToast={showToast} />}
             {view === "backup" && <BackupView canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
@@ -2769,7 +2775,8 @@ function CRMApp({ profile, session }) {
       {selectedCompany && (
         <CompanyModal
           company={selectedCompany}
-          onClose={() => setSelectedCompany(null)}
+          initialTab={selectedTab}
+          onClose={() => { setSelectedCompany(null); setSelectedTab(null); }}
           onSave={saveCompany}
           onToggleDoc={toggleDoc}
           currentUser={profile}
@@ -4743,15 +4750,18 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                   </td>
                   <td style={{ padding: "11px 8px", whiteSpace: "nowrap" }} onClick={function(e) { e.stopPropagation(); }}>
                     <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
-                      <button onClick={function() { onSelect(co); }} title="소통/상세보기"
+                      {/* 작업 버튼은 각각 다른 탭으로 연다 — 같은 onSelect(co)로 두면 셋 다 상세보기만 열려 구분이 없어짐 */}
+                      <button onClick={function() { onSelect(co, "history"); }} title="상담메모 (이슈·액션 · 소통내역)"
                         style={{ background: "#EEF2FF", border: "none", borderRadius: 4, padding: "3px 7px", fontSize: 11, cursor: "pointer", color: "#4338CA", fontWeight: 600 }}>💬</button>
-                      <button onClick={function() { onSelect(co); }} title="수정"
+                      <button onClick={function() { onSelect(co, "info"); }} title="수정 (기본정보)"
                         style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
                         <Icon name="edit" size={14} color="#888" />
                       </button>
                       <button onClick={async function() {
                         if (!window.confirm("'" + co.name + "' 업체를 휴지통으로 이동할까요?")) return;
-                        await supabase.from("companies").update({ deleted_at: new Date().toISOString() }).eq("id", co.id);
+                        var r = await supabase.from("companies").update({ deleted_at: new Date().toISOString() }).eq("id", co.id);
+                        // DB 삭제가 실패했는데 목록에서만 지우면 새로고침 때 되살아난다 → 성공 토스트가 거짓말이 됨
+                        if (r.error) { if (showToast) showToast("삭제 실패: " + r.error.message, "error"); return; }
                         setCompanies(function(prev) { return prev.filter(function(c) { return c.id !== co.id; }); });
                         if (showToast) showToast("휴지통으로 이동됐어요!");
                       }} title="삭제(휴지통)"
@@ -4941,9 +4951,12 @@ function MembersView({ profiles, onRefresh, showToast }) {
 }
 
 // ── 기업 상세 모달 ─────────────────────────────────────────────────────────────
-function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAgencyRegistered, companies }) {
-  const [tab, setTab] = useState("info");
-  const [prevTab, setPrevTab] = useState("info");
+// initialTab: 열릴 때 처음 보여줄 탭. 기업목록 "작업" 버튼이 용도별로 다른 탭을 지정한다
+// (✏️ 수정 → "info"(기본정보, 입력폼), 💬 상담메모 → "history"(이슈·액션 · 소통내역)).
+// 지정 안 하면 기존과 동일하게 "info".
+function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAgencyRegistered, companies, initialTab }) {
+  const [tab, setTab] = useState(initialTab || "info");
+  const [prevTab, setPrevTab] = useState(initialTab || "info");
   var goTab = function(id) { setPrevTab(tab); setTab(id); };
   const [data, setData] = useState({ ...company });
   const [editingName, setEditingName] = useState(false);
