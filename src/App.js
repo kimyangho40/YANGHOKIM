@@ -42,6 +42,140 @@ const AGENCIES =["소상공인시장진흥공단","중소벤처기업진흥공�
 const JUNGINGONG_PRODUCTS = ["창업기반지원","청년창업자금","혁신성장지원","개발기술사업화","재창업","내수기업수출기업화(10만불 미만)","수출기업글로벌화(10만불 이상)","사업전환","구조개선","긴급경영 안정자금","기타"];
 const SOJINGONG_PRODUCTS = ["신용취약자금","재도전특별자금","혁신성장 촉진자금(스마트 기술)","혁신성장 촉진자금(2년 연속 매출 10% 신장)","혁신성장 촉진자금(수출 자금)","혁신성장 촉진자금(그 외 기타)","상생성장지원자금","그 외 기타","대리대출"];
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 📊 소기업/소상공인 규모 자동판정 (참고용) + 중진공·소진공 신청가능 추정
+// ⚠️ 업종 키워드 매칭은 100% 정확하지 않으니 "참고용 배지"로만 사용하세요.
+//    아래 BIZ_SCALE_TABLE 의 금액(억원)은 중기부 공고 2026-287호 붙임2(업종별 소기업
+//    매출액 규모기준, 43개 업종) 원문으로 반드시 대조·수정하세요.
+//    현재값은 중소기업기본법 시행령 별표3(소기업 규모기준)을 근거로 한 초기값이며,
+//    공고 원문과 다르면 amount 숫자만 고치면 판정에 즉시 반영됩니다.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// 업종 키워드 → 소기업 평균매출액 상한(억원). 위에서부터 매칭(먼저 걸리는 항목 우선).
+const BIZ_SCALE_TABLE = [
+  { amount: 120, group: "제조",            keys: ["식료품","음료","의복","모피","가죽","가방","신발","코크스","연탄","석유정제","화학","의약","고무","플라스틱","비금속","1차금속","금속가공","전자","반도체","컴퓨터","영상","음향","통신장비","전기장비","기계","자동차","트레일러","가구","제조"] },
+  { amount: 80,  group: "제조/건설/도소매", keys: ["담배","섬유","목재","나무","펄프","종이","인쇄","기록매체","의료용물질","정밀","광학","시계","운송장비","건설","도매","소매","전기업","가스","증기","수도"] },
+  { amount: 50,  group: "농림어업/광업/운수/정보", keys: ["농업","임업","어업","광업","운수","운송","창고","출판","정보통신","정보서비스"] },
+  { amount: 30,  group: "서비스",          keys: ["수리","전문","과학","기술서비스","사업시설","사업지원","임대","보건","사회복지","예술","스포츠","여가","부동산"] },
+  { amount: 10,  group: "생활서비스",       keys: ["숙박","음식","외식","금융","보험","교육","협회","단체","미용","세탁","기타개인"] },
+];
+
+// 최근 3개년(2023~2025) 중 값이 있는 해의 평균 매출액(원)
+function bizAvgRevenue(company) {
+  var ys = ["revenue_2023", "revenue_2024", "revenue_2025"]
+    .map(function (k) { return Number(company && company[k]) || 0; })
+    .filter(function (v) { return v > 0; });
+  if (ys.length === 0) return null;
+  return ys.reduce(function (a, b) { return a + b; }, 0) / ys.length;
+}
+
+// 업종 텍스트 → 소기업 매출 규모기준(억원) 매칭
+function bizScaleCap(industry) {
+  var s = String(industry || "");
+  if (!s.trim()) return null;
+  for (var i = 0; i < BIZ_SCALE_TABLE.length; i++) {
+    var row = BIZ_SCALE_TABLE[i];
+    for (var j = 0; j < row.keys.length; j++) {
+      if (s.indexOf(row.keys[j]) >= 0) return { amount: row.amount, group: row.group, key: row.keys[j] };
+    }
+  }
+  return null;
+}
+
+// 소기업 여부: 평균매출액 ≤ 업종별 규모기준
+function judgeSmallBiz(company) {
+  var cap = bizScaleCap(company && company.industry);
+  var avg = bizAvgRevenue(company);
+  if (!cap) return { status: "unknown", reason: "업종 미매칭 → 규모기준 확인 필요 (업종 입력/공고 대조)" };
+  var capWon = cap.amount * 1e8;
+  if (avg == null) return { status: "unknown", cap: cap, reason: "매출 데이터 없음 · 소기업 기준 " + cap.amount + "억 이하 (" + cap.key + ")" };
+  var isSmall = avg <= capWon;
+  return {
+    status: isSmall ? "yes" : "no", cap: cap, avg: avg,
+    reason: "평균매출 " + (avg / 1e8).toFixed(1) + "억 " + (isSmall ? "≤" : ">") + " 소기업기준 " + cap.amount + "억 (업종매칭: " + cap.key + ")\n※ 업종 키워드 매칭 참고용",
+  };
+}
+
+// 소상공인 업종군별 상시근로자 상한: 광업·제조·건설·운수 = 10명 미만, 그 외 = 5명 미만
+function sosangEmpLimit(industry) {
+  return /(광업|제조|건설|운수|운송)/.test(String(industry || "")) ? 10 : 5;
+}
+
+// 소상공인 여부: 상시근로자수 < 업종군 기준
+function judgeSososang(company) {
+  var limit = sosangEmpLimit(company && company.industry);
+  var emp = parseInt(company && company.employee_count, 10);
+  var groupLabel = limit === 10 ? "광업·제조·건설·운수" : "그 외 업종";
+  if (isNaN(emp)) return { status: "unknown", limit: limit, reason: "상시근로자수 미입력 · 기준 " + limit + "명 미만 (" + groupLabel + ")" };
+  var isSo = emp < limit;
+  return {
+    status: isSo ? "yes" : "no", limit: limit, emp: emp,
+    reason: "상시근로자 " + emp + "명 " + (isSo ? "<" : "≥") + " 기준 " + limit + "명 (" + groupLabel + ")",
+  };
+}
+
+// 중진공 신청가능 추정: 소상공인 아니면 가능 / 소상공인이면 원칙 제한(⑨)이나 예외 확인
+function judgeJunginggong(company, so) {
+  var s = String(company && company.industry || "");
+  var hasExport = Number(company && company.export_usd) > 0;
+  if (so.status === "no") return { eligible: true, reason: "소상공인 아님 → 중진공 신청 가능" };
+  if (so.status === "unknown") return { eligible: null, reason: "소상공인 여부 확인 필요 (상시근로자수 입력)" };
+  var ex = [];
+  if (/제조/.test(s)) ex.push("제조업");
+  if (hasExport) ex.push("수출실적 보유 → 신시장진출지원자금");
+  if (ex.length) return { eligible: true, reason: "소상공인이나 예외 해당: " + ex.join(", ") + "\n(혁신성장업종·제주 예외업종은 별도 확인)" };
+  return { eligible: false, reason: "소상공인 → 중진공 원칙 제한(⑨)\n예외(제조업·혁신성장업종·수출실적·제주 예외업종) 시 가능" };
+}
+
+// 소진공 신청가능 추정: 소상공인이면 일반형 기본 / 수출 1천불↑이면 혁신형(수출)도
+function judgeSojinggong(company, so) {
+  var exportUsd = Number(company && company.export_usd) || 0;
+  if (so.status === "no") return { eligible: false, reason: "소상공인 아님 → 소진공 원칙 대상 아님" };
+  if (so.status === "unknown") return { eligible: null, reason: "소상공인 여부 확인 필요 (상시근로자수 입력)" };
+  var tiers = ["일반형"];
+  if (exportUsd >= 1000) tiers.push("혁신형(수출)");
+  return {
+    eligible: true, tiers: tiers,
+    reason: "소상공인 → " + tiers.join(", ") + " 신청 가능" + (exportUsd >= 1000 ? "\n(수출실적 " + exportUsd.toLocaleString() + "불 ≥ 1천불)" : "\n(수출 1천불↑이면 혁신형도 가능)"),
+  };
+}
+
+// 규모/기관 판정 배지 (참고용 · 마우스 오버 시 근거 tooltip)
+function BizScaleBadges({ company, size }) {
+  var small = judgeSmallBiz(company);
+  var so = judgeSososang(company);
+  var jg = judgeJunginggong(company, so);
+  var sj = judgeSojinggong(company, so);
+  var fs = size === "sm" ? 9 : 10;      // 1줄: 규모 배지
+  var fsAgency = size === "sm" ? 8 : 9; // 2줄: 기관 배지 (살짝 작게)
+  var mark = function (status) { return status === "yes" ? "O" : status === "no" ? "X" : "?"; };
+  var chip = function (key, text, tip, bg, color, fontSize) {
+    return <span key={key} title={tip} style={{ fontSize: fontSize, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: bg, color: color, whiteSpace: "nowrap", cursor: "help", lineHeight: 1.5 }}>{text}</span>;
+  };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3, alignItems: "flex-start" }}>
+      {/* 1줄: 규모 배지 (소기업 / 소상공인) */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 3, alignItems: "center" }}>
+        {chip("small", "소기업" + mark(small.status), small.reason,
+          small.status === "yes" ? "#ECFDF5" : small.status === "no" ? "#FEF2F2" : "#F3F4F6",
+          small.status === "yes" ? "#047857" : small.status === "no" ? "#B91C1C" : "#6B7280", fs)}
+        {chip("so", "소상공인" + mark(so.status), so.reason,
+          so.status === "yes" ? "#EFF6FF" : so.status === "no" ? "#FEF2F2" : "#F3F4F6",
+          so.status === "yes" ? "#1D4ED8" : so.status === "no" ? "#B91C1C" : "#6B7280", fs)}
+      </div>
+      {/* 2줄: 기관 배지 (중진공 / 소진공) */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 3, alignItems: "center" }}>
+        {chip("jg", "중진공 " + (jg.eligible === true ? "가능" : jg.eligible === false ? "제한" : "?"), jg.reason,
+          jg.eligible === true ? "#F5F3FF" : jg.eligible === false ? "#FEF3C7" : "#F3F4F6",
+          jg.eligible === true ? "#6D28D9" : jg.eligible === false ? "#B45309" : "#6B7280", fsAgency)}
+        {chip("sj", "소진공 " + (sj.eligible === true ? (sj.tiers.length > 1 ? "혁신형" : "일반형") : sj.eligible === false ? "대상X" : "?"), sj.reason,
+          sj.eligible === true ? "#FFF7ED" : "#F3F4F6",
+          sj.eligible === true ? "#C2410C" : "#6B7280", fsAgency)}
+      </div>
+    </div>
+  );
+}
+
 // 신청상품별 색상 (배경/글자)
 const PRODUCT_COLORS = {
   // 중진공 (보라 계열)
@@ -4159,7 +4293,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
 
   // 컬럼 너비 수동 조절 (헤더 경계 드래그) - 브라우저(localStorage)에 자동 저장
   const DEFAULT_LIST_COL_WIDTHS = {
-    "업체명": 130, "유형": 80, "지역": 90, "업종": 120, "대표자": 80, "담당": 60,
+    "업체명": 130, "유형": 80, "지역": 90, "업종": 120, "규모/기관": 130, "대표자": 80, "담당": 60,
     "진행단계": 175, "중복": 56, "정체일수": 70, "신청기관": 150, "계약일": 90, "진행기관": 140,
     "23년~25년 매출": 160, "26년 상반기 매출": 120, "신용점수": 90, "기타": 140, "작업": 110
   };
@@ -4355,7 +4489,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1200, tableLayout: "fixed" }}>
           <thead>
             <tr style={{ background: "#F7F6F3", borderBottom: "1px solid #E8E5E0", position: "sticky", top: 0, zIndex: 2 }}>
-              {["업체명","유형","지역","업종","대표자","담당","진행단계","중복","정체일수","신청기관","계약일","진행기관","23년~25년 매출","26년 상반기 매출","신용점수","기타","작업"].map(h => (
+              {["업체명","유형","지역","업종","규모/기관","대표자","담당","진행단계","중복","정체일수","신청기관","계약일","진행기관","23년~25년 매출","26년 상반기 매출","신용점수","기타","작업"].map(h => (
                 <th key={h} style={Object.assign({ padding: "10px 8px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left", letterSpacing: "0.03em", whiteSpace: "nowrap", background: "#F7F6F3", position: "relative", boxSizing: "border-box", width: listColWidths[h], minWidth: listColWidths[h], maxWidth: listColWidths[h] },
                   h === "업체명" ? { position: "sticky", left: 0, zIndex: 3, boxShadow: "2px 0 4px -2px rgba(0,0,0,0.08)" } : {}
                 )}>{h}
@@ -4424,6 +4558,9 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                   </td>
                   <td style={{ padding: "6px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 120 }} onClick={function(e) { e.stopPropagation(); }}>
                     <IndustryCell co={co} setCompanies={setCompanies} companies={companies} />
+                  </td>
+                  <td style={{ padding: "8px 8px", verticalAlign: "middle", boxSizing: "border-box", width: listColWidths["규모/기관"], minWidth: listColWidths["규모/기관"], maxWidth: listColWidths["규모/기관"] }} onClick={function(e) { e.stopPropagation(); }}>
+                    <BizScaleBadges company={co} size="sm" />
                   </td>
                   <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis" }}>{co.representative || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 12, whiteSpace: "nowrap" }}>{co.assignee || "-"}</td>
