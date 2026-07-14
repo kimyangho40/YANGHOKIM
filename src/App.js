@@ -5208,20 +5208,33 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
       setCallUploading(false);
     }
   };
-  // 소통내역 메모 렌더링 — 오디오 URL이 있으면 인라인 플레이어로 표시
+  // 소통내역 메모 렌더링
+  // - 음성 메모(voice-memos): 재생 위젯 없이 🎤 배지만 표시 (오디오는 버킷에 백업 유지)
+  // - 통화 녹음(call-recordings) 등: 기존처럼 인라인 플레이어로 표시
   var renderMemoContent = function(memo) {
     var text = memo || "";
     var audioUrls = [];
+    var hasVoiceMemo = false;
     var display = text.replace(/https?:\/\/[^\s]+/g, function(u) {
-      if (/voice-memos|call-recordings/.test(u) || /\.(mp3|m4a|wav|webm|ogg)(\?|$)/i.test(u)) {
+      if (/voice-memos/.test(u)) { hasVoiceMemo = true; return ""; } // 음성 메모: URL(플레이어) 숨김
+      if (/call-recordings/.test(u) || /\.(mp3|m4a|wav|webm|ogg)(\?|$)/i.test(u)) {
         audioUrls.push(u);
         return "";
       }
       return u;
     }).replace(/\n{2,}/g, "\n").trim();
+    // 음성 메모 라벨에서 앞쪽 🎙️ 중복 제거 → "음성 메모 (00:10)"
+    var voiceLabel = hasVoiceMemo ? display.replace(/^🎙️\s*/, "").trim() : "";
     return (
       <>
-        {display && <span>{display}</span>}
+        {hasVoiceMemo ? (
+          <span title="음성 파일은 백업 보관 중 (재생 위젯 숨김)"
+            style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, color: "#B91C1C", background: "#FEF2F2", padding: "2px 8px", borderRadius: 99 }}>
+            🎤 {voiceLabel || "음성 메모"}
+          </span>
+        ) : (
+          display && <span>{display}</span>
+        )}
         {audioUrls.map(function(u, idx) {
           return <audio key={idx} controls preload="none" src={u} style={{ display: "block", width: "100%", marginTop: 6, height: 36 }} />;
         })}
