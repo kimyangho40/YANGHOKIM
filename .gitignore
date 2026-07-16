@@ -23,3 +23,8 @@ yarn-debug.log*
 yarn-error.log*
 
 .vercel
+
+# 업무지시서 / 케이스 데이터 (로컬 작업용)
+/신규등록_업무지시.txt
+/신규등록_업무지시서.xlsx
+/신규등록_케이스전체_168건.txt
