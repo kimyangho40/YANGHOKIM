@@ -11119,7 +11119,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   const DEFAULT_COL_WIDTHS = {
     num: 40, business_name: 160, representative: 80, assignee: 80, amount: 70,
     product: 140, industry: 70, region: 80, contact: 130, status: 110, dup: 56, docs: 200,
-    credit: 60, notes: 140, action: 120, priority: 84
+    script: 72, edu: 72, credit: 60, notes: 140, action: 120, priority: 84
   };
   const [colWidths, setColWidths] = useState(function() {
     try {
@@ -11434,10 +11434,18 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       delivered_docs: editData.delivered_docs || [],
       updated_at: new Date().toISOString()
     };
+    var prevCase = cases.find(function(c) { return c.id === editData.id; });
+    var prevStatus = prevCase ? prevCase.status : "";
     var result = await supabase.from("agency_cases").update(updates).eq("id", editData.id);
     if (!result.error) {
       setCases(function(prev) { return prev.map(function(c) { return c.id === editData.id ? Object.assign({}, c, updates) : c; }); });
+      var savedId = editData.id;
+      var savedStatus = updates.status;
       setEditingId(null); setEditData({});
+      // 인라인 편집으로 부결/반려로 바뀐 경우도 재신청 체크리스트 (상태 변경분만)
+      if ((savedStatus === "부결" || savedStatus === "반려") && prevStatus !== savedStatus) {
+        openReject(Object.assign({}, prevCase || {}, updates, { id: savedId }));
+      }
     }
   };
 
@@ -11532,6 +11540,11 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   const [priorityTarget, setPriorityTarget] = useState(null);
   const [priorityChecks, setPriorityChecks] = useState({});
 
+  // 부결/반려 재신청 체크리스트 모달
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [rejectTarget, setRejectTarget] = useState(null);
+  const [rejectChecks, setRejectChecks] = useState({});
+
   var openPriority = function(row) {
     setPriorityTarget(row);
     var saved = {};
@@ -11545,6 +11558,91 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       setCases(function(prev) { return prev.map(function(c) { return c.id === priorityTarget.id ? Object.assign({}, c, { priority_checks: JSON.stringify(priorityChecks) }) : c; }); });
       setShowPriorityModal(false);
       alert("체크리스트가 저장됐어요!");
+    }
+  };
+
+  // ── 부결/반려 재신청 체크리스트 ──────────────────────────────────────
+  var openReject = function(row) {
+    setRejectTarget(row);
+    var saved = (row && typeof row.reject_checklist === "object" && row.reject_checklist) ? row.reject_checklist : {};
+    setRejectChecks({
+      rep_contacted: !!saved.rep_contacted,
+      assignee_confirmed: !!saved.assignee_confirmed,
+      reapply_intent: saved.reapply_intent || "",
+    });
+    setShowRejectModal(true);
+  };
+  // 원본 건 기준 다음달(년/월 +1). 12월 → 다음해 1월. (오늘 기준 아님)
+  var nextApplyPeriod = function(y, m) {
+    y = Number(y) || currentYear;
+    m = Number(m) || (new Date().getMonth() + 1);
+    var nm = m + 1, ny = y;
+    if (nm > 12) { nm = 1; ny = y + 1; }
+    return { year: ny, month: nm };
+  };
+  var saveRejectChecks = async function() {
+    if (!rejectTarget) return;
+    var checklist = {
+      rep_contacted: !!rejectChecks.rep_contacted,
+      assignee_confirmed: !!rejectChecks.assignee_confirmed,
+      reapply_intent: rejectChecks.reapply_intent || "보류",
+      decided_at: new Date().toISOString(),
+      decided_by: rejectTarget.assignee || null,
+      reapplied_case_id: null,
+    };
+    var per = null;
+    // 재신청 의사 '예' → 원본 건의 다음달로 새 건 자동 생성
+    if (checklist.reapply_intent === "예") {
+      per = nextApplyPeriod(rejectTarget.year, rejectTarget.month);
+      var base = {
+        agency_group: rejectTarget.agency_group || activeGroup,
+        year: per.year, month: per.month,
+        business_name: rejectTarget.business_name,
+        representative: rejectTarget.representative || null,
+        business_number: rejectTarget.business_number || null,
+        assignee: rejectTarget.assignee || null,
+        status: "시작 전",
+        request_amount: rejectTarget.request_amount || null,
+        region: rejectTarget.region || null,
+        notes: rejectTarget.notes || null,
+      };
+      // 1차: reapply_from_id 포함. 컬럼 미생성 시 최소 필드로 재시도.
+      var ins = await supabase.from("agency_cases").insert(Object.assign({}, base, { reapply_from_id: rejectTarget.id })).select().single();
+      if (ins.error) {
+        console.warn("재신청 건 생성 1차 실패, reapply_from_id 없이 재시도:", ins.error.message);
+        ins = await supabase.from("agency_cases").insert(base).select().single();
+      }
+      if (!ins.error && ins.data) {
+        checklist.reapplied_case_id = ins.data.id;
+        setCases(function(prev) { return prev.concat([ins.data]); });
+      } else if (ins.error) {
+        alert("재신청 건 자동 생성 실패: " + ins.error.message);
+      }
+    }
+    // 체크리스트 저장 — reject_checklist는 jsonb이므로 객체 그대로 (stringify 금지)
+    var r = await supabase.from("agency_cases").update({ reject_checklist: checklist }).eq("id", rejectTarget.id);
+    if (r.error) {
+      console.warn("reject_checklist 저장 실패(컬럼 미생성 가능):", r.error.message);
+      alert("체크리스트 저장에 실패했어요.\n" + r.error.message + "\n(reject_checklist 컬럼이 아직 없을 수 있어요 — SQL 실행 필요)");
+    } else {
+      setCases(function(prev) { return prev.map(function(c) { return c.id === rejectTarget.id ? Object.assign({}, c, { reject_checklist: checklist }) : c; }); });
+      if (checklist.reapplied_case_id && per) alert("재신청 체크리스트 저장 완료.\n" + per.year + "년 " + per.month + "월 재신청 건을 자동 생성했어요.");
+      else alert("재신청 체크리스트가 저장됐어요.");
+    }
+    setShowRejectModal(false);
+    setRejectTarget(null);
+  };
+
+  // 스크립트 전달 / 유선교육 토글 (즉시 저장 + 낙관적 갱신, 컬럼 미생성 방어)
+  var toggleFlag = async function(row, field, val) {
+    setCases(function(prev) { return prev.map(function(c) { return c.id === row.id ? Object.assign({}, c, { [field]: val }) : c; }); });
+    var upd = { updated_at: new Date().toISOString() };
+    upd[field] = val;
+    var r = await supabase.from("agency_cases").update(upd).eq("id", row.id);
+    if (r.error) {
+      console.warn(field + " 저장 실패(컬럼 미생성 가능):", r.error.message);
+      alert("저장 실패: " + r.error.message + "\n(해당 컬럼이 아직 없을 수 있어요 — SQL 실행 필요)");
+      setCases(function(prev) { return prev.map(function(c) { return c.id === row.id ? Object.assign({}, c, { [field]: !val }) : c; }); });
     }
   };
 
@@ -11790,6 +11888,8 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                 )}
                 <th style={headerCellStyle("status", { color: activeGroup === "구조혁신&사업전환" ? "#BE123C" : "#888" })}>상태<ResizeHandle colKey="status" /></th>
                 <th style={headerCellStyle("dup", { textAlign: "center" })}>중복<ResizeHandle colKey="dup" /></th>
+                <th style={headerCellStyle("script", { textAlign: "center", color: "#0369A1" })}>스크립트<ResizeHandle colKey="script" /></th>
+                <th style={headerCellStyle("edu", { textAlign: "center", color: "#0369A1" })}>유선교육<ResizeHandle colKey="edu" /></th>
                 {activeGroup === "구조혁신&사업전환" && (
                   <th style={headerCellStyle("docs", { color: "#0F6E56", background: "#E1F5EE" })}>전달 및 완료 서류<ResizeHandle colKey="docs" /></th>
                 )}
@@ -11812,6 +11912,9 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                         : (
                           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                             <span style={{ fontWeight: 600 }}>{row.business_name || "-"}</span>
+                            {row.reapply_from_id && (
+                              <span title="이전 부결/반려 건에서 재신청된 건" style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: "#FEF3C7", color: "#B45309", whiteSpace: "nowrap" }}>재신청</span>
+                            )}
                             {activeGroup === "중소벤처기업진흥공단" && (
                               <button onClick={function(e) { e.stopPropagation(); openPriority(row); }}
                                 style={{ fontSize: 10, padding: "2px 7px", background: "#F3F0FF", color: "#7C3AED", border: "1px solid #DDD6FE", borderRadius: 4, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>
@@ -12004,6 +12107,16 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                         return <span title={"같은 사업장(사업자명+대표자명)이 총 " + cnt + "건 등록됨"} style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", whiteSpace: "nowrap" }}>중복</span>;
                       })()}
                     </td>
+                    <td style={{ padding: "10px 12px", textAlign: "center" }} onClick={function(e) { e.stopPropagation(); }}>
+                      <input type="checkbox" checked={!!row.script_delivered}
+                        onChange={function(e) { e.stopPropagation(); toggleFlag(row, "script_delivered", e.target.checked); }}
+                        style={{ width: 15, height: 15, cursor: "pointer", accentColor: "#0369A1" }} />
+                    </td>
+                    <td style={{ padding: "10px 12px", textAlign: "center" }} onClick={function(e) { e.stopPropagation(); }}>
+                      <input type="checkbox" checked={!!row.phone_education_done}
+                        onChange={function(e) { e.stopPropagation(); toggleFlag(row, "phone_education_done", e.target.checked); }}
+                        style={{ width: 15, height: 15, cursor: "pointer", accentColor: "#0369A1" }} />
+                    </td>
                     {activeGroup === "구조혁신&사업전환" && (
                       <td style={{ padding: "10px 12px" }}>
                         {isEditing ? (
@@ -12169,6 +12282,51 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                   );
                 })}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 부결/반려 재신청 체크리스트 모달 */}
+      {showRejectModal && rejectTarget && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center" }}
+          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowRejectModal(false); }}>
+          <div style={{ background: "#fff", borderRadius: 16, width: 460, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.25)" }}>
+            <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#B91C1C" }}>부결/반려 재신청 체크리스트</h2>
+                <div style={{ fontSize: 12, color: "#888", marginTop: 3 }}>{rejectTarget.business_name} · {rejectTarget.status}</div>
+              </div>
+              <button onClick={function() { setShowRejectModal(false); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#888" }}>✕</button>
+            </div>
+            <div style={{ padding: "20px 24px" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 10, background: rejectChecks.rep_contacted ? "#F0FDF4" : "#FAFAFA", border: "1px solid " + (rejectChecks.rep_contacted ? "#BBF7D0" : "#EDEBE8"), cursor: "pointer", marginBottom: 10 }}>
+                <input type="checkbox" checked={!!rejectChecks.rep_contacted} onChange={function(e) { var v = e.target.checked; setRejectChecks(function(p) { return Object.assign({}, p, { rep_contacted: v }); }); }} style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#16A34A" }} />
+                <span style={{ fontSize: 13, fontWeight: rejectChecks.rep_contacted ? 600 : 400, color: "#333" }}>대표자 소통 완료</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 10, background: rejectChecks.assignee_confirmed ? "#F0FDF4" : "#FAFAFA", border: "1px solid " + (rejectChecks.assignee_confirmed ? "#BBF7D0" : "#EDEBE8"), cursor: "pointer", marginBottom: 18 }}>
+                <input type="checkbox" checked={!!rejectChecks.assignee_confirmed} onChange={function(e) { var v = e.target.checked; setRejectChecks(function(p) { return Object.assign({}, p, { assignee_confirmed: v }); }); }} style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#16A34A" }} />
+                <span style={{ fontSize: 13, fontWeight: rejectChecks.assignee_confirmed ? 600 : 400, color: "#333" }}>담당자 확인 완료</span>
+              </label>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 8 }}>재신청 의사</div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                {["예","아니오","보류"].map(function(opt) {
+                  var sel = rejectChecks.reapply_intent === opt;
+                  var col = opt === "예" ? "#16A34A" : opt === "아니오" ? "#DC2626" : "#B45309";
+                  return (
+                    <button key={opt} onClick={function() { setRejectChecks(function(p) { return Object.assign({}, p, { reapply_intent: opt }); }); }}
+                      style={{ flex: 1, padding: "9px 0", borderRadius: 8, fontSize: 13, fontWeight: sel ? 700 : 500, cursor: "pointer", background: sel ? col : "#fff", color: sel ? "#fff" : "#666", border: "1px solid " + (sel ? col : "#E8E5E0") }}>{opt}</button>
+                  );
+                })}
+              </div>
+              {rejectChecks.reapply_intent === "예" && (function() {
+                var per = nextApplyPeriod(rejectTarget.year, rejectTarget.month);
+                return <div style={{ fontSize: 12, color: "#0F6E56", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 8, padding: "8px 12px", marginTop: 4 }}>저장 시 <b>{per.year}년 {per.month}월</b> 재신청 건을 자동 생성해요.</div>;
+              })()}
+            </div>
+            <div style={{ padding: "0 24px 20px", display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={function() { setShowRejectModal(false); }} style={{ background: "#fff", color: "#666", border: "1px solid #E8E5E0", borderRadius: 8, padding: "9px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>나중에</button>
+              <button onClick={saveRejectChecks} style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, padding: "9px 20px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
             </div>
           </div>
         </div>
@@ -12392,6 +12550,10 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                                 logged_by: selectedCase.assignee || null,
                               });
                             }
+                          }
+                          // 부결/반려로 바뀌면 재신청 체크리스트 모달 (상태 변경분만)
+                          if ((s === "부결" || s === "반려") && prevStatus !== s) {
+                            openReject(Object.assign({}, selectedCase, { status: s }));
                           }
                         }
                       }} style={{ padding: "5px 12px", borderRadius: 99, border: isActive ? (isApproved ? "2px solid #0F6E56" : "2px solid " + sc.text) : "1px solid #E8E5E0", background: isActive ? sc.bg : "#fff", color: isActive ? sc.text : "#888", fontSize: 12, fontWeight: isActive ? 700 : 400, cursor: "pointer" }}>{isApproved ? "✓ " + s : s}</button>
@@ -13347,7 +13509,14 @@ function ApprovalCasesView({ profile }) {
     return ["전체"].concat(Array.from(s).sort());
   }, [cases]);
 
-  var agencyOpts = ["전체","소상공인시장진흥공단","신용보증기금","농협신용보증기금","기술보증기금","신용보증재단","중소벤처기업진흥공단","구조혁신&사업전환","경정청구","기타"];
+  // 기관 탭: 지정 기관 + 데이터에 실제 존재하는 기존값 자동 append (기존 사례가 필터에서 사라지지 않게)
+  var agencyOpts = useMemo(function() {
+    var list = ["전체","소상공인시장진흥공단","신용보증기금","농협신용보증기금","기술보증기금","신용보증재단","중소벤처기업진흥공단","미소재단","수출무역보험공사","구조혁신&사업전환","경정청구","기타"];
+    var seen = {};
+    list.forEach(function(x) { seen[x] = true; });
+    cases.forEach(function(c) { if (c.agency_group && !seen[c.agency_group]) { seen[c.agency_group] = true; list.push(c.agency_group); } });
+    return list;
+  }, [cases]);
   var resultOpts = ["전체","승인","약정","완료","부결","반려","진행중","신청전"];
 
   // 기관별 신청상품 옵션 매핑
@@ -13482,13 +13651,25 @@ function ApprovalCasesView({ profile }) {
         </div>
       </div>
 
+      {/* 기관 탭 */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+        {agencyOpts.map(function(a) {
+          var active = filterAgency === a;
+          var ag = AGENCY_GROUPS.find(function(g) { return g.id === a; });
+          var col = ag ? ag.color : "#1A1917";
+          return (
+            <div key={a} onClick={function() { setFilterAgency(a); }}
+              style={{ padding: "6px 13px", borderRadius: 99, cursor: "pointer", fontSize: 12, fontWeight: active ? 700 : 500, background: active ? col : "#fff", color: active ? "#fff" : "#666", border: "1px solid " + (active ? col : "#E8E5E0"), whiteSpace: "nowrap", transition: "all 0.15s" }}>
+              {a}
+            </div>
+          );
+        })}
+      </div>
+
       {/* 검색 + 필터 */}
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         <input type="text" value={search} onChange={function(e) { setSearch(e.target.value); }} placeholder="🔍 회사명, 이슈, 해결방법, 태그..."
           style={{ flex: 1, minWidth: 220, padding: "10px 14px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, outline: "none" }} />
-        <select value={filterAgency} onChange={function(e) { setFilterAgency(e.target.value); }} style={{ padding: "10px 14px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>
-          {agencyOpts.map(function(o) { return <option key={o} value={o}>기관: {o}</option>; })}
-        </select>
         <select value={filterResult} onChange={function(e) { setFilterResult(e.target.value); }} style={{ padding: "10px 14px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>
           {resultOpts.map(function(o) { return <option key={o} value={o}>결과: {o}</option>; })}
         </select>
@@ -14327,7 +14508,7 @@ function AssigneeWorkloadChart({ companies, setView, setFilterAssignee }) {
 function TeamNotesSection({ profile, onTakenToMyNote }) {
   const [allTeamNotes, setAllTeamNotes] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState("corporate"); // "corporate" | "individual"
+  const [activeTab, setActiveTab] = useState("corporate"); // "corporate" | "individual" | "all"(전체·공통)
   const [showAdd, setShowAdd] = useState(false);
   const [showDone, setShowDone] = useState(false); // 가져간/완료된 것도 볼지
   const [newNote, setNewNote] = useState({ title: "", content: "", priority: "normal", due_date: "", tags: [], checklist: [] });
@@ -14348,8 +14529,8 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
   // 탭별 노트 (열린 것 우선, 가져간 것은 토글에 따라)
   var displayNotes = useMemo(function() {
     return allTeamNotes.filter(function(n) {
-      // "all"(전체·공통) 업무는 법인팀·개인팀 양쪽 탭 모두에 표시
-      if (n.team !== activeTab && n.team !== "all") return false;
+      // 전체(공통) 탭은 팀 구분 없이 모두 표시. 법인팀/개인팀 탭은 해당 팀 + "all"(공통) 표시
+      if (activeTab !== "all" && n.team !== activeTab && n.team !== "all") return false;
       if (!showDone && n.status !== "open") return false;
       return true;
     });
@@ -14360,6 +14541,7 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
     return {
       corporate: allTeamNotes.filter(function(n) { return (n.team === "corporate" || n.team === "all") && n.status === "open"; }).length,
       individual: allTeamNotes.filter(function(n) { return (n.team === "individual" || n.team === "all") && n.status === "open"; }).length,
+      all: allTeamNotes.filter(function(n) { return n.status === "open"; }).length,
     };
   }, [allTeamNotes]);
 
@@ -14730,6 +14912,11 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
               style={{ background: "none", border: "none", padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", color: activeTab === "individual" ? "#1A1917" : "#888", borderBottom: "2px solid " + (activeTab === "individual" ? "#1A1917" : "transparent"), marginBottom: -1 }}>
               👤 개인팀
               {openCount.individual > 0 && <span style={{ marginLeft: 6, fontSize: 10, background: "#15803D", color: "#fff", padding: "1px 6px", borderRadius: 99 }}>{openCount.individual}</span>}
+            </button>
+            <button onClick={function() { setActiveTab("all"); }}
+              style={{ background: "none", border: "none", padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", color: activeTab === "all" ? "#7C3AED" : "#888", borderBottom: "2px solid " + (activeTab === "all" ? "#7C3AED" : "transparent"), marginBottom: -1 }}>
+              🌐 전체(공통)
+              {openCount.all > 0 && <span style={{ marginLeft: 6, fontSize: 10, background: "#7C3AED", color: "#fff", padding: "1px 6px", borderRadius: 99 }}>{openCount.all}</span>}
             </button>
           </div>
 
