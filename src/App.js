@@ -181,7 +181,13 @@ function judgeJunginggong(company, so) {
   if (/제조/.test(s)) ex.push("제조업 (업종 자동판정)");
   if (isInnovation) ex.push("혁신성장·초격차·신산업 분야 (수동 체크)");
   if (hasExport) ex.push("수출실적 보유 → 신시장진출지원자금");
-  if (ex.length) return { eligible: true, reason: "소상공인이나 예외 해당:\n· " + ex.join("\n· ") + "\n(제주 예외업종 등은 별도 확인)" };
+  // 제주 소재 예외업종 (별표1) — ⑨조항과 별개. region에 '제주' + 예외업종 키워드 매칭
+  var isJeju = String(company && company.region || "").indexOf("제주") >= 0;
+  var jejuExKeywords = /(호텔업|관광숙박|야영장|숙박시설\s*운영|청소년수련시설|자동차\s*임대|유원지|테마파크|오락장|수상오락|산업용\s*세탁|세탁물\s*공급)/;
+  if (isJeju && jejuExKeywords.test(s)) ex.push("제주 소재 예외업종(별표1)");
+  // 사회적경제기업 (협동조합·사회적기업·마을기업 등) — companies.social_enterprise 체크
+  if (company && company.social_enterprise === true) ex.push("사회적경제기업");
+  if (ex.length) return { eligible: true, reason: "소상공인이나 예외 해당:\n· " + ex.join("\n· ") };
   return { eligible: false, reason: "소상공인 → 중진공 원칙 제한(⑨)\n예외 없음: 제조업 아님 · 혁신성장 분야 미체크 · 수출실적 없음\n(해당되면 기본정보 탭에서 '혁신성장·초격차·신산업 분야' 체크)" };
 }
 
@@ -205,6 +211,23 @@ function judgeSojinggong(company, so) {
   };
 }
 
+// 마일스톤 후보 추천 (참고·확정 아님): 평균매출이 규모기준의 130%를 넘겼지만
+// 상시근로자수는 아직 기준보다 2명 이상 여유 → 곧 규모 졸업이 예상되는 후보.
+// 매출은 이미 높은데 인력이 적어 규모 판정이 아직 소상공인/소기업에 머무는 경우를 잡아준다.
+function judgeMilestoneCandidate(company) {
+  var small = judgeSmallBiz(company);
+  if (!small || small.status === "unknown" || small.cap == null || small.avg == null) return null;
+  var capWon = small.cap.amount * 1e8;
+  if (capWon <= 0 || !(small.avg > capWon * 1.3)) return null; // 매출 기준 130% 초과 아님
+  var limit = sosangEmpLimit(company && company.industry);
+  var emp = parseInt(company && company.employee_count, 10);
+  if (isNaN(emp)) return null;                 // 근로자수 미입력이면 판정 보류
+  if (!(emp <= limit - 2)) return null;         // 기준보다 2명 이상 여유가 아님
+  return {
+    reason: "마일스톤 후보(참고·확정 아님)\n평균매출 " + (small.avg / 1e8).toFixed(1) + "억 > 규모기준 " + small.cap.amount + "억의 130%(" + (small.cap.amount * 1.3).toFixed(1) + "억)\n상시근로자 " + emp + "명 (기준 " + limit + "명, 여유 " + (limit - emp) + "명 ≥ 2)",
+  };
+}
+
 // 규모/기관 판정 배지 (참고용 · 마우스 오버 시 근거 tooltip)
 // editable=true 이면 "✎ 보정" 버튼으로 수동 보정 패널을 연다 (기업목록은 자리가 좁아 읽기전용 유지).
 // onChange(next)로 biz_match_override 객체를 올려보낸다. 빈 객체 {} = 보정 전부 해제.
@@ -214,6 +237,7 @@ function BizScaleBadges({ company, size, editable, onChange }) {
   var so = judgeSososang(company);
   var jg = judgeJunginggong(company, so);
   var sj = judgeSojinggong(company, so);
+  var ms = judgeMilestoneCandidate(company); // 마일스톤 후보 (참고용)
   var ov = bizOverride(company);
   var fs = size === "sm" ? 9 : 10;      // 1줄: 규모 배지
   var fsAgency = size === "sm" ? 8 : 9; // 2줄: 기관 배지 (살짝 작게)
@@ -277,11 +301,12 @@ function BizScaleBadges({ company, size, editable, onChange }) {
           </button>
         )}
       </div>
-      {/* 2줄: 기관 배지 — eligible === true 인 것만 표시 (불가/모름은 렌더 안 함, 둘 다 아니면 공란) */}
-      {(jg.eligible === true || sj.eligible === true) && (
+      {/* 2줄: 기관 배지 — eligible === true 인 것만 표시 (불가/모름은 렌더 안 함) + 마일스톤 후보(참고) */}
+      {(jg.eligible === true || sj.eligible === true || ms) && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 3, alignItems: "center" }}>
           {jg.eligible === true && chip("jg", "중진공 가능", jg.reason, "#F5F3FF", "#6D28D9", fsAgency, jg.manual)}
           {sj.eligible === true && chip("sj", "소진공 " + sjLabel, sj.reason, "#FFF7ED", "#C2410C", fsAgency, sj.manual)}
+          {ms && chip("ms", "마일스톤 후보?", ms.reason, "#ECFEFF", "#0E7490", fsAgency, false)}
         </div>
       )}
       {/* 보정 패널 — 자동판정보다 항상 우선. "자동판정"을 고르면 원래 로직으로 복귀 */}
@@ -5942,6 +5967,12 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   {data.referrer && partnersList.findIndex(function(pt) { return pt.name === data.referrer; }) < 0 && <option value={data.referrer}>{data.referrer} (목록에 없음)</option>}
                 </select>
               </div>
+              {/* 사회적경제기업 — 체크 시 중진공 예외(규모/기관 배지)에 반영 */}
+              <label style={{ display: "flex", alignItems: "center", gap: 8, background: data.social_enterprise ? "#F5F3FF" : "#F7F6F3", border: "1px solid " + (data.social_enterprise ? "#DDD6FE" : "#E8E5E0"), borderRadius: 8, padding: "10px 13px", marginBottom: 10, cursor: "pointer" }}>
+                <input type="checkbox" checked={!!data.social_enterprise} onChange={function(e) { var v = e.target.checked; setData(function(p) { return Object.assign({}, p, { social_enterprise: v }); }); }} style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#6D28D9" }} />
+                <span style={{ fontSize: 13, fontWeight: data.social_enterprise ? 700 : 500, color: data.social_enterprise ? "#6D28D9" : "#555" }}>사회적경제기업</span>
+                <span style={{ fontSize: 11, color: "#888" }}>— 협동조합·사회적기업·마을기업 등 (중진공 예외 반영)</span>
+              </label>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>연락처</div>
