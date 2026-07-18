@@ -3094,6 +3094,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         </button>
       </div>
 
+      {/* 🔔 방치 자동 알림 배너 (3일 이상 응답/서류 대기) */}
+      <StaleWaitBanner setView={setView} />
+
       {/* 🆕 오늘의 할 일 위젯 */}
       {(function() {
         var today = kstDate();
@@ -4256,6 +4259,62 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView, companies 
 
 
 // 📋 대시보드용 내 할일 미니 위젯
+// 🔔 방치 자동 알림 배너 - 응답대기/서류대기로 3일 넘게 미완료인 업무노트를 모아 대시보드 상단에 표시
+function StaleWaitBanner({ setView }) {
+  const [items, setItems] = useState([]);
+  useEffect(function() {
+    async function load() {
+      var r = await supabase.from("work_notes")
+        .select("id,title,content,wait_reason,wait_since,company_id,is_done")
+        .is("deleted_at", null).not("wait_reason", "is", null);
+      if (r.error || !r.data) return;
+      var rows = r.data.filter(function(n) {
+        return !n.is_done && n.wait_since && (n.wait_reason === "응답대기" || n.wait_reason === "서류대기");
+      }).map(function(n) {
+        return { note: n, days: Math.floor((Date.now() - new Date(n.wait_since)) / 86400000) };
+      }).filter(function(x) { return x.days >= 3; });
+      if (rows.length === 0) { setItems([]); return; }
+      // 연결 기업명 조회
+      var ids = {}; rows.forEach(function(x) { if (x.note.company_id) ids[x.note.company_id] = 1; });
+      var names = {}; var idList = Object.keys(ids);
+      if (idList.length) {
+        var cr = await supabase.from("companies").select("id,name").in("id", idList);
+        if (!cr.error && cr.data) cr.data.forEach(function(c) { names[c.id] = c.name; });
+      }
+      rows.forEach(function(x) {
+        x.name = x.note.company_id ? (names[x.note.company_id] || "") : "";
+        if (!x.name) x.name = (x.note.title || (x.note.content || "").split("\n")[0] || "업무").slice(0, 20);
+      });
+      rows.sort(function(a, b) { return b.days - a.days; });
+      setItems(rows);
+    }
+    load();
+  }, []);
+  if (items.length === 0) return null;
+  return (
+    <div style={{ background: "linear-gradient(135deg, #FEF2F2 0%, #FEF3C7 100%)", border: "1px solid #FCA5A5", borderRadius: 12, padding: "14px 18px", marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <span style={{ fontSize: 15 }}>🔔</span>
+        <div style={{ fontSize: 13, fontWeight: 800, color: "#B91C1C" }}>방치 알림 · 3일 이상 대기 중인 업무 {items.length}건</div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {items.map(function(x) {
+          var reasonLabel = x.note.wait_reason === "서류대기" ? "서류 요청" : "응답 대기";
+          var tail = x.note.wait_reason === "서류대기" ? "무회신" : "무응답";
+          return (
+            <div key={x.note.id} onClick={function() { setView("worknotes"); }}
+              style={{ display: "flex", alignItems: "center", gap: 8, background: "#fff", border: "1px solid #FECACA", borderRadius: 8, padding: "8px 12px", cursor: "pointer" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#B91C1C", background: "#FEE2E2", borderRadius: 99, padding: "1px 8px", whiteSpace: "nowrap" }}>{x.days}일째</span>
+              <span style={{ fontSize: 13, color: "#333", fontWeight: 600 }}>{x.name}</span>
+              <span style={{ fontSize: 12, color: "#888" }}>{reasonLabel} · {tail}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function MyTodoWidget({ setView }) {
   const [count, setCount] = useState({ total: 0, overdue: 0, today: 0 });
   
@@ -5001,6 +5060,11 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   const [agencyCases, setAgencyCases] = useState([]);
   const [settlements, setSettlements] = useState([]);
   const [commLogs, setCommLogs] = useState([]);
+  // 🕒 타임라인 탭: 연결된 업무노트 + 전체 활동로그 병합
+  const [timelineNotes, setTimelineNotes] = useState([]);
+  const [timelineLogs, setTimelineLogs] = useState([]);
+  const [timelineLoaded, setTimelineLoaded] = useState(false);
+  const [timelineLoading, setTimelineLoading] = useState(false);
   const [partnersList, setPartnersList] = useState([]);
   useEffect(function() {
     supabase.from("partners").select("id,name").order("created_at", { ascending: true }).then(function(r) {
@@ -5315,6 +5379,23 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
       setLoadingExtra(false);
     });
   }, [company.id, company.name]);
+
+  // 🕒 타임라인 로드: 연결 업무노트 + 전체 활동로그(company_id·case_id 둘 다)
+  var loadTimeline = async function() {
+    if (!company.id) return;
+    setTimelineLoading(true);
+    var results = await Promise.all([
+      supabase.from("activity_logs").select("*").or("company_id.eq." + company.id + ",case_id.eq." + company.id).is("deleted_at", null).order("created_at", { ascending: false }),
+      supabase.from("work_notes").select("id,title,content,created_at,note_date,assignee,is_done").eq("company_id", company.id).is("deleted_at", null).order("created_at", { ascending: false }),
+    ]);
+    if (!results[0].error) setTimelineLogs(results[0].data || []);
+    if (!results[1].error) setTimelineNotes(results[1].data || []);
+    setTimelineLoading(false);
+    setTimelineLoaded(true);
+  };
+  useEffect(function() {
+    if (tab === "timeline" && !timelineLoaded && !timelineLoading) loadTimeline();
+  }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 소통내역 1건 저장(스키마 컬럼 불일치 대비 단계적 재시도). 성공 시 { error:null } 반환
   var insertCommLog = async function(text) {
@@ -5779,6 +5860,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
             { id: "bizinfo", label: "기업정보", badge: (Array.isArray(data.loans) ? data.loans.length : 0) + (Array.isArray(data.company_info) ? data.company_info.length : 0) },
             { id: "docs", label: "서류현황" },
             { id: "history", label: "이슈·액션", badge: commLogs.length },
+            { id: "timeline", label: "🕒 타임라인" },
             { id: "agency", label: "기관진행", badge: agencyCases.length },
             { id: "settlement", label: "정산현황", badge: settlements.length },
             { id: "ai", label: "🤖 AI 상담" },
@@ -6477,6 +6559,56 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 )}
               </div>
             </>
+          )}
+
+          {/* 🕒 타임라인 탭 — 소통내역 + 연결 업무노트 + 단계변경 시간순 병합 */}
+          {tab === "timeline" && (
+            <div>
+              <div style={{ fontSize: 12, color: "#888", marginBottom: 12 }}>소통내역 · 연결된 업무노트 · 진행단계 변경을 시간순으로 모았어요.</div>
+              {timelineLoading ? (
+                <div style={{ padding: "40px 0", textAlign: "center", color: "#AAA", fontSize: 13 }}>타임라인 불러오는 중...</div>
+              ) : (function() {
+                var SRC = {
+                  "업무노트": { bg: "#F0FDF4", color: "#15803D", border: "#BBF7D0" },
+                  "소통내역": { bg: "#F0F9FF", color: "#075985", border: "#BAE6FD" },
+                  "단계변경": { bg: "#F5F3FF", color: "#7C3AED", border: "#DDD6FE" },
+                };
+                var items = [];
+                (timelineLogs || []).forEach(function(l) {
+                  var kind = (l.log_type === "stage_change" || l.log_type === "assignee_change") ? "단계변경"
+                           : (l.log_type === "note_auto") ? "업무노트" : "소통내역";
+                  items.push({ at: l.created_at, kind: kind, text: l.memo || l.note || "", by: l.logged_by || l.assignee || "" });
+                });
+                (timelineNotes || []).forEach(function(n) {
+                  var preview = (n.title && n.title.trim()) ? n.title.trim() : ((n.content || "").split("\n").map(function(s) { return s.replace(/^- \[[ x]\]\s*/i, "").trim(); }).filter(Boolean)[0] || "(내용 없음)");
+                  items.push({ at: n.created_at || (n.note_date ? n.note_date + "T00:00:00" : null), kind: "업무노트", text: (n.is_done ? "✅ " : "📝 ") + preview, by: n.assignee || "" });
+                });
+                items = items.filter(function(x) { return x.at; }).sort(function(a, b) { return new Date(b.at) - new Date(a.at); });
+                if (items.length === 0) return (<div style={{ padding: "40px 0", textAlign: "center", color: "#AAA", fontSize: 13 }}>표시할 타임라인 기록이 없어요.</div>);
+                return (
+                  <div style={{ position: "relative", paddingLeft: 6 }}>
+                    {items.map(function(it, i) {
+                      var s = SRC[it.kind] || SRC["소통내역"];
+                      return (
+                        <div key={i} style={{ display: "flex", gap: 10, paddingBottom: 14, position: "relative" }}>
+                          <div style={{ flexShrink: 0, width: 10, display: "flex", flexDirection: "column", alignItems: "center" }}>
+                            <div style={{ width: 10, height: 10, borderRadius: "50%", background: s.color, marginTop: 4 }} />
+                            {i < items.length - 1 && <div style={{ flex: 1, width: 2, background: "#EDEBE8", marginTop: 2 }} />}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3, flexWrap: "wrap" }}>
+                              <span style={{ fontSize: 10, fontWeight: 700, color: s.color, background: s.bg, border: "1px solid " + s.border, borderRadius: 99, padding: "1px 7px" }}>{it.kind}</span>
+                              <span style={{ fontSize: 10, color: "#999" }}>{it.by || "-"} · {it.at ? new Date(it.at).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "numeric", minute: "numeric" }) : "-"}</span>
+                            </div>
+                            <div style={{ fontSize: 13, color: "#333", lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{it.text || "-"}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
           )}
 
           {/* 기관별 진행현황 탭 */}
@@ -7738,6 +7870,16 @@ function encodeItemText(t) {
 function decodeItemText(t) {
   return String(t == null ? "" : t).replace(/\\n/g, "\n");
 }
+// @업체 태그: 입력값 끝(공백 없는) "@질의" 를 추출. 없으면 null.
+function extractMention(value) {
+  if (value == null) return null;
+  var s = String(value);
+  var at = s.lastIndexOf("@");
+  if (at < 0) return null;
+  var after = s.slice(at + 1);
+  if (/[\s\n]/.test(after)) return null; // 공백이 오면 태그 입력 종료로 간주
+  return { at: at, query: after };
+}
 
 // ── 업무노트 수정 카드 (독립 컴포넌트 - 입력버그 방지) ─────────────────────────
 function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
@@ -7901,7 +8043,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
 }
 
 // ── 업무노트 카드 (독립 컴포넌트 - 입력버그 방지) ──────────────────────────────
-function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditingId, toggleDone, togglePin, deleteNote, fmtDate, currentUserName, onChecklistChange, moveNoteDate }) {
+function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditingId, toggleDone, togglePin, deleteNote, fmtDate, currentUserName, onChecklistChange, moveNoteDate, setWaitReason }) {
   var isEditing = editingId === note.id;
   var isMyNote = true;
 
@@ -7996,6 +8138,30 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
         );
       })()}
 
+      {/* ⏳ 대기 사유 (방치 알림용) — 배지 + 변경 셀렉트 */}
+      {setWaitReason && !note.is_done && (function() {
+        var wr = note.wait_reason;
+        var waiting = wr === "응답대기" || wr === "서류대기";
+        var days = (waiting && note.wait_since) ? Math.floor((Date.now() - new Date(note.wait_since)) / 86400000) : 0;
+        var stale = waiting && days >= 3;
+        return (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+            {waiting && (
+              <span style={{ fontSize: 10, fontWeight: 700, color: stale ? "#B91C1C" : "#B45309", background: stale ? "#FEE2E2" : "#FEF3C7", border: "1px solid " + (stale ? "#FCA5A5" : "#FDE68A"), borderRadius: 99, padding: "1px 7px" }}>
+                ⏳ {wr === "응답대기" ? "대표자 응답대기" : "서류대기"}{days > 0 ? " · " + days + "일째" : ""}{stale ? " 🔔" : ""}
+              </span>
+            )}
+            <select value={wr || "일반"} onChange={function(e) { setWaitReason(note, e.target.value); }}
+              title="응답대기·서류대기로 3일 넘게 미완료면 대시보드 상단 리마인드에 떠요"
+              style={{ fontSize: 10, padding: "2px 6px", border: "1px solid #E8E5E0", borderRadius: 6, background: "#fff", color: "#888", outline: "none", cursor: "pointer" }}>
+              <option value="일반">대기 없음</option>
+              <option value="응답대기">대표자 응답대기</option>
+              <option value="서류대기">서류대기</option>
+            </select>
+          </div>
+        );
+      })()}
+
       {/* 체크리스트 or 일반 내용 */}
       {note.content && (
         checklist ? (
@@ -8085,6 +8251,8 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
 
   const [companiesList, setCompaniesList] = useState([]);
   const [pushEnabled, setPushEnabled] = useState(false);
+  // @업체 태그 자동완성 (새 노트 작성 폼): { type:'title'|'content'|'item', idx, query }
+  const [mention, setMention] = useState(null);
 
   // 📱 업무노트 모바일 최적화 CSS 주입 (휴대폰에서 작성 편하게)
   useEffect(function() {
@@ -8157,18 +8325,62 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     return found;
   };
 
-  // 활동로그에 자동 기록
+  // 활동로그에 자동 기록 — company_id 도 함께 넣어야 CompanyModal(소통내역·타임라인)에 표시됨
   var logToActivity = async function(company, memo) {
     if (!company || !memo) return;
-    await supabase.from("activity_logs").insert({
-      case_id: company.id,
+    var payload = {
+      company_id: company.id,   // 모달은 company_id 로 조회 → 필수
+      case_id: company.id,      // 기존 호환
       case_type: "company",
       business_name: company.name,
       assignee: profile?.name || "",
       log_type: "note_auto",
       memo: memo.slice(0, 200),
       logged_by: profile?.name || "",
+    };
+    var r = await supabase.from("activity_logs").insert(payload);
+    if (r.error && /company_id/.test(r.error.message || "")) {
+      delete payload.company_id;
+      await supabase.from("activity_logs").insert(payload);
+    }
+  };
+
+  // @업체 태그 선택 시: 해당 필드의 "@질의" 를 "@업체명 " 으로 치환 + 노트에 company_id 연결
+  var applyMention = function(co) {
+    if (!mention) return;
+    setNewNote(function(p) {
+      var upd = { company_id: co.id, company_name: co.name };
+      if (mention.type === "title") {
+        var m = extractMention(p.title); if (m) upd.title = p.title.slice(0, m.at) + "@" + co.name + " ";
+      } else if (mention.type === "content") {
+        var m2 = extractMention(p.content); if (m2) upd.content = p.content.slice(0, m2.at) + "@" + co.name + " ";
+      } else if (mention.type === "item") {
+        var items = (p.checkItems || []).slice();
+        var t = (items[mention.idx] && items[mention.idx].text) || "";
+        var m3 = extractMention(t);
+        if (m3) { items[mention.idx] = Object.assign({}, items[mention.idx], { text: t.slice(0, m3.at) + "@" + co.name + " " }); upd.checkItems = items; }
+      }
+      return Object.assign({}, p, upd);
     });
+    setMention(null);
+  };
+
+  // @업체 태그 드롭다운 렌더 (해당 필드가 활성 상태일 때만)
+  var mentionMenu = function(type, idx) {
+    if (!mention || mention.type !== type || (type === "item" && mention.idx !== idx)) return null;
+    var q = (mention.query || "").toLowerCase();
+    var matches = (companiesList || []).filter(function(c) { return c.name && c.name.toLowerCase().indexOf(q) >= 0; }).slice(0, 6);
+    if (matches.length === 0) return null;
+    return (
+      <div style={{ position: "absolute", zIndex: 60, top: "100%", left: 0, minWidth: 220, background: "#fff", border: "1px solid #86EFAC", borderRadius: 8, boxShadow: "0 6px 20px rgba(0,0,0,0.12)", marginTop: 2, maxHeight: 220, overflowY: "auto" }}>
+        {matches.map(function(c) {
+          return (<div key={c.id} onMouseDown={function(e) { e.preventDefault(); applyMention(c); }}
+            style={{ padding: "8px 12px", fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, borderBottom: "1px solid #F0EDE8" }}
+            onMouseEnter={function(e) { e.currentTarget.style.background = "#F0FDF4"; }} onMouseLeave={function(e) { e.currentTarget.style.background = "#fff"; }}>
+            🏢 <span>{c.name}</span></div>);
+        })}
+      </div>
+    );
   };
 
   var fetchNotes = async function() {
@@ -8358,7 +8570,14 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       note_date: newNote.note_date || kstDate(),
     };
     if (newNote.due_date) insertObj.due_date = newNote.due_date;
+    if (newNote.company_id) insertObj.company_id = newNote.company_id; // @업체 태그로 연결된 기업
+    if (newNote.wait_reason && newNote.wait_reason !== "일반") { insertObj.wait_reason = newNote.wait_reason; insertObj.wait_since = new Date().toISOString(); } // 방치 알림용 대기상태
     var r = await supabase.from("work_notes").insert(insertObj).select().single();
+    if (r.error && /company_id|wait_reason|wait_since/.test(r.error.message || "")) {
+      // 신규 컬럼 미생성 방어 — 연결·대기상태 없이 재시도
+      var insMin = Object.assign({}, insertObj); delete insMin.company_id; delete insMin.wait_reason; delete insMin.wait_since;
+      r = await supabase.from("work_notes").insert(insMin).select().single();
+    }
     if (!r.error && r.data) {
       setNotes(function(prev) { return [r.data].concat(prev); });
       setShowAdd(false);
@@ -8376,7 +8595,8 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       for (var i = 0; i < detected.length; i++) {
         await logToActivity(detected[i], "📝 업무노트: " + (newNote.title || newNote.content.split("\n")[0]));
       }
-      setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "", note_date: "" });
+      setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "", note_date: "", company_id: null, company_name: "" });
+      setMention(null);
       // 사이드바 뱃지 업데이트
       if (onBadgeUpdate) onBadgeUpdate();
     } else if (r.error) {
@@ -8396,13 +8616,29 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     setReplyText("");
   };
 
+  // 대기 사유 변경 (일반/응답대기/서류대기) — 대기 상태로 바뀌면 wait_since 기록, 일반으로 풀면 초기화
+  var setNoteWaitReason = async function(note, reason) {
+    var isWaiting = reason === "응답대기" || reason === "서류대기";
+    var upd = { wait_reason: isWaiting ? reason : null, wait_since: isWaiting ? (note.wait_since || new Date().toISOString()) : null, updated_at: new Date().toISOString() };
+    var r = await supabase.from("work_notes").update(upd).eq("id", note.id);
+    if (!r.error) {
+      setNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, upd) : n; }); });
+    } else {
+      alert("대기 사유 저장 실패: " + r.error.message);
+    }
+  };
+
   var onChecklistChange = async function(noteId, newContent) {
     var r = await supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", noteId);
     if (!r.error) {
       setNotes(function(prev) { return prev.map(function(n) { return n.id === noteId ? Object.assign({}, n, { content: newContent }) : n; }); });
-      // 방금 체크 완료된 항목에 기업명이 있으면 활동로그 기록
+      // 방금 체크 완료된 항목 → 활동로그 기록
       var prevNote = notes.find(function(n) { return n.id === noteId; });
       if (prevNote) {
+        // 노트에 @태그로 연결된 기업 (있으면 항상 이 업체에 "[업무노트] … 완료" 기록)
+        var linkedCompany = prevNote.company_id
+          ? { id: prevNote.company_id, name: (companiesList.find(function(c) { return c.id === prevNote.company_id; }) || {}).name || "" }
+          : null;
         var prevLines = (prevNote.content || "").split("\n");
         var newLines = newContent.split("\n");
         for (var i = 0; i < newLines.length; i++) {
@@ -8410,10 +8646,20 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
           var newLine = newLines[i];
           // 새로 체크된 항목 (- [ ] → - [x])
           if (/^- \[x\]/.test(newLine.trim()) && /^- \[ \]/.test(prevLine.trim())) {
-            var itemText = newLine.trim().replace(/^- \[x\]\s*/, "");
+            var rawItem = newLine.trim().replace(/^- \[x\]\s*/, "");
+            var itemText = decodeItemText(rawItem.replace(/\[\d{4}-\d{2}-\d{2}\]|\[\d{1,2}\/\d{1,2}\]/, "").trim());
+            var logged = {};
+            // 1) 연결 기업 우선 기록 (company_id 기반 → 소통내역·타임라인에 표시)
+            if (linkedCompany && linkedCompany.id) {
+              await logToActivity(linkedCompany, "[업무노트] " + itemText + " 완료");
+              logged[linkedCompany.id] = 1;
+            }
+            // 2) 항목 텍스트에서 이름으로 감지된 기업도 기록 (중복 제외)
             var detected = detectCompaniesInText(itemText);
             for (var j = 0; j < detected.length; j++) {
+              if (logged[detected[j].id]) continue;
               await logToActivity(detected[j], "✅ 완료: " + itemText);
+              logged[detected[j].id] = 1;
             }
           }
         }
@@ -8587,7 +8833,16 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       {/* 새 노트 작성 폼 */}
       {showAdd && (
         <div className="wn-addform" style={{ background: "#F0FDF4", border: "2px solid #86EFAC", borderRadius: 12, padding: "18px 20px", marginBottom: 20 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D", marginBottom: 12 }}>✏️ 새 노트 작성</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D" }}>✏️ 새 노트 작성</div>
+            <span style={{ fontSize: 11, color: "#888" }}>· 제목·항목·내용에 <b>@</b> 입력 시 업체 연결</span>
+            {newNote.company_name && (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 99, padding: "2px 8px" }}>
+                🔗 {newNote.company_name}
+                <span onClick={function() { setNewNote(function(p) { return Object.assign({}, p, { company_id: null, company_name: "" }); }); }} style={{ cursor: "pointer", color: "#6366F1" }}>✕</span>
+              </span>
+            )}
+          </div>
           <div style={{ display: "flex", gap: 16, marginBottom: 10, flexWrap: "wrap" }}>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
               <input type="checkbox" checked={newNote.is_todo} onChange={function(e) { setNewNote(function(p) { return Object.assign({}, p, { is_todo: e.target.checked }); }); }} />
@@ -8605,14 +8860,27 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
               {ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
             </select>
           </div>
-          <input value={newNote.title} placeholder="제목 (선택사항)" onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
-            style={{ width: "100%", padding: "10px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 14, fontWeight: 600, boxSizing: "border-box", outline: "none", marginBottom: 10, background: "#fff" }} />
+          <div style={{ position: "relative", marginBottom: 10 }}>
+            <input value={newNote.title} placeholder="제목 (선택사항) — @업체명 으로 연결"
+              onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { title: v }); }); var m = extractMention(v); setMention(m ? { type: "title", query: m.query } : null); }}
+              onBlur={function() { setTimeout(function() { setMention(function(cur) { return cur && cur.type === "title" ? null : cur; }); }, 150); }}
+              style={{ width: "100%", padding: "10px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 14, fontWeight: 600, boxSizing: "border-box", outline: "none", background: "#fff" }} />
+            {mentionMenu("title")}
+          </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <label style={{ fontSize: 12, color: "#15803D", fontWeight: 600, whiteSpace: "nowrap" }}>📅 마감일</label>
             <input type="date" value={newNote.due_date || ""} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { due_date: v }); }); }}
               style={{ width: "auto", padding: "7px 10px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, background: "#fff", outline: "none" }} />
             {newNote.due_date && <button onClick={function() { setNewNote(function(p) { return Object.assign({}, p, { due_date: "" }); }); }}
               style={{ background: "none", border: "none", cursor: "pointer", color: "#AAA", fontSize: 14 }}>✕</button>}
+            <label style={{ fontSize: 12, color: "#B45309", fontWeight: 600, whiteSpace: "nowrap", marginLeft: 8 }}>⏳ 대기 사유</label>
+            <select value={newNote.wait_reason || "일반"} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { wait_reason: v }); }); }}
+              title="응답대기·서류대기로 3일 넘게 미완료면 대시보드 상단에 리마인드로 떠요"
+              style={{ width: "auto", padding: "7px 10px", border: "1px solid " + (newNote.wait_reason && newNote.wait_reason !== "일반" ? "#F59E0B" : "#86EFAC"), borderRadius: 6, fontSize: 12, background: "#fff", outline: "none", color: newNote.wait_reason && newNote.wait_reason !== "일반" ? "#B45309" : "#333" }}>
+              <option value="일반">일반</option>
+              <option value="응답대기">대표자 응답대기</option>
+              <option value="서류대기">서류대기</option>
+            </select>
           </div>
           {/* 체크리스트 항목들 */}
           {newNote.checkItems && newNote.checkItems.length > 0 && (
@@ -8621,10 +8889,14 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
                 return (
                   <div key={idx} style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 8 }}>
                     <input type="checkbox" disabled style={{ width: 15, height: 15, flexShrink: 0, marginTop: 6 }} />
-                    <textarea value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성 / Enter로 줄바꿈)"}
-                      rows={Math.max(1, (item.text || "").split("\n").length)}
-                      onChange={function(e) { var v = e.target.value; setNewNote(function(p) { var items = p.checkItems.slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); }}
-                      style={{ flex: 1, border: "none", outline: "none", fontSize: 13, lineHeight: 1.7, background: "transparent", resize: "vertical", fontFamily: "inherit", overflow: "hidden", padding: "3px 0" }} autoFocus={idx === newNote.checkItems.length - 1} />
+                    <div style={{ flex: 1, position: "relative" }}>
+                      <textarea value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성 / @업체명 연결 / Enter로 줄바꿈)"}
+                        rows={Math.max(1, (item.text || "").split("\n").length)}
+                        onChange={function(e) { var v = e.target.value; setNewNote(function(p) { var items = p.checkItems.slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); var m = extractMention(v); setMention(m ? { type: "item", idx: idx, query: m.query } : null); }}
+                        onBlur={function() { setTimeout(function() { setMention(function(cur) { return cur && cur.type === "item" && cur.idx === idx ? null : cur; }); }, 150); }}
+                        style={{ width: "100%", boxSizing: "border-box", border: "none", outline: "none", fontSize: 13, lineHeight: 1.7, background: "transparent", resize: "vertical", fontFamily: "inherit", overflow: "hidden", padding: "3px 0" }} autoFocus={idx === newNote.checkItems.length - 1} />
+                      {mentionMenu("item", idx)}
+                    </div>
                     <input type="date" value={item.dueDate || ""} title="이 항목의 마감일 (선택)"
                       onChange={function(e) { var v = e.target.value; setNewNote(function(p) { var items = p.checkItems.slice(); items[idx] = Object.assign({}, items[idx], { dueDate: v }); return Object.assign({}, p, { checkItems: items }); }); }}
                       style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, color: "#4338CA", outline: "none", width: 130, marginTop: 4 }} />
@@ -8649,8 +8921,13 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
               💡 직접 입력 시: <code style={{ background: "#F0EDE8", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>- [ ] 할일 [5/30]</code> 또는 <code style={{ background: "#F0EDE8", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>- [ ] 할일 → 5/30</code>
             </span>
           </div>
-          <textarea value={newNote.content} placeholder={newNote.checkItems && newNote.checkItems.length > 0 ? "추가 메모 (선택사항)..." : "내용을 자유롭게 입력하세요. 업무 메모, 오늘 할 일, 주의사항 등..."} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { content: v }); }); }} rows={newNote.checkItems && newNote.checkItems.length > 0 ? 2 : 6}
-            style={{ width: "100%", padding: "12px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, lineHeight: 1.75, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff" }} />
+          <div style={{ position: "relative" }}>
+            <textarea value={newNote.content} placeholder={newNote.checkItems && newNote.checkItems.length > 0 ? "추가 메모 (선택사항)..." : "내용을 자유롭게 입력하세요. 업무 메모, 오늘 할 일, @업체명 으로 업체 연결..."} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { content: v }); }); var m = extractMention(v); setMention(m ? { type: "content", query: m.query } : null); }}
+              onBlur={function() { setTimeout(function() { setMention(function(cur) { return cur && cur.type === "content" ? null : cur; }); }, 150); }}
+              rows={newNote.checkItems && newNote.checkItems.length > 0 ? 2 : 6}
+              style={{ width: "100%", padding: "12px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, lineHeight: 1.75, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff" }} />
+            {mentionMenu("content")}
+          </div>
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
             <button onClick={saveNew} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "10px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
             <button onClick={function() { setShowAdd(false); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 16px", fontSize: 13, cursor: "pointer" }}>취소</button>
@@ -8841,7 +9118,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
                   {notesForSelectedDate.map(function(note) {
-                    return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} />;
+                    return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} />;
                   })}
                 </div>
               )}
@@ -8903,7 +9180,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#B45309", letterSpacing: "0.05em", marginBottom: 10 }}>📌 고정된 노트</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} />; })}
+                {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} />; })}
               </div>
             </div>
           )}
@@ -8912,7 +9189,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div>
               {pinned.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: "#888", letterSpacing: "0.05em", marginBottom: 10 }}>전체 노트</div>}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} />; })}
+                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} />; })}
               </div>
             </div>
           )}
