@@ -9274,7 +9274,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       )}
 
       {/* 📋 팀 업무 공간 (법인팀/개인팀) */}
-      <TeamNotesSection profile={profile} onTakenToMyNote={function(noteData) {
+      <TeamNotesSection profile={profile} companiesList={companiesList} onTakenToMyNote={function(noteData) {
         // 같은 id가 이미 notes에 있으면 교체, 없으면 새로 추가
         setNotes(function(prev) {
           var exists = prev.find(function(n) { return n.id === noteData.id; });
@@ -15186,7 +15186,7 @@ function AssigneeWorkloadChart({ companies, setView, setFilterAssignee }) {
 }
 
 // ========== 📋 팀 노트 섹션 (법인팀/개인팀 공유 작업공간) ==========
-function TeamNotesSection({ profile, onTakenToMyNote }) {
+function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
   const [allTeamNotes, setAllTeamNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("corporate"); // "corporate" | "individual" | "all"(전체·공통)
@@ -15852,16 +15852,19 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
               )}
             </div>
             <div style={{ marginBottom: 10 }}>
-              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>제목 (선택)</label>
-              <input type="text" value={newNote.title} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
-                placeholder="예: (주)메이크올 7월 신청 준비"
+              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>제목 (선택) <span style={{ color: "#94A3B8" }}>· @업체명 입력 시 파란색 표시</span></label>
+              <MentionField multiline={false} companiesList={companiesList}
+                value={newNote.title} placeholder="예: @메이크올 7월 신청 준비"
+                onChange={function(v) { setNewNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
                 style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
             </div>
             <div style={{ marginBottom: 10 }}>
               <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>업무 내용 *</label>
-              <textarea value={newNote.content} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { content: v }); }); }}
-                placeholder="어떤 업무를 누가 가져가야 하는지 상세하게 적어주세요"
-                style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, lineHeight: 1.7, resize: "vertical", minHeight: 100, boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+              <MentionField multiline={true} companiesList={companiesList}
+                value={newNote.content} placeholder="어떤 업무를 누가 가져가야 하는지 상세하게 적어주세요 (@업체명 연결)"
+                rows={5}
+                onChange={function(v) { setNewNote(function(p) { return Object.assign({}, p, { content: v }); }); }}
+                style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, lineHeight: 1.7, resize: "vertical", minHeight: 100, boxSizing: "border-box", outline: "none", fontFamily: "inherit" }} />
             </div>
 
             {/* 체크리스트 입력 영역 */}
@@ -15889,18 +15892,20 @@ function TeamNotesSection({ profile, onTakenToMyNote }) {
                     return (
                       <div key={item.id} style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
                         <span style={{ color: "#888", fontSize: 12, marginTop: 6 }}>☐</span>
-                        <textarea value={item.text}
-                          rows={Math.max(1, (item.text || "").split("\n").length)}
-                          onChange={function(e) {
-                            var v = e.target.value;
-                            setNewNote(function(p) {
-                              var arr = (p.checklist || []).slice();
-                              arr[idx] = Object.assign({}, arr[idx], { text: v });
-                              return Object.assign({}, p, { checklist: arr });
-                            });
-                          }}
-                          placeholder="예: 사업자등록증 받기 (Enter로 줄바꿈 · 새 항목은 + 버튼)"
-                          style={{ flex: 1, padding: "5px 10px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 12, boxSizing: "border-box", outline: "none", background: "#fff", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, overflow: "hidden" }} />
+                        <div style={{ flex: 1 }}>
+                          <MentionField multiline={true} companiesList={companiesList}
+                            value={item.text}
+                            rows={Math.max(1, (item.text || "").split("\n").length)}
+                            placeholder="예: @업체명 사업자등록증 받기 (Enter로 줄바꿈 · 새 항목은 + 버튼)"
+                            onChange={function(v) {
+                              setNewNote(function(p) {
+                                var arr = (p.checklist || []).slice();
+                                arr[idx] = Object.assign({}, arr[idx], { text: v });
+                                return Object.assign({}, p, { checklist: arr });
+                              });
+                            }}
+                            style={{ width: "100%", padding: "5px 10px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 12, boxSizing: "border-box", outline: "none", background: "#fff", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, overflow: "hidden" }} />
+                        </div>
                         <button onClick={function() {
                           setNewNote(function(p) {
                             var arr = (p.checklist || []).filter(function(_, i) { return i !== idx; });
