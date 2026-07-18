@@ -39,6 +39,14 @@ const STAGE_COLORS = {
 const DONE_STATUSES = ["승인", "약정", "완료"];
 const REJECT_STATUSES = ["부결", "반려", "신청취소", "진행불가", "신청못함", "중단"];
 const AGENCIES =["소상공인시장진흥공단","중소벤처기업진흥공단","신용보증기금","농협신용보증기금","신용보증재단","기술보증기금","서민금융진흥원","구조혁신&사업전환","기타"];
+// 부결 사유 → 재신청 조건 안내 (재신청 체크리스트 모달)
+const REJECT_REASONS = [
+  { key: "서류 미비",    guide: "서류 보완 후 즉시 재신청 가능" },
+  { key: "신용도 부족",  guide: "통상 3~6개월 후 재신청 권장" },
+  { key: "업력 부족",    guide: "만 1년 경과 후 재신청 가능" },
+  { key: "부채비율 초과", guide: "재무구조 개선 후 재신청 권장" },
+  { key: "기타",         guide: "" },
+];
 const JUNGINGONG_PRODUCTS = ["창업기반지원","청년창업자금","혁신성장지원","개발기술사업화","재창업","내수기업수출기업화(10만불 미만)","수출기업글로벌화(10만불 이상)","사업전환","구조개선","긴급경영 안정자금","기타"];
 const SOJINGONG_PRODUCTS = ["신용취약자금","재도전특별자금","혁신성장 촉진자금(스마트 기술)","혁신성장 촉진자금(2년 연속 매출 10% 신장)","혁신성장 촉진자금(수출 자금)","혁신성장 촉진자금(그 외 기타)","상생성장지원자금","그 외 기타","대리대출"];
 
@@ -3162,6 +3170,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
               {/* 📋 팀 업무 대기 - team_notes 기반 (법인팀/개인팀 · 전체는 양쪽 모두) */}
               <TeamTodoWidget setView={setView} />
 
+              {/* 📄 시트지(기업현황표) 미작성 현황 */}
+              <SheetStatusWidget companies={companies} setView={setView} />
+
               {/* 📅 차기 업무 마감 요약 (next_action 날짜 자동 집계) */}
               {(function() {
                 var acts = (companies || []).filter(function(c) { return c.next_action && nearestActionDate(c.next_action) !== null; }).map(function(c) { return daysUntil(nearestActionDate(c.next_action)); });
@@ -4335,6 +4346,39 @@ function StaleWaitBanner({ setView }) {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+// 📄 시트지(기업현황표) 작성 현황 위젯 — 시트지 업로드 자동기록(activity_logs) 유무로 작성완료/미작성 판단
+function SheetStatusWidget({ companies, setView }) {
+  const [doneIds, setDoneIds] = useState(null); // 시트지 업로드 기록이 있는 company_id 집합 (null=로딩중)
+  useEffect(function() {
+    async function load() {
+      // 시트지/기업현황표 업로드 시 남는 소통내역 memo 패턴으로 작성완료 판단
+      var r = await supabase.from("activity_logs")
+        .select("company_id")
+        .is("deleted_at", null)
+        .ilike("memo", "%업로드 자동 기록%");
+      if (r.error || !r.data) { setDoneIds(new Set()); return; }
+      var s = new Set();
+      r.data.forEach(function(l) { if (l.company_id) s.add(l.company_id); });
+      setDoneIds(s);
+    }
+    load();
+  }, []);
+  var list = (companies || []).filter(function(c) { return !c.deleted_at; });
+  var missing = doneIds ? list.filter(function(c) { return !doneIds.has(c.id); }) : [];
+  var missingCount = missing.length;
+  var doneCount = list.length - missingCount;
+  return (
+    <div onClick={function() { setView("companies"); }} title={doneIds && missingCount > 0 ? ("미작성: " + missing.slice(0, 12).map(function(c) { return c.name; }).join(", ") + (missingCount > 12 ? " 외 " + (missingCount - 12) + "곳" : "")) : ""}
+      style={{ background: "linear-gradient(135deg, #B45309 0%, #D97706 100%)", borderRadius: 10, padding: "14px 16px", cursor: "pointer", color: "#fff", boxShadow: "0 2px 8px rgba(180, 83, 9, 0.2)" }}>
+      <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 4, opacity: 0.9 }}>📄 시트지 미작성</div>
+      <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>{doneIds == null ? "…" : (missingCount > 0 ? missingCount + "건" : "모두 작성")}</div>
+      <div style={{ fontSize: 10, opacity: 0.9 }}>
+        {doneIds == null ? "확인 중..." : "작성완료 " + doneCount + " / 전체 " + list.length + " · 눌러서 기업목록"}
       </div>
     </div>
   );
@@ -11945,6 +11989,8 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       rep_contacted: !!saved.rep_contacted,
       assignee_confirmed: !!saved.assignee_confirmed,
       reapply_intent: saved.reapply_intent || "",
+      reject_reason: saved.reject_reason || "",
+      reject_reason_memo: saved.reject_reason_memo || "",
     });
     setShowRejectModal(true);
   };
@@ -11962,6 +12008,8 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       rep_contacted: !!rejectChecks.rep_contacted,
       assignee_confirmed: !!rejectChecks.assignee_confirmed,
       reapply_intent: rejectChecks.reapply_intent || "보류",
+      reject_reason: rejectChecks.reject_reason || "",
+      reject_reason_memo: rejectChecks.reject_reason === "기타" ? (rejectChecks.reject_reason_memo || "") : "",
       decided_at: new Date().toISOString(),
       decided_by: rejectTarget.assignee || null,
       reapplied_case_id: null,
@@ -12698,6 +12746,34 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
               {rejectChecks.reapply_intent === "예" && (function() {
                 var per = nextApplyPeriod(rejectTarget.year, rejectTarget.month);
                 return <div style={{ fontSize: 12, color: "#0F6E56", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 8, padding: "8px 12px", marginTop: 4 }}>저장 시 <b>{per.year}년 {per.month}월</b> 재신청 건을 자동 생성해요.</div>;
+              })()}
+
+              {/* 부결 사유 + 재신청 조건 안내 */}
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#555", margin: "18px 0 8px" }}>부결 사유</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                {REJECT_REASONS.map(function(r) {
+                  var sel = rejectChecks.reject_reason === r.key;
+                  return (
+                    <button key={r.key} onClick={function() { setRejectChecks(function(p) { return Object.assign({}, p, { reject_reason: r.key }); }); }}
+                      style={{ padding: "7px 12px", borderRadius: 8, fontSize: 12, fontWeight: sel ? 700 : 500, cursor: "pointer", background: sel ? "#B91C1C" : "#fff", color: sel ? "#fff" : "#666", border: "1px solid " + (sel ? "#B91C1C" : "#E8E5E0") }}>{r.key}</button>
+                  );
+                })}
+              </div>
+              {(function() {
+                var found = REJECT_REASONS.find(function(r) { return r.key === rejectChecks.reject_reason; });
+                if (!found) return null;
+                if (found.key === "기타") {
+                  return (
+                    <textarea value={rejectChecks.reject_reason_memo || ""} placeholder="재신청 조건·사유를 직접 메모해주세요."
+                      onChange={function(e) { var v = e.target.value; setRejectChecks(function(p) { return Object.assign({}, p, { reject_reason_memo: v }); }); }}
+                      style={{ width: "100%", minHeight: 64, padding: "9px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.6, resize: "vertical", boxSizing: "border-box", outline: "none", fontFamily: "inherit" }} />
+                  );
+                }
+                return (
+                  <div style={{ fontSize: 12, color: "#92400E", background: "#FEF9EC", border: "1px solid #FDE68A", borderRadius: 8, padding: "8px 12px" }}>
+                    📌 재신청 조건: <b>{found.guide}</b>
+                  </div>
+                );
               })()}
             </div>
             <div style={{ padding: "0 24px 20px", display: "flex", gap: 8, justifyContent: "flex-end" }}>
