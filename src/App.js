@@ -574,17 +574,25 @@ function computeFinanceRatios(company) {
   var op = parseFinanceNum(getCompanyInfoVal(info, "영업이익"));
   var interest = parseFinanceNum(getCompanyInfoVal(info, "이자비용"));
 
-  // 부채비율 = 부채총계 / 자본총계 × 100
-  var debtRatio = null, debtText = "데이터 부족", capitalImpaired = false;
+  // 부채비율 = 부채총계 / 자본총계 × 100 (자동). 계산 불가 시 수동입력(debt_ratio) 폴백.
+  var debtRatio = null, debtText = "데이터 부족", capitalImpaired = false, debtSource = null;
   if (debt !== null && capital !== null) {
-    if (capital <= 0) { capitalImpaired = true; debtText = "자본잠식"; }
-    else { debtRatio = (debt / capital) * 100; debtText = (Math.round(debtRatio * 10) / 10) + "%"; }
+    if (capital <= 0) { capitalImpaired = true; debtText = "자본잠식"; debtSource = "auto"; }
+    else { debtRatio = (debt / capital) * 100; debtText = (Math.round(debtRatio * 10) / 10) + "%"; debtSource = "auto"; }
   }
-  // 이자보상배율 = 영업이익 / 이자비용
-  var icr = null, icrText = "데이터 부족", noInterest = false;
+  if (debtSource === null) {
+    var mDebt = parseFloat(company && company.debt_ratio);
+    if (!isNaN(mDebt)) { debtRatio = mDebt; debtText = (Math.round(mDebt * 10) / 10) + "%"; debtSource = "manual"; }
+  }
+  // 이자보상배율 = 영업이익 / 이자비용 (자동). 계산 불가 시 수동입력(interest_coverage_ratio) 폴백.
+  var icr = null, icrText = "데이터 부족", noInterest = false, icrSource = null;
   if (op !== null && interest !== null) {
-    if (interest === 0) { noInterest = true; icrText = "이자비용 0"; icr = op >= 0 ? Infinity : -Infinity; }
-    else { icr = op / interest; icrText = (Math.round(icr * 100) / 100) + "배"; }
+    if (interest === 0) { noInterest = true; icrText = "이자비용 0"; icr = op >= 0 ? Infinity : -Infinity; icrSource = "auto"; }
+    else { icr = op / interest; icrText = (Math.round(icr * 100) / 100) + "배"; icrSource = "auto"; }
+  }
+  if (icrSource === null) {
+    var mIcr = parseFloat(company && company.interest_coverage_ratio);
+    if (!isNaN(mIcr)) { icr = mIcr; icrText = (Math.round(mIcr * 100) / 100) + "배"; icrSource = "manual"; }
   }
 
   var hasDebtRatio = debtRatio !== null || capitalImpaired;
@@ -600,6 +608,7 @@ function computeFinanceRatios(company) {
   return {
     debtRatio: debtRatio, icr: icr, debtText: debtText, icrText: icrText,
     capitalImpaired: capitalImpaired, noInterest: noInterest, lackData: lackData,
+    debtSource: debtSource, icrSource: icrSource,
     sojinFit: fit(1.0), jungjinFit: fit(1.5),
   };
 }
@@ -6264,17 +6273,44 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 return (
                   <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 4 }}>💹 재무비율 자동 계산</div>
-                    <div style={{ fontSize: 10, color: "#94A3B8", marginBottom: 10 }}>부채총계·자본총계·영업이익·이자비용 값으로 실시간 계산 (기업정보 항목 기준)</div>
+                    <div style={{ fontSize: 10, color: "#94A3B8", marginBottom: 10 }}>기업현황표 값으로 자동 계산 · 값이 없으면 아래 칸에 직접 입력하면 판정에 바로 반영</div>
+                    {(function() {
+                      var srcBadge = function(src) {
+                        if (src === "auto") return <span style={{ marginLeft: 4, fontSize: 9, color: "#15803D", fontWeight: 700 }}>(자동)</span>;
+                        if (src === "manual") return <span style={{ marginLeft: 4, fontSize: 9, color: "#B45309", fontWeight: 700 }}>(수동입력)</span>;
+                        return null;
+                      };
+                      return (
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
                       <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 8, padding: "9px 11px" }}>
-                        <div style={{ fontSize: 10.5, color: "#888", marginBottom: 3 }}>부채비율 <span style={{ color: "#CBD5E1" }}>(부채/자본×100)</span></div>
-                        <div style={{ fontSize: 16, fontWeight: 800, color: fr.debtText === "데이터 부족" ? "#CBD5E1" : (fr.debtRatio !== null && fr.debtRatio <= 200 ? "#15803D" : "#DC2626") }}>{fr.debtText}</div>
+                        <div style={{ fontSize: 10.5, color: "#888", marginBottom: 3 }}>부채비율 <span style={{ color: "#CBD5E1" }}>(부채/자본×100)</span>{srcBadge(fr.debtSource)}</div>
+                        {fr.debtSource === "auto" ? (
+                          <div style={{ fontSize: 16, fontWeight: 800, color: fr.debtRatio !== null && fr.debtRatio <= 200 ? "#15803D" : "#DC2626" }}>{fr.debtText}</div>
+                        ) : (
+                          <div style={{ display: "flex", alignItems: "baseline", gap: 3 }}>
+                            <input type="number" value={data.debt_ratio == null ? "" : data.debt_ratio} placeholder="직접 입력"
+                              onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { debt_ratio: v }); }); }}
+                              style={{ width: 72, fontSize: 15, fontWeight: 800, color: fr.debtSource === "manual" ? (fr.debtRatio !== null && fr.debtRatio <= 200 ? "#15803D" : "#DC2626") : "#334155", background: "transparent", border: "none", borderBottom: "1px solid #E2E8F0", outline: "none" }} />
+                            <span style={{ fontSize: 12, color: "#94A3B8" }}>%</span>
+                          </div>
+                        )}
                       </div>
                       <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 8, padding: "9px 11px" }}>
-                        <div style={{ fontSize: 10.5, color: "#888", marginBottom: 3 }}>이자보상배율 <span style={{ color: "#CBD5E1" }}>(영업이익/이자)</span></div>
-                        <div style={{ fontSize: 16, fontWeight: 800, color: fr.icrText === "데이터 부족" ? "#CBD5E1" : "#334155" }}>{fr.icrText}</div>
+                        <div style={{ fontSize: 10.5, color: "#888", marginBottom: 3 }}>이자보상배율 <span style={{ color: "#CBD5E1" }}>(영업이익/이자)</span>{srcBadge(fr.icrSource)}</div>
+                        {fr.icrSource === "auto" ? (
+                          <div style={{ fontSize: 16, fontWeight: 800, color: "#334155" }}>{fr.icrText}</div>
+                        ) : (
+                          <div style={{ display: "flex", alignItems: "baseline", gap: 3 }}>
+                            <input type="number" step="0.1" value={data.interest_coverage_ratio == null ? "" : data.interest_coverage_ratio} placeholder="직접 입력"
+                              onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { interest_coverage_ratio: v }); }); }}
+                              style={{ width: 72, fontSize: 15, fontWeight: 800, color: "#334155", background: "transparent", border: "none", borderBottom: "1px solid #E2E8F0", outline: "none" }} />
+                            <span style={{ fontSize: 12, color: "#94A3B8" }}>배</span>
+                          </div>
+                        )}
                       </div>
                     </div>
+                      );
+                    })()}
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                       <div style={{ background: sj.bg, border: "1px solid " + sj.border, borderRadius: 8, padding: "8px 11px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <span style={{ fontSize: 11.5, fontWeight: 700, color: sj.text }}>소진공</span>
