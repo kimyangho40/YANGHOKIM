@@ -7992,6 +7992,149 @@ function extractMention(value) {
   return { at: at, query: after };
 }
 
+// ── @업체 태그 입력 필드 (재사용) ─────────────────────────────────────────────
+// - 실제 companies에 연결되는 "@업체명"은 파란색으로 하이라이트(백드롭 오버레이 · 한글 IME 안전)
+// - 자동완성 드롭다운: ↑↓ 이동 · Enter로 첫(또는 선택) 항목 즉시 선택 · 마우스 클릭도 그대로
+// props: value, onChange(v), onLink(company), companiesList, multiline, style, placeholder, rows, autoFocus, onBlur, onKeyDown
+function MentionField(props) {
+  var value = props.value == null ? "" : String(props.value);
+  var companiesList = props.companiesList || [];
+  var multiline = !!props.multiline;
+  var style = props.style || {};
+  var placeholder = props.placeholder || "";
+
+  var elRef = useRef(null);
+  var backRef = useRef(null);
+  var mqState = useState(null); var mq = mqState[0]; var setMq = mqState[1];   // {at, query} | null
+  var acState = useState(0); var active = acState[0]; var setActive = acState[1];
+
+  // 실제 업체명(길이 내림차순 · 최장일치용)
+  var names = useMemo(function() {
+    return companiesList.map(function(c) { return c && c.name; }).filter(Boolean)
+      .sort(function(a, b) { return b.length - a.length; });
+  }, [companiesList]);
+
+  var matches = mq
+    ? companiesList.filter(function(c) { return c.name && c.name.toLowerCase().indexOf((mq.query || "").toLowerCase()) >= 0; }).slice(0, 6)
+    : [];
+
+  var syncScroll = function() {
+    if (elRef.current && backRef.current) {
+      backRef.current.scrollTop = elRef.current.scrollTop;
+      backRef.current.scrollLeft = elRef.current.scrollLeft;
+    }
+  };
+
+  var handleChange = function(e) {
+    var v = e.target.value;
+    if (props.onChange) props.onChange(v);
+    setMq(extractMention(v));
+    setActive(0);
+    setTimeout(syncScroll, 0);
+  };
+
+  var pick = function(co) {
+    var m = extractMention(value);
+    if (m && props.onChange) props.onChange(value.slice(0, m.at) + "@" + co.name + " ");
+    if (props.onLink) props.onLink(co);
+    setMq(null);
+    setTimeout(function() { if (elRef.current) elRef.current.focus(); }, 0);
+  };
+
+  var handleKeyDown = function(e) {
+    if (props.onKeyDown) props.onKeyDown(e);
+    if (!mq || matches.length === 0) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setActive(function(a) { return Math.min(matches.length - 1, a + 1); }); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive(function(a) { return Math.max(0, a - 1); }); }
+    else if (e.key === "Enter") { e.preventDefault(); pick(matches[active] || matches[0]); }
+    else if (e.key === "Escape") { setMq(null); }
+  };
+
+  var handleBlur = function(e) {
+    if (props.onBlur) props.onBlur(e);
+    setTimeout(function() { setMq(null); }, 150); // 드롭다운 클릭(onMouseDown) 처리 시간 확보
+  };
+
+  // 백드롭 세그먼트 (실제 업체 태그 → 파랑, 그 외 → 기본색)
+  var isBoundary = function(t, idx) { return idx <= 0 || /\s/.test(t.charAt(idx - 1)); };
+  var segs = [];
+  (function() {
+    var t = value, i = 0, buf = "";
+    while (i < t.length) {
+      if (t.charAt(i) === "@" && isBoundary(t, i)) {
+        var matched = null;
+        for (var k = 0; k < names.length; k++) {
+          var nm = names[k];
+          if (nm && t.substr(i + 1, nm.length) === nm) {
+            var afterCh = t.charAt(i + 1 + nm.length);
+            if (afterCh === "" || /\s/.test(afterCh)) { matched = nm; break; }
+          }
+        }
+        if (matched) {
+          if (buf) { segs.push({ t: buf }); buf = ""; }
+          segs.push({ t: "@" + matched, tag: true });
+          i += 1 + matched.length;
+          continue;
+        }
+      }
+      buf += t.charAt(i); i++;
+    }
+    if (buf) segs.push({ t: buf });
+  })();
+
+  var textColor = style.color || "#1A1917";
+  var backdropStyle = {
+    position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
+    margin: 0, boxSizing: "border-box",
+    fontSize: style.fontSize, fontWeight: style.fontWeight, fontFamily: style.fontFamily || "inherit",
+    lineHeight: style.lineHeight, letterSpacing: style.letterSpacing,
+    padding: style.padding, border: style.border, borderColor: "transparent",
+    borderRadius: style.borderRadius, color: textColor, background: "transparent",
+    pointerEvents: "none", overflow: "hidden",
+    whiteSpace: multiline ? "pre-wrap" : "pre", wordBreak: multiline ? "break-word" : "normal",
+    textDecoration: style.textDecoration, zIndex: 0,
+  };
+  var fieldStyle = Object.assign({}, style, {
+    position: "relative", background: "transparent", color: "transparent",
+    caretColor: textColor, zIndex: 1,
+    fontFamily: style.fontFamily || "inherit", // 백드롭과 폰트 강제 일치(정렬 어긋남 방지)
+  });
+
+  var dropdown = (mq && matches.length > 0) ? (
+    <div style={{ position: "absolute", zIndex: 60, top: "100%", left: 0, minWidth: 220, background: "#fff", border: "1px solid #86EFAC", borderRadius: 8, boxShadow: "0 6px 20px rgba(0,0,0,0.12)", marginTop: 2, maxHeight: 220, overflowY: "auto" }}>
+      {matches.map(function(c, mi) {
+        return (<div key={c.id}
+          onMouseDown={function(e) { e.preventDefault(); pick(c); }}
+          onMouseEnter={function() { setActive(mi); }}
+          style={{ padding: "8px 12px", fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, borderBottom: "1px solid #F0EDE8", background: mi === active ? "#F0FDF4" : "#fff" }}>
+          🏢 <span>{c.name}</span>{mi === active && <span style={{ marginLeft: "auto", fontSize: 10, color: "#15803D", fontWeight: 700 }}>Enter ↵</span>}</div>);
+      })}
+    </div>
+  ) : null;
+
+  var fieldProps = {
+    ref: elRef, value: value, onChange: handleChange, onKeyDown: handleKeyDown,
+    onBlur: handleBlur, onScroll: syncScroll, placeholder: "", autoFocus: props.autoFocus, style: fieldStyle,
+  };
+
+  return (
+    <div style={{ position: "relative", width: style.width || "100%" }}>
+      <div ref={backRef} aria-hidden="true" style={backdropStyle}>
+        {value === ""
+          ? <span style={{ color: "#9AA0A6" }}>{placeholder}</span>
+          : segs.map(function(s, i) { return s.tag
+              ? <span key={i} style={{ color: "#2563EB", fontWeight: 700 }}>{s.t}</span>
+              : <span key={i}>{s.t}</span>; })}
+        {"​"}
+      </div>
+      {multiline
+        ? <textarea {...fieldProps} rows={props.rows} />
+        : <input {...fieldProps} />}
+      {dropdown}
+    </div>
+  );
+}
+
 // ── 업무노트 수정 카드 (독립 컴포넌트 - 입력버그 방지) ─────────────────────────
 function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, companiesList }) {
   // @업체 태그 자동완성: { type:'title'|'freeContent'|'item', idx, query }
@@ -8089,6 +8232,12 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
     // company_id 는 autoSaveEditNow(content 전용)로 저장되지 않으므로 즉시 반영
     if (editNote.id) supabase.from("work_notes").update({ company_id: co.id, updated_at: new Date().toISOString() }).eq("id", editNote.id);
   };
+  // @태그 선택 시 업체 연결 (MentionField에서 호출) — 텍스트 치환은 MentionField가 담당
+  var linkCompany = function(co) {
+    setEditNote(function(p) { return Object.assign({}, p, { company_id: co.id, company_name: co.name }); });
+    if (editNote.id) supabase.from("work_notes").update({ company_id: co.id, updated_at: new Date().toISOString() }).eq("id", editNote.id);
+    setTimeout(autoSaveEditNow, 0);
+  };
   var mentionMenu = function(type, idx) {
     if (!mention || mention.type !== type || (type === "item" && mention.idx !== idx)) return null;
     var q = (mention.query || "").toLowerCase();
@@ -8129,11 +8278,12 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
         </label>
       </div>
       <div style={{ position: "relative", marginBottom: 10 }}>
-        <input value={editNote.title || ""} placeholder="제목 (선택사항) — @업체명 으로 연결"
-          onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { title: v }); }); var m = extractMention(v); setMention(m ? { type: "title", query: m.query } : null); }}
-          onBlur={function() { autoSaveEditNow(); setTimeout(function() { setMention(function(cur) { return cur && cur.type === "title" ? null : cur; }); }, 150); }}
+        <MentionField multiline={false} companiesList={companiesList}
+          value={editNote.title || ""} placeholder="제목 (선택사항) — @업체명 으로 연결"
+          onChange={function(v) { setEditNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
+          onLink={linkCompany}
+          onBlur={function() { autoSaveEditNow(); }}
           style={{ width: "100%", padding: "10px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 14, fontWeight: 600, boxSizing: "border-box", outline: "none", background: "#fff" }} />
-        {mentionMenu("title")}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
         <label style={{ fontSize: 12, color: "#15803D", fontWeight: 600, whiteSpace: "nowrap" }}>📅 마감일</label>
@@ -8168,12 +8318,13 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
                   supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", editNote.id);
                 }} style={{ width: 15, height: 15, flexShrink: 0, cursor: "pointer", marginTop: 6 }} />
                 <div style={{ flex: 1, position: "relative" }}>
-                  <textarea value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성 / @업체명 연결 / Enter로 줄바꿈)"}
+                  <MentionField multiline={true} companiesList={companiesList}
+                    value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성 / @업체명 연결 / Enter로 줄바꿈)"}
                     rows={Math.max(1, (item.text || "").split("\n").length)}
-                    onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); var m = extractMention(v); setMention(m ? { type: "item", idx: idx, query: m.query } : null); }}
-                    onBlur={function() { autoSaveEditNow(); setTimeout(function() { setMention(function(cur) { return cur && cur.type === "item" && cur.idx === idx ? null : cur; }); }, 150); }}
+                    onChange={function(v) { setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); }}
+                    onLink={linkCompany}
+                    onBlur={function() { autoSaveEditNow(); }}
                     style={{ width: "100%", boxSizing: "border-box", border: "none", outline: "none", fontSize: 13, lineHeight: 1.7, background: "transparent", resize: "vertical", fontFamily: "inherit", overflow: "hidden", padding: "3px 0", textDecoration: item.checked ? "line-through" : "none", color: item.checked ? "#AAA" : "#333" }} />
-                  {mentionMenu("item", idx)}
                 </div>
                 <input type="date" value={item.dueDate || ""} title="이 항목의 마감일 (선택)"
                   onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { dueDate: v }); return Object.assign({}, p, { checkItems: items }); }); setTimeout(autoSaveEditNow, 0); }}
@@ -8200,12 +8351,13 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
         </span>
       </div>
       <div style={{ position: "relative" }}>
-        <textarea value={freeContent} placeholder={checkItems.length > 0 ? "추가 메모 (선택사항)..." : "내용을 자유롭게 입력하세요. @업체명 으로 업체 연결..."}
-          onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { freeContent: v }); }); var m = extractMention(v); setMention(m ? { type: "freeContent", query: m.query } : null); }}
-          onBlur={function() { autoSaveEditNow(); setTimeout(function() { setMention(function(cur) { return cur && cur.type === "freeContent" ? null : cur; }); }, 150); }}
+        <MentionField multiline={true} companiesList={companiesList}
+          value={freeContent} placeholder={checkItems.length > 0 ? "추가 메모 (선택사항)..." : "내용을 자유롭게 입력하세요. @업체명 으로 업체 연결..."}
           rows={checkItems.length > 0 ? 4 : 8}
+          onChange={function(v) { setEditNote(function(p) { return Object.assign({}, p, { freeContent: v }); }); }}
+          onLink={linkCompany}
+          onBlur={function() { autoSaveEditNow(); }}
           style={{ width: "100%", padding: "12px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, lineHeight: 1.75, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff", minHeight: 120 }} />
-        {mentionMenu("freeContent")}
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
         <button onClick={saveEdit} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "10px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
@@ -8536,6 +8688,10 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       return Object.assign({}, p, upd);
     });
     setMention(null);
+  };
+  // @태그 선택 시 업체 연결 (MentionField에서 호출) — 텍스트 치환은 MentionField가 담당
+  var linkCompany = function(co) {
+    setNewNote(function(p) { return Object.assign({}, p, { company_id: co.id, company_name: co.name }); });
   };
 
   // @업체 태그 드롭다운 렌더 (해당 필드가 활성 상태일 때만)
@@ -9041,11 +9197,11 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             </select>
           </div>
           <div style={{ position: "relative", marginBottom: 10 }}>
-            <input value={newNote.title} placeholder="제목 (선택사항) — @업체명 으로 연결"
-              onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { title: v }); }); var m = extractMention(v); setMention(m ? { type: "title", query: m.query } : null); }}
-              onBlur={function() { setTimeout(function() { setMention(function(cur) { return cur && cur.type === "title" ? null : cur; }); }, 150); }}
+            <MentionField multiline={false} companiesList={companiesList}
+              value={newNote.title} placeholder="제목 (선택사항) — @업체명 으로 연결"
+              onChange={function(v) { setNewNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
+              onLink={linkCompany}
               style={{ width: "100%", padding: "10px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 14, fontWeight: 600, boxSizing: "border-box", outline: "none", background: "#fff" }} />
-            {mentionMenu("title")}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <label style={{ fontSize: 12, color: "#15803D", fontWeight: 600, whiteSpace: "nowrap" }}>📅 마감일</label>
@@ -9070,12 +9226,13 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
                   <div key={idx} style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 8 }}>
                     <input type="checkbox" disabled style={{ width: 15, height: 15, flexShrink: 0, marginTop: 6 }} />
                     <div style={{ flex: 1, position: "relative" }}>
-                      <textarea value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성 / @업체명 연결 / Enter로 줄바꿈)"}
+                      <MentionField multiline={true} companiesList={companiesList}
+                        value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성 / @업체명 연결 / Enter로 줄바꿈)"}
                         rows={Math.max(1, (item.text || "").split("\n").length)}
-                        onChange={function(e) { var v = e.target.value; setNewNote(function(p) { var items = p.checkItems.slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); var m = extractMention(v); setMention(m ? { type: "item", idx: idx, query: m.query } : null); }}
-                        onBlur={function() { setTimeout(function() { setMention(function(cur) { return cur && cur.type === "item" && cur.idx === idx ? null : cur; }); }, 150); }}
-                        style={{ width: "100%", boxSizing: "border-box", border: "none", outline: "none", fontSize: 13, lineHeight: 1.7, background: "transparent", resize: "vertical", fontFamily: "inherit", overflow: "hidden", padding: "3px 0" }} autoFocus={idx === newNote.checkItems.length - 1} />
-                      {mentionMenu("item", idx)}
+                        autoFocus={idx === newNote.checkItems.length - 1}
+                        onChange={function(v) { setNewNote(function(p) { var items = p.checkItems.slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); }}
+                        onLink={linkCompany}
+                        style={{ width: "100%", boxSizing: "border-box", border: "none", outline: "none", fontSize: 13, lineHeight: 1.7, background: "transparent", resize: "vertical", fontFamily: "inherit", overflow: "hidden", padding: "3px 0" }} />
                     </div>
                     <input type="date" value={item.dueDate || ""} title="이 항목의 마감일 (선택)"
                       onChange={function(e) { var v = e.target.value; setNewNote(function(p) { var items = p.checkItems.slice(); items[idx] = Object.assign({}, items[idx], { dueDate: v }); return Object.assign({}, p, { checkItems: items }); }); }}
@@ -9102,11 +9259,12 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             </span>
           </div>
           <div style={{ position: "relative" }}>
-            <textarea value={newNote.content} placeholder={newNote.checkItems && newNote.checkItems.length > 0 ? "추가 메모 (선택사항)..." : "내용을 자유롭게 입력하세요. 업무 메모, 오늘 할 일, @업체명 으로 업체 연결..."} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { content: v }); }); var m = extractMention(v); setMention(m ? { type: "content", query: m.query } : null); }}
-              onBlur={function() { setTimeout(function() { setMention(function(cur) { return cur && cur.type === "content" ? null : cur; }); }, 150); }}
+            <MentionField multiline={true} companiesList={companiesList}
+              value={newNote.content} placeholder={newNote.checkItems && newNote.checkItems.length > 0 ? "추가 메모 (선택사항)..." : "내용을 자유롭게 입력하세요. 업무 메모, 오늘 할 일, @업체명 으로 업체 연결..."}
               rows={newNote.checkItems && newNote.checkItems.length > 0 ? 2 : 6}
+              onChange={function(v) { setNewNote(function(p) { return Object.assign({}, p, { content: v }); }); }}
+              onLink={linkCompany}
               style={{ width: "100%", padding: "12px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, lineHeight: 1.75, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff" }} />
-            {mentionMenu("content")}
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
             <button onClick={saveNew} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "10px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
