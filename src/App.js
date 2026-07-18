@@ -12800,6 +12800,7 @@ function DBLeadsView({ canExport }) {
   const [activeMonth, setActiveMonth] = useState(new Date().getMonth() + 1);
   const [filterStatus, setFilterStatus] = useState("전체");
   const [filterWeek, setFilterWeek] = useState("전체");
+  const [filterAssignee, setFilterAssignee] = useState("전체");
   const [editingId, setEditingId] = useState(null);
   const [editData, setEditData] = useState({});
   const [showAddLead, setShowAddLead] = useState(false);
@@ -12860,6 +12861,18 @@ function DBLeadsView({ canExport }) {
         var w = getWeek(l);
         if (w !== parseInt(filterWeek)) return false;
       }
+      if (filterAssignee !== "전체") {
+        var asg = (l.assignee || "").trim();
+        var isUnassigned = !asg || asg === "-";
+        if (filterAssignee === "미배정") {
+          if (!isUnassigned) return false;
+        } else if (filterAssignee === "기타") {
+          // 미배정도 아니고 양호/동일/관호도 아닌 담당자
+          if (isUnassigned || asg === "양호" || asg === "동일" || asg === "관호") return false;
+        } else {
+          if (asg !== filterAssignee) return false;
+        }
+      }
       if (dbSearch.trim()) {
         var s = dbSearch.trim().toLowerCase();
         return (l.business_name || "").toLowerCase().includes(s) ||
@@ -12868,7 +12881,7 @@ function DBLeadsView({ canExport }) {
       }
       return true;
     });
-  }, [leads, activeMonth, filterStatus, filterWeek, dbSearch]);
+  }, [leads, activeMonth, filterStatus, filterWeek, filterAssignee, dbSearch]);
 
   var monthsWithData = useMemo(function() {
     var s = new Set();
@@ -12883,6 +12896,19 @@ function DBLeadsView({ canExport }) {
       if (w && w >= 1 && w <= 5) counts[w]++;
     });
     return counts;
+  }, [leads, activeMonth]);
+
+  // 담당자별 건수 (양호/동일/관호 고정 + 미배정 + 기타)
+  var assigneeCounts = useMemo(function() {
+    var c = { "전체": 0, "미배정": 0, "양호": 0, "동일": 0, "관호": 0, "기타": 0 };
+    leads.filter(function(l) { return (activeMonth === "all" || l.month === activeMonth) && l.year === 2026 && !l.deleted_at; }).forEach(function(l) {
+      c["전체"]++;
+      var asg = (l.assignee || "").trim();
+      if (!asg || asg === "-") c["미배정"]++;
+      else if (asg === "양호" || asg === "동일" || asg === "관호") c[asg]++;
+      else c["기타"]++;
+    });
+    return c;
   }, [leads, activeMonth]);
 
   var summary = useMemo(function() {
@@ -13037,6 +13063,15 @@ function DBLeadsView({ canExport }) {
           var label = w === "전체" ? "전체" : w + "주차";
           var count = w === "전체" ? "" : (weeksWithData[parseInt(w)] > 0 ? " (" + weeksWithData[parseInt(w)] + ")" : "");
           return (<div key={w} onClick={function() { setFilterWeek(w); }} style={{ padding: "4px 12px", borderRadius: 99, cursor: "pointer", fontSize: 12, background: filterWeek === w ? "#1A1917" : "#fff", color: filterWeek === w ? "#F7F6F3" : "#666", border: filterWeek === w ? "none" : "1px solid #E8E5E0" }}>{label}{count}</div>);
+        })}
+      </div>
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, color: "#888", marginRight: 4 }}>담당자별:</span>
+        {["전체","미배정","양호","동일","관호","기타"].map(function(a) {
+          var cnt = assigneeCounts[a] || 0;
+          var badge = a === "전체" ? "" : (cnt > 0 ? " (" + cnt + ")" : "");
+          return (<div key={a} onClick={function() { setFilterAssignee(a); }} style={{ padding: "4px 12px", borderRadius: 99, cursor: "pointer", fontSize: 12, background: filterAssignee === a ? "#1A1917" : "#fff", color: filterAssignee === a ? "#F7F6F3" : "#666", border: filterAssignee === a ? "none" : "1px solid #E8E5E0" }}>{a}{badge}</div>);
         })}
       </div>
 
