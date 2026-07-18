@@ -7913,7 +7913,9 @@ function extractMention(value) {
 }
 
 // ── 업무노트 수정 카드 (독립 컴포넌트 - 입력버그 방지) ─────────────────────────
-function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
+function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, companiesList }) {
+  // @업체 태그 자동완성: { type:'title'|'freeContent'|'item', idx, query }
+  var [mention, setMention] = useState(null);
   // content가 변경되면 checkItems와 freeText로 분리
   // editNote.checkItems가 이미 있으면 그걸 우선 사용 (사용자가 편집 중인 상태)
   
@@ -7984,9 +7986,58 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
     });
   };
 
+  // @업체 태그 선택 시: 해당 필드의 "@질의" → "@업체명 " 치환 + 노트 company_id 연결
+  var applyMention = function(co) {
+    if (!mention) return;
+    setEditNote(function(p) {
+      var upd = { company_id: co.id, company_name: co.name };
+      if (mention.type === "title") {
+        var m = extractMention(p.title); if (m) upd.title = (p.title || "").slice(0, m.at) + "@" + co.name + " ";
+      } else if (mention.type === "freeContent") {
+        var v = p.freeContent !== undefined ? p.freeContent : (p.content || "");
+        var m2 = extractMention(v); if (m2) upd.freeContent = v.slice(0, m2.at) + "@" + co.name + " ";
+      } else if (mention.type === "item") {
+        var items = (p.checkItems || []).slice();
+        var t = (items[mention.idx] && items[mention.idx].text) || "";
+        var m3 = extractMention(t);
+        if (m3) { items[mention.idx] = Object.assign({}, items[mention.idx], { text: t.slice(0, m3.at) + "@" + co.name + " " }); upd.checkItems = items; }
+      }
+      return Object.assign({}, p, upd);
+    });
+    setMention(null);
+    setTimeout(autoSaveEditNow, 0);
+    // company_id 는 autoSaveEditNow(content 전용)로 저장되지 않으므로 즉시 반영
+    if (editNote.id) supabase.from("work_notes").update({ company_id: co.id, updated_at: new Date().toISOString() }).eq("id", editNote.id);
+  };
+  var mentionMenu = function(type, idx) {
+    if (!mention || mention.type !== type || (type === "item" && mention.idx !== idx)) return null;
+    var q = (mention.query || "").toLowerCase();
+    var matches = (companiesList || []).filter(function(c) { return c.name && c.name.toLowerCase().indexOf(q) >= 0; }).slice(0, 6);
+    if (matches.length === 0) return null;
+    return (
+      <div style={{ position: "absolute", zIndex: 60, top: "100%", left: 0, minWidth: 220, background: "#fff", border: "1px solid #86EFAC", borderRadius: 8, boxShadow: "0 6px 20px rgba(0,0,0,0.12)", marginTop: 2, maxHeight: 220, overflowY: "auto" }}>
+        {matches.map(function(c) {
+          return (<div key={c.id} onMouseDown={function(e) { e.preventDefault(); applyMention(c); }}
+            style={{ padding: "8px 12px", fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, borderBottom: "1px solid #F0EDE8" }}
+            onMouseEnter={function(e) { e.currentTarget.style.background = "#F0FDF4"; }} onMouseLeave={function(e) { e.currentTarget.style.background = "#fff"; }}>
+            🏢 <span>{c.name}</span></div>);
+        })}
+      </div>
+    );
+  };
+
   return (
     <div style={{ background: "#F0FDF4", border: "2px solid #86EFAC", borderRadius: 12, padding: "18px 20px" }}>
-      <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D", marginBottom: 12 }}>✏️ 노트 수정</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D" }}>✏️ 노트 수정</div>
+        <span style={{ fontSize: 11, color: "#888" }}>· 제목·항목·내용에 <b>@</b> 입력 시 업체 연결</span>
+        {(editNote.company_name || (editNote.company_id && ((companiesList || []).find(function(c) { return c.id === editNote.company_id; }) || {}).name)) && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 99, padding: "2px 8px" }}>
+            🔗 {editNote.company_name || ((companiesList || []).find(function(c) { return c.id === editNote.company_id; }) || {}).name}
+            <span onClick={function() { setEditNote(function(p) { return Object.assign({}, p, { company_id: null, company_name: "" }); }); if (editNote.id) supabase.from("work_notes").update({ company_id: null, updated_at: new Date().toISOString() }).eq("id", editNote.id); }} style={{ cursor: "pointer", color: "#6366F1" }}>✕</span>
+          </span>
+        )}
+      </div>
       <div style={{ display: "flex", gap: 16, marginBottom: 10 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
           <input type="checkbox" checked={editNote.is_todo || false} onChange={function(e) { setEditNote(function(p) { return Object.assign({}, p, { is_todo: e.target.checked }); }); }} />
@@ -7997,8 +8048,13 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
           📌 상단 고정
         </label>
       </div>
-      <input value={editNote.title || ""} placeholder="제목 (선택사항)" onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
-        style={{ width: "100%", padding: "10px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 14, fontWeight: 600, boxSizing: "border-box", outline: "none", marginBottom: 10, background: "#fff" }} />
+      <div style={{ position: "relative", marginBottom: 10 }}>
+        <input value={editNote.title || ""} placeholder="제목 (선택사항) — @업체명 으로 연결"
+          onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { title: v }); }); var m = extractMention(v); setMention(m ? { type: "title", query: m.query } : null); }}
+          onBlur={function() { autoSaveEditNow(); setTimeout(function() { setMention(function(cur) { return cur && cur.type === "title" ? null : cur; }); }, 150); }}
+          style={{ width: "100%", padding: "10px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 14, fontWeight: 600, boxSizing: "border-box", outline: "none", background: "#fff" }} />
+        {mentionMenu("title")}
+      </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
         <label style={{ fontSize: 12, color: "#15803D", fontWeight: 600, whiteSpace: "nowrap" }}>📅 마감일</label>
         <input type="date" value={editNote.due_date || ""} onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { due_date: v }); }); }}
@@ -8031,11 +8087,14 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
                   var newContent = parts.join("\n");
                   supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", editNote.id);
                 }} style={{ width: 15, height: 15, flexShrink: 0, cursor: "pointer", marginTop: 6 }} />
-                <textarea value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성 / Enter로 줄바꿈)"}
-                  rows={Math.max(1, (item.text || "").split("\n").length)}
-                  onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); }}
-                  onBlur={autoSaveEditNow}
-                  style={{ flex: 1, border: "none", outline: "none", fontSize: 13, lineHeight: 1.7, background: "transparent", resize: "vertical", fontFamily: "inherit", overflow: "hidden", padding: "3px 0", textDecoration: item.checked ? "line-through" : "none", color: item.checked ? "#AAA" : "#333" }} />
+                <div style={{ flex: 1, position: "relative" }}>
+                  <textarea value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성 / @업체명 연결 / Enter로 줄바꿈)"}
+                    rows={Math.max(1, (item.text || "").split("\n").length)}
+                    onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); var m = extractMention(v); setMention(m ? { type: "item", idx: idx, query: m.query } : null); }}
+                    onBlur={function() { autoSaveEditNow(); setTimeout(function() { setMention(function(cur) { return cur && cur.type === "item" && cur.idx === idx ? null : cur; }); }, 150); }}
+                    style={{ width: "100%", boxSizing: "border-box", border: "none", outline: "none", fontSize: 13, lineHeight: 1.7, background: "transparent", resize: "vertical", fontFamily: "inherit", overflow: "hidden", padding: "3px 0", textDecoration: item.checked ? "line-through" : "none", color: item.checked ? "#AAA" : "#333" }} />
+                  {mentionMenu("item", idx)}
+                </div>
                 <input type="date" value={item.dueDate || ""} title="이 항목의 마감일 (선택)"
                   onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { dueDate: v }); return Object.assign({}, p, { checkItems: items }); }); setTimeout(autoSaveEditNow, 0); }}
                   style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, color: "#4338CA", outline: "none", width: 130, marginTop: 4 }} />
@@ -8060,11 +8119,14 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel }) {
           💡 직접 입력 시: <code style={{ background: "#F0EDE8", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>- [ ] 할일 [5/30]</code> 또는 <code style={{ background: "#F0EDE8", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>- [ ] 할일 → 5/30</code>
         </span>
       </div>
-      <textarea value={freeContent} placeholder={checkItems.length > 0 ? "추가 메모 (선택사항)..." : "내용을 자유롭게 입력하세요..."} 
-        onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { freeContent: v }); }); }} 
-        onBlur={autoSaveEditNow}
-        rows={checkItems.length > 0 ? 4 : 8}
-        style={{ width: "100%", padding: "12px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, lineHeight: 1.75, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff", minHeight: 120 }} />
+      <div style={{ position: "relative" }}>
+        <textarea value={freeContent} placeholder={checkItems.length > 0 ? "추가 메모 (선택사항)..." : "내용을 자유롭게 입력하세요. @업체명 으로 업체 연결..."}
+          onChange={function(e) { var v = e.target.value; setEditNote(function(p) { return Object.assign({}, p, { freeContent: v }); }); var m = extractMention(v); setMention(m ? { type: "freeContent", query: m.query } : null); }}
+          onBlur={function() { autoSaveEditNow(); setTimeout(function() { setMention(function(cur) { return cur && cur.type === "freeContent" ? null : cur; }); }, 150); }}
+          rows={checkItems.length > 0 ? 4 : 8}
+          style={{ width: "100%", padding: "12px 13px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, lineHeight: 1.75, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff", minHeight: 120 }} />
+        {mentionMenu("freeContent")}
+      </div>
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
         <button onClick={saveEdit} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "10px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
         <button onClick={onCancel} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 16px", fontSize: 13, cursor: "pointer" }}>취소</button>
@@ -8716,14 +8778,20 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       finalContent = parts.join("\n");
     }
     
-    var r = await supabase.from("work_notes").update({
+    var upd = {
       title: editNote.title,
       content: finalContent,
       is_todo: editNote.is_todo,
       pinned: editNote.pinned,
       due_date: editNote.due_date || null,
+      company_id: editNote.company_id || null, // @태그로 연결/해제된 기업
       updated_at: new Date().toISOString(),
-    }).eq("id", editNote.id);
+    };
+    var r = await supabase.from("work_notes").update(upd).eq("id", editNote.id);
+    if (r.error && /company_id/.test(r.error.message || "")) {
+      delete upd.company_id;
+      r = await supabase.from("work_notes").update(upd).eq("id", editNote.id);
+    }
     if (!r.error) {
       setNotes(function(prev) { return prev.map(function(n) { return n.id === editNote.id ? Object.assign({}, n, editNote, { content: finalContent }) : n; }); });
       setEditingId(null); setEditNote({});
@@ -8856,6 +8924,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             editNote={editNote}
             setEditNote={setEditNote}
             saveEdit={saveEdit}
+            companiesList={companiesList}
             onCancel={function() { setEditingId(null); setEditNote({}); }}
           />
         </div>
