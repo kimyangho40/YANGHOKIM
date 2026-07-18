@@ -6069,10 +6069,9 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   </div>
                   <div style={{ flex: 1, minWidth: 90 }}>
                     <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>수수료율 (%)</div>
-                    <select value={data.fee || 5} onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { fee: v }); }); }}
-                      style={{ width: "100%", fontSize: 13, padding: "7px 9px", border: "1px solid #E8E5E0", borderRadius: 6, background: "#fff", outline: "none", boxSizing: "border-box" }}>
-                      {[1,2,3,4,5].map(function(r) { return <option key={r} value={r}>{r}%</option>; })}
-                    </select>
+                    <input type="number" step="0.1" min="0" value={data.fee == null ? "" : data.fee} placeholder="예: 5"
+                      onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { fee: v }); }); }}
+                      style={{ width: "100%", fontSize: 13, padding: "7px 9px", border: "1px solid #E8E5E0", borderRadius: 6, background: "#fff", outline: "none", boxSizing: "border-box" }} />
                   </div>
                 </div>
                 <div style={{ background: "#fff", borderRadius: 8, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
