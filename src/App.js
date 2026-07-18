@@ -3995,10 +3995,10 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView, companies 
       // - [ ] 또는 - [x] 패턴 매칭
       var match = line.match(/^(\s*)- \[([ x])\]\s*(.*)$/i);
       if (match) {
-        var textFull = match[3].trim();
+        var textFull = splitItemWait(match[3].trim()).rest; // 항목별 대기사유 메타 제거
         var itemDueDate = null;
         var displayText = textFull;
-        
+
         // 마감일 추출: [MM/DD] 또는 [YYYY-MM-DD] 또는 → MM/DD
         // 우선순위: 대괄호 > 화살표
         var bracketMatch = textFull.match(/\[(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2})\]/);
@@ -4309,29 +4309,38 @@ function StaleWaitBanner({ setView }) {
   const [items, setItems] = useState([]);
   useEffect(function() {
     async function load() {
+      // 항목별 대기사유({응답대기:since})를 content 마크다운에서 스캔
       var r = await supabase.from("work_notes")
-        .select("id,title,content,wait_reason,wait_since,company_id,is_done")
-        .is("deleted_at", null).not("wait_reason", "is", null);
+        .select("id,title,content,company_id,is_done")
+        .is("deleted_at", null).eq("is_done", false);
       if (r.error || !r.data) return;
-      var rows = r.data.filter(function(n) {
-        return !n.is_done && n.wait_since && (n.wait_reason === "응답대기" || n.wait_reason === "서류대기");
-      }).map(function(n) {
-        return { note: n, days: Math.floor((Date.now() - new Date(n.wait_since)) / 86400000) };
-      }).filter(function(x) { return x.days >= 3; });
-      if (rows.length === 0) { setItems([]); return; }
+      var now = Date.now();
+      var waiting = [];
+      r.data.forEach(function(n) {
+        (n.content || "").split("\n").forEach(function(line) {
+          var m = line.match(/^(\s*)- \[([ x])\]\s*(.*)$/i);
+          if (!m || m[2].toLowerCase() === "x") return; // 완료 항목 제외
+          var w = splitItemWait(m[3]);
+          if (w.reason !== "응답대기" && w.reason !== "서류대기") return;
+          var itemText = decodeItemText(w.rest.replace(/\[\d{4}-\d{2}-\d{2}\]|\[\d{1,2}\/\d{1,2}\]/, "").replace(/→\s*\d{4}-\d{2}-\d{2}\s*$|→\s*\d{1,2}\/\d{1,2}\s*$/, "").trim());
+          var days = w.since ? Math.floor((now - new Date(w.since + "T00:00:00").getTime()) / 86400000) : 0;
+          waiting.push({ key: n.id + ":" + line, noteId: n.id, company_id: n.company_id, title: n.title, reason: w.reason, text: itemText, days: days });
+        });
+      });
+      waiting = waiting.filter(function(x) { return x.days >= 3; });
+      if (waiting.length === 0) { setItems([]); return; }
       // 연결 기업명 조회
-      var ids = {}; rows.forEach(function(x) { if (x.note.company_id) ids[x.note.company_id] = 1; });
+      var ids = {}; waiting.forEach(function(x) { if (x.company_id) ids[x.company_id] = 1; });
       var names = {}; var idList = Object.keys(ids);
       if (idList.length) {
         var cr = await supabase.from("companies").select("id,name").in("id", idList);
         if (!cr.error && cr.data) cr.data.forEach(function(c) { names[c.id] = c.name; });
       }
-      rows.forEach(function(x) {
-        x.name = x.note.company_id ? (names[x.note.company_id] || "") : "";
-        if (!x.name) x.name = (x.note.title || (x.note.content || "").split("\n")[0] || "업무").slice(0, 20);
+      waiting.forEach(function(x) {
+        x.name = String((x.company_id && names[x.company_id]) || x.title || x.text || "업무").slice(0, 24);
       });
-      rows.sort(function(a, b) { return b.days - a.days; });
-      setItems(rows);
+      waiting.sort(function(a, b) { return b.days - a.days; });
+      setItems(waiting);
     }
     load();
   }, []);
@@ -4344,14 +4353,15 @@ function StaleWaitBanner({ setView }) {
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {items.map(function(x) {
-          var reasonLabel = x.note.wait_reason === "서류대기" ? "서류 요청" : "응답 대기";
-          var tail = x.note.wait_reason === "서류대기" ? "무회신" : "무응답";
+          var reasonLabel = x.reason === "서류대기" ? "서류 요청" : "응답 대기";
+          var tail = x.reason === "서류대기" ? "무회신" : "무응답";
           return (
-            <div key={x.note.id} onClick={function() { setView("worknotes"); }}
+            <div key={x.key} onClick={function() { setView("worknotes"); }}
               style={{ display: "flex", alignItems: "center", gap: 8, background: "#fff", border: "1px solid #FECACA", borderRadius: 8, padding: "8px 12px", cursor: "pointer" }}>
               <span style={{ fontSize: 11, fontWeight: 700, color: "#B91C1C", background: "#FEE2E2", borderRadius: 99, padding: "1px 8px", whiteSpace: "nowrap" }}>{x.days}일째</span>
               <span style={{ fontSize: 13, color: "#333", fontWeight: 600 }}>{x.name}</span>
-              <span style={{ fontSize: 12, color: "#888" }}>{reasonLabel} · {tail}</span>
+              {x.text && <span style={{ fontSize: 12, color: "#555", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}>{x.text}</span>}
+              <span style={{ fontSize: 12, color: "#888", whiteSpace: "nowrap" }}>{reasonLabel} · {tail}</span>
             </div>
           );
         })}
@@ -7981,6 +7991,22 @@ function encodeItemText(t) {
 function decodeItemText(t) {
   return String(t == null ? "" : t).replace(/\\n/g, "\n");
 }
+// 체크리스트 항목별 대기사유 메타데이터 — 라인 끝의 {응답대기} / {서류대기} / {응답대기:2026-07-18}
+// since(YYYY-MM-DD)는 방치 알림 "N일째" 계산용 (없으면 0일로 간주)
+var ITEM_WAIT_RE = /\s*\{(응답대기|서류대기)(?::(\d{4}-\d{2}-\d{2}))?\}\s*$/;
+function splitItemWait(textFull) {
+  var s = String(textFull == null ? "" : textFull);
+  var m = s.match(ITEM_WAIT_RE);
+  if (!m) return { reason: "", since: "", rest: s.trim() };
+  return { reason: m[1], since: m[2] || "", rest: s.replace(ITEM_WAIT_RE, "").trim() };
+}
+// 체크리스트 항목 → content 마크다운 한 줄: "- [ ] 텍스트 [마감일] {대기사유:since}"
+function buildItemLine(i) {
+  var line = "- [" + (i.checked ? "x" : " ") + "] " + encodeItemText(i.text);
+  if (i.dueDate) line += " [" + i.dueDate + "]";
+  if (i.waitReason && i.waitReason !== "일반") line += " {" + i.waitReason + (i.waitSince ? ":" + i.waitSince : "") + "}";
+  return line;
+}
 // @업체 태그: 입력값 끝(공백 없는) "@질의" 를 추출. 없으면 null.
 function extractMention(value) {
   if (value == null) return null;
@@ -8151,6 +8177,9 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
       var m = line.match(/^(\s*)- \[([ x])\]\s*(.*)$/i);
       if (m) {
         var textFull = m[3].trim();
+        var wsplit = splitItemWait(textFull); // 항목별 대기사유 먼저 분리(라인 끝)
+        var waitReason = wsplit.reason, waitSince = wsplit.since;
+        textFull = wsplit.rest;
         var dateStr = null;
         var displayText = textFull;
         var bracketMatch = textFull.match(/\[(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2})\]/);
@@ -8166,7 +8195,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
           }
           displayText = textFull.replace(/\[\d{4}-\d{2}-\d{2}\]|\[\d{1,2}\/\d{1,2}\]/, "").replace(/→\s*\d{4}-\d{2}-\d{2}\s*$|→\s*\d{1,2}\/\d{1,2}\s*$/, "").trim();
         }
-        items.push({ checked: m[2].toLowerCase() === "x", text: decodeItemText(displayText), dueDate: dateStr || "" });
+        items.push({ checked: m[2].toLowerCase() === "x", text: decodeItemText(displayText), dueDate: dateStr || "", waitReason: waitReason || "", waitSince: waitSince || "" });
       } else {
         freeLines.push(line);
       }
@@ -8194,11 +8223,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
   var autoSaveEditNow = function() {
     setEditNote(function(p) {
       if (!p || !p.id) return p;
-      var items = (p.checkItems || []).filter(function(i) { return (i.text || "").trim(); }).map(function(i) {
-        var line = "- [" + (i.checked ? "x" : " ") + "] " + encodeItemText(i.text);
-        if (i.dueDate) line += " [" + i.dueDate + "]";
-        return line;
-      });
+      var items = (p.checkItems || []).filter(function(i) { return (i.text || "").trim(); }).map(buildItemLine);
       var ft = (p.freeContent || "").trim();
       var parts = [];
       if (items.length > 0) parts.push(items.join("\n"));
@@ -8297,7 +8322,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
         <div style={{ border: "1px solid #86EFAC", borderRadius: 8, padding: "10px 12px", marginBottom: 8, background: "#fff" }}>
           {checkItems.map(function(item, idx) {
             return (
-              <div key={idx} style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 8 }}>
+              <div key={idx} style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 8, background: item.waitReason && item.waitReason !== "일반" ? "#FFFBEB" : "transparent", border: "1px solid " + (item.waitReason && item.waitReason !== "일반" ? "#FDE68A" : "transparent"), borderRadius: 8, padding: item.waitReason && item.waitReason !== "일반" ? "4px 6px" : "0" }}>
                 <input type="checkbox" checked={item.checked || false} onChange={function(e) {
                   var ck = e.target.checked;
                   // state 업데이트
@@ -8305,11 +8330,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
                   newItems[idx] = Object.assign({}, newItems[idx], { checked: ck });
                   setEditNote(function(p) { return Object.assign({}, p, { checkItems: newItems }); });
                   // 즉시 DB 저장 (저장 안 누르고 이탈해도 체크 상태 유지)
-                  var lines = newItems.filter(function(i) { return (i.text || "").trim(); }).map(function(i) {
-                    var line = "- [" + (i.checked ? "x" : " ") + "] " + encodeItemText(i.text);
-                    if (i.dueDate) line += " [" + i.dueDate + "]";
-                    return line;
-                  });
+                  var lines = newItems.filter(function(i) { return (i.text || "").trim(); }).map(buildItemLine);
                   var ft = (editNote.freeContent || "").trim();
                   var parts = [];
                   if (lines.length > 0) parts.push(lines.join("\n"));
@@ -8328,7 +8349,14 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
                 </div>
                 <input type="date" value={item.dueDate || ""} title="이 항목의 마감일 (선택)"
                   onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); items[idx] = Object.assign({}, items[idx], { dueDate: v }); return Object.assign({}, p, { checkItems: items }); }); setTimeout(autoSaveEditNow, 0); }}
-                  style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, color: "#4338CA", outline: "none", width: 130, marginTop: 4 }} />
+                  style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, color: "#4338CA", outline: "none", width: 116, marginTop: 4 }} />
+                <select value={item.waitReason || "일반"} title="이 항목의 대기 사유 (응답대기·서류대기로 3일↑ 미완료면 방치 알림)"
+                  onChange={function(e) { var v = e.target.value; setEditNote(function(p) { var items = (p.checkItems || []).slice(); var since = v !== "일반" ? (items[idx].waitSince || kstDate()) : ""; items[idx] = Object.assign({}, items[idx], { waitReason: v === "일반" ? "" : v, waitSince: since }); return Object.assign({}, p, { checkItems: items }); }); setTimeout(autoSaveEditNow, 0); }}
+                  style={{ padding: "3px 4px", border: "1px solid " + (item.waitReason && item.waitReason !== "일반" ? "#F59E0B" : "#E8E5E0"), borderRadius: 4, fontSize: 10, marginTop: 4, width: 78, outline: "none", cursor: "pointer", color: item.waitReason && item.waitReason !== "일반" ? "#B45309" : "#888", background: item.waitReason && item.waitReason !== "일반" ? "#FFFBEB" : "#fff" }}>
+                  <option value="일반">일반</option>
+                  <option value="응답대기">응답대기</option>
+                  <option value="서류대기">서류대기</option>
+                </select>
                 <button onClick={function() { setEditNote(function(p) { var items = (p.checkItems || []).filter(function(_, i) { return i !== idx; }); return Object.assign({}, p, { checkItems: items }); }); setTimeout(autoSaveEditNow, 0); }}
                   style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 16, padding: "2px 4px", lineHeight: 1, marginTop: 4 }}>×</button>
               </div>
@@ -8380,7 +8408,7 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
     if (!hasChecklist) return null;
     return lines.map(function(line, idx) {
       var m = line.trim().match(/^- \[([ x])\] (.+)/);
-      if (m) return { idx: idx, checked: m[1] === "x", text: decodeItemText(m[2]), isCheck: true };
+      if (m) { var w = splitItemWait(m[2]); return { idx: idx, checked: m[1] === "x", text: decodeItemText(w.rest), waitReason: w.reason, isCheck: true }; }
       return { idx: idx, text: line, isCheck: false };
     });
   };
@@ -8463,29 +8491,7 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
         );
       })()}
 
-      {/* ⏳ 대기 사유 (방치 알림용) — 배지 + 변경 셀렉트 */}
-      {setWaitReason && !note.is_done && (function() {
-        var wr = note.wait_reason;
-        var waiting = wr === "응답대기" || wr === "서류대기";
-        var days = (waiting && note.wait_since) ? Math.floor((Date.now() - new Date(note.wait_since)) / 86400000) : 0;
-        var stale = waiting && days >= 3;
-        return (
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-            {waiting && (
-              <span style={{ fontSize: 10, fontWeight: 700, color: stale ? "#B91C1C" : "#B45309", background: stale ? "#FEE2E2" : "#FEF3C7", border: "1px solid " + (stale ? "#FCA5A5" : "#FDE68A"), borderRadius: 99, padding: "1px 7px" }}>
-                ⏳ {wr === "응답대기" ? "대표자 응답대기" : "서류대기"}{days > 0 ? " · " + days + "일째" : ""}{stale ? " 🔔" : ""}
-              </span>
-            )}
-            <select value={wr || "일반"} onChange={function(e) { setWaitReason(note, e.target.value); }}
-              title="응답대기·서류대기로 3일 넘게 미완료면 대시보드 상단 리마인드에 떠요"
-              style={{ fontSize: 10, padding: "2px 6px", border: "1px solid #E8E5E0", borderRadius: 6, background: "#fff", color: "#888", outline: "none", cursor: "pointer" }}>
-              <option value="일반">대기 없음</option>
-              <option value="응답대기">대표자 응답대기</option>
-              <option value="서류대기">서류대기</option>
-            </select>
-          </div>
-        );
-      })()}
+      {/* 대기 사유는 체크리스트 항목 단위로 이동 (아래 항목별 ⏳ 배지로 표시) */}
 
       {/* 체크리스트 or 일반 내용 */}
       {note.content && (
@@ -8498,10 +8504,13 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
                 ) : null;
               }
               return (
-                <label key={item.idx} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 0", cursor: "pointer" }}>
+                <label key={item.idx} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: item.waitReason ? "6px 8px" : "6px 0", cursor: "pointer", background: item.waitReason ? "#FFFBEB" : "transparent", border: "1px solid " + (item.waitReason ? "#FDE68A" : "transparent"), borderRadius: 8 }}>
                   <input type="checkbox" checked={item.checked} onChange={function() { toggleCheckItem(item.idx); }}
                     style={{ width: 15, height: 15, marginTop: 3, cursor: "pointer", accentColor: "#1A1917", flexShrink: 0 }} />
                   <span style={{ fontSize: 13, color: item.checked ? "#AAA" : "#333", textDecoration: item.checked ? "line-through" : "none", lineHeight: 1.8, whiteSpace: "pre-wrap" }}>{item.text}</span>
+                  {item.waitReason && !item.checked && (
+                    <span style={{ fontSize: 10, fontWeight: 700, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 99, padding: "1px 7px", whiteSpace: "nowrap", flexShrink: 0, marginTop: 2 }}>⏳ {item.waitReason}</span>
+                  )}
                 </label>
               );
             })}
@@ -8878,11 +8887,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   var saveNew = async function() {
     // checkItems가 있으면 content로 변환해서 합치기 (마감일 [YYYY-MM-DD] 포함, 체크 상태도 반영)
     var checkContent = (newNote.checkItems && newNote.checkItems.length > 0)
-      ? newNote.checkItems.filter(function(i) { return i.text.trim(); }).map(function(i) {
-          var line = "- [" + (i.checked ? "x" : " ") + "] " + encodeItemText(i.text);
-          if (i.dueDate) line += " [" + i.dueDate + "]";
-          return line;
-        }).join("\n")
+      ? newNote.checkItems.filter(function(i) { return i.text.trim(); }).map(buildItemLine).join("\n")
       : "";
     var finalContent = newNote.content.trim();
     if (checkContent) finalContent = finalContent ? finalContent + "\n" + checkContent : checkContent;
@@ -8900,11 +8905,11 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     };
     if (newNote.due_date) insertObj.due_date = newNote.due_date;
     if (newNote.company_id) insertObj.company_id = newNote.company_id; // @업체 태그로 연결된 기업
-    if (newNote.wait_reason && newNote.wait_reason !== "일반") { insertObj.wait_reason = newNote.wait_reason; insertObj.wait_since = new Date().toISOString(); } // 방치 알림용 대기상태
+    // 대기 사유는 이제 노트 단위가 아니라 체크리스트 항목별로 content 마크다운에 저장됨 ({응답대기:since})
     var r = await supabase.from("work_notes").insert(insertObj).select().single();
-    if (r.error && /company_id|wait_reason|wait_since/.test(r.error.message || "")) {
-      // 신규 컬럼 미생성 방어 — 연결·대기상태 없이 재시도
-      var insMin = Object.assign({}, insertObj); delete insMin.company_id; delete insMin.wait_reason; delete insMin.wait_since;
+    if (r.error && /company_id/.test(r.error.message || "")) {
+      // 신규 컬럼 미생성 방어 — 연결 없이 재시도
+      var insMin = Object.assign({}, insertObj); delete insMin.company_id;
       r = await supabase.from("work_notes").insert(insMin).select().single();
     }
     if (!r.error && r.data) {
@@ -9209,21 +9214,14 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
               style={{ width: "auto", padding: "7px 10px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, background: "#fff", outline: "none" }} />
             {newNote.due_date && <button onClick={function() { setNewNote(function(p) { return Object.assign({}, p, { due_date: "" }); }); }}
               style={{ background: "none", border: "none", cursor: "pointer", color: "#AAA", fontSize: 14 }}>✕</button>}
-            <label style={{ fontSize: 12, color: "#B45309", fontWeight: 600, whiteSpace: "nowrap", marginLeft: 8 }}>⏳ 대기 사유</label>
-            <select value={newNote.wait_reason || "일반"} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { wait_reason: v }); }); }}
-              title="응답대기·서류대기로 3일 넘게 미완료면 대시보드 상단에 리마인드로 떠요"
-              style={{ width: "auto", padding: "7px 10px", border: "1px solid " + (newNote.wait_reason && newNote.wait_reason !== "일반" ? "#F59E0B" : "#86EFAC"), borderRadius: 6, fontSize: 12, background: "#fff", outline: "none", color: newNote.wait_reason && newNote.wait_reason !== "일반" ? "#B45309" : "#333" }}>
-              <option value="일반">일반</option>
-              <option value="응답대기">대표자 응답대기</option>
-              <option value="서류대기">서류대기</option>
-            </select>
+            <span style={{ fontSize: 11, color: "#94A3B8", marginLeft: 8 }}>⏳ 대기 사유는 아래 체크리스트 항목별로 지정</span>
           </div>
           {/* 체크리스트 항목들 */}
           {newNote.checkItems && newNote.checkItems.length > 0 && (
             <div style={{ border: "1px solid #86EFAC", borderRadius: 8, padding: "10px 12px", marginBottom: 8, background: "#fff" }}>
               {newNote.checkItems.map(function(item, idx) {
                 return (
-                  <div key={idx} style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 8 }}>
+                  <div key={idx} style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 8, background: item.waitReason && item.waitReason !== "일반" ? "#FFFBEB" : "transparent", border: "1px solid " + (item.waitReason && item.waitReason !== "일반" ? "#FDE68A" : "transparent"), borderRadius: 8, padding: item.waitReason && item.waitReason !== "일반" ? "4px 6px" : "0" }}>
                     <input type="checkbox" disabled style={{ width: 15, height: 15, flexShrink: 0, marginTop: 6 }} />
                     <div style={{ flex: 1, position: "relative" }}>
                       <MentionField multiline={true} companiesList={companiesList}
@@ -9236,7 +9234,14 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
                     </div>
                     <input type="date" value={item.dueDate || ""} title="이 항목의 마감일 (선택)"
                       onChange={function(e) { var v = e.target.value; setNewNote(function(p) { var items = p.checkItems.slice(); items[idx] = Object.assign({}, items[idx], { dueDate: v }); return Object.assign({}, p, { checkItems: items }); }); }}
-                      style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, color: "#4338CA", outline: "none", width: 130, marginTop: 4 }} />
+                      style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, color: "#4338CA", outline: "none", width: 116, marginTop: 4 }} />
+                    <select value={item.waitReason || "일반"} title="이 항목의 대기 사유 (응답대기·서류대기로 3일↑ 미완료면 방치 알림)"
+                      onChange={function(e) { var v = e.target.value; setNewNote(function(p) { var items = p.checkItems.slice(); var since = v !== "일반" ? (items[idx].waitSince || kstDate()) : ""; items[idx] = Object.assign({}, items[idx], { waitReason: v === "일반" ? "" : v, waitSince: since }); return Object.assign({}, p, { checkItems: items }); }); }}
+                      style={{ padding: "3px 4px", border: "1px solid " + (item.waitReason && item.waitReason !== "일반" ? "#F59E0B" : "#E8E5E0"), borderRadius: 4, fontSize: 10, marginTop: 4, width: 78, outline: "none", cursor: "pointer", color: item.waitReason && item.waitReason !== "일반" ? "#B45309" : "#888", background: item.waitReason && item.waitReason !== "일반" ? "#FFFBEB" : "#fff" }}>
+                      <option value="일반">일반</option>
+                      <option value="응답대기">응답대기</option>
+                      <option value="서류대기">서류대기</option>
+                    </select>
                     <button onClick={function() { setNewNote(function(p) { var items = p.checkItems.filter(function(_, i) { return i !== idx; }); return Object.assign({}, p, { checkItems: items }); }); }}
                       style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 16, padding: "2px 4px", lineHeight: 1, marginTop: 4 }}>×</button>
                   </div>
