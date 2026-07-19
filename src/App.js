@@ -5131,9 +5131,11 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
     return listDupKeys[bn + "|" + rep] || 0;
   }
 
+  // 태블릿(768~1024px)에서 숨길 부가 컬럼 — 핵심(업체명·지역·대표자·담당·진행단계·정체일수·신청기관·작업)만 남김
+  const LIST_TABLET_HIDE = ["유형", "업종", "규모/기관", "중복", "계약일", "진행기관", "23년~25년 매출", "26년 상반기 매출", "신용점수", "기타"];
   // 컬럼 너비 수동 조절 (헤더 경계 드래그) - 브라우저(localStorage)에 자동 저장
   const DEFAULT_LIST_COL_WIDTHS = {
-    "업체명": 130, "유형": 80, "지역": 90, "업종": 120, "규모/기관": 130, "대표자": 80, "담당": 60,
+    "업체명": 200, "유형": 80, "지역": 90, "업종": 120, "규모/기관": 130, "대표자": 80, "담당": 60,
     "진행단계": 175, "중복": 56, "정체일수": 70, "신청기관": 150, "계약일": 90, "진행기관": 140,
     "23년~25년 매출": 160, "26년 상반기 매출": 120, "신용점수": 90, "기타": 140, "작업": 110
   };
@@ -5324,20 +5326,26 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
             style={{ fontSize: 12, color: "#888", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>초기화</button>
         )}
       </div>
+      {/* 태블릿(768~1024px)에서 부가 컬럼 숨기고 업체명에 여유 주기 */}
+      <style>{"@media (min-width:768px) and (max-width:1024px){.lst-hide-tablet{display:none !important;}.lst-table{min-width:0 !important;}.lst-name-cell{width:auto !important;min-width:200px !important;max-width:none !important;}}"}</style>
       <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
         <div style={{ overflowX: "auto", maxHeight: "calc(100vh - 220px)", overflowY: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1200, tableLayout: "fixed" }}>
+        <table className="lst-table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 1200, tableLayout: "fixed" }}>
           <thead>
             <tr style={{ background: "#F7F6F3", borderBottom: "1px solid #E8E5E0", position: "sticky", top: 0, zIndex: 2 }}>
-              {["업체명","유형","지역","업종","규모/기관","대표자","담당","진행단계","중복","정체일수","신청기관","계약일","진행기관","23년~25년 매출","26년 상반기 매출","신용점수","기타","작업"].map(h => (
-                <th key={h} style={Object.assign({ padding: "10px 8px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left", letterSpacing: "0.03em", whiteSpace: "nowrap", background: "#F7F6F3", position: "relative", boxSizing: "border-box", width: listColWidths[h], minWidth: listColWidths[h], maxWidth: listColWidths[h] },
+              {["업체명","유형","지역","업종","규모/기관","대표자","담당","진행단계","중복","정체일수","신청기관","계약일","진행기관","23년~25년 매출","26년 상반기 매출","신용점수","기타","작업"].map(h => {
+                var hideTablet = LIST_TABLET_HIDE.indexOf(h) >= 0;
+                var w = h === "업체명" ? Math.max(180, listColWidths[h] || 180) : listColWidths[h];
+                return (
+                <th key={h} className={(h === "업체명" ? "lst-name-cell " : "") + (hideTablet ? "lst-hide-tablet" : "")} style={Object.assign({ padding: "10px 8px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left", letterSpacing: "0.03em", whiteSpace: "nowrap", background: "#F7F6F3", position: "relative", boxSizing: "border-box", width: w, minWidth: w, maxWidth: w },
                   h === "업체명" ? { position: "sticky", left: 0, zIndex: 3, boxShadow: "2px 0 4px -2px rgba(0,0,0,0.08)" } : {}
                 )}>{h}
                   <span onMouseDown={function(e) { startListColResize(h, e); }} onClick={function(e) { e.stopPropagation(); }}
                     title="드래그해서 열 너비 조절"
                     style={{ position: "absolute", right: 0, top: 0, height: "100%", width: 6, cursor: "col-resize", userSelect: "none", zIndex: 5 }} />
                 </th>
-              ))}
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -5348,7 +5356,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                   style={{ borderBottom: "1px solid #F0EDE8", cursor: editNameId === co.id ? "default" : "pointer", background: i % 2 === 0 ? "#fff" : "#FAFAF8" }}
                   onMouseOver={e => { if (editNameId !== co.id) e.currentTarget.style.background = "#F0F0EC"; }}
                   onMouseOut={e => e.currentTarget.style.background = i % 2 === 0 ? "#fff" : "#FAFAF8"}>
-                  <td style={{ padding: "11px 8px", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", boxSizing: "border-box", position: "sticky", left: 0, background: i % 2 === 0 ? "#fff" : "#FAFAF8", zIndex: 1, boxShadow: "2px 0 4px -2px rgba(0,0,0,0.08)" }} onClick={e => e.stopPropagation()}>
+                  <td className="lst-name-cell" style={{ padding: "11px 8px", fontSize: 13, fontWeight: 600, whiteSpace: "normal", wordBreak: "keep-all", overflowWrap: "anywhere", boxSizing: "border-box", position: "sticky", left: 0, background: i % 2 === 0 ? "#fff" : "#FAFAF8", zIndex: 1, boxShadow: "2px 0 4px -2px rgba(0,0,0,0.08)" }} onClick={e => e.stopPropagation()}>
                     {editNameId === co.id ? (
                       <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
                         <input value={editNameVal} onChange={function(e) { var v = e.target.value; setEditNameVal(v); }} autoFocus
@@ -5359,7 +5367,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                       </div>
                     ) : (
                       <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{co.name}</span>
+                        <span style={{ minWidth: 0, whiteSpace: "normal", wordBreak: "keep-all", overflowWrap: "anywhere", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", lineHeight: 1.3 }}>{co.name}</span>
                         {(function() { var tm = teamOf(co); return <span title="팀 (저장값 우선 · 없으면 업체명 기준 자동)" style={{ flexShrink: 0, fontSize: 9, padding: "2px 6px", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap", background: tm === "법인팀" ? "#EEF2FF" : "#F0FDF4", color: tm === "법인팀" ? "#4338CA" : "#15803D" }}>{tm}</span>; })()}
                         {co.stagnant_days >= 7 && <span style={{ fontSize: 10, color: "#DC2626" }}>⚠</span>}
                         {(function() { var yr = youthReapplyStatus(co, (agencyByName[co.name] || []).map(function(x) { return x.product; })); return yr && yr.eligible ? <span title={"청년창업 부결 " + yr.rejectedDate + " · 6개월 경과(재신청 가능일 " + yr.reapplyDate + ")"} style={{ flexShrink: 0, fontSize: 9, padding: "2px 6px", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap", background: "#DCFCE7", color: "#15803D", border: "1px solid #86EFAC" }}>재신청 가능</span> : null; })()}
@@ -5372,7 +5380,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                       </div>
                     )}
                   </td>
-                  <td style={{ padding: "11px 8px", whiteSpace: "nowrap" }}><span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 99, background: co.type === "법인" ? "#EEF2FF" : "#F0FDF4", color: co.type === "법인" ? "#4338CA" : "#15803D", fontWeight: 600 }}>{co.type === "법인" ? "법인사업자" : "개인사업자"}</span></td>
+                  <td className="lst-hide-tablet" style={{ padding: "11px 8px", whiteSpace: "nowrap" }}><span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 99, background: co.type === "법인" ? "#EEF2FF" : "#F0FDF4", color: co.type === "법인" ? "#4338CA" : "#15803D", fontWeight: 600 }}>{co.type === "법인" ? "법인사업자" : "개인사업자"}</span></td>
                   <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 90, overflow: "hidden", textOverflow: "ellipsis" }} onClick={e => e.stopPropagation()}>
                     {editRegionId === co.id ? (
                       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
@@ -5396,16 +5404,16 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                       </span>
                     )}
                   </td>
-                  <td style={{ padding: "6px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 120 }} onClick={function(e) { e.stopPropagation(); }}>
+                  <td className="lst-hide-tablet" style={{ padding: "6px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 120 }} onClick={function(e) { e.stopPropagation(); }}>
                     <IndustryCell co={co} setCompanies={setCompanies} companies={companies} />
                   </td>
-                  <td style={{ padding: "8px 8px", verticalAlign: "middle", boxSizing: "border-box", width: listColWidths["규모/기관"], minWidth: listColWidths["규모/기관"], maxWidth: listColWidths["규모/기관"] }} onClick={function(e) { e.stopPropagation(); }}>
+                  <td className="lst-hide-tablet" style={{ padding: "8px 8px", verticalAlign: "middle", boxSizing: "border-box", width: listColWidths["규모/기관"], minWidth: listColWidths["규모/기관"], maxWidth: listColWidths["규모/기관"] }} onClick={function(e) { e.stopPropagation(); }}>
                     <BizScaleBadges company={co} size="sm" />
                   </td>
                   <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis" }}>{co.representative || "-"}</td>
                   <td style={{ padding: "11px 13px", fontSize: 12, whiteSpace: "nowrap" }}>{co.assignee || "-"}</td>
                   <td style={{ padding: "11px 13px", whiteSpace: "nowrap" }}><span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, fontWeight: 600 }}>{co.stage}</span>{(function(){ var ms = masterStatus(co.name); return ms ? <span style={{ display: "inline-block", marginLeft: 4, fontSize: 9, padding: "3px 7px", borderRadius: 99, background: ms.bg, color: ms.text, fontWeight: 700 }} title="여러 기관 종합 상태">{ms.label}</span> : null; })()}</td>
-                  <td style={{ padding: "11px 13px", textAlign: "center" }}>{(function() { var cnt = isListDup(co); return cnt ? <span title={"같은 사업장이 총 " + cnt + "건 등록됨"} style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", whiteSpace: "nowrap" }}>중복</span> : null; })()}</td>
+                  <td className="lst-hide-tablet" style={{ padding: "11px 13px", textAlign: "center" }}>{(function() { var cnt = isListDup(co); return cnt ? <span title={"같은 사업장이 총 " + cnt + "건 등록됨"} style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", whiteSpace: "nowrap" }}>중복</span> : null; })()}</td>
                   <td style={{ padding: "11px 13px", whiteSpace: "nowrap", textAlign: "center" }}>{(function() { var d = co.stagnant_days || 0; if (d >= 14) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", fontWeight: 700 }}>⚠ {d}일</span>; if (d >= 7) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEF3C7", color: "#B45309", fontWeight: 700 }}>{d}일</span>; return <span style={{ fontSize: 11, color: "#AAA" }}>{d}일</span>; })()}</td>
                   <td style={{ padding: "8px 8px", fontSize: 11, verticalAlign: "middle" }}>
                     {(function() {
@@ -5429,12 +5437,12 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                       </div>;
                     })()}
                   </td>
-                  <td style={{ padding: "11px 13px", fontSize: 12, color: "#555", whiteSpace: "nowrap" }}>{co.contract_date || "-"}</td>
-                  <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.agency || "-"}</td>
-                  <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", boxSizing: "border-box" }}>{[formatRevenue(co.revenue_2023), formatRevenue(co.revenue_2024), formatRevenue(co.revenue_2025)].filter(r=>r&&r!=="-").join(" / ") || "-"}</td>
-                  <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap" }}>{formatRevenue(co.revenue_2026_h1) || "-"}</td>
-                  <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap" }}>{(co.credit_score_kcb || co.credit_score_nice) ? ((co.credit_score_kcb || "-") + " / " + (co.credit_score_nice || "-")) : "-"}</td>
-                  <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                  <td className="lst-hide-tablet" style={{ padding: "11px 13px", fontSize: 12, color: "#555", whiteSpace: "nowrap" }}>{co.contract_date || "-"}</td>
+                  <td className="lst-hide-tablet" style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.agency || "-"}</td>
+                  <td className="lst-hide-tablet" style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", boxSizing: "border-box" }}>{[formatRevenue(co.revenue_2023), formatRevenue(co.revenue_2024), formatRevenue(co.revenue_2025)].filter(r=>r&&r!=="-").join(" / ") || "-"}</td>
+                  <td className="lst-hide-tablet" style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap" }}>{formatRevenue(co.revenue_2026_h1) || "-"}</td>
+                  <td className="lst-hide-tablet" style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap" }}>{(co.credit_score_kcb || co.credit_score_nice) ? ((co.credit_score_kcb || "-") + " / " + (co.credit_score_nice || "-")) : "-"}</td>
+                  <td className="lst-hide-tablet" style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                     onClick={function(e) { e.stopPropagation(); }}
                     onDoubleClick={function() { setEditingEtcId(co.id); setEditingEtcVal(co.next_action || ""); }}
                     title="더블클릭하면 수정">
