@@ -458,8 +458,17 @@ const DOC_LIST = ["사업자등록증","최근 3년치 재무제표 (23년~25년
 const TEAMS = ["법인전담","개인전담","관리자"];
 const ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일","양호"];
 // 📓 업무노트 열람 권한 — 관리자는 전원 열람, 공유 그룹은 서로 열람(수정은 본인 것만)
-const WN_ADMINS = ["양호", "관호", "유진"];
-const WN_SHARE_GROUPS = [["미현", "인선"]];
+//   양호만 전체 열람. 관호·유진은 관리자 권한 없이 본인 노트만. 양호 본인 노트는 양호만 봄.
+const WN_ADMINS = ["양호"];
+const WN_SHARE_GROUPS = [["미현", "인선"]]; // 서로 노트 열람 가능
+// 🧑‍🤝‍🧑 팀 구성 — 팀 공지 "확인" 대상 명단 (팀별로 확인 인원이 다름)
+const TEAM_MEMBERS = {
+  individual: ["양호", "동일", "관호", "현애", "지혜", "정원"], // 개인팀
+  corporate: ["양호", "동일", "유진", "인선", "미현"],          // 법인팀
+};
+// 전체(공통) = 두 팀 합집합(중복 제거)
+TEAM_MEMBERS.all = TEAM_MEMBERS.individual.concat(TEAM_MEMBERS.corporate.filter(function(n) { return TEAM_MEMBERS.individual.indexOf(n) < 0; }));
+function teamRoster(teamKey) { return TEAM_MEMBERS[teamKey] || TEAM_MEMBERS.all; }
 function wnIsAdmin(name) { return WN_ADMINS.indexOf(name) >= 0; }
 // 해당 사용자가 볼 수 있는 담당자 이름 목록 (본인 + 공유그룹, 관리자는 전원)
 function wnViewable(name) {
@@ -2319,6 +2328,9 @@ function CRMApp({ profile, session }) {
   const [workNotesBadge, setWorkNotesBadge] = useState(0);
   const [quickMemo, setQuickMemo] = useState(false);
   const [quickMemoText, setQuickMemoText] = useState("");
+  const [quickMemoCompany, setQuickMemoCompany] = useState(null); // 선택된 업체 {id, name}
+  const [quickMemoQuery, setQuickMemoQuery] = useState("");        // 업체 검색어
+  const [quickMemoSaved, setQuickMemoSaved] = useState(0);         // 연속 저장 카운트(피드백)
   const [menuExpanded, setMenuExpanded] = useState(false);
   const [agencyRefreshKey, setAgencyRefreshKey] = useState(0);
   const [notifications, setNotifications] = useState([]);
@@ -2974,47 +2986,86 @@ function CRMApp({ profile, session }) {
         );
       })()}
 
-      {/* 빠른 메모 팝업 */}
-      {quickMemo && (
+      {/* 빠른 메모 팝업 — 업체 검색(자동완성) + 메모 → 해당 업체 소통내역(activity_logs)에 기록 · 연속 입력 */}
+      {quickMemo && (function() {
+        var qmq = (quickMemoQuery || "").trim().toLowerCase();
+        var qmMatches = qmq ? (companies || []).filter(function(c) {
+          return (c.name && c.name.toLowerCase().indexOf(qmq) >= 0) || (c.representative && String(c.representative).toLowerCase().indexOf(qmq) >= 0);
+        }).slice(0, 8) : [];
+        var qmSave = async function() {
+          if (!quickMemoCompany || !quickMemoText.trim()) return;
+          var me = profile?.name || "";
+          var payload = { company_id: quickMemoCompany.id, case_id: quickMemoCompany.id, case_type: "company", business_name: quickMemoCompany.name, assignee: me, log_type: "quick_memo", memo: quickMemoText.trim().slice(0, 1000), logged_by: me };
+          var r = await supabase.from("activity_logs").insert(payload);
+          if (r.error && /company_id/.test(r.error.message || "")) { delete payload.company_id; r = await supabase.from("activity_logs").insert(payload); }
+          if (r.error) { alert("저장 실패: " + r.error.message); return; }
+          setQuickMemoText("");                    // 입력칸만 초기화 (연속 입력 가능 · 업체는 유지)
+          setQuickMemoSaved(function(n) { return n + 1; });
+          showToast("📝 '" + quickMemoCompany.name + "' 소통내역에 기록했어요!");
+        };
+        return (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center" }}
           onClick={() => setQuickMemo(false)}>
-          <div style={{ background: "#fff", borderRadius: 14, padding: "22px", width: 380, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}
+          <div style={{ background: "#fff", borderRadius: 14, padding: "22px", width: 400, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}
             onClick={e => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-              <div style={{ fontSize: 15, fontWeight: 800 }}>✏️ 빠른 메모</div>
+              <div style={{ fontSize: 15, fontWeight: 800 }}>✏️ 빠른 메모 <span style={{ fontSize: 11, fontWeight: 500, color: "#888" }}>· 업체 소통내역에 기록</span></div>
               <button onClick={() => setQuickMemo(false)} style={{ background: "none", border: "none", cursor: "pointer" }}>
                 <Icon name="x" size={18} color="#888" />
               </button>
             </div>
+
+            {/* 업체 선택 (자동완성) */}
+            {quickMemoCompany ? (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "10px 12px", background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: 8, marginBottom: 10 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#15803D" }}>🏢 {quickMemoCompany.name}</span>
+                <button onClick={function() { setQuickMemoCompany(null); setQuickMemoQuery(""); }} style={{ background: "none", border: "none", color: "#15803D", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>변경</button>
+              </div>
+            ) : (
+              <div style={{ position: "relative", marginBottom: 10 }}>
+                <input value={quickMemoQuery} onChange={function(e) { setQuickMemoQuery(e.target.value); }} autoFocus
+                  placeholder="🔍 업체명·대표자 검색"
+                  style={{ width: "100%", padding: "11px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+                {qmq && (
+                  <div style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,0.1)", zIndex: 10, maxHeight: 220, overflowY: "auto" }}>
+                    {qmMatches.length === 0 ? (
+                      <div style={{ padding: "12px", fontSize: 12, color: "#AAA", textAlign: "center" }}>'{quickMemoQuery}' 검색 결과 없음</div>
+                    ) : qmMatches.map(function(c) {
+                      return (
+                        <div key={c.id} onClick={function() { setQuickMemoCompany({ id: c.id, name: c.name }); setQuickMemoQuery(""); }}
+                          style={{ padding: "9px 12px", fontSize: 13, cursor: "pointer", borderBottom: "1px solid #F5F5F4", display: "flex", justifyContent: "space-between", alignItems: "center" }}
+                          onMouseEnter={function(e) { e.currentTarget.style.background = "#F0FDF4"; }}
+                          onMouseLeave={function(e) { e.currentTarget.style.background = "#fff"; }}>
+                          <span style={{ fontWeight: 600 }}>{c.name}</span>
+                          <span style={{ fontSize: 11, color: "#888" }}>{c.assignee || ""}{c.representative ? " · " + c.representative : ""}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
             <textarea value={quickMemoText} onChange={function(e) { var v = e.target.value; setQuickMemoText(v); }}
-              placeholder="메모 내용을 입력하세요..."
-              rows={5} autoFocus
-              style={{ width: "100%", padding: "12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, resize: "none", boxSizing: "border-box", outline: "none", lineHeight: 1.6 }} />
+              placeholder={quickMemoCompany ? "메모 내용을 입력하세요…" : "먼저 업체를 선택하세요"}
+              rows={5} disabled={!quickMemoCompany}
+              onKeyDown={function(e) { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); qmSave(); } }}
+              style={{ width: "100%", padding: "12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, resize: "none", boxSizing: "border-box", outline: "none", lineHeight: 1.6, background: quickMemoCompany ? "#fff" : "#FAFAF9" }} />
+            {quickMemoSaved > 0 && <div style={{ fontSize: 11, color: "#15803D", marginTop: 6 }}>✅ 이번 세션 {quickMemoSaved}건 기록됨 · 계속 입력할 수 있어요 (Ctrl+Enter로 저장)</div>}
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              <button onClick={async function() {
-                if (!quickMemoText.trim()) return;
-                await supabase.from("work_notes").insert({
-                  title: "빠른 메모",
-                  content: quickMemoText.trim(),
-                  assignee: profile?.name || "",
-                  is_todo: false,
-                  pinned: false,
-                });
-                setQuickMemoText("");
-                setQuickMemo(false);
-                showToast("메모가 저장됐어요!");
-              }}
-                style={{ flex: 1, padding: "11px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                업무노트에 저장
+              <button onClick={qmSave} disabled={!quickMemoCompany || !quickMemoText.trim()}
+                style={{ flex: 1, padding: "11px", background: (quickMemoCompany && quickMemoText.trim()) ? "#1A1917" : "#E8E5E0", color: (quickMemoCompany && quickMemoText.trim()) ? "#fff" : "#AAA", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: (quickMemoCompany && quickMemoText.trim()) ? "pointer" : "not-allowed" }}>
+                소통내역에 저장
               </button>
-              <button onClick={() => setQuickMemo(false)}
+              <button onClick={() => { setQuickMemo(false); setQuickMemoSaved(0); }}
                 style={{ padding: "11px 16px", background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>
-                취소
+                닫기
               </button>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* 사이드바 */}
       <div className="crm-sidebar" style={{ position: "fixed", left: 0, top: 0, width: 220, height: "100vh", background: "#1A1917", display: "flex", flexDirection: "column", zIndex: 100 }}>
@@ -3117,7 +3168,7 @@ function CRMApp({ profile, session }) {
             </div>
           </div>
           <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-            <button onClick={() => setQuickMemo(true)}
+            <button onClick={() => { setQuickMemoText(""); setQuickMemoCompany(null); setQuickMemoQuery(""); setQuickMemoSaved(0); setQuickMemo(true); }}
               style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "7px 6px", background: "#4338CA", border: "none", borderRadius: 6, color: "#fff", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>
               ✏️ 빠른 메모
             </button>
@@ -3414,6 +3465,64 @@ function AiSearchModal({ companies, onClose, onSelectCompany }) {
   );
 }
 
+// 🌅 오전 알림 요약 배너 — 오늘 마감 · 나한테 온 요청 · 3일 넘긴 미완료 (본인 기준, 숫자 클릭 시 업무노트로 이동)
+function MorningSummaryBanner({ myName, setView }) {
+  const [sum, setSum] = useState(null);
+  useEffect(function() {
+    if (!myName) { setSum(null); return; }
+    var alive = true;
+    async function load() {
+      var today = kstDate();
+      var res = await Promise.all([
+        supabase.from("work_notes").select("content,note_date,created_at").eq("assignee", myName).is("deleted_at", null),
+        supabase.from("work_requests").select("id").eq("request_to", myName).eq("status", "pending"),
+      ]);
+      if (!alive) return;
+      var notes = (!res[0].error && res[0].data) ? res[0].data : [];
+      var dueToday = 0, stale3 = 0;
+      notes.forEach(function(n) {
+        var nd = n.note_date || (n.created_at ? new Date(n.created_at).toISOString().slice(0, 10) : null);
+        var ageDays = nd ? Math.floor((new Date(today + "T00:00:00") - new Date(nd + "T00:00:00")) / 86400000) : 0;
+        parseUnfinishedItems(n.content).forEach(function(it) {
+          if (it.dueDate === today) dueToday++;
+          if (ageDays >= 3) stale3++;
+        });
+      });
+      var reqCount = (!res[1].error && res[1].data) ? res[1].data.length : 0;
+      setSum({ dueToday: dueToday, reqCount: reqCount, stale3: stale3 });
+    }
+    load();
+    return function() { alive = false; };
+  }, [myName]);
+  if (!sum) return null;
+  var jumpNotes = function() { localStorage.setItem("wn_jump_assignee", myName); setView("worknotes"); };
+  var d = new Date();
+  var w = ["일", "월", "화", "수", "목", "금", "토"][d.getDay()];
+  var greet = (function() { var h = d.getHours(); return h < 12 ? "좋은 아침이에요" : h < 18 ? "오늘도 힘내세요" : "마무리 잘 하세요"; })();
+  var Cell = function(props) {
+    return (
+      <div onClick={jumpNotes} title="클릭하면 내 업무노트로 이동"
+        style={{ flex: 1, minWidth: 110, cursor: "pointer", padding: "10px 14px", borderRadius: 10, background: props.count > 0 ? props.bgActive : "#fff", border: "1px solid " + (props.count > 0 ? props.borderActive : "#E8E5E0") }}>
+        <div style={{ fontSize: 12, color: props.count > 0 ? props.fgActive : "#888", fontWeight: 600 }}>{props.icon} {props.label}</div>
+        <div style={{ fontSize: 24, fontWeight: 800, lineHeight: 1.2, color: props.count > 0 ? props.fgActive : "#BBB" }}>{props.count}<span style={{ fontSize: 13, fontWeight: 600 }}>건</span></div>
+      </div>
+    );
+  };
+  return (
+    <div style={{ background: "linear-gradient(135deg, #ECFDF5 0%, #F0FDFA 100%)", border: "1px solid #A7F3D0", borderRadius: 12, padding: "16px 18px", marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+        <span style={{ fontSize: 16 }}>🌅</span>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#065F46" }}>{d.getMonth() + 1}월 {d.getDate()}일 ({w}) · {greet}, {myName} 님</div>
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <Cell icon="📅" label="오늘 마감" count={sum.dueToday} bgActive="#FEF9C3" borderActive="#FDE68A" fgActive="#92400E" />
+        <Cell icon="📩" label="나한테 온 요청" count={sum.reqCount} bgActive="#EEF2FF" borderActive="#C7D2FE" fgActive="#4338CA" />
+        <Cell icon="⏳" label="3일 넘긴 미완료" count={sum.stale3} bgActive="#FEE2E2" borderActive="#FCA5A5" fgActive="#B91C1C" />
+      </div>
+    </div>
+  );
+}
+
 // ── 대시보드 ──────────────────────────────────────────────────────────────────
 function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, setFilterAssignee, setDashboardFilter, onAdd, canExport, myName }) {
   const contractDone = companies.filter(c => c.fee_status === "수수료수령완료").length;
@@ -3541,6 +3650,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
           <Icon name="plus" size={15} color="#F7F6F3" /> 신규 업체 등록
         </button>
       </div>
+
+      {/* 🌅 오전 알림 요약 (오늘 마감 · 받은 요청 · 3일↑ 미완료) */}
+      <MorningSummaryBanner myName={myName} setView={setView} />
 
       {/* 🔔 방치 자동 알림 배너 (3일 이상 응답/서류 대기) */}
       <StaleWaitBanner setView={setView} />
@@ -16318,14 +16430,14 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
   const [activeTab, setActiveTab] = useState("corporate"); // "corporate" | "individual" | "all"(전체·공통)
   const [showAdd, setShowAdd] = useState(false);
   const [showDone, setShowDone] = useState(false); // 가져간/완료된 것도 볼지
-  const [newNote, setNewNote] = useState({ title: "", content: "", priority: "normal", due_date: "", tags: [], checklist: [] });
+  const [newNote, setNewNote] = useState({ title: "", content: "", priority: "normal", due_date: "", tags: [], checklist: [], is_announcement: false });
   const [newNoteTeam, setNewNoteTeam] = useState("corporate"); // 새 업무 대상 팀: "corporate" | "individual" | "all"(전체·공통)
   const [collapsed, setCollapsed] = useState(false); // 섹션 전체 접기
   const [editingNoteId, setEditingNoteId] = useState(null); // 수정 중인 팀 노트 ID
   const [editingDraft, setEditingDraft] = useState(null); // 수정 작업 중인 임시 데이터
   const [expandedIds, setExpandedIds] = useState(function() { return {}; }); // 접힌 카드 중 사용자가 펼친 것(id->true)
 
-  var ROSTER = ASSIGNEES; // 전원 확인 판정 기준 명단
+  var rosterOf = function(note) { return teamRoster(note && note.team); }; // 팀별 확인 대상 명단 (법인/개인/전체)
   var isAdmin = profile?.role === "admin" || profile?.name === "양호";
 
   useEffect(function() { fetchTeamNotes(); }, []);
@@ -16349,10 +16461,19 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
   var doneCount = useMemo(function() { return tabNotes.filter(function(n) { return n.status !== "open"; }).length; }, [tabNotes]);
 
   var PRI_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
-  // 탭별 노트 (긴급 먼저 → 최신순). 완료/가져간 카드는 토글에 따라 표시
+  // 📌 공지로 등록됐고 대기중이며 아직 전원 확인 전인 카드는 최상단 고정 (전원 확인되면 고정 해제 → 접힘)
+  //    ackAll이 아직 정의되기 전(아래)에 호출되므로 read_by·teamRoster로 직접 계산한다.
+  var isPinnedAnnounce = function(n) {
+    if (!n || !n.is_announcement || n.status !== "open") return false;
+    var rb = Array.isArray(n.read_by) ? n.read_by : [];
+    return !teamRoster(n.team).every(function(nm) { return rb.indexOf(nm) >= 0; });
+  };
+  // 탭별 노트 (📌공지 고정 먼저 → 긴급 먼저 → 최신순). 완료/가져간 카드는 토글에 따라 표시
   var displayNotes = useMemo(function() {
     var list = tabNotes.filter(function(n) { return showDone || n.status === "open"; });
     return list.slice().sort(function(a, b) {
+      var pa = isPinnedAnnounce(a) ? 0 : 1, pb = isPinnedAnnounce(b) ? 0 : 1;
+      if (pa !== pb) return pa - pb; // 공지 고정 카드 최상단
       var pr = (PRI_RANK[a.priority] == null ? 2 : PRI_RANK[a.priority]) - (PRI_RANK[b.priority] == null ? 2 : PRI_RANK[b.priority]);
       if (pr !== 0) return pr;
       return String(b.created_at || "").localeCompare(String(a.created_at || ""));
@@ -16395,11 +16516,14 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       posted_by: profile?.name || "익명",
       status: "open",
       checklist: cleanChecklist,
+      is_announcement: !!newNote.is_announcement, // 📌 공지 고정 여부
     };
     var r = await supabase.from("team_notes").insert(payload).select().single();
+    // is_announcement 컬럼이 아직 없는 환경 → 컬럼 제거 후 재시도 (안내된 SQL 실행 전에도 등록은 되게)
+    if (r.error && /is_announcement|column/.test(r.error.message || "")) { var p2 = Object.assign({}, payload); delete p2.is_announcement; r = await supabase.from("team_notes").insert(p2).select().single(); }
     if (r.error) { alert("등록 실패: " + r.error.message); return; }
     setAllTeamNotes(function(prev) { return [r.data].concat(prev); });
-    setNewNote({ title: "", content: "", priority: "normal", due_date: "", tags: [], checklist: [] });
+    setNewNote({ title: "", content: "", priority: "normal", due_date: "", tags: [], checklist: [], is_announcement: false });
     setShowAdd(false);
   };
 
@@ -16698,8 +16822,8 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     }
   };
   var ackList = function(note) { return Array.isArray(note.read_by) ? note.read_by : []; };
-  var ackAll = function(note) { var rb = ackList(note); return ROSTER.every(function(nm) { return rb.indexOf(nm) >= 0; }); };
-  var ackMissing = function(note) { var rb = ackList(note); return ROSTER.filter(function(nm) { return rb.indexOf(nm) < 0; }); };
+  var ackAll = function(note) { var rb = ackList(note); return rosterOf(note).every(function(nm) { return rb.indexOf(nm) >= 0; }); };
+  var ackMissing = function(note) { var rb = ackList(note); return rosterOf(note).filter(function(nm) { return rb.indexOf(nm) < 0; }); };
   // 7일 이상 지난 카드 or 전원 확인 완료 카드는 기본 접힘 (사용자가 펼치면 해제)
   var isOld7 = function(note) { return note.created_at ? (Date.now() - new Date(note.created_at).getTime()) > 7 * 86400000 : false; };
   var isFolded = function(note) { if (expandedIds[note.id]) return false; return isOld7(note) || ackAll(note); };
@@ -16893,6 +17017,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                     <div key={note.id} onClick={function() { toggleExpand(note.id); }}
                       style={{ background: "#F7F6F3", border: "1px solid #E8E5E0", borderLeft: "3px solid " + ps.dot, borderRadius: 8, padding: "8px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
                       <span style={{ fontSize: 12, color: "#999" }}>▶</span>
+                      {note.is_announcement && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: "#FEF3C7", color: "#92400E", whiteSpace: "nowrap" }}>📌 공지</span>}
                       <span style={{ fontSize: 12, fontWeight: 600, color: "#555", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{note.title || (note.content || "").split("\n")[0] || "팀 업무"}</span>
                       {allAck && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: "#DCFCE7", color: "#15803D", whiteSpace: "nowrap" }}>✅ 확인 완료</span>}
                       {isOld7(note) && !allAck && <span style={{ fontSize: 9, color: "#AAA", whiteSpace: "nowrap" }}>7일+ 경과</span>}
@@ -16905,6 +17030,9 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                   <div key={note.id} style={{ background: isOpen ? "#FFFEF7" : "#F7F6F3", border: "1px solid " + (isOpen ? "#FEF3C7" : "#E8E5E0"), borderLeft: "3px solid " + ps.dot, borderRadius: 8, padding: "10px 12px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
                       <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        {note.is_announcement && (
+                          <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: "#FEF3C7", color: "#92400E", border: "1px solid #FCD34D" }}>📌 공지</span>
+                        )}
                         <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: ss.bg, color: ss.color }}>{ss.label}</span>
                         {note.team === "all" && (
                           <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: "#F3E8FF", color: "#7C3AED" }}>🌐 전체</span>
@@ -16996,7 +17124,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                             {iAck ? "✅ 확인함" : "✅ 확인"}
                           </button>
                           <span style={{ fontSize: 10, color: allAck ? "#15803D" : "#888", fontWeight: allAck ? 700 : 400 }}>
-                            {allAck ? "전원 확인 완료" : "확인 " + rb.length + "/" + ROSTER.length + "명"}
+                            {allAck ? "전원 확인 완료" : "확인 " + rb.length + "/" + rosterOf(note).length + "명"}
                           </span>
                           {rb.length > 0 && <span style={{ fontSize: 9, color: "#AAA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 160 }}>{rb.join(", ")}</span>}
                           {isAdmin && !allAck && missing.length > 0 && (
@@ -17053,6 +17181,12 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                 <div style={{ fontSize: 10, color: "#7C3AED", marginTop: 4 }}>전체(공통)로 등록하면 법인팀·개인팀 양쪽 목록에 모두 표시됩니다.</div>
               )}
             </div>
+            {/* 📌 공지 고정 */}
+            <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", marginBottom: 10, background: newNote.is_announcement ? "#FEF3C7" : "#F7F6F3", border: "1px solid " + (newNote.is_announcement ? "#FCD34D" : "#E8E5E0"), borderRadius: 8, cursor: "pointer" }}>
+              <input type="checkbox" checked={!!newNote.is_announcement} onChange={function(e) { var v = e.target.checked; setNewNote(function(p) { return Object.assign({}, p, { is_announcement: v }); }); }} />
+              <span style={{ fontSize: 12, fontWeight: 700, color: newNote.is_announcement ? "#92400E" : "#666" }}>📌 공지로 등록</span>
+              <span style={{ fontSize: 10, color: "#888" }}>· 팀 목록 최상단에 고정 · 전원 확인하면 자동으로 내려감</span>
+            </label>
             <div style={{ marginBottom: 10 }}>
               <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>제목 (선택) <span style={{ color: "#94A3B8" }}>· @업체명 입력 시 파란색 표시</span></label>
               <MentionField multiline={false} companiesList={companiesList}
