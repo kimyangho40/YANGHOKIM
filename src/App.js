@@ -3533,6 +3533,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
       {/* 🔔 방치 자동 알림 배너 (3일 이상 응답/서류 대기) */}
       <StaleWaitBanner setView={setView} />
 
+      {/* 📩 내가 보낸 요청 중 6시간+ 미확인 */}
+      <UnreadRequestsBanner myName={myName} setView={setView} />
+
       {/* 🗂️ 담당자별 미완료 현황 (업무노트 체크리스트 기준) */}
       <AssigneeUnfinishedWidget myName={myName} setView={setView} />
 
@@ -4823,6 +4826,44 @@ function AssigneeUnfinishedWidget({ myName, setView }) {
               <span style={{ textAlign: "right", fontSize: 14, fontWeight: 700, color: "#1A1917" }}>{r.count}</span>
               <span style={{ textAlign: "right", fontSize: 13, fontWeight: 700, color: r.stale > 0 ? "#B91C1C" : "#BBB" }}>{r.stale > 0 ? r.stale + "건" : "0"}</span>
               <span style={{ textAlign: "right", fontSize: 11, color: r.oldest ? "#B45309" : "#BBB" }}>{r.oldest || "-"}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// 📩 미확인 요청 배너 — 내가 보낸 요청 중 6시간 넘게 안 읽힌 것(기능5)
+function UnreadRequestsBanner({ myName, setView }) {
+  const [items, setItems] = useState([]);
+  useEffect(function() {
+    async function load() {
+      if (!myName) return;
+      var sixAgo = new Date(Date.now() - 6 * 3600000).toISOString();
+      var r = await supabase.from("work_requests").select("*").eq("request_from", myName).eq("status", "pending").lt("created_at", sixAgo).order("created_at", { ascending: true });
+      if (r.error || !r.data) { setItems([]); return; }
+      setItems(r.data);
+    }
+    load();
+  }, [myName]);
+  if (items.length === 0) return null;
+  return (
+    <div onClick={function() { setView("worknotes"); }}
+      style={{ background: "linear-gradient(135deg, #FFF7ED 0%, #FEF3C7 100%)", border: "1px solid #FDBA74", borderRadius: 12, padding: "12px 16px", marginBottom: 18, cursor: "pointer" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: items.length ? 8 : 0 }}>
+        <span style={{ fontSize: 15 }}>📩</span>
+        <div style={{ fontSize: 13, fontWeight: 800, color: "#B45309" }}>미확인 요청 {items.length}건 · 6시간 넘게 안 읽음</div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+        {items.slice(0, 5).map(function(x) {
+          var hrs = Math.floor((Date.now() - new Date(x.created_at).getTime()) / 3600000);
+          return (
+            <div key={x.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#7C2D12" }}>
+              <span style={{ fontWeight: 700, whiteSpace: "nowrap" }}>→ {x.request_to}</span>
+              {x.urgent && <span>🚨</span>}
+              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{x.content}</span>
+              <span style={{ color: "#B45309", whiteSpace: "nowrap" }}>{hrs}시간째</span>
             </div>
           );
         })}
@@ -9045,10 +9086,11 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
                   <div key={item.idx} style={{ fontSize: 13, color: "#888", lineHeight: 1.75, paddingLeft: 4 }}>{item.text}</div>
                 ) : null;
               }
+              var isReq = /^📩/.test(item.text); // 팀원 업무 요청 항목
               return (
-                <label key={item.idx} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: item.waitReason ? "6px 8px" : "6px 0", cursor: "pointer", background: item.waitReason ? "#FFFBEB" : "transparent", border: "1px solid " + (item.waitReason ? "#FDE68A" : "transparent"), borderRadius: 8 }}>
+                <label key={item.idx} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: (item.waitReason || isReq) ? "6px 8px" : "6px 0", cursor: "pointer", background: isReq ? "#FFF7ED" : item.waitReason ? "#FFFBEB" : "transparent", borderLeft: isReq ? "3px solid #F59E0B" : "1px solid transparent", border: !isReq && item.waitReason ? "1px solid #FDE68A" : undefined, borderRadius: isReq ? 6 : 8 }}>
                   <input type="checkbox" checked={item.checked} onChange={function() { toggleCheckItem(item.idx); }}
-                    style={{ width: 15, height: 15, marginTop: 3, cursor: "pointer", accentColor: "#1A1917", flexShrink: 0 }} />
+                    style={{ width: 15, height: 15, marginTop: 3, cursor: "pointer", accentColor: isReq ? "#F59E0B" : "#1A1917", flexShrink: 0 }} />
                   <span style={{ fontSize: 13, color: item.checked ? "#AAA" : "#333", textDecoration: item.checked ? "line-through" : "none", lineHeight: 1.8, whiteSpace: "pre-wrap" }}>{item.text}</span>
                   {item.waitReason && !item.checked && (
                     <span style={{ fontSize: 10, fontWeight: 700, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 99, padding: "1px 7px", whiteSpace: "nowrap", flexShrink: 0, marginTop: 2 }}>⏳ {item.waitReason}</span>
@@ -9135,6 +9177,16 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   // 🗓️ 주간 정리 리마인드 모달
   const [showWeekly, setShowWeekly] = useState(false);
   const weeklyOpenedRef = useRef(false);
+  // 📩 업무 요청 (팀원 간)
+  const [showRequest, setShowRequest] = useState(false);
+  const [reqTo, setReqTo] = useState("");
+  const [reqText, setReqText] = useState("");
+  const [reqUrgent, setReqUrgent] = useState(false);
+  const [reqCompanyId, setReqCompanyId] = useState(null);
+  const [incomingReqCount, setIncomingReqCount] = useState(0); // 받은 미읽음 요청 수(배지)
+  const [sentRequests, setSentRequests] = useState([]); // 내가 보낸 요청
+  const [showSent, setShowSent] = useState(false);
+  const reqReadRef = useRef(false);
 
   // 📱 업무노트 모바일 최적화 CSS 주입 (휴대폰에서 작성 편하게)
   useEffect(function() {
@@ -9583,6 +9635,79 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     if (markDone) markWeeklyReviewed();
   };
 
+  // 📩 업무 요청: 받은/보낸 요청 로드 + 업무노트 열었으니 받은 요청 읽음 처리(기능5)
+  var loadRequests = async function() {
+    var me = profile?.name; if (!me) return;
+    var inc = await supabase.from("work_requests").select("*").eq("request_to", me).order("created_at", { ascending: false });
+    if (inc.error) return; // 테이블 미생성/접근불가 → 요청 기능 조용히 비활성
+    var incoming = inc.data || [];
+    var pending = incoming.filter(function(r) { return r.status === "pending"; });
+    setIncomingReqCount(pending.length); // 이번 방문에 "새 요청 N건" 배지
+    if (!reqReadRef.current && pending.length) {
+      reqReadRef.current = true;
+      await supabase.from("work_requests").update({ status: "read", read_at: new Date().toISOString() }).in("id", pending.map(function(r) { return r.id; }));
+    }
+    var sent = await supabase.from("work_requests").select("*").eq("request_from", me).order("created_at", { ascending: false });
+    if (!sent.error) setSentRequests(sent.data || []);
+  };
+  useEffect(function() { if (!loading && profile?.name) loadRequests(); }, [loading, profile]);
+
+  var sendRequest = async function() {
+    var from = profile?.name || "";
+    var to = reqTo;
+    var text = reqText.trim();
+    if (!to) { alert("받는 사람을 선택하세요."); return; }
+    if (!text) { alert("요청 내용을 입력하세요."); return; }
+    var today = kstDate();
+    var itemLine = buildItemLine({ checked: false, text: "📩 " + from + " 요청: " + text });
+    // 받는 사람 오늘 노트 찾기(DB 직접 조회 — 로컬 notes엔 남의 노트가 없을 수 있음)
+    var found = await supabase.from("work_notes").select("*").eq("assignee", to).eq("note_date", today).is("deleted_at", null).order("created_at", { ascending: false }).limit(1);
+    var noteId = null, savedNote = null;
+    if (!found.error && found.data && found.data.length) {
+      var tn = found.data[0];
+      var nc = tn.content ? tn.content + "\n" + itemLine : itemLine;
+      var up = await supabase.from("work_notes").update({ content: nc, is_todo: true, updated_at: new Date().toISOString() }).eq("id", tn.id).select().single();
+      if (!up.error) { noteId = tn.id; savedNote = up.data; }
+    }
+    if (!noteId) {
+      var ins = { assignee: to, title: noteAutoTitle(to, today), content: itemLine, is_todo: true, created_by: from, note_date: today };
+      if (reqCompanyId) ins.company_id = reqCompanyId;
+      var ir = await supabase.from("work_notes").insert(ins).select().single();
+      if (ir.error && /company_id/.test(ir.error.message || "")) { delete ins.company_id; ir = await supabase.from("work_notes").insert(ins).select().single(); }
+      if (ir.error) { alert("요청 노트 생성 실패: " + ir.error.message); return; }
+      noteId = ir.data.id; savedNote = ir.data;
+    }
+    if (savedNote) setNotes(function(prev) { var ex = prev.find(function(n) { return n.id === savedNote.id; }); return ex ? prev.map(function(n) { return n.id === savedNote.id ? savedNote : n; }) : [savedNote].concat(prev); });
+    // work_requests 기록 (테이블 없으면 조용히 skip)
+    var reqRow = { request_from: from, request_to: to, content: text, urgent: reqUrgent, note_id: noteId, status: "pending" };
+    if (reqCompanyId) reqRow.company_id = reqCompanyId;
+    var rr = await supabase.from("work_requests").insert(reqRow).select().single();
+    if (rr.error && /company_id/.test(rr.error.message || "")) { delete reqRow.company_id; rr = await supabase.from("work_requests").insert(reqRow).select().single(); }
+    if (!rr.error && rr.data) setSentRequests(function(prev) { return [rr.data].concat(prev); });
+    if (to !== from) sendPushToUser(to, { title: (reqUrgent ? "🚨 긴급 " : "📩 ") + "업무 요청", body: from + ": " + text, url: window.location.origin + "?view=worknotes" });
+    setReqTo(""); setReqText(""); setReqUrgent(false); setReqCompanyId(null); setShowRequest(false);
+    if (onBadgeUpdate) onBadgeUpdate();
+    alert("📩 '" + to + "'님에게 요청을 보냈어요.");
+  };
+
+  // 받은 요청 항목을 완료 체크하면 보낸 사람 쪽에 완료 반영(기능4)
+  var syncRequestDone = async function(prevContent, newContent) {
+    var me = profile?.name; if (!me || sentRequests == null) return;
+    var prevLines = (prevContent || "").split("\n");
+    var newLines = (newContent || "").split("\n");
+    for (var i = 0; i < newLines.length; i++) {
+      var wasUnchecked = /^\s*- \[ \]/.test(prevLines[i] || "");
+      var nowChecked = /^\s*- \[x\]/i.test(newLines[i] || "");
+      if (!(wasUnchecked && nowChecked)) continue;
+      var m = (newLines[i] || "").match(/📩\s*(\S+)\s*요청:\s*(.+?)\s*$/);
+      if (!m) continue;
+      var content = decodeItemText(splitItemWait(m[2]).rest).replace(/→.*이월\s*$/, "").trim();
+      // 나에게 온 pending/read 요청 중 내용 일치 건 done 처리
+      await supabase.from("work_requests").update({ status: "done", done_at: new Date().toISOString() })
+        .eq("request_to", me).neq("status", "done").ilike("content", content.slice(0, 60) + "%");
+    }
+  };
+
   var saveNew = async function() {
     // checkItems가 있으면 content로 변환해서 합치기 (마감일 [YYYY-MM-DD] 포함, 체크 상태도 반영)
     var checkContent = (newNote.checkItems && newNote.checkItems.length > 0)
@@ -9662,9 +9787,12 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   };
 
   var onChecklistChange = async function(noteId, newContent) {
+    var prevNoteForReq = notes.find(function(n) { return n.id === noteId; });
     var r = await supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", noteId);
     if (!r.error) {
       setNotes(function(prev) { return prev.map(function(n) { return n.id === noteId ? Object.assign({}, n, { content: newContent }) : n; }); });
+      // 📩 받은 요청 항목 완료 시 보낸 사람 쪽에 반영
+      if (prevNoteForReq) syncRequestDone(prevNoteForReq.content, newContent);
       // 방금 체크 완료된 항목 → 활동로그 기록
       var prevNote = notes.find(function(n) { return n.id === noteId; });
       if (prevNote) {
@@ -9815,6 +9943,13 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
           <button onClick={function() { var nd = selectedDate || todayStr; var md = nd ? (parseInt(nd.slice(5,7)) + "월" + parseInt(nd.slice(8,10)) + "일") : ""; var pickName = (filterAssignee !== "전체" ? filterAssignee : (profile?.name || "")); var autoTitle = (md ? md + " " : "") + pickName + " 업무"; setShowAdd(true); setNewNote({ title: autoTitle, content: "", is_todo: false, pinned: false, target_assignee: (filterAssignee !== "전체" ? filterAssignee : ""), checkItems: [], due_date: "", note_date: nd }); }}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             <Icon name="plus" size={15} color="#F7F6F3" /> 새 노트
+          </button>
+          <button onClick={function() { setShowRequest(true); }} title="팀원에게 업무 요청 보내기"
+            style={{ position: "relative", display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#B45309", border: "1px solid #FED7AA", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            📩 업무 요청
+            {incomingReqCount > 0 && (
+              <span style={{ position: "absolute", top: -6, right: -6, background: "#EF4444", color: "#fff", fontSize: 10, fontWeight: 700, borderRadius: 99, minWidth: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }}>{incomingReqCount}</span>
+            )}
           </button>
           <button onClick={openTrash}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
@@ -10089,6 +10224,69 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
               </>
             )}
           </div>
+        </div>
+      )}
+
+      {/* 📩 업무 요청 모달 */}
+      {showRequest && (
+        <div onClick={function() { setShowRequest(false); }}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div onClick={function(e) { e.stopPropagation(); }}
+            style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 460, padding: 22, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div style={{ fontSize: 16, fontWeight: 800 }}>📩 업무 요청 보내기</div>
+              <button onClick={function() { setShowRequest(false); }} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#888" }}>✕</button>
+            </div>
+            <label style={{ fontSize: 12, color: "#888", display: "block", marginBottom: 4 }}>받는 사람</label>
+            <select value={reqTo} onChange={function(e) { setReqTo(e.target.value); }}
+              style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff", marginBottom: 12, boxSizing: "border-box" }}>
+              <option value="">담당자 선택</option>
+              {ASSIGNEES.filter(function(a) { return a !== profile?.name; }).map(function(a) { return <option key={a} value={a}>{a}</option>; })}
+            </select>
+            <label style={{ fontSize: 12, color: "#888", display: "block", marginBottom: 4 }}>요청 내용 <span style={{ color: "#94A3B8" }}>· @업체명 연결 가능</span></label>
+            <div style={{ position: "relative", marginBottom: 12 }}>
+              <MentionField multiline={true} companiesList={companiesList} value={reqText} rows={4}
+                placeholder="예: @메이크올 사업자등록증 오늘까지 받아주세요"
+                onChange={function(v) { setReqText(v); }} onLink={function(co) { setReqCompanyId(co.id); }}
+                style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.6, resize: "vertical", boxSizing: "border-box", outline: "none", background: "#fff", fontFamily: "inherit" }} />
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginBottom: 8 }}>
+              <input type="checkbox" checked={reqUrgent} onChange={function(e) { setReqUrgent(e.target.checked); }} />
+              🚨 긴급 요청
+            </label>
+            {reqCompanyId && <div style={{ fontSize: 12, color: "#4338CA", marginBottom: 8 }}>🔗 업체 연결됨 <span onClick={function() { setReqCompanyId(null); }} style={{ cursor: "pointer", color: "#6366F1" }}>✕</span></div>}
+            <div style={{ fontSize: 11, color: "#94A3B8", marginBottom: 14, lineHeight: 1.5 }}>받는 사람의 <b>오늘 업무노트 체크리스트</b>에 <b>📩 요청 항목</b>으로 자동 추가돼요. (오늘 노트가 없으면 새로 만듭니다)</div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={function() { setShowRequest(false); }} style={{ padding: "10px 16px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer", color: "#888" }}>취소</button>
+              <button onClick={sendRequest} style={{ padding: "10px 20px", background: "#B45309", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>요청 보내기</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 📤 내가 보낸 요청 (읽음/완료 추적) */}
+      {sentRequests.length > 0 && (
+        <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, padding: "12px 16px", marginBottom: 16 }}>
+          <div onClick={function() { setShowSent(!showSent); }} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+            <span style={{ fontSize: 13 }}>{showSent ? "▼" : "▶"}</span>
+            <span style={{ fontSize: 13, fontWeight: 700 }}>📤 내가 보낸 요청 {sentRequests.length}건</span>
+            {(function() { var unread = sentRequests.filter(function(r) { return r.status === "pending"; }).length; return unread > 0 ? <span style={{ fontSize: 11, color: "#B91C1C", background: "#FEE2E2", borderRadius: 99, padding: "1px 8px", fontWeight: 700 }}>안읽음 {unread}</span> : null; })()}
+          </div>
+          {showSent && (
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+              {sentRequests.map(function(r) {
+                var st = r.status === "done" ? { t: "✅ 완료됨", c: "#15803D", b: "#DCFCE7" } : r.status === "read" ? { t: "👀 읽음", c: "#1E40AF", b: "#DBEAFE" } : { t: "• 안읽음", c: "#B91C1C", b: "#FEE2E2" };
+                return (
+                  <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: "#FAFAF9", borderRadius: 8, border: "1px solid #F0EDE8" }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#4338CA", whiteSpace: "nowrap" }}>→ {r.request_to}</span>
+                    {r.urgent && <span style={{ fontSize: 10, color: "#B91C1C" }}>🚨</span>}
+                    <span style={{ fontSize: 13, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.content}</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: st.c, background: st.b, borderRadius: 99, padding: "2px 8px", whiteSpace: "nowrap" }}>{st.t}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -16016,6 +16214,10 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
   const [collapsed, setCollapsed] = useState(false); // 섹션 전체 접기
   const [editingNoteId, setEditingNoteId] = useState(null); // 수정 중인 팀 노트 ID
   const [editingDraft, setEditingDraft] = useState(null); // 수정 작업 중인 임시 데이터
+  const [expandedIds, setExpandedIds] = useState(function() { return {}; }); // 접힌 카드 중 사용자가 펼친 것(id->true)
+
+  var ROSTER = ASSIGNEES; // 전원 확인 판정 기준 명단
+  var isAdmin = profile?.role === "admin" || profile?.name === "양호";
 
   useEffect(function() { fetchTeamNotes(); }, []);
 
@@ -16026,15 +16228,27 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     setLoading(false);
   };
 
-  // 탭별 노트 (열린 것 우선, 가져간 것은 토글에 따라)
-  var displayNotes = useMemo(function() {
+  // 팀 필터(탭)만 적용한 목록 — 완료 건수 계산용
+  var tabNotes = useMemo(function() {
     return allTeamNotes.filter(function(n) {
-      // 전체(공통) 탭은 팀 구분 없이 모두 표시. 법인팀/개인팀 탭은 해당 팀 + "all"(공통) 표시
       if (activeTab !== "all" && n.team !== activeTab && n.team !== "all") return false;
-      if (!showDone && n.status !== "open") return false;
       return true;
     });
-  }, [allTeamNotes, activeTab, showDone]);
+  }, [allTeamNotes, activeTab]);
+
+  // 완료/가져간(비open) 카드 수 — "완료된 업무 N건 보기" 토글 라벨용
+  var doneCount = useMemo(function() { return tabNotes.filter(function(n) { return n.status !== "open"; }).length; }, [tabNotes]);
+
+  var PRI_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
+  // 탭별 노트 (긴급 먼저 → 최신순). 완료/가져간 카드는 토글에 따라 표시
+  var displayNotes = useMemo(function() {
+    var list = tabNotes.filter(function(n) { return showDone || n.status === "open"; });
+    return list.slice().sort(function(a, b) {
+      var pr = (PRI_RANK[a.priority] == null ? 2 : PRI_RANK[a.priority]) - (PRI_RANK[b.priority] == null ? 2 : PRI_RANK[b.priority]);
+      if (pr !== 0) return pr;
+      return String(b.created_at || "").localeCompare(String(a.created_at || ""));
+    });
+  }, [tabNotes, showDone]);
 
   var openCount = useMemo(function() {
     // 전체(공통) 대기 업무는 양쪽 팀 카운트에 모두 포함
@@ -16359,10 +16573,34 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     });
   };
 
+  // 공지 확인(ack) 토글 — 본인 이름을 team_notes.read_by 배열에 넣고 뺀다
+  var toggleAck = async function(note) {
+    var me = normalizeName(profile?.name);
+    if (!me) { alert("로그인 정보가 없습니다."); return; }
+    var cur = Array.isArray(note.read_by) ? note.read_by.slice() : [];
+    var has = cur.indexOf(me) >= 0;
+    var next = has ? cur.filter(function(x) { return x !== me; }) : cur.concat([me]);
+    setAllTeamNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { read_by: next }) : n; }); });
+    var r = await supabase.from("team_notes").update({ read_by: next }).eq("id", note.id);
+    if (r.error) {
+      setAllTeamNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { read_by: cur }) : n; }); });
+      if (!/read_by|column/.test(r.error.message || "")) alert("확인 저장 실패: " + r.error.message);
+      else alert("확인 기능을 쓰려면 team_notes.read_by 컬럼이 필요합니다. (안내된 SQL 실행 후 사용)");
+    }
+  };
+  var ackList = function(note) { return Array.isArray(note.read_by) ? note.read_by : []; };
+  var ackAll = function(note) { var rb = ackList(note); return ROSTER.every(function(nm) { return rb.indexOf(nm) >= 0; }); };
+  var ackMissing = function(note) { var rb = ackList(note); return ROSTER.filter(function(nm) { return rb.indexOf(nm) < 0; }); };
+  // 7일 이상 지난 카드 or 전원 확인 완료 카드는 기본 접힘 (사용자가 펼치면 해제)
+  var isOld7 = function(note) { return note.created_at ? (Date.now() - new Date(note.created_at).getTime()) > 7 * 86400000 : false; };
+  var isFolded = function(note) { if (expandedIds[note.id]) return false; return isOld7(note) || ackAll(note); };
+  var toggleExpand = function(id) { setExpandedIds(function(p) { var n = Object.assign({}, p); if (n[id]) delete n[id]; else n[id] = true; return n; }); };
+
   var priorityStyle = function(p) {
-    if (p === "urgent") return { bg: "#FEE2E2", color: "#B91C1C", label: "🚨 긴급" };
-    if (p === "high") return { bg: "#FEF3C7", color: "#92400E", label: "⭐ 중요" };
-    return { bg: "#F3F4F6", color: "#666", label: "일반" };
+    if (p === "urgent") return { bg: "#FEE2E2", color: "#B91C1C", label: "🔴 긴급", dot: "#EF4444" };
+    if (p === "high") return { bg: "#FEF3C7", color: "#92400E", label: "⭐ 중요", dot: "#F59E0B" };
+    if (p === "low") return { bg: "#F0FDF4", color: "#15803D", label: "🟢 여유", dot: "#22C55E" };
+    return { bg: "#FEF9C3", color: "#854D0E", label: "🟡 보통", dot: "#EAB308" }; // normal
   };
 
   var statusStyle = function(s) {
@@ -16391,7 +16629,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#666", cursor: "pointer" }}>
               <input type="checkbox" checked={showDone} onChange={function(e) { setShowDone(e.target.checked); }} />
-              가져간 것도 보기
+              완료된 업무 {doneCount > 0 ? doneCount + "건 " : ""}보기
             </label>
             <button onClick={function() { setNewNoteTeam(activeTab); setShowAdd(true); }}
               style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ 새 업무</button>
@@ -16459,9 +16697,10 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                           <select value={editingDraft.priority}
                             onChange={function(e) { var v = e.target.value; setEditingDraft(function(p) { return Object.assign({}, p, { priority: v }); }); }}
                             style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, boxSizing: "border-box", background: "#fff" }}>
-                            <option value="normal">일반</option>
-                            <option value="high">⭐ 중요</option>
-                            <option value="urgent">🚨 긴급</option>
+                            <option value="urgent">🔴 긴급</option>
+                            <option value="normal">🟡 보통</option>
+                            <option value="low">🟢 여유</option>
+                            <option value="high">⭐ 중요(기존)</option>
                           </select>
                         </div>
                         <div>
@@ -16538,18 +16777,30 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                   );
                 }
 
+                // ── 접힘 카드 (7일 경과 또는 전원 확인 완료) ──
+                if (isFolded(note)) {
+                  var allAck = ackAll(note);
+                  return (
+                    <div key={note.id} onClick={function() { toggleExpand(note.id); }}
+                      style={{ background: "#F7F6F3", border: "1px solid #E8E5E0", borderLeft: "3px solid " + ps.dot, borderRadius: 8, padding: "8px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 12, color: "#999" }}>▶</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "#555", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{note.title || (note.content || "").split("\n")[0] || "팀 업무"}</span>
+                      {allAck && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: "#DCFCE7", color: "#15803D", whiteSpace: "nowrap" }}>✅ 확인 완료</span>}
+                      {isOld7(note) && !allAck && <span style={{ fontSize: 9, color: "#AAA", whiteSpace: "nowrap" }}>7일+ 경과</span>}
+                    </div>
+                  );
+                }
+
                 // ── 일반 보기 모드 ──
                 return (
-                  <div key={note.id} style={{ background: isOpen ? "#FFFEF7" : "#F7F6F3", border: "1px solid " + (isOpen ? "#FEF3C7" : "#E8E5E0"), borderRadius: 8, padding: "10px 12px" }}>
+                  <div key={note.id} style={{ background: isOpen ? "#FFFEF7" : "#F7F6F3", border: "1px solid " + (isOpen ? "#FEF3C7" : "#E8E5E0"), borderLeft: "3px solid " + ps.dot, borderRadius: 8, padding: "10px 12px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
                       <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                         <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: ss.bg, color: ss.color }}>{ss.label}</span>
                         {note.team === "all" && (
                           <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: "#F3E8FF", color: "#7C3AED" }}>🌐 전체</span>
                         )}
-                        {note.priority !== "normal" && (
-                          <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: ps.bg, color: ps.color }}>{ps.label}</span>
-                        )}
+                        <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: ps.bg, color: ps.color }}>{ps.label}</span>
                       </div>
                       <span style={{ fontSize: 9, color: "#AAA" }}>
                         {note.created_at ? new Date(note.created_at).toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" }) : ""}
@@ -16622,6 +16873,29 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                         )}
                       </div>
                     </div>
+                    {/* 공지 확인 체크 */}
+                    {(function() {
+                      var rb = ackList(note);
+                      var me = normalizeName(profile?.name);
+                      var iAck = rb.indexOf(me) >= 0;
+                      var allAck = ackAll(note);
+                      var missing = ackMissing(note);
+                      return (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 8, paddingTop: 8, borderTop: "1px dashed #E8E5E0" }}>
+                          <button onClick={function() { toggleAck(note); }}
+                            style={{ fontSize: 11, fontWeight: 700, padding: "5px 10px", borderRadius: 6, cursor: "pointer", border: "1px solid " + (iAck ? "#86EFAC" : "#E8E5E0"), background: iAck ? "#DCFCE7" : "#fff", color: iAck ? "#15803D" : "#666" }}>
+                            {iAck ? "✅ 확인함" : "✅ 확인"}
+                          </button>
+                          <span style={{ fontSize: 10, color: allAck ? "#15803D" : "#888", fontWeight: allAck ? 700 : 400 }}>
+                            {allAck ? "전원 확인 완료" : "확인 " + rb.length + "/" + ROSTER.length + "명"}
+                          </span>
+                          {rb.length > 0 && <span style={{ fontSize: 9, color: "#AAA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 160 }}>{rb.join(", ")}</span>}
+                          {isAdmin && !allAck && missing.length > 0 && (
+                            <span title="아직 확인 안 한 사람" style={{ fontSize: 9, color: "#B91C1C", background: "#FEE2E2", borderRadius: 99, padding: "2px 7px", whiteSpace: "nowrap" }}>미확인: {missing.join(", ")}</span>
+                          )}
+                        </div>
+                      );
+                    })()}
                     {/* 액션 버튼 */}
                     <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
                       {isOpen && (
@@ -16744,9 +17018,10 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                 <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>우선순위</label>
                 <select value={newNote.priority} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { priority: v }); }); }}
                   style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", background: "#fff" }}>
-                  <option value="normal">일반</option>
-                  <option value="high">⭐ 중요</option>
-                  <option value="urgent">🚨 긴급</option>
+                  <option value="urgent">🔴 긴급</option>
+                  <option value="normal">🟡 보통</option>
+                  <option value="low">🟢 여유</option>
+                  <option value="high">⭐ 중요(기존)</option>
                 </select>
               </div>
               <div>
