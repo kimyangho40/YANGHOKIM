@@ -3475,7 +3475,7 @@ function MorningSummaryBanner({ myName, setView }) {
       var today = kstDate();
       var res = await Promise.all([
         supabase.from("work_notes").select("content,note_date,created_at").eq("assignee", myName).is("deleted_at", null),
-        supabase.from("work_requests").select("id").eq("request_to", myName).eq("status", "pending"),
+        supabase.from("work_requests").select("id").eq("request_to", myName).neq("status", "done"),
       ]);
       if (!alive) return;
       var notes = (!res[0].error && res[0].data) ? res[0].data : [];
