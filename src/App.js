@@ -457,6 +457,18 @@ const TEAM_FILTER_OPTS = ["전체", "법인팀", "개인팀"];
 const DOC_LIST = ["사업자등록증","최근 3년치 재무제표 (23년~25년)","최근 3년치 부가세 증명원 (23년~25년)","법인 기업 금융거래 확인서","대표자 신용점수","4대보험 명부","월별 고용보험 가입자 명부","그 외 사업전환 필수 서류","최근 1년 수출실적 증명서","사업자 대출 금융거래 확인서","대표자 신분증","임대차 계약서","회사 소개서 또는 사업계획서","2026년 상반기 부가세 증명원","대표자 개인 대출 금융거래 확인서","직전연도 상시근로자 수 파악","기업 인증 자료 (벤처·이노비즈·연구전담 부서 등)","특허 및 상표권 관련 자료"];
 const TEAMS = ["법인전담","개인전담","관리자"];
 const ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일","양호"];
+// 📓 업무노트 열람 권한 — 관리자는 전원 열람, 공유 그룹은 서로 열람(수정은 본인 것만)
+const WN_ADMINS = ["양호", "관호", "유진"];
+const WN_SHARE_GROUPS = [["미현", "인선"]];
+function wnIsAdmin(name) { return WN_ADMINS.indexOf(name) >= 0; }
+// 해당 사용자가 볼 수 있는 담당자 이름 목록 (본인 + 공유그룹, 관리자는 전원)
+function wnViewable(name) {
+  if (!name) return [];
+  if (wnIsAdmin(name)) return ASSIGNEES.slice();
+  var s = [name];
+  WN_SHARE_GROUPS.forEach(function(g) { if (g.indexOf(name) >= 0) g.forEach(function(n) { if (s.indexOf(n) < 0) s.push(n); }); });
+  return s;
+}
 const INDUSTRY_OPTIONS = ["제조업","농업·어업","숙박업","음식점업","전자상거래업","정보통신업","도소매업","서비스업","창고업","자동차임대업"];
 
 // ── 정책자금 신규 기능: 상수 & 계산 로직 ─────────────────────────────────────────
@@ -8979,9 +8991,9 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
 }
 
 // ── 업무노트 카드 (독립 컴포넌트 - 입력버그 방지) ──────────────────────────────
-function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditingId, toggleDone, togglePin, deleteNote, fmtDate, currentUserName, onChecklistChange, moveNoteDate, setWaitReason }) {
+function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditingId, toggleDone, togglePin, deleteNote, fmtDate, currentUserName, onChecklistChange, moveNoteDate, setWaitReason, editable }) {
   var isEditing = editingId === note.id;
-  var isMyNote = true;
+  var isMyNote = editable !== false; // 본인 노트만 수정/체크 가능 (공유그룹으로 보이는 남의 노트는 읽기 전용)
 
   // 체크리스트 파싱: "- [ ] 항목" 또는 "- [x] 항목" 형식
   var parseChecklist = function(content) {
@@ -9001,6 +9013,7 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
   var totalCount = checklist ? checklist.filter(function(i) { return i.isCheck; }).length : 0;
 
   var toggleCheckItem = function(lineIdx) {
+    if (!isMyNote) return; // 남의 노트는 체크 불가(읽기 전용)
     var lines = (note.content || "").split("\n");
     var line = lines[lineIdx];
     if (/^- \[ \]/.test(line.trim())) {
@@ -9022,9 +9035,10 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {note.is_todo && (
-            <input type="checkbox" checked={note.is_done || false} onChange={function() { toggleDone(note); }}
-              style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#1A1917" }} />
+            <input type="checkbox" checked={note.is_done || false} disabled={!isMyNote} onChange={function() { if (isMyNote) toggleDone(note); }}
+              style={{ width: 16, height: 16, cursor: isMyNote ? "pointer" : "default", accentColor: "#1A1917" }} />
           )}
+          {!isMyNote && <span title={"읽기 전용 · " + (note.assignee || "") + " 님의 노트"} style={{ fontSize: 10, fontWeight: 700, color: "#6B7280", background: "#F3F4F6", border: "1px solid #E5E7EB", borderRadius: 99, padding: "1px 7px" }}>👀 읽기전용</span>}
           {note.pinned && <span style={{ fontSize: 14 }}>📌</span>}
           <span style={{ fontSize: 14, fontWeight: 700, color: "#1A1917", textDecoration: note.is_done ? "line-through" : "none" }}>
             {note.title || <span style={{ color: "#888", fontWeight: 400 }}>제목 없음</span>}
@@ -9176,6 +9190,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   const [carrySel, setCarrySel] = useState({}); // key(noteId:lineIdx) -> bool
   // 🗓️ 주간 정리 리마인드 모달
   const [showWeekly, setShowWeekly] = useState(false);
+  const [weeklyMode, setWeeklyMode] = useState("mon"); // "mon"(지난주 정리) | "fri"(이번 주 마무리)
   const weeklyOpenedRef = useRef(false);
   // 📩 업무 요청 (팀원 간)
   const [showRequest, setShowRequest] = useState(false);
@@ -9352,14 +9367,21 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     if (!r.error) setTrashedNotes(function(prev) { return prev.filter(function(n) { return n.id !== id; }); });
   };
 
+  // 📓 열람 권한: 관리자=전원 / 공유그룹=서로 / 그 외=본인만
+  var myName = profile?.name || "";
+  var isWnAdmin = wnIsAdmin(myName);
+  var viewableNames = useMemo(function() { return wnViewable(myName); }, [myName]);
+  var canEditNote = function(n) { return (n.assignee || "") === myName; }; // 수정/체크는 본인 노트만
+
   var filtered = useMemo(function() {
     return notes.filter(function(n) {
+      if (viewableNames.indexOf(n.assignee) < 0) return false; // 열람 권한 없는 담당자 제외
       if (filterAssignee !== "전체" && n.assignee !== filterAssignee) return false;
       if (filterType === "메모") return !n.is_todo;
       if (filterType === "할일") return n.is_todo;
       return true;
     });
-  }, [notes, filterAssignee, filterType]);
+  }, [notes, filterAssignee, filterType, viewableNames]);
 
   // 노트의 날짜 추출 (note_date 우선, 없으면 created_at에서)
   var getNoteDate = function(n) {
@@ -9487,7 +9509,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   // 대시보드 "담당자별 미완료 현황"에서 넘어온 경우 해당 담당자로 필터 (탭 진입 1회)
   useEffect(function() {
     var j = localStorage.getItem("wn_jump_assignee");
-    if (j) { localStorage.removeItem("wn_jump_assignee"); setFilterAssignee(j); setViewMode("list"); }
+    if (j) { localStorage.removeItem("wn_jump_assignee"); if (wnViewable(profile?.name).indexOf(j) >= 0) { setFilterAssignee(j); setViewMode("list"); } }
   }, []);
 
   // 📋 이월 후보: 대상 담당자의 이전 노트들 미완료 항목 (현재 작성 중 항목과 중복 제외)
@@ -9544,7 +9566,8 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     setShowCarry(false);
   };
 
-  // 🗓️ 지난주(이번 주 월요일 이전) 미완료 항목 — 본인 것만
+  // 🗓️ 주간 정리 대상 항목 — 본인 것만
+  //   mon 모드: 이번 주 월요일 이전(지난주까지) 미완료 / fri 모드: 이번 주(월~오늘) 미완료
   var weeklyItems = useMemo(function() {
     var me = profile?.name || "";
     if (!me) return [];
@@ -9553,31 +9576,46 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     notes.forEach(function(n) {
       if ((n.assignee || "") !== me) return;
       var nd = getNoteDate(n);
-      if (!nd || nd >= thisMon) return; // 이번 주 이후 노트 제외
+      if (!nd) return;
+      if (weeklyMode === "fri") { if (nd < thisMon || nd > todayStr) return; } // 이번 주 범위
+      else { if (nd >= thisMon) return; } // 지난주 이전
       parseUnfinishedItems(n.content).forEach(function(it) {
         list.push(Object.assign({ noteId: n.id, noteTitle: n.title || "(제목 없음)", noteDate: nd }, it));
       });
     });
     list.sort(function(a, b) { return (a.noteDate || "").localeCompare(b.noteDate || ""); }); // 오래된 것 먼저
     return list;
-  }, [notes, profile, todayStr]);
+  }, [notes, profile, todayStr, weeklyMode]);
 
+  var weeklyKey = function(mode, me) { return "lastWeeklyReview" + (mode === "fri" ? "Fri" : "Mon") + "_" + me; };
   var markWeeklyReviewed = function() {
-    var me = profile?.name; if (me) localStorage.setItem("lastWeeklyReview_" + me, mondayOf(todayStr));
+    var me = profile?.name; if (me) localStorage.setItem(weeklyKey(weeklyMode, me), mondayOf(todayStr));
     setShowWeekly(false);
   };
 
-  // 월요일/탭 진입 시 자동 표시 (이번 주 이미 정리했으면 skip, 정리할 항목 없으면 skip)
+  // 월요일(월~목)·금요일(금~일) 탭 진입 시 자동 표시 — 이번 주 해당 모드 이미 정리했으면 skip
   useEffect(function() {
     if (loading || weeklyOpenedRef.current) return;
     var me = profile?.name; if (!me) return;
+    var day = new Date().getDay(); // 0=일 … 6=토
+    var mode = (day === 5 || day === 6 || day === 0) ? "fri" : "mon"; // 금·토·일 → 이번주 마무리, 월~목 → 지난주 정리
     var thisMon = mondayOf(todayStr);
-    var last = localStorage.getItem("lastWeeklyReview_" + me);
+    var last = localStorage.getItem(weeklyKey(mode, me));
     if (last && last >= thisMon) { weeklyOpenedRef.current = true; return; }
+    setWeeklyMode(mode);
+  }, [loading, profile, todayStr]);
+
+  // 모드 확정 후 해당 모드의 정리 항목이 있으면 모달 오픈 (1회)
+  useEffect(function() {
+    if (loading || weeklyOpenedRef.current || showWeekly) return;
+    var me = profile?.name; if (!me) return;
+    var thisMon = mondayOf(todayStr);
+    var last = localStorage.getItem(weeklyKey(weeklyMode, me));
+    if (last && last >= thisMon) return;
     if (weeklyItems.length === 0) return;
     weeklyOpenedRef.current = true;
     setShowWeekly(true);
-  }, [loading, weeklyItems, profile, todayStr]);
+  }, [loading, profile, todayStr, weeklyMode, weeklyItems, showWeekly]);
 
   // 주간 정리 실행: entries = [{item, action:'carry'|'done'|'delete'}]
   var applyReviewActions = async function(entries, markDone) {
@@ -9716,7 +9754,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     var finalContent = newNote.content.trim();
     if (checkContent) finalContent = finalContent ? finalContent + "\n" + checkContent : checkContent;
     if (!newNote.title.trim() && !finalContent.trim()) { alert("제목 또는 내용을 입력해주세요."); return; }
-    var assigneeName = newNote.target_assignee || profile?.name || "전체";
+    var assigneeName = profile?.name || "전체"; // 업무노트는 본인 노트만 작성 (assignee 본인 고정)
     var insertObj = {
       assignee: assigneeName,
       title: newNote.title.trim(),
@@ -9940,7 +9978,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <button onClick={function() { setViewMode("list"); }}
               style={{ padding: "6px 12px", fontSize: 12, fontWeight: 600, background: viewMode === "list" ? "#fff" : "transparent", border: "1px solid " + (viewMode === "list" ? "#E8E5E0" : "transparent"), borderRadius: 6, color: viewMode === "list" ? "#1A1917" : "#888", cursor: "pointer" }}>📋 목록</button>
           </div>
-          <button onClick={function() { var nd = selectedDate || todayStr; var md = nd ? (parseInt(nd.slice(5,7)) + "월" + parseInt(nd.slice(8,10)) + "일") : ""; var pickName = (filterAssignee !== "전체" ? filterAssignee : (profile?.name || "")); var autoTitle = (md ? md + " " : "") + pickName + " 업무"; setShowAdd(true); setNewNote({ title: autoTitle, content: "", is_todo: false, pinned: false, target_assignee: (filterAssignee !== "전체" ? filterAssignee : ""), checkItems: [], due_date: "", note_date: nd }); }}
+          <button onClick={function() { var nd = selectedDate || todayStr; setShowAdd(true); setNewNote({ title: noteAutoTitle(profile?.name || "", nd), content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "", note_date: nd }); }}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             <Icon name="plus" size={15} color="#F7F6F3" /> 새 노트
           </button>
@@ -9963,9 +10001,11 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
 
       {/* 필터 */}
       <div style={{ display: "flex", gap: 16, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
+        {/* 담당자 필터 — 관리자 전원 / 공유그룹은 서로 / 일반 담당자는 본인만(탭 숨김) */}
+        {(isWnAdmin || viewableNames.length > 1) && (
         <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
           <span style={{ fontSize: 12, color: "#888" }}>담당자:</span>
-          {["전체"].concat(ASSIGNEES).map(function(a) {
+          {(isWnAdmin ? ["전체"].concat(ASSIGNEES) : ["전체"].concat(viewableNames)).map(function(a) {
             return (
               <div key={a} onClick={function() { setFilterAssignee(a); }}
                 style={{ padding: "5px 13px", borderRadius: 99, cursor: "pointer", fontSize: 12, fontWeight: filterAssignee === a ? 700 : 400,
@@ -9976,6 +10016,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             );
           })}
         </div>
+        )}
         <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
           <span style={{ fontSize: 12, color: "#888" }}>유형:</span>
           {["전체","메모","할일"].map(function(t) {
@@ -10029,11 +10070,10 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             </label>
           </div>
           <div style={{ marginBottom: 10 }}>
-            <select value={newNote.target_assignee || profile?.name || ""} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { target_assignee: v }); }); }}
-              style={{ padding: "8px 12px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, background: "#fff", width: "auto" }}>
-              <option value="">담당자 선택</option>
-              {ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
-            </select>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 12px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, background: "#F0FDF4", color: "#15803D", fontWeight: 600 }}>
+              👤 {profile?.name} <span style={{ fontSize: 11, color: "#16A34A", fontWeight: 400 }}>· 본인 노트 (담당자 고정)</span>
+            </span>
+            <span style={{ fontSize: 11, color: "#94A3B8", marginLeft: 8 }}>다른 사람에게 맡길 일은 📩 업무 요청을 이용하세요</span>
           </div>
           <div style={{ position: "relative", marginBottom: 10 }}>
             <MentionField multiline={false} companiesList={companiesList}
@@ -10177,15 +10217,15 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
           <div style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 600, maxHeight: "84vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", padding: "16px 20px", borderBottom: "1px solid #E8E5E0", background: "linear-gradient(135deg, #FFF7ED 0%, #FEF3C7 100%)", borderRadius: "14px 14px 0 0" }}>
               <div>
-                <div style={{ fontSize: 15, fontWeight: 800, color: "#92400E" }}>🗓️ 주간 정리 · 지난주 미완료 {weeklyItems.length}건</div>
-                <div style={{ fontSize: 11, color: "#B45309", marginTop: 3 }}>{profile?.name} 님, 지난주에 마치지 못한 항목들을 정리해요.</div>
+                <div style={{ fontSize: 15, fontWeight: 800, color: "#92400E" }}>🗓️ 주간 정리 · {weeklyMode === "fri" ? "이번 주 미완료" : "지난주 미완료"} {weeklyItems.length}건 정리</div>
+                <div style={{ fontSize: 11, color: "#B45309", marginTop: 3 }}>{profile?.name} 님, {weeklyMode === "fri" ? "이번 주 마무리 전에 남은 항목을" : "지난주에 마치지 못한 항목들을"} 정리해요.</div>
               </div>
               <button onClick={function() { setShowWeekly(false); }} title="닫기 (다음에 다시 표시)" style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#92400E", lineHeight: 1 }}>✕</button>
             </div>
             {weeklyItems.length === 0 ? (
               <div style={{ padding: "40px 20px", textAlign: "center" }}>
                 <div style={{ fontSize: 34, marginBottom: 10 }}>🎉</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: "#15803D", marginBottom: 4 }}>지난주 미완료 항목을 모두 정리했어요!</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#15803D", marginBottom: 4 }}>{weeklyMode === "fri" ? "이번 주" : "지난주"} 미완료 항목을 모두 정리했어요!</div>
                 <button onClick={markWeeklyReviewed} style={{ marginTop: 14, padding: "9px 20px", background: "#15803D", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>완료</button>
               </div>
             ) : (
@@ -10460,7 +10500,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
                     </div>
                   </div>
                 </div>
-                <button onClick={function() { var pn = (filterAssignee !== "전체" ? filterAssignee : (profile?.name || "")); setShowAdd(true); setNewNote({ title: noteAutoTitle(pn, selectedDate), content: "", is_todo: false, pinned: false, target_assignee: (filterAssignee !== "전체" ? filterAssignee : ""), checkItems: [], due_date: "", note_date: selectedDate }); }}
+                <button onClick={function() { setShowAdd(true); setNewNote({ title: noteAutoTitle(profile?.name || "", selectedDate), content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "", note_date: selectedDate }); }}
                   style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ 이 날짜에 노트 추가</button>
               </div>
               {/* 노트 카드들 */}
@@ -10473,7 +10513,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
                   {notesForSelectedDate.map(function(note) {
-                    return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} />;
+                    return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} />;
                   })}
                 </div>
               )}
@@ -10535,7 +10575,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#B45309", letterSpacing: "0.05em", marginBottom: 10 }}>📌 고정된 노트</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} />; })}
+                {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} />; })}
               </div>
             </div>
           )}
@@ -10544,7 +10584,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div>
               {pinned.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: "#888", letterSpacing: "0.05em", marginBottom: 10 }}>전체 노트</div>}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} />; })}
+                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} />; })}
               </div>
             </div>
           )}
