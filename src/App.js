@@ -8559,19 +8559,23 @@ function parseUnfinishedItems(content) {
     var due = null;
     var dm = rest.match(/\[(\d{4}-\d{2}-\d{2})\]/);
     if (dm) { due = dm[1]; rest = rest.replace(dm[0], "").trim(); }
-    rest = rest.replace(/→\s*\d{1,2}\/\d{1,2}\s*이월\s*$/, "").trim(); // 기존 이월 꼬리표 제거
+    rest = rest.replace(/\s*\(?→\s*\d{1,2}\/\d{1,2}\s*이월\)?\s*$/, "").trim(); // 이월 꼬리표 제거(구형 "→ M/D 이월" · 신형 "(→ M/D 이월)" 모두)
     var text = decodeItemText(rest);
     if (!text) return;
     out.push({ lineIdx: idx, text: text, dueDate: due, waitReason: w.reason || "", waitSince: w.since || "" });
   });
   return out;
 }
-// content의 특정 라인들을 완료(- [x]) 처리하고 " → M/D 이월" 꼬리표 추가
+// content의 특정 라인들에 "(→ M/D 이월)" 안내 꼬리표만 추가 (체크 상태·텍스트는 그대로 유지)
+//   ⚠️ 원본 항목을 삭제하거나 완료([x])로 바꾸지 않는다 — 미완료([ ])와 원문을 보존하고 안내만 덧붙인다.
 function markLinesCarried(content, lineIdxSet, md) {
   var lines = (content || "").split("\n");
   lineIdxSet.forEach(function(i) {
     var m = lines[i] != null && lines[i].match(/^(\s*)- \[ \]\s*(.*)$/);
-    if (m) lines[i] = m[1] + "- [x] " + m[2].replace(/\s*$/, "") + " → " + md + " 이월";
+    if (!m) return;
+    var body = m[2].replace(/\s*$/, "");
+    if (/\(?→\s*\d{1,2}\/\d{1,2}\s*이월\)?/.test(body)) return; // 이미 이월 표시가 있으면 중복 추가 안 함
+    lines[i] = m[1] + "- [ ] " + body + " (→ " + md + " 이월)";
   });
   return lines.join("\n");
 }
@@ -9566,7 +9570,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       });
       return Object.assign({}, p, { checkItems: items, is_todo: true });
     });
-    // 2) 원본 노트들: 해당 항목 완료 + "→ M/D 이월" 표시 (삭제하지 않음)
+    // 2) 원본 노트들: 해당 항목은 미완료([ ])·원문 그대로 두고 "(→ M/D 이월)" 안내만 추가 (삭제·완료 처리 안 함)
     var md = mdLabel(newNote.note_date);
     var byNote = new Map();
     chosen.forEach(function(c) { if (!byNote.has(c.noteId)) byNote.set(c.noteId, new Set()); byNote.get(c.noteId).add(c.lineIdx); });
@@ -10224,7 +10228,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: "1px solid #E8E5E0" }}>
               <div>
                 <div style={{ fontSize: 15, fontWeight: 700 }}>📋 이전 미완료 가져오기</div>
-                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>{carryTarget} · 이전 노트의 미완료 {carryCandidates.length}건 · 가져오면 원본은 "→ 이월" 처리</div>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>{carryTarget} · 이전 노트의 미완료 {carryCandidates.length}건 · 가져와도 원본 항목은 그대로 두고 "(→ 이월)" 표시만 추가</div>
               </div>
               <button onClick={function() { setShowCarry(false); }} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#888", lineHeight: 1 }}>✕</button>
             </div>
