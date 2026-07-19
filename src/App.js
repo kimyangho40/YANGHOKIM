@@ -9188,6 +9188,8 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   // 📋 이전 미완료 가져오기(이월) 모달
   const [showCarry, setShowCarry] = useState(false);
   const [carrySel, setCarrySel] = useState({}); // key(noteId:lineIdx) -> bool
+  const [carryUndo, setCarryUndo] = useState(null); // 방금 가져오기 되돌리기: {count, addedTexts, snapshots:[{id,content}]}
+  const carryUndoTimer = useRef(null);
   // 🗓️ 주간 정리 리마인드 모달
   const [showWeekly, setShowWeekly] = useState(false);
   const [weeklyMode, setWeeklyMode] = useState("mon"); // "mon"(지난주 정리) | "fri"(이번 주 마무리)
@@ -9520,8 +9522,10 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     var list = [];
     notes.forEach(function(n) {
       if ((n.assignee || "") !== carryTarget) return;
-      parseUnfinishedItems(n.content).forEach(function(it) {
+      var srcLines = (n.content || "").split("\n");
+      parseUnfinishedItems(n.content).forEach(function(it) { // parseUnfinishedItems는 - [ ] (미완료)만 반환 → 완료(- [x]) 항목은 애초에 제외
         if (existing[it.text.trim().toLowerCase()]) return; // 오늘 노트에 이미 있으면 중복 방지
+        if (/→\s*\d{1,2}\/\d{1,2}\s*이월/.test(srcLines[it.lineIdx] || "")) return; // 이미 이월 표시된 항목 제외
         list.push(Object.assign({ noteId: n.id, noteTitle: n.title || "(제목 없음)", noteDate: getNoteDate(n) }, it));
       });
     });
@@ -9539,6 +9543,10 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   var applyCarry = async function() {
     var chosen = carryCandidates.filter(function(c) { return carrySel[c.noteId + ":" + c.lineIdx]; });
     if (!chosen.length) { setShowCarry(false); return; }
+    // 실제로 새로 추가되는 항목 텍스트(중복 제외) — 되돌리기용
+    var existing0 = {}; (newNote.checkItems || []).forEach(function(it) { if (it.text) existing0[it.text.trim().toLowerCase()] = 1; });
+    var addedTexts = [];
+    chosen.forEach(function(c) { var k = c.text.trim().toLowerCase(); if (!existing0[k]) { existing0[k] = 1; addedTexts.push(c.text); } });
     // 1) 현재 작성 폼 체크리스트에 추가 (중복 방지)
     setNewNote(function(p) {
       var items = (p.checkItems || []).slice();
@@ -9550,21 +9558,55 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       });
       return Object.assign({}, p, { checkItems: items, is_todo: true });
     });
-    // 2) 원본 노트들: 해당 항목 완료 + "→ M/D 이월" 표시
+    // 2) 원본 노트들: 해당 항목 완료 + "→ M/D 이월" 표시 (삭제하지 않음)
     var md = mdLabel(newNote.note_date);
     var byNote = new Map();
     chosen.forEach(function(c) { if (!byNote.has(c.noteId)) byNote.set(c.noteId, new Set()); byNote.get(c.noteId).add(c.lineIdx); });
-    var updates = [];
+    var updates = [], snapshots = [];
     byNote.forEach(function(set, nid) {
       var cur = notes.find(function(n) { return n.id === nid; });
-      if (cur) updates.push({ id: nid, content: markLinesCarried(cur.content, set, md) });
+      if (cur) { snapshots.push({ id: nid, content: cur.content }); updates.push({ id: nid, content: markLinesCarried(cur.content, set, md) }); } // 원본 스냅샷 = 되돌리기용
     });
     for (var i = 0; i < updates.length; i++) {
       await supabase.from("work_notes").update({ content: updates[i].content, updated_at: new Date().toISOString() }).eq("id", updates[i].id);
     }
     setNotes(function(prev) { return prev.map(function(n) { var u = updates.find(function(x) { return x.id === n.id; }); return u ? Object.assign({}, n, { content: u.content }) : n; }); });
     setShowCarry(false);
+    // 되돌리기 토스트 (5초) + Ctrl+Z
+    setCarryUndo({ count: chosen.length, addedTexts: addedTexts, snapshots: snapshots });
+    if (carryUndoTimer.current) clearTimeout(carryUndoTimer.current);
+    carryUndoTimer.current = setTimeout(function() { setCarryUndo(null); }, 5000);
   };
+
+  // ↩️ 방금 가져오기 되돌리기 — 새 노트에서 가져온 항목 제거 + 원본 이월 표시 원복
+  var undoCarry = async function() {
+    var u = carryUndo;
+    if (!u) return;
+    if (carryUndoTimer.current) { clearTimeout(carryUndoTimer.current); carryUndoTimer.current = null; }
+    setCarryUndo(null);
+    // 1) 새 노트에서 방금 추가된 항목 제거
+    var removeSet = {}; (u.addedTexts || []).forEach(function(t) { removeSet[t.trim().toLowerCase()] = 1; });
+    setNewNote(function(p) {
+      var items = (p.checkItems || []).filter(function(it) { return !removeSet[(it.text || "").trim().toLowerCase()]; });
+      return Object.assign({}, p, { checkItems: items });
+    });
+    // 2) 원본 노트 content를 가져오기 이전으로 복원 (이월 표시 제거)
+    for (var i = 0; i < (u.snapshots || []).length; i++) {
+      var s = u.snapshots[i];
+      await supabase.from("work_notes").update({ content: s.content, updated_at: new Date().toISOString() }).eq("id", s.id);
+    }
+    setNotes(function(prev) { return prev.map(function(n) { var s = (u.snapshots || []).find(function(x) { return x.id === n.id; }); return s ? Object.assign({}, n, { content: s.content }) : n; }); });
+  };
+
+  // Ctrl+Z (또는 ⌘Z) 로 방금 가져오기 되돌리기 (토스트 떠 있는 동안만)
+  useEffect(function() {
+    if (!carryUndo) return;
+    var onKey = function(e) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) { e.preventDefault(); undoCarry(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return function() { window.removeEventListener("keydown", onKey); };
+  }, [carryUndo]);
 
   // 🗓️ 주간 정리 대상 항목 — 본인 것만
   //   mon 모드: 이번 주 월요일 이전(지난주까지) 미완료 / fri 모드: 이번 주(월~오늘) 미완료
@@ -10156,6 +10198,15 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
         </div>
       )}
 
+      {/* ↩️ 가져오기 되돌리기 토스트 (5초) */}
+      {carryUndo && (
+        <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 2100, display: "flex", alignItems: "center", gap: 14, background: "#1A1917", color: "#fff", borderRadius: 10, padding: "10px 16px", boxShadow: "0 8px 30px rgba(0,0,0,0.3)" }}>
+          <span style={{ fontSize: 13 }}>✅ 방금 {carryUndo.count}건 가져왔어요</span>
+          <button onClick={undoCarry} style={{ background: "none", border: "none", color: "#FCD34D", fontSize: 13, fontWeight: 700, cursor: "pointer", padding: "2px 4px" }}>↩️ 되돌리기</button>
+          <span style={{ fontSize: 10, color: "#9CA3AF" }}>Ctrl+Z</span>
+        </div>
+      )}
+
       {/* 📋 이전 미완료 가져오기(이월) 모달 */}
       {showCarry && (
         <div onClick={function() { setShowCarry(false); }}
@@ -10201,9 +10252,15 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
                 </div>
                 <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", padding: "14px 20px", borderTop: "1px solid #E8E5E0" }}>
                   <button onClick={function() { setShowCarry(false); }} style={{ padding: "9px 16px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer", color: "#888" }}>취소</button>
-                  <button onClick={applyCarry} style={{ padding: "9px 20px", background: "#15803D", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                    {Object.keys(carrySel).length}건 가져오기
-                  </button>
+                  {(function() {
+                    var selCount = carryCandidates.filter(function(c) { return carrySel[c.noteId + ":" + c.lineIdx]; }).length;
+                    return (
+                      <button onClick={applyCarry} disabled={selCount === 0}
+                        style={{ padding: "9px 20px", background: selCount === 0 ? "#D1D5DB" : "#15803D", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: selCount === 0 ? "default" : "pointer" }}>
+                        선택한 {selCount}건 가져오기
+                      </button>
+                    );
+                  })()}
                 </div>
               </>
             )}
