@@ -2793,7 +2793,7 @@ function CRMApp({ profile, session }) {
           </div>
         ) : (
           <>
-            {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setFilterAssignee={setFilterAssignee} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
+            {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setFilterAssignee={setFilterAssignee} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} myName={profile?.name} />}
             {view === "agency" && <AgencyView key={agencyJumpKey} jumpToMonth={agencyJumpMonth} jumpToGroup={agencyJumpGroup} />}
             {view === "dbleads" && <DBLeadsView canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
             {view === "settlement" && <SettlementView />}
@@ -3009,7 +3009,7 @@ function AiSearchModal({ companies, onClose, onSelectCompany }) {
 }
 
 // ── 대시보드 ──────────────────────────────────────────────────────────────────
-function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, setFilterAssignee, setDashboardFilter, onAdd, canExport }) {
+function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, setFilterAssignee, setDashboardFilter, onAdd, canExport, myName }) {
   const contractDone = companies.filter(c => c.fee_status === "수수료수령완료").length;
   const contracted = companies.filter(c => c.fee_status !== "미수령").length;
   // const thisWeek = companies.filter(c => c.next_contact && c.next_contact <= "2026-05-15").length;
@@ -3138,6 +3138,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
 
       {/* 🔔 방치 자동 알림 배너 (3일 이상 응답/서류 대기) */}
       <StaleWaitBanner setView={setView} />
+
+      {/* 🗂️ 담당자별 미완료 현황 (업무노트 체크리스트 기준) */}
+      <AssigneeUnfinishedWidget myName={myName} setView={setView} />
 
       {/* 🆕 오늘의 할 일 위젯 */}
       {(function() {
@@ -4362,6 +4365,70 @@ function StaleWaitBanner({ setView }) {
               <span style={{ fontSize: 13, color: "#333", fontWeight: 600 }}>{x.name}</span>
               {x.text && <span style={{ fontSize: 12, color: "#555", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}>{x.text}</span>}
               <span style={{ fontSize: 12, color: "#888", whiteSpace: "nowrap" }}>{reasonLabel} · {tail}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// 🗂️ 담당자별 미완료 현황 위젯 — 업무노트 체크리스트 미완료(- [ ])를 담당자별로 집계
+// 각 담당자: 미완료 수 · 3일 이상 방치 수 · 가장 오래된 미완료 노트 날짜. 본인 행 하이라이트, 클릭 시 해당 담당자 업무노트로 이동
+function AssigneeUnfinishedWidget({ myName, setView }) {
+  const [rows, setRows] = useState(null);
+  useEffect(function() {
+    async function load() {
+      var r = await supabase.from("work_notes").select("assignee,content,note_date,created_at").is("deleted_at", null);
+      if (r.error || !r.data) { setRows([]); return; }
+      var today = kstDate();
+      var agg = {};
+      r.data.forEach(function(n) {
+        var name = (n.assignee || "").trim();
+        if (!name) return;
+        var un = parseUnfinishedItems(n.content);
+        if (!un.length) return;
+        var nd = n.note_date || (n.created_at ? new Date(n.created_at).toISOString().slice(0, 10) : null);
+        if (!agg[name]) agg[name] = { name: name, count: 0, stale: 0, oldest: null };
+        var a = agg[name];
+        un.forEach(function() {
+          a.count++;
+          if (nd) {
+            var days = Math.floor((new Date(today + "T00:00:00") - new Date(nd + "T00:00:00")) / 86400000);
+            if (days >= 3) a.stale++;
+            if (!a.oldest || nd < a.oldest) a.oldest = nd;
+          }
+        });
+      });
+      var list = Object.keys(agg).map(function(k) { return agg[k]; });
+      list.sort(function(a, b) { return b.count - a.count; });
+      setRows(list);
+    }
+    load();
+  }, []);
+  if (rows == null || rows.length === 0) return null;
+  var jump = function(name) { localStorage.setItem("wn_jump_assignee", name); setView("worknotes"); };
+  return (
+    <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, padding: "16px 18px", marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+        <span style={{ fontSize: 15 }}>🗂️</span>
+        <div style={{ fontSize: 14, fontWeight: 700 }}>담당자별 미완료 현황</div>
+        <span style={{ fontSize: 11, color: "#888", fontWeight: 400 }}>업무노트 체크리스트 기준 · 클릭 시 해당 담당자 노트로</span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.9fr 1.1fr 1.2fr", gap: 8, fontSize: 10, color: "#AAA", fontWeight: 600, padding: "0 10px 4px" }}>
+          <span>담당자</span><span style={{ textAlign: "right" }}>미완료</span><span style={{ textAlign: "right" }}>3일↑ 방치</span><span style={{ textAlign: "right" }}>가장 오래된</span>
+        </div>
+        {rows.map(function(r) {
+          var mine = myName && r.name === myName;
+          return (
+            <div key={r.name} onClick={function() { jump(r.name); }}
+              style={{ display: "grid", gridTemplateColumns: "1.4fr 0.9fr 1.1fr 1.2fr", gap: 8, alignItems: "center", padding: "9px 10px", borderRadius: 8, cursor: "pointer",
+                background: mine ? "#EEF2FF" : "#FAFAF9", border: "1px solid " + (mine ? "#C7D2FE" : "#F0EDE8") }}>
+              <span style={{ fontSize: 13, fontWeight: mine ? 800 : 600, color: mine ? "#4338CA" : "#1A1917" }}>{r.name}{mine ? " (나)" : ""}</span>
+              <span style={{ textAlign: "right", fontSize: 14, fontWeight: 700, color: "#1A1917" }}>{r.count}</span>
+              <span style={{ textAlign: "right", fontSize: 13, fontWeight: 700, color: r.stale > 0 ? "#B91C1C" : "#BBB" }}>{r.stale > 0 ? r.stale + "건" : "0"}</span>
+              <span style={{ textAlign: "right", fontSize: 11, color: r.oldest ? "#B45309" : "#BBB" }}>{r.oldest || "-"}</span>
             </div>
           );
         })}
@@ -8007,6 +8074,62 @@ function buildItemLine(i) {
   if (i.waitReason && i.waitReason !== "일반") line += " {" + i.waitReason + (i.waitSince ? ":" + i.waitSince : "") + "}";
   return line;
 }
+// 노트 자동 제목: "M월D일 이름 업무" (예: "7월19일 양호 업무")
+function noteAutoTitle(name, dateStr) {
+  var d = dateStr || kstDate();
+  var mm = parseInt(d.slice(5, 7), 10), dd = parseInt(d.slice(8, 10), 10);
+  return mm + "월" + dd + "일 " + (name || "") + " 업무";
+}
+// YYYY-MM-DD → "M/D" (이월 표시용)
+function mdLabel(dateStr) {
+  var d = dateStr || kstDate();
+  return parseInt(d.slice(5, 7), 10) + "/" + parseInt(d.slice(8, 10), 10);
+}
+// 해당 날짜가 속한 주의 월요일(YYYY-MM-DD)
+function mondayOf(dateStr) {
+  var d = new Date((dateStr || kstDate()) + "T00:00:00");
+  var day = d.getDay(); // 0=일 … 6=토
+  d.setDate(d.getDate() + (day === 0 ? -6 : 1 - day));
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+// content 마크다운에서 미완료(- [ ]) 항목 파싱 → {lineIdx, text, dueDate, waitReason, waitSince}
+// text는 마감일 대괄호·대기사유 메타·기존 "→ 이월" 꼬리표를 제거한 순수 항목 텍스트
+function parseUnfinishedItems(content) {
+  var out = [];
+  (content || "").split("\n").forEach(function(line, idx) {
+    var m = line.match(/^(\s*)- \[ \]\s*(.*)$/);
+    if (!m) return;
+    var w = splitItemWait(m[2]); // 라인 끝 {대기사유:since} 분리
+    var rest = w.rest;
+    var due = null;
+    var dm = rest.match(/\[(\d{4}-\d{2}-\d{2})\]/);
+    if (dm) { due = dm[1]; rest = rest.replace(dm[0], "").trim(); }
+    rest = rest.replace(/→\s*\d{1,2}\/\d{1,2}\s*이월\s*$/, "").trim(); // 기존 이월 꼬리표 제거
+    var text = decodeItemText(rest);
+    if (!text) return;
+    out.push({ lineIdx: idx, text: text, dueDate: due, waitReason: w.reason || "", waitSince: w.since || "" });
+  });
+  return out;
+}
+// content의 특정 라인들을 완료(- [x]) 처리하고 " → M/D 이월" 꼬리표 추가
+function markLinesCarried(content, lineIdxSet, md) {
+  var lines = (content || "").split("\n");
+  lineIdxSet.forEach(function(i) {
+    var m = lines[i] != null && lines[i].match(/^(\s*)- \[ \]\s*(.*)$/);
+    if (m) lines[i] = m[1] + "- [x] " + m[2].replace(/\s*$/, "") + " → " + md + " 이월";
+  });
+  return lines.join("\n");
+}
+// content의 특정 라인들을 완료(- [x]) 처리만
+function markLinesDone(content, lineIdxSet) {
+  var lines = (content || "").split("\n");
+  lineIdxSet.forEach(function(i) { if (lines[i] != null) lines[i] = lines[i].replace(/^(\s*)- \[ \]/, "$1- [x]"); });
+  return lines.join("\n");
+}
+// content에서 특정 라인들 삭제
+function removeLines(content, lineIdxSet) {
+  return (content || "").split("\n").filter(function(_, i) { return !lineIdxSet.has(i); }).join("\n");
+}
 // @업체 태그: 입력값 끝(공백 없는) "@질의" 를 추출. 없으면 null.
 function extractMention(value) {
   if (value == null) return null;
@@ -8587,6 +8710,12 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   const [pushEnabled, setPushEnabled] = useState(false);
   // @업체 태그 자동완성 (새 노트 작성 폼): { type:'title'|'content'|'item', idx, query }
   const [mention, setMention] = useState(null);
+  // 📋 이전 미완료 가져오기(이월) 모달
+  const [showCarry, setShowCarry] = useState(false);
+  const [carrySel, setCarrySel] = useState({}); // key(noteId:lineIdx) -> bool
+  // 🗓️ 주간 정리 리마인드 모달
+  const [showWeekly, setShowWeekly] = useState(false);
+  const weeklyOpenedRef = useRef(false);
 
   // 📱 업무노트 모바일 최적화 CSS 주입 (휴대폰에서 작성 편하게)
   useEffect(function() {
@@ -8883,6 +9012,157 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
 
   var pinned = filtered.filter(function(n) { return n.pinned; });
   var unpinned = filtered.filter(function(n) { return !n.pinned; });
+
+  // 대시보드 "담당자별 미완료 현황"에서 넘어온 경우 해당 담당자로 필터 (탭 진입 1회)
+  useEffect(function() {
+    var j = localStorage.getItem("wn_jump_assignee");
+    if (j) { localStorage.removeItem("wn_jump_assignee"); setFilterAssignee(j); setViewMode("list"); }
+  }, []);
+
+  // 📋 이월 후보: 대상 담당자의 이전 노트들 미완료 항목 (현재 작성 중 항목과 중복 제외)
+  var carryTarget = newNote.target_assignee || profile?.name || "";
+  var carryCandidates = useMemo(function() {
+    var existing = {};
+    (newNote.checkItems || []).forEach(function(it) { if (it.text) existing[it.text.trim().toLowerCase()] = 1; });
+    var list = [];
+    notes.forEach(function(n) {
+      if ((n.assignee || "") !== carryTarget) return;
+      parseUnfinishedItems(n.content).forEach(function(it) {
+        if (existing[it.text.trim().toLowerCase()]) return; // 오늘 노트에 이미 있으면 중복 방지
+        list.push(Object.assign({ noteId: n.id, noteTitle: n.title || "(제목 없음)", noteDate: getNoteDate(n) }, it));
+      });
+    });
+    list.sort(function(a, b) { return (b.noteDate || "").localeCompare(a.noteDate || ""); }); // 최신 노트 먼저
+    return list;
+  }, [notes, carryTarget, newNote.checkItems]);
+
+  var openCarry = function() {
+    var sel = {};
+    carryCandidates.forEach(function(c) { sel[c.noteId + ":" + c.lineIdx] = true; }); // 기본 전체 선택
+    setCarrySel(sel);
+    setShowCarry(true);
+  };
+
+  var applyCarry = async function() {
+    var chosen = carryCandidates.filter(function(c) { return carrySel[c.noteId + ":" + c.lineIdx]; });
+    if (!chosen.length) { setShowCarry(false); return; }
+    // 1) 현재 작성 폼 체크리스트에 추가 (중복 방지)
+    setNewNote(function(p) {
+      var items = (p.checkItems || []).slice();
+      var existing = {}; items.forEach(function(it) { if (it.text) existing[it.text.trim().toLowerCase()] = 1; });
+      chosen.forEach(function(c) {
+        var k = c.text.trim().toLowerCase();
+        if (existing[k]) return; existing[k] = 1;
+        items.push({ text: c.text, dueDate: c.dueDate || "", waitReason: c.waitReason || "", waitSince: c.waitReason ? (c.waitSince || kstDate()) : "" });
+      });
+      return Object.assign({}, p, { checkItems: items, is_todo: true });
+    });
+    // 2) 원본 노트들: 해당 항목 완료 + "→ M/D 이월" 표시
+    var md = mdLabel(newNote.note_date);
+    var byNote = new Map();
+    chosen.forEach(function(c) { if (!byNote.has(c.noteId)) byNote.set(c.noteId, new Set()); byNote.get(c.noteId).add(c.lineIdx); });
+    var updates = [];
+    byNote.forEach(function(set, nid) {
+      var cur = notes.find(function(n) { return n.id === nid; });
+      if (cur) updates.push({ id: nid, content: markLinesCarried(cur.content, set, md) });
+    });
+    for (var i = 0; i < updates.length; i++) {
+      await supabase.from("work_notes").update({ content: updates[i].content, updated_at: new Date().toISOString() }).eq("id", updates[i].id);
+    }
+    setNotes(function(prev) { return prev.map(function(n) { var u = updates.find(function(x) { return x.id === n.id; }); return u ? Object.assign({}, n, { content: u.content }) : n; }); });
+    setShowCarry(false);
+  };
+
+  // 🗓️ 지난주(이번 주 월요일 이전) 미완료 항목 — 본인 것만
+  var weeklyItems = useMemo(function() {
+    var me = profile?.name || "";
+    if (!me) return [];
+    var thisMon = mondayOf(todayStr);
+    var list = [];
+    notes.forEach(function(n) {
+      if ((n.assignee || "") !== me) return;
+      var nd = getNoteDate(n);
+      if (!nd || nd >= thisMon) return; // 이번 주 이후 노트 제외
+      parseUnfinishedItems(n.content).forEach(function(it) {
+        list.push(Object.assign({ noteId: n.id, noteTitle: n.title || "(제목 없음)", noteDate: nd }, it));
+      });
+    });
+    list.sort(function(a, b) { return (a.noteDate || "").localeCompare(b.noteDate || ""); }); // 오래된 것 먼저
+    return list;
+  }, [notes, profile, todayStr]);
+
+  var markWeeklyReviewed = function() {
+    var me = profile?.name; if (me) localStorage.setItem("lastWeeklyReview_" + me, mondayOf(todayStr));
+    setShowWeekly(false);
+  };
+
+  // 월요일/탭 진입 시 자동 표시 (이번 주 이미 정리했으면 skip, 정리할 항목 없으면 skip)
+  useEffect(function() {
+    if (loading || weeklyOpenedRef.current) return;
+    var me = profile?.name; if (!me) return;
+    var thisMon = mondayOf(todayStr);
+    var last = localStorage.getItem("lastWeeklyReview_" + me);
+    if (last && last >= thisMon) { weeklyOpenedRef.current = true; return; }
+    if (weeklyItems.length === 0) return;
+    weeklyOpenedRef.current = true;
+    setShowWeekly(true);
+  }, [loading, weeklyItems, profile, todayStr]);
+
+  // 주간 정리 실행: entries = [{item, action:'carry'|'done'|'delete'}]
+  var applyReviewActions = async function(entries, markDone) {
+    var me = profile?.name || "";
+    var md = mdLabel(todayStr);
+    var perNote = new Map(); // noteId -> {carried,done,del,content}
+    var carryTexts = [];
+    entries.forEach(function(e) {
+      var it = e.item;
+      if (!perNote.has(it.noteId)) {
+        var cur = notes.find(function(n) { return n.id === it.noteId; });
+        perNote.set(it.noteId, { carried: new Set(), done: new Set(), del: new Set(), content: cur ? cur.content : "" });
+      }
+      var g = perNote.get(it.noteId);
+      if (e.action === "carry") { g.carried.add(it.lineIdx); carryTexts.push(it); }
+      else if (e.action === "done") { g.done.add(it.lineIdx); }
+      else if (e.action === "delete") { g.del.add(it.lineIdx); }
+    });
+    // 원본 노트 content 재구성
+    var updates = [];
+    perNote.forEach(function(g, nid) {
+      var c = g.content;
+      if (g.carried.size) c = markLinesCarried(c, g.carried, md);
+      if (g.done.size) c = markLinesDone(c, g.done);
+      if (g.del.size) c = removeLines(c, g.del);
+      updates.push({ id: nid, content: c });
+    });
+    // '오늘로 이월' 항목 → 오늘 노트에 추가 (없으면 생성)
+    var todayInsert = null;
+    if (carryTexts.length) {
+      var newLines = carryTexts.map(function(it) {
+        return buildItemLine({ checked: false, text: it.text, dueDate: it.dueDate || "", waitReason: it.waitReason || "", waitSince: it.waitReason ? todayStr : "" });
+      }).join("\n");
+      var todayNote = notes.find(function(n) { return (n.assignee || "") === me && getNoteDate(n) === todayStr; });
+      if (todayNote) {
+        var u = updates.find(function(x) { return x.id === todayNote.id; });
+        var base = u ? u.content : (todayNote.content || "");
+        var merged = base ? base + "\n" + newLines : newLines;
+        if (u) u.content = merged; else updates.push({ id: todayNote.id, content: merged });
+      } else {
+        var ins = { assignee: me, title: noteAutoTitle(me, todayStr), content: newLines, is_todo: true, created_by: me, note_date: todayStr };
+        var ri = await supabase.from("work_notes").insert(ins).select().single();
+        if (!ri.error && ri.data) todayInsert = ri.data;
+      }
+    }
+    for (var i = 0; i < updates.length; i++) {
+      await supabase.from("work_notes").update({ content: updates[i].content, updated_at: new Date().toISOString() }).eq("id", updates[i].id);
+    }
+    setNotes(function(prev) {
+      var next = prev.map(function(n) { var u = updates.find(function(x) { return x.id === n.id; }); return u ? Object.assign({}, n, { content: u.content }) : n; });
+      if (todayInsert) next = [todayInsert].concat(next);
+      return next;
+    });
+    if (onBadgeUpdate) onBadgeUpdate();
+    if (markDone) markWeeklyReviewed();
+  };
 
   var saveNew = async function() {
     // checkItems가 있으면 content로 변환해서 합치기 (마감일 [YYYY-MM-DD] 포함, 체크 상태도 반영)
@@ -9259,6 +9539,10 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             }} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", background: "#fff", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, color: "#15803D", fontWeight: 600, cursor: "pointer" }}>
               ☑️ 체크리스트 항목 추가
             </button>
+            <button onClick={openCarry} title={carryCandidates.length ? (carryTarget + " 이전 미완료 " + carryCandidates.length + "건") : "이전 미완료 항목 없음"}
+              style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", background: carryCandidates.length ? "#EEF2FF" : "#F7F6F3", border: "1px solid " + (carryCandidates.length ? "#C7D2FE" : "#E8E5E0"), borderRadius: 6, fontSize: 12, color: carryCandidates.length ? "#4338CA" : "#AAA", fontWeight: 600, cursor: "pointer" }}>
+              📋 이전 미완료 가져오기{carryCandidates.length ? " (" + carryCandidates.length + ")" : ""}
+            </button>
             <span style={{ fontSize: 10, color: "#888", alignSelf: "center", lineHeight: 1.4 }}>
               💡 직접 입력 시: <code style={{ background: "#F0EDE8", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>- [ ] 할일 [5/30]</code> 또는 <code style={{ background: "#F0EDE8", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>- [ ] 할일 → 5/30</code>
             </span>
@@ -9274,6 +9558,117 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
             <button onClick={saveNew} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "10px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
             <button onClick={function() { setShowAdd(false); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 16px", fontSize: 13, cursor: "pointer" }}>취소</button>
+          </div>
+        </div>
+      )}
+
+      {/* 📋 이전 미완료 가져오기(이월) 모달 */}
+      {showCarry && (
+        <div onClick={function() { setShowCarry(false); }}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div onClick={function(e) { e.stopPropagation(); }}
+            style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 560, maxHeight: "82vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: "1px solid #E8E5E0" }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700 }}>📋 이전 미완료 가져오기</div>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>{carryTarget} · 이전 노트의 미완료 {carryCandidates.length}건 · 가져오면 원본은 "→ 이월" 처리</div>
+              </div>
+              <button onClick={function() { setShowCarry(false); }} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#888", lineHeight: 1 }}>✕</button>
+            </div>
+            {carryCandidates.length === 0 ? (
+              <div style={{ padding: "48px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>가져올 이전 미완료 항목이 없어요.</div>
+            ) : (
+              <>
+                <div style={{ display: "flex", gap: 8, padding: "10px 20px", borderBottom: "1px solid #F0EDE8" }}>
+                  <button onClick={function() { var s = {}; carryCandidates.forEach(function(c) { s[c.noteId + ":" + c.lineIdx] = true; }); setCarrySel(s); }}
+                    style={{ fontSize: 11, padding: "4px 10px", background: "#F7F6F3", border: "1px solid #E8E5E0", borderRadius: 6, cursor: "pointer", color: "#555" }}>전체 선택</button>
+                  <button onClick={function() { setCarrySel({}); }}
+                    style={{ fontSize: 11, padding: "4px 10px", background: "#F7F6F3", border: "1px solid #E8E5E0", borderRadius: 6, cursor: "pointer", color: "#555" }}>전체 해제</button>
+                </div>
+                <div style={{ overflowY: "auto", padding: "8px 12px", flex: 1 }}>
+                  {carryCandidates.map(function(c) {
+                    var key = c.noteId + ":" + c.lineIdx;
+                    var checked = !!carrySel[key];
+                    return (
+                      <label key={key} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "9px 8px", borderRadius: 8, cursor: "pointer", background: checked ? "#F0FDF4" : "transparent" }}>
+                        <input type="checkbox" checked={checked} onChange={function() { setCarrySel(function(p) { var n = Object.assign({}, p); if (n[key]) delete n[key]; else n[key] = true; return n; }); }} style={{ marginTop: 3, width: 15, height: 15, flexShrink: 0 }} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, color: "#1A1917", lineHeight: 1.5 }}>{c.text}</div>
+                          <div style={{ fontSize: 10, color: "#999", marginTop: 2, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            <span>{c.noteDate || "-"}</span>
+                            <span>· {c.noteTitle}</span>
+                            {c.dueDate && <span style={{ color: "#4338CA" }}>· 📅 {c.dueDate}</span>}
+                            {c.waitReason && <span style={{ color: "#B45309" }}>· ⏳ {c.waitReason}</span>}
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", padding: "14px 20px", borderTop: "1px solid #E8E5E0" }}>
+                  <button onClick={function() { setShowCarry(false); }} style={{ padding: "9px 16px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer", color: "#888" }}>취소</button>
+                  <button onClick={applyCarry} style={{ padding: "9px 20px", background: "#15803D", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                    {Object.keys(carrySel).length}건 가져오기
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 🗓️ 주간 정리 리마인드 모달 */}
+      {showWeekly && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 600, maxHeight: "84vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", padding: "16px 20px", borderBottom: "1px solid #E8E5E0", background: "linear-gradient(135deg, #FFF7ED 0%, #FEF3C7 100%)", borderRadius: "14px 14px 0 0" }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 800, color: "#92400E" }}>🗓️ 주간 정리 · 지난주 미완료 {weeklyItems.length}건</div>
+                <div style={{ fontSize: 11, color: "#B45309", marginTop: 3 }}>{profile?.name} 님, 지난주에 마치지 못한 항목들을 정리해요.</div>
+              </div>
+              <button onClick={function() { setShowWeekly(false); }} title="닫기 (다음에 다시 표시)" style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#92400E", lineHeight: 1 }}>✕</button>
+            </div>
+            {weeklyItems.length === 0 ? (
+              <div style={{ padding: "40px 20px", textAlign: "center" }}>
+                <div style={{ fontSize: 34, marginBottom: 10 }}>🎉</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#15803D", marginBottom: 4 }}>지난주 미완료 항목을 모두 정리했어요!</div>
+                <button onClick={markWeeklyReviewed} style={{ marginTop: 14, padding: "9px 20px", background: "#15803D", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>완료</button>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: "flex", gap: 8, padding: "10px 20px", borderBottom: "1px solid #F0EDE8", flexWrap: "wrap" }}>
+                  <button onClick={function() { applyReviewActions(weeklyItems.map(function(it) { return { item: it, action: "carry" }; }), true); }}
+                    style={{ fontSize: 12, padding: "6px 12px", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 6, cursor: "pointer", color: "#4338CA", fontWeight: 600 }}>📌 전체 오늘로 이월</button>
+                  <button onClick={function() { applyReviewActions(weeklyItems.map(function(it) { return { item: it, action: "done" }; }), true); }}
+                    style={{ fontSize: 12, padding: "6px 12px", background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: 6, cursor: "pointer", color: "#15803D", fontWeight: 600 }}>✅ 전체 완료</button>
+                  <button onClick={markWeeklyReviewed} title="이번 주는 더 이상 표시하지 않음"
+                    style={{ fontSize: 12, padding: "6px 12px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 6, cursor: "pointer", color: "#888", marginLeft: "auto" }}>이번 주는 건너뛰기</button>
+                </div>
+                <div style={{ overflowY: "auto", padding: "8px 12px", flex: 1 }}>
+                  {weeklyItems.map(function(it) {
+                    var key = it.noteId + ":" + it.lineIdx;
+                    return (
+                      <div key={key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 8px", borderBottom: "1px solid #F7F6F3" }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, color: "#1A1917", lineHeight: 1.5 }}>{it.text}</div>
+                          <div style={{ fontSize: 10, color: "#999", marginTop: 2 }}>
+                            {it.noteDate}{it.dueDate ? " · 📅 " + it.dueDate : ""}{it.waitReason ? " · ⏳ " + it.waitReason : ""}
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
+                          <button onClick={function() { applyReviewActions([{ item: it, action: "carry" }], false); }} title="오늘 노트로 이월"
+                            style={{ fontSize: 11, padding: "5px 9px", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 6, cursor: "pointer", color: "#4338CA", fontWeight: 600, whiteSpace: "nowrap" }}>오늘로 이월</button>
+                          <button onClick={function() { applyReviewActions([{ item: it, action: "done" }], false); }} title="완료 처리"
+                            style={{ fontSize: 11, padding: "5px 9px", background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: 6, cursor: "pointer", color: "#15803D", fontWeight: 600, whiteSpace: "nowrap" }}>완료</button>
+                          <button onClick={function() { applyReviewActions([{ item: it, action: "delete" }], false); }} title="이 항목 삭제"
+                            style={{ fontSize: 11, padding: "5px 9px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6, cursor: "pointer", color: "#B91C1C", fontWeight: 600, whiteSpace: "nowrap" }}>삭제</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -9448,7 +9843,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
                     </div>
                   </div>
                 </div>
-                <button onClick={function() { setShowAdd(true); setNewNote({ title: "", content: "", is_todo: false, pinned: false, target_assignee: (filterAssignee !== "전체" ? filterAssignee : ""), checkItems: [], due_date: "", note_date: selectedDate }); }}
+                <button onClick={function() { var pn = (filterAssignee !== "전체" ? filterAssignee : (profile?.name || "")); setShowAdd(true); setNewNote({ title: noteAutoTitle(pn, selectedDate), content: "", is_todo: false, pinned: false, target_assignee: (filterAssignee !== "전체" ? filterAssignee : ""), checkItems: [], due_date: "", note_date: selectedDate }); }}
                   style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ 이 날짜에 노트 추가</button>
               </div>
               {/* 노트 카드들 */}
