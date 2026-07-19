@@ -1607,6 +1607,396 @@ function BackupView({ canExport }) {
   );
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// 📱 MobileApp — /m 경로 전용 모바일 최적화 화면 (기존 CRMApp/PC 화면과 완전 분리)
+//   하단 탭: 홈 · 업무노트 · 업체검색 · 내정보 / 로그인은 기존 Supabase 세션 공유
+// ══════════════════════════════════════════════════════════════════════════
+function MobileApp({ profile, session }) {
+  const myName = (profile && profile.name) || "";
+  const [tab, setTab] = useState("home");
+  const [notes, setNotes] = useState([]);
+  const [companies, setCompanies] = useState([]);
+  const [acts, setActs] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // 새 노트 작성
+  const [composing, setComposing] = useState(false);
+  const [newTitle, setNewTitle] = useState("");
+  const [newItems, setNewItems] = useState([]);
+  const [newCompanyId, setNewCompanyId] = useState(null);
+
+  // 업체 검색
+  const [q, setQ] = useState("");
+  const [selCompany, setSelCompany] = useState(null);
+  const [logs, setLogs] = useState([]);
+  const [memo, setMemo] = useState("");
+  const [recent, setRecent] = useState(function() { try { return JSON.parse(localStorage.getItem("m_recent_companies") || "[]"); } catch (e) { return []; } });
+
+  // 상태바 색상(#15803D) + iOS 자동확대 방지 + 트랜지션 CSS 주입
+  useEffect(function() {
+    var meta = document.querySelector('meta[name="theme-color"]');
+    var prev = meta ? meta.getAttribute("content") : null;
+    if (!meta) { meta = document.createElement("meta"); meta.name = "theme-color"; document.head.appendChild(meta); }
+    meta.setAttribute("content", "#15803D");
+    if (!document.getElementById("m-app-css")) {
+      var st = document.createElement("style"); st.id = "m-app-css";
+      st.textContent = [
+        ".m-root,.m-root *{ -webkit-tap-highlight-color: transparent; box-sizing: border-box; }",
+        ".m-root input,.m-root textarea,.m-root select,.m-root button{ font-size:16px; }",
+        ".m-tap{ min-height:44px; min-width:44px; }",
+        ".m-fade{ animation: mfade .24s ease; }",
+        "@keyframes mfade{ from{ opacity:0; transform:translateY(8px);} to{ opacity:1; transform:none;} }"
+      ].join("");
+      document.head.appendChild(st);
+    }
+    return function() { if (meta && prev != null) meta.setAttribute("content", prev); };
+  }, []);
+
+  var companiesList = useMemo(function() {
+    return companies.map(function(c) { return { id: c.id, name: c.name }; }).filter(function(c) { return c.name; });
+  }, [companies]);
+
+  var loadAll = async function() {
+    setLoading(true);
+    var res = await Promise.all([
+      supabase.from("work_notes").select("*").eq("assignee", myName).is("deleted_at", null).order("created_at", { ascending: false }),
+      supabase.from("companies").select("*").is("deleted_at", null).order("created_at", { ascending: false }),
+      supabase.from("activity_logs").select("*").is("deleted_at", null).order("created_at", { ascending: false }).limit(5)
+    ]);
+    if (!res[0].error) setNotes(res[0].data || []);
+    if (!res[1].error) setCompanies(res[1].data || []);
+    if (!res[2].error) setActs(res[2].data || []);
+    setLoading(false);
+  };
+  useEffect(function() { if (myName) loadAll(); }, [myName]);
+
+  var todayStr = kstDate();
+  var todayLabel = (function() {
+    var d = new Date();
+    var w = ["일", "월", "화", "수", "목", "금", "토"][d.getDay()];
+    return (d.getMonth() + 1) + "월 " + d.getDate() + "일 (" + w + ")";
+  })();
+
+  // 내 미완료 항목 수 + 3일↑ 대기 리마인드
+  var myUnfinishedCount = useMemo(function() {
+    var c = 0;
+    notes.forEach(function(n) { c += parseUnfinishedItems(n.content).length; });
+    return c;
+  }, [notes]);
+
+  var waitingReminders = useMemo(function() {
+    var out = [];
+    notes.forEach(function(n) {
+      parseUnfinishedItems(n.content).forEach(function(it) {
+        if (it.waitReason !== "응답대기" && it.waitReason !== "서류대기") return;
+        var days = it.waitSince ? Math.floor((new Date(todayStr + "T00:00:00") - new Date(it.waitSince + "T00:00:00")) / 86400000) : 0;
+        if (days >= 3) out.push({ key: n.id + ":" + it.lineIdx, text: it.text, reason: it.waitReason, days: days, title: n.title });
+      });
+    });
+    out.sort(function(a, b) { return b.days - a.days; });
+    return out;
+  }, [notes, todayStr]);
+
+  var toggleItem = async function(note, lineIdx) {
+    var nc = toggleLineChecked(note.content, lineIdx);
+    setNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { content: nc }) : n; }); });
+    await supabase.from("work_notes").update({ content: nc, updated_at: new Date().toISOString() }).eq("id", note.id);
+  };
+
+  var saveNote = async function() {
+    var content = newItems.filter(function(i) { return (i.text || "").trim(); }).map(function(i) { return buildItemLine({ checked: false, text: i.text }); }).join("\n");
+    if (!newTitle.trim() && !content.trim()) return;
+    var ins = { assignee: myName, title: newTitle.trim() || noteAutoTitle(myName, todayStr), content: content, is_todo: newItems.length > 0, created_by: myName, note_date: todayStr };
+    if (newCompanyId) ins.company_id = newCompanyId;
+    var r = await supabase.from("work_notes").insert(ins).select().single();
+    if (r.error && /company_id/.test(r.error.message || "")) { delete ins.company_id; r = await supabase.from("work_notes").insert(ins).select().single(); }
+    if (!r.error && r.data) { setNotes(function(prev) { return [r.data].concat(prev); }); setNewTitle(""); setNewItems([]); setNewCompanyId(null); setComposing(false); }
+    else if (r.error) alert("저장 실패: " + r.error.message);
+  };
+
+  var searchResults = useMemo(function() {
+    var s = q.trim().toLowerCase();
+    if (!s) return [];
+    return companies.filter(function(c) {
+      return (c.name && c.name.toLowerCase().indexOf(s) >= 0) || (c.representative && c.representative.toLowerCase().indexOf(s) >= 0);
+    }).slice(0, 20);
+  }, [q, companies]);
+
+  var loadLogs = async function(id) {
+    var r = await supabase.from("activity_logs").select("*").eq("company_id", id).is("deleted_at", null).order("created_at", { ascending: false }).limit(30);
+    if (!r.error) setLogs(r.data || []);
+  };
+  var openCompany = function(c) {
+    setSelCompany(c); setLogs([]); setMemo("");
+    var nr = [{ id: c.id, name: c.name }].concat(recent.filter(function(x) { return x.id !== c.id; })).slice(0, 5);
+    setRecent(nr);
+    try { localStorage.setItem("m_recent_companies", JSON.stringify(nr)); } catch (e) {}
+    loadLogs(c.id);
+  };
+  var addMemo = async function() {
+    if (!memo.trim() || !selCompany) return;
+    var payload = { company_id: selCompany.id, case_id: selCompany.id, case_type: "company", business_name: selCompany.name, assignee: myName, log_type: "note_auto", memo: memo.trim().slice(0, 500), logged_by: myName };
+    var r = await supabase.from("activity_logs").insert(payload);
+    if (r.error && /company_id/.test(r.error.message || "")) { delete payload.company_id; await supabase.from("activity_logs").insert(payload); }
+    setMemo(""); loadLogs(selCompany.id);
+  };
+
+  var fmtTime = function(iso) {
+    if (!iso) return "";
+    var d = new Date(iso);
+    return (d.getMonth() + 1) + "/" + d.getDate() + " " + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  };
+
+  var TABS = [
+    { key: "home", label: "홈", icon: "🏠" },
+    { key: "notes", label: "업무노트", icon: "📝" },
+    { key: "search", label: "업체검색", icon: "🔍" },
+    { key: "me", label: "내정보", icon: "👤" }
+  ];
+
+  var card = { background: "#fff", border: "1px solid #E8E5E0", borderRadius: 14, padding: 16, marginBottom: 12 };
+
+  return (
+    <div className="m-root" style={{ minHeight: "100vh", background: "#F5F5F4", color: "#1A1917", paddingBottom: 76, fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>
+      {/* 상단 상태바 */}
+      <div style={{ position: "sticky", top: 0, zIndex: 50, background: "#15803D", color: "#fff", padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "-0.02em" }}>
+          {tab === "home" ? "홈" : tab === "notes" ? "업무노트" : tab === "search" ? "업체검색" : "내정보"}
+        </div>
+        <div style={{ fontSize: 13, opacity: 0.9 }}>{myName} 님</div>
+      </div>
+
+      <div style={{ padding: 14 }}>
+        {loading ? (
+          <div style={{ textAlign: "center", color: "#999", fontSize: 15, padding: "80px 0" }}>불러오는 중…</div>
+        ) : (
+          <div className="m-fade" key={tab}>
+
+            {/* ── 홈 ── */}
+            {tab === "home" && (
+              <div>
+                <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 2 }}>{todayLabel}</div>
+                <div style={{ fontSize: 14, color: "#888", marginBottom: 14 }}>오늘도 화이팅이에요, {myName} 님 💪</div>
+
+                <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+                  <div onClick={function() { setTab("notes"); }} className="m-tap" style={{ flex: 1, background: "linear-gradient(135deg,#15803D,#22C55E)", color: "#fff", borderRadius: 14, padding: 16 }}>
+                    <div style={{ fontSize: 12, opacity: 0.9 }}>내 미완료</div>
+                    <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1.2 }}>{myUnfinishedCount}</div>
+                    <div style={{ fontSize: 11, opacity: 0.9 }}>체크리스트 항목</div>
+                  </div>
+                  <div className="m-tap" style={{ flex: 1, background: waitingReminders.length ? "linear-gradient(135deg,#B45309,#F59E0B)" : "#fff", color: waitingReminders.length ? "#fff" : "#1A1917", border: waitingReminders.length ? "none" : "1px solid #E8E5E0", borderRadius: 14, padding: 16 }}>
+                    <div style={{ fontSize: 12, opacity: 0.9 }}>3일↑ 대기</div>
+                    <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1.2 }}>{waitingReminders.length}</div>
+                    <div style={{ fontSize: 11, opacity: 0.9 }}>응답·서류 대기</div>
+                  </div>
+                </div>
+
+                {waitingReminders.length > 0 && (
+                  <div style={card}>
+                    <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>🔔 대기 리마인드</div>
+                    {waitingReminders.slice(0, 6).map(function(w) {
+                      return (
+                        <div key={w.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid #F5F5F4" }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: "#B45309", background: "#FEF3C7", borderRadius: 99, padding: "2px 8px", whiteSpace: "nowrap" }}>{w.days}일째</span>
+                          <span style={{ fontSize: 14, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{w.text}</span>
+                          <span style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap" }}>{w.reason}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div style={card}>
+                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>🕒 최근 활동</div>
+                  {acts.length === 0 ? (
+                    <div style={{ fontSize: 13, color: "#AAA", padding: "10px 0" }}>최근 활동이 없어요.</div>
+                  ) : acts.map(function(a) {
+                    return (
+                      <div key={a.id} style={{ padding: "9px 0", borderBottom: "1px solid #F5F5F4" }}>
+                        <div style={{ fontSize: 14, lineHeight: 1.4 }}>{a.business_name || "-"}</div>
+                        <div style={{ fontSize: 12, color: "#888", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.memo || a.log_type}</div>
+                        <div style={{ fontSize: 11, color: "#BBB", marginTop: 2 }}>{a.logged_by || a.assignee || ""} · {fmtTime(a.created_at)}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* ── 업무노트 ── */}
+            {tab === "notes" && (
+              <div>
+                {!composing ? (
+                  <button onClick={function() { setComposing(true); }} className="m-tap" style={{ width: "100%", background: "#15803D", color: "#fff", border: "none", borderRadius: 12, padding: "13px", fontWeight: 700, marginBottom: 14, cursor: "pointer" }}>+ 새 노트 작성</button>
+                ) : (
+                  <div style={Object.assign({}, card, { border: "2px solid #86EFAC", background: "#F0FDF4" })}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#15803D", marginBottom: 10 }}>✏️ 새 노트</div>
+                    <div style={{ position: "relative", marginBottom: 10 }}>
+                      <MentionField multiline={false} companiesList={companiesList} value={newTitle} placeholder="제목 (비우면 자동: 오늘 날짜)"
+                        onChange={function(v) { setNewTitle(v); }} onLink={function(co) { setNewCompanyId(co.id); }}
+                        style={{ width: "100%", padding: "12px", border: "1px solid #86EFAC", borderRadius: 10, fontWeight: 600, outline: "none", background: "#fff", boxSizing: "border-box" }} />
+                    </div>
+                    {newItems.map(function(it, idx) {
+                      return (
+                        <div key={idx} style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
+                          <span style={{ marginTop: 12, fontSize: 16 }}>☐</span>
+                          <div style={{ flex: 1, position: "relative" }}>
+                            <MentionField multiline={true} companiesList={companiesList} value={it.text} placeholder={"항목 " + (idx + 1) + " · @업체명 연결"}
+                              rows={1} autoFocus={idx === newItems.length - 1}
+                              onChange={function(v) { setNewItems(function(p) { var a = p.slice(); a[idx] = { text: v }; return a; }); }}
+                              onLink={function(co) { setNewCompanyId(co.id); }}
+                              style={{ width: "100%", padding: "10px 12px", border: "1px solid #D1FAE5", borderRadius: 10, outline: "none", background: "#fff", resize: "none", fontFamily: "inherit", boxSizing: "border-box" }} />
+                          </div>
+                          <button onClick={function() { setNewItems(function(p) { return p.filter(function(_, i) { return i !== idx; }); }); }} className="m-tap" style={{ background: "none", border: "none", color: "#999", fontSize: 20, cursor: "pointer" }}>×</button>
+                        </div>
+                      );
+                    })}
+                    <button onClick={function() { setNewItems(function(p) { return p.concat([{ text: "" }]); }); }} className="m-tap" style={{ width: "100%", background: "#fff", border: "1px dashed #86EFAC", color: "#15803D", borderRadius: 10, padding: "10px", fontWeight: 600, marginBottom: 10, cursor: "pointer" }}>☑️ 체크리스트 항목 추가</button>
+                    {newCompanyId && <div style={{ fontSize: 12, color: "#4338CA", marginBottom: 8 }}>🔗 업체 연결됨</div>}
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button onClick={saveNote} className="m-tap" style={{ flex: 1, background: "#15803D", color: "#fff", border: "none", borderRadius: 10, padding: "12px", fontWeight: 700, cursor: "pointer" }}>저장</button>
+                      <button onClick={function() { setComposing(false); setNewTitle(""); setNewItems([]); setNewCompanyId(null); }} className="m-tap" style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 10, padding: "12px 18px", cursor: "pointer" }}>취소</button>
+                    </div>
+                  </div>
+                )}
+
+                {notes.length === 0 ? (
+                  <div style={{ textAlign: "center", color: "#AAA", fontSize: 14, padding: "60px 0" }}>작성한 노트가 없어요.</div>
+                ) : notes.map(function(n) {
+                  var items = parseAllItems(n.content);
+                  return (
+                    <div key={n.id} style={card}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: items.length ? 10 : 0 }}>
+                        <div style={{ fontSize: 15, fontWeight: 700, lineHeight: 1.4 }}>{n.title || "(제목 없음)"}</div>
+                        <div style={{ fontSize: 11, color: "#AAA", whiteSpace: "nowrap" }}>{n.note_date || (n.created_at ? n.created_at.slice(0, 10) : "")}</div>
+                      </div>
+                      {items.map(function(it) {
+                        var waiting = it.waitReason === "응답대기" || it.waitReason === "서류대기";
+                        return (
+                          <div key={it.lineIdx} onClick={function() { toggleItem(n, it.lineIdx); }} className="m-tap"
+                            style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "9px 8px", cursor: "pointer", borderRadius: 8, background: waiting && !it.checked ? "#FFFBEB" : "transparent", borderLeft: waiting && !it.checked ? "3px solid #F59E0B" : "3px solid transparent" }}>
+                            <span style={{ fontSize: 18, lineHeight: 1.3, color: it.checked ? "#15803D" : "#BBB" }}>{it.checked ? "☑" : "☐"}</span>
+                            <span style={{ flex: 1, fontSize: 15, lineHeight: 1.45, color: it.checked ? "#AAA" : "#1A1917", textDecoration: it.checked ? "line-through" : "none" }}>
+                              {it.text}
+                              {it.dueDate && <span style={{ fontSize: 11, color: "#4338CA", marginLeft: 6 }}>📅 {it.dueDate}</span>}
+                            </span>
+                          </div>
+                        );
+                      })}
+                      {items.length === 0 && n.content && (
+                        <div style={{ fontSize: 14, color: "#555", whiteSpace: "pre-wrap", lineHeight: 1.6, marginTop: 8 }}>{n.content}</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* ── 업체검색 ── */}
+            {tab === "search" && (
+              selCompany ? (
+                <div>
+                  <button onClick={function() { setSelCompany(null); }} className="m-tap" style={{ background: "none", border: "none", color: "#15803D", fontWeight: 700, marginBottom: 10, cursor: "pointer", padding: 0 }}>← 검색으로</button>
+                  <div style={card}>
+                    <div style={{ fontSize: 19, fontWeight: 800, marginBottom: 6 }}>{selCompany.name}</div>
+                    <div style={{ fontSize: 13, color: "#666", marginBottom: 10 }}>담당자 {selCompany.assignee || "-"}{selCompany.representative ? " · 대표 " + selCompany.representative : ""}</div>
+                    <BizScaleBadges company={selCompany} size="sm" />
+                    <div style={{ marginTop: 10 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "#1D4ED8", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 99, padding: "5px 12px" }}>진행: {selCompany.stage || "미지정"}</span>
+                    </div>
+                  </div>
+                  <div style={card}>
+                    <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>💬 소통내역 · 메모</div>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                      <textarea value={memo} onChange={function(e) { setMemo(e.target.value); }} placeholder="간단 메모 추가…" rows={2}
+                        style={{ flex: 1, padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 10, outline: "none", resize: "none", fontFamily: "inherit", boxSizing: "border-box" }} />
+                      <button onClick={addMemo} className="m-tap" style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 10, padding: "0 16px", fontWeight: 700, cursor: "pointer" }}>등록</button>
+                    </div>
+                    {logs.length === 0 ? (
+                      <div style={{ fontSize: 13, color: "#AAA", padding: "10px 0" }}>기록이 없어요.</div>
+                    ) : logs.map(function(l) {
+                      return (
+                        <div key={l.id} style={{ padding: "9px 0", borderBottom: "1px solid #F5F5F4" }}>
+                          <div style={{ fontSize: 14, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{l.memo || l.log_type}</div>
+                          <div style={{ fontSize: 11, color: "#BBB", marginTop: 3 }}>{l.logged_by || l.assignee || ""} · {fmtTime(l.created_at)}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <input value={q} onChange={function(e) { setQ(e.target.value); }} placeholder="🔍 업체명·대표자 검색"
+                    style={{ width: "100%", padding: "14px 16px", border: "1px solid #E8E5E0", borderRadius: 12, outline: "none", marginBottom: 14, boxSizing: "border-box" }} />
+                  {q.trim() ? (
+                    searchResults.length === 0 ? (
+                      <div style={{ textAlign: "center", color: "#AAA", fontSize: 14, padding: "40px 0" }}>'{q}' 검색 결과가 없어요.</div>
+                    ) : searchResults.map(function(c) {
+                      return (
+                        <div key={c.id} onClick={function() { openCompany(c); }} className="m-tap" style={Object.assign({}, card, { marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" })}>
+                          <div>
+                            <div style={{ fontSize: 15, fontWeight: 700 }}>{c.name}</div>
+                            <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{c.assignee || "-"} · {c.stage || "미지정"}</div>
+                          </div>
+                          <span style={{ color: "#CCC", fontSize: 20 }}>›</span>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div>
+                      <div style={{ fontSize: 13, color: "#888", fontWeight: 600, marginBottom: 10 }}>최근 본 업체</div>
+                      {recent.length === 0 ? (
+                        <div style={{ textAlign: "center", color: "#AAA", fontSize: 14, padding: "40px 0" }}>최근 본 업체가 없어요.</div>
+                      ) : recent.map(function(rc) {
+                        return (
+                          <div key={rc.id} onClick={function() { var full = companies.find(function(c) { return c.id === rc.id; }); if (full) openCompany(full); }} className="m-tap" style={Object.assign({}, card, { marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" })}>
+                            <div style={{ fontSize: 15, fontWeight: 700 }}>{rc.name}</div>
+                            <span style={{ color: "#CCC", fontSize: 20 }}>›</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )
+            )}
+
+            {/* ── 내정보 ── */}
+            {tab === "me" && (
+              <div>
+                <div style={Object.assign({}, card, { textAlign: "center", padding: "26px 16px" })}>
+                  <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#15803D", color: "#fff", fontSize: 26, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}>{myName ? myName[0] : "?"}</div>
+                  <div style={{ fontSize: 19, fontWeight: 800 }}>{myName}</div>
+                  <div style={{ fontSize: 13, color: "#888", marginTop: 4 }}>{(profile && profile.role) || "member"}{profile && profile.team ? " · " + profile.team : ""}</div>
+                  <div style={{ fontSize: 12, color: "#AAA", marginTop: 2 }}>{session && session.user ? session.user.email : ""}</div>
+                </div>
+                <button onClick={function() { window.location.href = "/"; }} className="m-tap" style={{ width: "100%", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, padding: "14px", fontWeight: 600, marginBottom: 10, cursor: "pointer" }}>🖥️ PC 화면으로 이동</button>
+                <button onClick={function() { supabase.auth.signOut(); }} className="m-tap" style={{ width: "100%", background: "#fff", border: "1px solid #FECACA", color: "#B91C1C", borderRadius: 12, padding: "14px", fontWeight: 600, cursor: "pointer" }}>로그아웃</button>
+                <div style={{ textAlign: "center", fontSize: 11, color: "#CCC", marginTop: 16 }}>모바일 v{(typeof buildInfo !== "undefined" && buildInfo.commit) || ""}</div>
+              </div>
+            )}
+
+          </div>
+        )}
+      </div>
+
+      {/* 하단 탭 네비게이션 */}
+      <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 50, background: "#fff", borderTop: "1px solid #E8E5E0", display: "flex", paddingBottom: "env(safe-area-inset-bottom)" }}>
+        {TABS.map(function(t) {
+          var active = tab === t.key;
+          return (
+            <button key={t.key} onClick={function() { setTab(t.key); if (t.key !== "search") setSelCompany(null); }} className="m-tap"
+              style={{ flex: 1, background: "none", border: "none", padding: "9px 0 11px", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, color: active ? "#15803D" : "#9CA3AF" }}>
+              <span style={{ fontSize: 21, filter: active ? "none" : "grayscale(0.4)" }}>{t.icon}</span>
+              <span style={{ fontSize: 11, fontWeight: active ? 700 : 500 }}>{t.label}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
@@ -1640,6 +2030,10 @@ export default function App() {
   if (profile.status === "pending" || profile.status === "rejected") {
     return <PendingApproval email={session.user.email} name={profile.name} rejected={profile.status === "rejected"} />;
   }
+  // 📱 모바일 전용 경로 /m — 기존 PC(CRMApp)는 그대로 두고 모바일 최적화 화면만 렌더
+  var path = (typeof window !== "undefined" && window.location) ? window.location.pathname : "";
+  var isMobileRoute = /^\/m(\/|$)/.test(path) || (typeof window !== "undefined" && /[?&]m=1\b/.test(window.location.search));
+  if (isMobileRoute) return <MobileApp profile={profile} session={session} />;
   return <CRMApp profile={profile} session={session} />;
 }
 
@@ -8129,6 +8523,31 @@ function markLinesDone(content, lineIdxSet) {
 // content에서 특정 라인들 삭제
 function removeLines(content, lineIdxSet) {
   return (content || "").split("\n").filter(function(_, i) { return !lineIdxSet.has(i); }).join("\n");
+}
+// content의 모든 체크리스트 항목(완료 포함) 파싱 → {lineIdx, checked, text, dueDate, waitReason, raw}
+function parseAllItems(content) {
+  var out = [];
+  (content || "").split("\n").forEach(function(line, idx) {
+    var m = line.match(/^(\s*)- \[([ xX])\]\s*(.*)$/);
+    if (!m) return;
+    var w = splitItemWait(m[3]);
+    var rest = w.rest;
+    var due = null;
+    var dm = rest.match(/\[(\d{4}-\d{2}-\d{2})\]/);
+    if (dm) { due = dm[1]; rest = rest.replace(dm[0], "").trim(); }
+    out.push({ lineIdx: idx, checked: m[2].toLowerCase() === "x", text: decodeItemText(rest), dueDate: due, waitReason: w.reason || "", raw: line });
+  });
+  return out;
+}
+// content의 특정 라인 체크 상태 토글
+function toggleLineChecked(content, lineIdx) {
+  var lines = (content || "").split("\n");
+  var m = lines[lineIdx] != null && lines[lineIdx].match(/^(\s*)- \[([ xX])\]/);
+  if (m) {
+    var nc = m[2].toLowerCase() === "x" ? " " : "x";
+    lines[lineIdx] = lines[lineIdx].replace(/^(\s*)- \[[ xX]\]/, "$1- [" + nc + "]");
+  }
+  return lines.join("\n");
 }
 // @업체 태그: 입력값 끝(공백 없는) "@질의" 를 추출. 없으면 null.
 function extractMention(value) {
