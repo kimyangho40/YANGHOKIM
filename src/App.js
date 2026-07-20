@@ -2801,6 +2801,8 @@ function CRMApp({ profile, session }) {
   const [quickTaskText, setQuickTaskText] = useState("");
   const [quickTaskDate, setQuickTaskDate] = useState("");
   const [quickTaskSaved, setQuickTaskSaved] = useState(0);
+  const [quickTaskTarget, setQuickTaskTarget] = useState("나"); // "나" | 팀원 이름 → 다른 사람이면 업무 요청 처리
+  const [quickTaskUrgent, setQuickTaskUrgent] = useState(false);
   const [menuExpanded, setMenuExpanded] = useState(false);
   const [agencyRefreshKey, setAgencyRefreshKey] = useState(0);
   const [notifications, setNotifications] = useState([]);
@@ -3591,27 +3593,41 @@ function CRMApp({ profile, session }) {
       {showQuickTask && (function() {
         var me = profile?.name || "";
         var qtDate = quickTaskDate || kstDate();
-        var qtLines = quickTaskText.split("\n").map(function(s) { return s.trim(); }).filter(Boolean);
+        var isMe = quickTaskTarget === "나" || quickTaskTarget === me; // 나 → 내 노트 · 타인 → 업무 요청
+        var to = isMe ? me : quickTaskTarget;
+        // 문단(빈 줄)마다 1개 항목 · 문단 내부의 단일 줄바꿈은 항목 안에서 유지
+        var qtItems = quickTaskText.split(/\n[ \t]*\n+/).map(function(s) { return s.replace(/^\s+|\s+$/g, ""); }).filter(function(s) { return s; });
         var closeQuickTask = function() { if (confirmDiscard(quickTaskText.trim())) setShowQuickTask(false); };
         var qtSave = async function() {
-          if (!me || qtLines.length === 0) return;
-          var block = qtLines.map(function(t) { return buildItemLine({ checked: false, text: t }); }).join("\n");
-          var found = await supabase.from("work_notes").select("*").eq("assignee", me).eq("note_date", qtDate).is("deleted_at", null).order("created_at", { ascending: false }).limit(1);
+          if (!me || qtItems.length === 0) return;
+          var lines = qtItems.map(function(t) { return buildItemLine({ checked: false, text: isMe ? t : ("📩 " + me + " 요청: " + t) }); });
+          var block = lines.join("\n");
+          var noteId = null;
+          var found = await supabase.from("work_notes").select("*").eq("assignee", to).eq("note_date", qtDate).is("deleted_at", null).order("created_at", { ascending: false }).limit(1);
           if (found.error) { alert("저장 실패: " + found.error.message); return; }
           if (found.data && found.data.length) {
             var tn = found.data[0];
             var nc = tn.content ? tn.content + "\n" + block : block;
             var up = await supabase.from("work_notes").update({ content: nc, is_todo: true, updated_at: new Date().toISOString() }).eq("id", tn.id);
             if (up.error) { alert("저장 실패: " + up.error.message); return; }
+            noteId = tn.id;
           } else {
-            var ins = { assignee: me, title: noteAutoTitle(me, qtDate), content: block, is_todo: true, created_by: me, note_date: qtDate };
-            var ir = await supabase.from("work_notes").insert(ins);
+            var ins = { assignee: to, title: noteAutoTitle(to, qtDate), content: block, is_todo: true, created_by: me, note_date: qtDate };
+            var ir = await supabase.from("work_notes").insert(ins).select().single();
             if (ir.error) { alert("저장 실패: " + ir.error.message); return; }
+            noteId = ir.data ? ir.data.id : null;
+          }
+          // 다른 사람이면 업무 요청으로도 기록(항목별 1건) + 푸시 알림
+          if (!isMe) {
+            for (var i = 0; i < qtItems.length; i++) {
+              await supabase.from("work_requests").insert({ request_from: me, request_to: to, content: qtItems[i], urgent: quickTaskUrgent, note_id: noteId, status: "pending" });
+            }
+            if (to !== me) sendPushToUser(to, { title: (quickTaskUrgent ? "🚨 긴급 " : "📩 ") + "업무 요청", body: me + ": " + qtItems[0] + (qtItems.length > 1 ? " 외 " + (qtItems.length - 1) + "건" : ""), url: window.location.origin + "?view=worknotes" });
           }
           setQuickTaskText("");
           setQuickTaskSaved(function(n) { return n + 1; });
           fetchWorkNotesBadge(me);
-          showToast("✅ 저장됨");
+          showToast(isMe ? "✅ 저장됨" : ("📩 " + to + "님에게 요청 보냄"));
         };
         var dateBtn = function(label, ds) {
           var active = qtDate === ds;
@@ -3625,6 +3641,21 @@ function CRMApp({ profile, session }) {
               <div style={{ fontSize: 15, fontWeight: 800 }}>📝 빠른 업무 <span style={{ fontSize: 11, fontWeight: 500, color: "#888" }}>· 날짜별 업무노트에 추가</span></div>
               <button onClick={closeQuickTask} style={{ background: "none", border: "none", cursor: "pointer" }}><Icon name="x" size={18} color="#888" /></button>
             </div>
+            {/* 대상자 (나 → 내 노트 · 타인 → 업무 요청) */}
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>대상자</label>
+              <select value={quickTaskTarget} onChange={function(e) { setQuickTaskTarget(e.target.value); }}
+                style={{ width: "100%", padding: "9px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff", boxSizing: "border-box", outline: "none" }}>
+                <option value="나">나 (내 업무노트에 추가)</option>
+                {ASSIGNEES.filter(function(a) { return a !== me; }).map(function(a) { return <option key={a} value={a}>{a} (업무 요청)</option>; })}
+              </select>
+              {!isMe && (
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginTop: 8, color: "#B45309", fontWeight: 600 }}>
+                  <input type="checkbox" checked={quickTaskUrgent} onChange={function(e) { setQuickTaskUrgent(e.target.checked); }} />
+                  🚨 긴급 요청
+                </label>
+              )}
+            </div>
             {/* 날짜 선택 */}
             <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
               {dateBtn("오늘", kstDate())}
@@ -3633,19 +3664,19 @@ function CRMApp({ profile, session }) {
               <input type="date" value={qtDate} onChange={function(e) { setQuickTaskDate(e.target.value); }}
                 style={{ padding: "6px 10px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 12, outline: "none", marginLeft: 4 }} />
             </div>
-            {/* 내용 (한 줄 = 체크리스트 1개 · @업체 자동완성) */}
+            {/* 내용 (문단=빈 줄 기준으로 1개 체크리스트 항목 · @업체 자동완성) */}
             <MentionField multiline={true} companiesList={companies}
-              value={quickTaskText} rows={5}
-              placeholder="업무 내용 (한 줄 = 체크리스트 1개 · @업체명 연결)"
+              value={quickTaskText} rows={6}
+              placeholder={"업무 내용 · 빈 줄로 문단을 나누면 각 문단이 1개 항목" + (isMe ? "" : " → " + to + "에게 요청") + " · @업체명 연결"}
               onChange={function(v) { setQuickTaskText(v); }}
               onKeyDown={function(e) { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); qtSave(); } }}
               style={{ width: "100%", padding: "12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.6, boxSizing: "border-box", outline: "none", resize: "vertical", fontFamily: "inherit", background: "#fff" }} />
-            <div style={{ fontSize: 11, color: "#888", marginTop: 6 }}>💡 여러 줄 입력하면 각 줄이 <b>- [ ] 체크리스트</b> 항목으로 저장돼요 (Ctrl+Enter로 저장)</div>
+            <div style={{ fontSize: 11, color: "#888", marginTop: 6 }}>💡 문단 구분(빈 줄)마다 체크리스트 항목이 됩니다 (Ctrl+Enter로 저장){qtItems.length > 0 ? " · 현재 " + qtItems.length + "개 항목" : ""}</div>
             {quickTaskSaved > 0 && <div style={{ fontSize: 11, color: "#15803D", marginTop: 6 }}>✅ 이번 세션 {quickTaskSaved}건 저장됨 · 계속 입력할 수 있어요</div>}
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              <button onClick={qtSave} disabled={qtLines.length === 0}
-                style={{ flex: 1, padding: "11px", background: qtLines.length ? "#15803D" : "#E8E5E0", color: qtLines.length ? "#fff" : "#AAA", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: qtLines.length ? "pointer" : "not-allowed" }}>
-                업무노트에 저장
+              <button onClick={qtSave} disabled={qtItems.length === 0}
+                style={{ flex: 1, padding: "11px", background: qtItems.length ? (isMe ? "#15803D" : "#B45309") : "#E8E5E0", color: qtItems.length ? "#fff" : "#AAA", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: qtItems.length ? "pointer" : "not-allowed" }}>
+                {isMe ? "업무노트에 저장" : ("📩 " + to + "에게 요청 보내기" + (qtItems.length > 1 ? " (" + qtItems.length + ")" : ""))}
               </button>
               <button onClick={closeQuickTask}
                 style={{ padding: "11px 16px", background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>
@@ -3765,7 +3796,7 @@ function CRMApp({ profile, session }) {
               style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "7px 6px", background: "#4338CA", border: "none", borderRadius: 6, color: "#fff", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>
               ✏️ 빠른 메모
             </button>
-            <button onClick={() => { setQuickTaskText(""); setQuickTaskDate(kstDate()); setQuickTaskSaved(0); setShowQuickTask(true); }}
+            <button onClick={() => { setQuickTaskText(""); setQuickTaskDate(kstDate()); setQuickTaskSaved(0); setQuickTaskTarget("나"); setQuickTaskUrgent(false); setShowQuickTask(true); }}
               style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "7px 6px", background: "#15803D", border: "none", borderRadius: 6, color: "#fff", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>
               📝 빠른 업무
             </button>
