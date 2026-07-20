@@ -1453,9 +1453,83 @@ const Icon = ({ name, size = 16, color = "currentColor" }) => {
     chevronR:  <svg {...p}><polyline points="9 18 15 12 9 6"/></svg>,
     chevronL:  <svg {...p}><polyline points="15 18 9 12 15 6"/></svg>,
     link:      <svg {...p}><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>,
+    chat:      <svg {...p}><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>,
   };
   return icons[name] || null;
 };
+
+// ── 팀 채팅 상수/헬퍼 ─────────────────────────────────────────────────────────
+const CHAT_TEAMS = {
+  corporate:  ["양호", "동일", "유진", "인선", "미현"],
+  individual: ["양호", "동일", "관호", "현애", "지혜", "정원"],
+};
+// 전체 팀원 (법인+개인 합집합) — DM 상대 목록
+const CHAT_ALL_MEMBERS = Array.from(new Set([].concat(CHAT_TEAMS.corporate, CHAT_TEAMS.individual)));
+// 기본(팀) 채널 목록
+const CHAT_CHANNELS = [
+  { id: "general",    label: "전체",   emoji: "🌐" },
+  { id: "corporate",  label: "법인팀", emoji: "🏢" },
+  { id: "individual", label: "개인팀", emoji: "👤" },
+];
+// DM 채널 id — 두 사람 이름을 정렬해 합치므로 어느 쪽이 열어도 같은 채널
+function dmChannelId(a, b) {
+  return "dm:" + [a, b].sort().join("|");
+}
+// DM 채널 id에서 상대방 이름 추출
+function dmPartner(channel, me) {
+  if (!channel || channel.indexOf("dm:") !== 0) return null;
+  var parts = channel.slice(3).split("|");
+  return parts.find(function(n) { return n !== me; }) || parts[0];
+}
+// 이 채널을 이 사람이 볼 수 있는가
+function canAccessChannel(channel, name) {
+  if (!channel || !name) return false;
+  if (channel === "general") return true;
+  if (channel === "corporate")  return CHAT_TEAMS.corporate.indexOf(name) >= 0;
+  if (channel === "individual") return CHAT_TEAMS.individual.indexOf(name) >= 0;
+  if (channel.indexOf("dm:") === 0) return channel.slice(3).split("|").indexOf(name) >= 0;
+  return false;
+}
+// 메시지 텍스트에서 @업체 태그된 업체 목록 추출 ({id, name})
+function findTaggedCompanies(text, companiesList) {
+  if (!text || !companiesList || companiesList.length === 0) return [];
+  // 긴 이름 우선(짧은 이름이 긴 이름의 일부일 때 오검출 방지)
+  var sorted = companiesList.slice().sort(function(a, b) { return (b.name || "").length - (a.name || "").length; });
+  var out = [];
+  sorted.forEach(function(co) {
+    if (co.name && text.indexOf("@" + co.name) >= 0) {
+      if (!out.find(function(f) { return f.id === co.id; })) out.push(co);
+    }
+  });
+  return out;
+}
+// @업체 태그를 파란색으로 렌더 (기존 companiesList 재사용)
+function renderMentionText(text, companiesList) {
+  if (!text) return null;
+  var names = (companiesList || []).map(function(c) { return c.name; }).filter(Boolean)
+    .sort(function(a, b) { return b.length - a.length; });
+  if (names.length === 0) return text;
+  var esc = names.map(function(n) { return n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); });
+  var re = new RegExp("@(" + esc.join("|") + ")", "g");
+  var parts = []; var last = 0; var m; var key = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    parts.push(<span key={"m" + (key++)} style={{ color: "#2563EB", fontWeight: 700 }}>{m[0]}</span>);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
+// 채팅 시간 표시 (오늘이면 시:분, 이전이면 월/일 시:분)
+function fmtChatTime(iso) {
+  if (!iso) return "";
+  var d = new Date(iso);
+  var now = new Date();
+  var sameDay = d.toDateString() === now.toDateString();
+  var hm = d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+  if (sameDay) return hm;
+  return (d.getMonth() + 1) + "/" + d.getDate() + " " + hm;
+}
 
 // 사이드바 메뉴 항목 - 비활성 글씨/아이콘 가시성 개선 + 호버 밝아짐
 function SideNavItem({ icon, label, active, onClick, rightSlot }) {
@@ -2018,6 +2092,321 @@ function MobileApp({ profile, session }) {
   );
 }
 
+// ── 실시간 팀 채팅 ────────────────────────────────────────────────────────────
+function ChatView({ profile, onUnreadChange }) {
+  const me = profile?.name || "";
+  const [channel, setChannel] = useState("general");
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [companiesList, setCompaniesList] = useState([]);
+  const [mentionMatches, setMentionMatches] = useState([]);
+  const [unreadByChannel, setUnreadByChannel] = useState({});
+  const inputRef = useRef(null);
+  const scrollRef = useRef(null);
+  const channelRef = useRef(channel);
+  channelRef.current = channel;
+  const markedRef = useRef({}); // 이미 읽음 처리한 메시지 id (중복 update 방지)
+  const onUnreadRef = useRef(onUnreadChange); // App 재렌더로 콜백이 바뀌어도 effect 재실행 안 되게 고정
+  onUnreadRef.current = onUnreadChange;
+
+  // 접근 가능한 팀 채널
+  const teamChannels = CHAT_CHANNELS.filter(function(c) { return canAccessChannel(c.id, me); });
+  // DM 상대 (나 제외 전체 팀원)
+  const dmMembers = CHAT_ALL_MEMBERS.filter(function(n) { return n !== me; });
+
+  // 기업목록 로드 (@업체 자동완성/태그용)
+  useEffect(function() {
+    supabase.from("companies").select("id, name").is("deleted_at", null).then(function(r) {
+      if (!r.error) setCompaniesList(r.data || []);
+    });
+  }, []);
+
+  // 채널별 안 읽은 수 집계
+  const refreshUnreadMap = useCallback(async function() {
+    if (!me) return;
+    var r = await supabase.from("chat_messages").select("channel, sender, read_by")
+      .order("created_at", { ascending: false }).limit(1000);
+    if (r.error || !r.data) return;
+    var map = {};
+    r.data.forEach(function(m) {
+      if (m.sender === me) return;
+      var rb = Array.isArray(m.read_by) ? m.read_by : [];
+      if (rb.indexOf(me) >= 0) return;
+      if (!canAccessChannel(m.channel, me)) return;
+      map[m.channel] = (map[m.channel] || 0) + 1;
+    });
+    setUnreadByChannel(map);
+  }, [me]);
+
+  // 메시지 읽음 처리 (내가 안 보냈고 read_by에 내 이름 없는 것)
+  const markRead = useCallback(async function(list) {
+    if (!me) return;
+    var targets = (list || []).filter(function(m) {
+      if (m.sender === me) return false;
+      if (markedRef.current[m.id]) return false;
+      var rb = Array.isArray(m.read_by) ? m.read_by : [];
+      return rb.indexOf(me) < 0;
+    });
+    if (targets.length === 0) return;
+    for (var i = 0; i < targets.length; i++) {
+      var m = targets[i];
+      markedRef.current[m.id] = true;
+      var rb = Array.isArray(m.read_by) ? m.read_by.slice() : [];
+      rb.push(me);
+      await supabase.from("chat_messages").update({ read_by: rb }).eq("id", m.id);
+    }
+    refreshUnreadMap();
+    if (onUnreadRef.current) onUnreadRef.current();
+  }, [me, refreshUnreadMap]);
+
+  // 채널 진입 시 메시지 로드
+  useEffect(function() {
+    if (!channel) return;
+    var alive = true;
+    supabase.from("chat_messages").select("*").eq("channel", channel)
+      .order("created_at", { ascending: true }).limit(500)
+      .then(function(r) {
+        if (!alive) return;
+        if (!r.error) { setMessages(r.data || []); markRead(r.data || []); }
+      });
+    return function() { alive = false; };
+  }, [channel, markRead]);
+
+  // 실시간 구독 (ChatView 생존 동안 1개) — 모든 채널 변화를 받아 현재 채널이면 반영
+  useEffect(function() {
+    var ch = supabase.channel("chat-view")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages" }, function(payload) {
+        var row = payload.new;
+        refreshUnreadMap();
+        if (row.channel === channelRef.current) {
+          setMessages(function(prev) {
+            if (prev.find(function(m) { return m.id === row.id; })) return prev;
+            return prev.concat(row);
+          });
+          markRead([row]);
+        }
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "chat_messages" }, function(payload) {
+        var row = payload.new;
+        if (row.channel === channelRef.current) {
+          setMessages(function(prev) { return prev.map(function(m) { return m.id === row.id ? row : m; }); });
+        }
+      })
+      .subscribe();
+    return function() { supabase.removeChannel(ch); };
+  }, [refreshUnreadMap, markRead]);
+
+  useEffect(function() { refreshUnreadMap(); }, [refreshUnreadMap]);
+
+  // 새 메시지 시 하단으로 스크롤
+  useEffect(function() {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages]);
+
+  // @업체 자동완성 갱신
+  function updateMention(val, caret) {
+    var upto = val.slice(0, caret == null ? val.length : caret);
+    var atIdx = upto.lastIndexOf("@");
+    if (atIdx < 0) { setMentionMatches([]); return; }
+    var prev = atIdx > 0 ? upto[atIdx - 1] : " ";
+    if (atIdx !== 0 && !/\s/.test(prev)) { setMentionMatches([]); return; }
+    var q = upto.slice(atIdx + 1);
+    if (q.indexOf("\n") >= 0 || q.length > 20) { setMentionMatches([]); return; }
+    var ql = q.toLowerCase();
+    var matches = companiesList.filter(function(co) {
+      return co.name && (q === "" || co.name.toLowerCase().indexOf(ql) >= 0);
+    }).slice(0, 6);
+    setMentionMatches(matches);
+  }
+
+  function handleInputChange(e) {
+    setInput(e.target.value);
+    updateMention(e.target.value, e.target.selectionStart);
+  }
+
+  function pickMention(co) {
+    var val = input;
+    var caret = inputRef.current ? inputRef.current.selectionStart : val.length;
+    var atIdx = val.slice(0, caret).lastIndexOf("@");
+    if (atIdx < 0) return;
+    var before = val.slice(0, atIdx);
+    var after = val.slice(caret);
+    var inserted = "@" + co.name + " ";
+    var next = before + inserted + after;
+    setInput(next);
+    setMentionMatches([]);
+    setTimeout(function() {
+      if (inputRef.current) {
+        inputRef.current.focus();
+        var pos = (before + inserted).length;
+        inputRef.current.setSelectionRange(pos, pos);
+      }
+    }, 0);
+  }
+
+  async function send() {
+    var text = input.trim();
+    if (!text || sending || !me) return;
+    setSending(true);
+    setInput("");
+    setMentionMatches([]);
+    var payload = { sender: me, message: text, channel: channel, read_by: [me], saved_to_activity: [] };
+    var r = await supabase.from("chat_messages").insert(payload).select().single();
+    if (!r.error && r.data) {
+      var row = r.data;
+      setMessages(function(prev) {
+        if (prev.find(function(m) { return m.id === row.id; })) return prev;
+        return prev.concat(row);
+      });
+    } else if (r.error) {
+      alert("메시지 전송 실패: " + r.error.message);
+      setInput(text);
+    }
+    setSending(false);
+  }
+
+  function onKeyDown(e) {
+    if (mentionMatches.length > 0) {
+      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickMention(mentionMatches[0]); return; }
+      if (e.key === "Escape") { e.preventDefault(); setMentionMatches([]); return; }
+    }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  }
+
+  // @업체 태그된 메시지의 소통내역 저장
+  async function saveToActivity(msg, co) {
+    var saved = Array.isArray(msg.saved_to_activity) ? msg.saved_to_activity.slice() : [];
+    if (saved.indexOf(co.id) >= 0) return;
+    var log = { company_id: co.id, business_name: co.name, log_type: "chat_memo", memo: msg.message, logged_by: msg.sender };
+    var r = await supabase.from("activity_logs").insert(log);
+    if (r.error) { alert("소통내역 저장 실패: " + r.error.message); return; }
+    saved.push(co.id);
+    var u = await supabase.from("chat_messages").update({ saved_to_activity: saved }).eq("id", msg.id);
+    if (!u.error) {
+      setMessages(function(prev) {
+        return prev.map(function(m) { return m.id === msg.id ? Object.assign({}, m, { saved_to_activity: saved }) : m; });
+      });
+    }
+  }
+
+  // 현재 채널 제목
+  var title;
+  if (channel.indexOf("dm:") === 0) title = "💬 " + dmPartner(channel, me);
+  else {
+    var cc = CHAT_CHANNELS.find(function(c) { return c.id === channel; });
+    title = cc ? cc.emoji + " " + cc.label : channel;
+  }
+
+  var chColStyle = { padding: "10px 12px", borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginBottom: 2 };
+
+  return (
+    <div style={{ height: "calc(100vh - 56px)", display: "flex", gap: 0, border: "1px solid #E8E5E0", borderRadius: 12, overflow: "hidden", background: "#fff" }}>
+      {/* 채널 목록 */}
+      <div style={{ width: 220, borderRight: "1px solid #E8E5E0", background: "#FAF9F7", display: "flex", flexDirection: "column", overflowY: "auto" }}>
+        <div style={{ padding: "16px 16px 8px", fontSize: 16, fontWeight: 700 }}>💬 팀 채팅</div>
+        <div style={{ padding: "6px 10px" }}>
+          <div style={{ fontSize: 10, color: "#999", letterSpacing: "0.06em", padding: "6px 8px 4px", fontWeight: 700 }}>채널</div>
+          {teamChannels.map(function(c) {
+            var active = channel === c.id;
+            var un = unreadByChannel[c.id] || 0;
+            return (
+              <div key={c.id} onClick={function() { setChannel(c.id); }}
+                style={Object.assign({}, chColStyle, { background: active ? "#1A1917" : "transparent", color: active ? "#fff" : "#333", fontWeight: active ? 700 : 500 })}>
+                <span>{c.emoji}</span>
+                <span style={{ flex: 1 }}>{c.label}</span>
+                {un > 0 && <span style={{ background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{un}</span>}
+              </div>
+            );
+          })}
+          <div style={{ fontSize: 10, color: "#999", letterSpacing: "0.06em", padding: "12px 8px 4px", fontWeight: 700 }}>1:1 대화 (DM)</div>
+          {dmMembers.map(function(n) {
+            var cid = dmChannelId(me, n);
+            var active = channel === cid;
+            var un = unreadByChannel[cid] || 0;
+            return (
+              <div key={cid} onClick={function() { setChannel(cid); }}
+                style={Object.assign({}, chColStyle, { background: active ? "#1A1917" : "transparent", color: active ? "#fff" : "#333", fontWeight: active ? 700 : 500 })}>
+                <span style={{ width: 22, height: 22, borderRadius: "50%", background: active ? "#4338CA" : "#E5E1DA", color: active ? "#fff" : "#555", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>{n[0]}</span>
+                <span style={{ flex: 1 }}>{n}</span>
+                {un > 0 && <span style={{ background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{un}</span>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 메시지 영역 */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <div style={{ padding: "14px 20px", borderBottom: "1px solid #E8E5E0", fontSize: 15, fontWeight: 700 }}>{title}</div>
+        <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "16px 20px", background: "#F4F2EE" }}>
+          {messages.length === 0 ? (
+            <div style={{ textAlign: "center", color: "#AAA", fontSize: 13, marginTop: 40 }}>아직 메시지가 없어요. 첫 메시지를 보내보세요 👋</div>
+          ) : messages.map(function(msg) {
+            var mine = msg.sender === me;
+            var tagged = findTaggedCompanies(msg.message, companiesList);
+            var savedArr = Array.isArray(msg.saved_to_activity) ? msg.saved_to_activity : [];
+            return (
+              <div key={msg.id} style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", marginBottom: 12 }}>
+                {!mine && <div style={{ fontSize: 11, color: "#888", margin: "0 6px 3px", fontWeight: 600 }}>{msg.sender}</div>}
+                <div style={{ display: "flex", alignItems: "flex-end", gap: 6, flexDirection: mine ? "row-reverse" : "row", maxWidth: "78%" }}>
+                  <div style={{ background: mine ? "#FEE500" : "#fff", color: "#1A1917", padding: "9px 13px", borderRadius: 14, fontSize: 14, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", boxShadow: "0 1px 2px rgba(0,0,0,0.06)" }}>
+                    {renderMentionText(msg.message, companiesList)}
+                  </div>
+                  <div style={{ fontSize: 10, color: "#999", whiteSpace: "nowrap" }}>{fmtChatTime(msg.created_at)}</div>
+                </div>
+                {/* @업체 태그 → 소통내역 저장 버튼 (업체별) */}
+                {tagged.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 5, justifyContent: mine ? "flex-end" : "flex-start" }}>
+                    {tagged.map(function(co) {
+                      var done = savedArr.indexOf(co.id) >= 0;
+                      return (
+                        <button key={co.id} disabled={done} onClick={function() { saveToActivity(msg, co); }}
+                          title={done ? "이미 저장됨" : co.name + " 소통내역에 저장"}
+                          style={{ fontSize: 11, fontWeight: 700, borderRadius: 8, padding: "4px 10px", cursor: done ? "default" : "pointer",
+                            border: done ? "1px solid #86EFAC" : "1px solid #C7D2FE",
+                            background: done ? "#F0FDF4" : "#EEF2FF", color: done ? "#15803D" : "#4338CA" }}>
+                          {done ? "✅ " + co.name + " 저장됨" : "📋 " + co.name + " 소통내역 저장"}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* 입력창 */}
+        <div style={{ position: "relative", borderTop: "1px solid #E8E5E0", padding: "12px 16px", background: "#fff" }}>
+          {mentionMatches.length > 0 && (
+            <div style={{ position: "absolute", bottom: "100%", left: 16, marginBottom: 6, width: 260, background: "#fff", border: "1px solid #E8E5E0", borderRadius: 10, boxShadow: "0 6px 24px rgba(0,0,0,0.12)", overflow: "hidden", zIndex: 10 }}>
+              <div style={{ padding: "6px 12px", fontSize: 10, color: "#999", borderBottom: "1px solid #F0EDE8" }}>@업체 태그 — 클릭 또는 Enter</div>
+              {mentionMatches.map(function(co, i) {
+                return (
+                  <div key={co.id} onMouseDown={function(e) { e.preventDefault(); pickMention(co); }}
+                    style={{ padding: "8px 12px", fontSize: 13, cursor: "pointer", background: i === 0 ? "#EEF2FF" : "#fff", color: "#1A1917" }}>
+                    <span style={{ color: "#2563EB", fontWeight: 700 }}>@</span>{co.name}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+            <input ref={inputRef} value={input} onChange={handleInputChange} onKeyDown={onKeyDown}
+              placeholder="메시지 입력 (@업체 태그 가능, Enter로 전송)"
+              style={{ flex: 1, border: "1px solid #E8E5E0", borderRadius: 10, padding: "11px 14px", fontSize: 14, outline: "none" }} />
+            <button onClick={send} disabled={sending || !input.trim()}
+              style={{ background: input.trim() ? "#1A1917" : "#D6D2CB", color: "#fff", border: "none", borderRadius: 10, padding: "11px 20px", fontSize: 14, fontWeight: 700, cursor: input.trim() ? "pointer" : "default", whiteSpace: "nowrap" }}>
+              전송
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
@@ -2326,6 +2715,7 @@ function CRMApp({ profile, session }) {
   const [toast, setToast] = useState(null);
   const [showTodayAlert, setShowTodayAlert] = useState(false);
   const [workNotesBadge, setWorkNotesBadge] = useState(0);
+  const [chatUnread, setChatUnread] = useState(0);
   const [quickMemo, setQuickMemo] = useState(false);
   const [quickMemoText, setQuickMemoText] = useState("");
   const [quickMemoCompany, setQuickMemoCompany] = useState(null); // 선택된 업체 {id, name}
@@ -2450,6 +2840,24 @@ function CRMApp({ profile, session }) {
     } catch(e) {}
   };
 
+  // 안 읽은 채팅 수 — 내가 볼 수 있는 채널 중 내가 안 보낸 & read_by에 내 이름 없는 메시지
+  const fetchChatUnread = useCallback(async (name) => {
+    if (!name) return;
+    try {
+      var r = await supabase.from("chat_messages")
+        .select("id, sender, channel, read_by")
+        .order("created_at", { ascending: false }).limit(1000);
+      if (r.error || !r.data) return;
+      var cnt = r.data.filter(function(m) {
+        if (m.sender === name) return false;
+        var rb = Array.isArray(m.read_by) ? m.read_by : [];
+        if (rb.indexOf(name) >= 0) return false;
+        return canAccessChannel(m.channel, name);
+      }).length;
+      setChatUnread(cnt);
+    } catch (e) {}
+  }, []);
+
   const fetchAll = useCallback(async () => {
     setLoading(true);
     const [{ data: cos }, { data: profs }, { data: agencyCases }] = await Promise.all([
@@ -2487,6 +2895,18 @@ function CRMApp({ profile, session }) {
     fetchAll();
     if (profile?.name) fetchWorkNotesBadge(profile.name);
   }, [fetchAll]);
+
+  // 채팅 안 읽은 수 로드 + 실시간 갱신 (새 메시지/읽음 처리 시 배지 갱신)
+  useEffect(() => {
+    if (!profile?.name) return;
+    fetchChatUnread(profile.name);
+    var ch = supabase.channel("chat-badge")
+      .on("postgres_changes", { event: "*", schema: "public", table: "chat_messages" }, function() {
+        fetchChatUnread(profile.name);
+      })
+      .subscribe();
+    return function() { supabase.removeChannel(ch); };
+  }, [profile?.name, fetchChatUnread]);
 
   // 로그인 시 오늘 할 일 알림 - 최초 1회만
   const alertShownRef = useRef(false);
@@ -3102,6 +3522,7 @@ function CRMApp({ profile, session }) {
             { id: "mytodo",     label: "내 할일",     icon: "check" },
             { id: "agency",     label: "기관별 현황", icon: "building" },
             { id: "worknotes",  label: "업무 노트",   icon: "edit" },
+            { id: "chat",       label: "채팅",        icon: "chat" },
             { id: "list",       label: "기업 목록",   icon: "list" },
             { id: "pipeline",   label: "파이프라인",  icon: "pipeline" },
             { id: "cases",      label: "사례집",      icon: "folder" },
@@ -3111,6 +3532,8 @@ function CRMApp({ profile, session }) {
               rightSlot={
                 (id === "worknotes" && workNotesBadge > 0) ? (
                   <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{workNotesBadge}</span>
+                ) : (id === "chat" && chatUnread > 0) ? (
+                  <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{chatUnread}</span>
                 ) : (id === "list" && stagnant.filter(function(c) { return c.stagnant_days >= 14; }).length > 0) ? (
                   <span style={{ marginLeft: "auto", background: "#B45309", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>⚠</span>
                 ) : null
@@ -3256,6 +3679,7 @@ function CRMApp({ profile, session }) {
             {view === "settlement" && <SettlementView />}
             {view === "activitylog" && <ActivityLogView />}
             {view === "worknotes" && <WorkNotesView profile={profile} onBadgeUpdate={function() { fetchWorkNotesBadge(profile?.name); }} />}
+            {view === "chat" && <ChatView profile={profile} onUnreadChange={function() { fetchChatUnread(profile?.name); }} />}
             {view === "leave" && <LeaveView profile={profile} profiles={profiles} />}
             {view === "partners" && <PartnersView />}
             {view === "calendar" && <CalendarView companies={companies} onSelectCompany={setSelectedCompany} profile={profile} />}
