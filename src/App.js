@@ -2133,6 +2133,7 @@ function MobileApp({ profile, session }) {
 // ── 실시간 팀 채팅 ────────────────────────────────────────────────────────────
 function ChatView({ profile, onUnreadChange }) {
   const me = profile?.name || "";
+  const isAdmin = profile?.role === "admin" || me === "양호"; // 관리자는 남의 메시지도 삭제 가능
   const [channel, setChannel] = useState("general");
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -2163,11 +2164,12 @@ function ChatView({ profile, onUnreadChange }) {
   // 채널별 안 읽은 수 집계
   const refreshUnreadMap = useCallback(async function() {
     if (!me) return;
-    var r = await supabase.from("chat_messages").select("channel, sender, read_by")
+    var r = await supabase.from("chat_messages").select("channel, sender, read_by, deleted_at")
       .order("created_at", { ascending: false }).limit(1000);
     if (r.error || !r.data) return;
     var map = {};
     r.data.forEach(function(m) {
+      if (m.deleted_at) return;
       if (m.sender === me) return;
       var rb = Array.isArray(m.read_by) ? m.read_by : [];
       if (rb.indexOf(me) >= 0) return;
@@ -2181,6 +2183,7 @@ function ChatView({ profile, onUnreadChange }) {
   const markRead = useCallback(async function(list) {
     if (!me) return;
     var targets = (list || []).filter(function(m) {
+      if (m.deleted_at) return false;
       if (m.sender === me) return false;
       if (markedRef.current[m.id]) return false;
       var rb = Array.isArray(m.read_by) ? m.read_by : [];
@@ -2328,6 +2331,21 @@ function ChatView({ profile, onUnreadChange }) {
     }
   }
 
+  // 메시지 삭제 (soft delete) — 본인 메시지 또는 관리자
+  async function deleteMessage(msg) {
+    if (!msg || msg.deleted_at) return;
+    if (!(msg.sender === me || isAdmin)) return;
+    if (!window.confirm("삭제하시겠습니까?")) return;
+    var ts = new Date().toISOString();
+    var u = await supabase.from("chat_messages").update({ deleted_at: ts }).eq("id", msg.id);
+    if (u.error) { alert("삭제 실패: " + u.error.message); return; }
+    setMessages(function(prev) {
+      return prev.map(function(m) { return m.id === msg.id ? Object.assign({}, m, { deleted_at: ts }) : m; });
+    });
+    refreshUnreadMap();
+    if (onUnreadRef.current) onUnreadRef.current();
+  }
+
   // 현재 채널 제목
   var title;
   if (channel.indexOf("dm:") === 0) title = "💬 " + dmPartner(channel, me);
@@ -2382,19 +2400,33 @@ function ChatView({ profile, onUnreadChange }) {
             <div style={{ textAlign: "center", color: "#AAA", fontSize: 13, marginTop: 40 }}>아직 메시지가 없어요. 첫 메시지를 보내보세요 👋</div>
           ) : messages.map(function(msg) {
             var mine = msg.sender === me;
-            var tagged = findTaggedCompanies(msg.message, companiesList);
+            var deleted = !!msg.deleted_at;
+            var canDelete = (mine || isAdmin) && !deleted;
+            var tagged = deleted ? [] : findTaggedCompanies(msg.message, companiesList);
             var savedArr = Array.isArray(msg.saved_to_activity) ? msg.saved_to_activity : [];
             return (
               <div key={msg.id} style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", marginBottom: 12 }}>
                 {!mine && <div style={{ fontSize: 11, color: "#888", margin: "0 6px 3px", fontWeight: 600 }}>{msg.sender}</div>}
                 <div style={{ display: "flex", alignItems: "flex-end", gap: 6, flexDirection: mine ? "row-reverse" : "row", maxWidth: "78%" }}>
-                  <div style={{ background: mine ? "#FEE500" : "#fff", color: "#1A1917", padding: "9px 13px", borderRadius: 14, fontSize: 14, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", boxShadow: "0 1px 2px rgba(0,0,0,0.06)" }}>
-                    {renderMentionText(msg.message, companiesList)}
+                  {deleted ? (
+                    <div style={{ background: "#ECEAE5", color: "#9AA0A6", fontStyle: "italic", padding: "9px 13px", borderRadius: 14, fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                      삭제된 메시지입니다
+                    </div>
+                  ) : (
+                    <div style={{ background: mine ? "#FEE500" : "#fff", color: "#1A1917", padding: "9px 13px", borderRadius: 14, fontSize: 14, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", boxShadow: "0 1px 2px rgba(0,0,0,0.06)" }}>
+                      {renderMentionText(msg.message, companiesList)}
+                    </div>
+                  )}
+                  <div style={{ display: "flex", alignItems: "center", gap: 4, flexDirection: mine ? "row-reverse" : "row", whiteSpace: "nowrap" }}>
+                    <span style={{ fontSize: 10, color: "#999" }}>{fmtChatTime(msg.created_at)}</span>
+                    {canDelete && (
+                      <span onClick={function() { deleteMessage(msg); }} title="메시지 삭제"
+                        style={{ fontSize: 12, cursor: "pointer", color: "#B0AAA0", lineHeight: 1 }}>🗑</span>
+                    )}
                   </div>
-                  <div style={{ fontSize: 10, color: "#999", whiteSpace: "nowrap" }}>{fmtChatTime(msg.created_at)}</div>
                 </div>
                 {/* @업체 태그 → 소통내역 저장 버튼 (업체별) */}
-                {tagged.length > 0 && (
+                {!deleted && tagged.length > 0 && (
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 5, justifyContent: mine ? "flex-end" : "flex-start" }}>
                     {tagged.map(function(co) {
                       var done = savedArr.indexOf(co.id) >= 0;
@@ -2883,10 +2915,11 @@ function CRMApp({ profile, session }) {
     if (!name) return;
     try {
       var r = await supabase.from("chat_messages")
-        .select("id, sender, channel, read_by")
+        .select("id, sender, channel, read_by, deleted_at")
         .order("created_at", { ascending: false }).limit(1000);
       if (r.error || !r.data) return;
       var cnt = r.data.filter(function(m) {
+        if (m.deleted_at) return false;
         if (m.sender === name) return false;
         var rb = Array.isArray(m.read_by) ? m.read_by : [];
         if (rb.indexOf(name) >= 0) return false;
