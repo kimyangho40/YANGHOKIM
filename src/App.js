@@ -9902,6 +9902,9 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   // 🗓️ 주간 정리 리마인드 모달
   const [showWeekly, setShowWeekly] = useState(false);
   const [weeklyMode, setWeeklyMode] = useState("mon"); // "mon"(지난주 정리) | "fri"(이번 주 마무리)
+  // 주간 정리 항목별 이월 상태: key(noteId:lineIdx) -> 'processing' | 'done' (중복 클릭·중복 삽입 방지 + 시각 피드백)
+  const [reviewStatus, setReviewStatus] = useState({});
+  const [bulkCarry, setBulkCarry] = useState("idle"); // idle | processing | done (전체 이월 버튼)
   const weeklyOpenedRef = useRef(false);
   // 📩 업무 요청 (팀원 간)
   const [showRequest, setShowRequest] = useState(false);
@@ -10337,6 +10340,9 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     list.sort(function(a, b) { return (a.noteDate || "").localeCompare(b.noteDate || ""); }); // 오래된 것 먼저
     return list;
   }, [notes, profile, todayStr, weeklyMode]);
+
+  // 모달이 닫히면 이월 상태 초기화 (다음에 열 때 깨끗하게)
+  useEffect(function() { if (!showWeekly) { setReviewStatus({}); setBulkCarry("idle"); } }, [showWeekly]);
 
   var weeklyKey = function(mode, me) { return "lastWeeklyReview" + (mode === "fri" ? "Fri" : "Mon") + "_" + me; };
   var markWeeklyReviewed = function() {
@@ -10997,8 +11003,20 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             ) : (
               <>
                 <div style={{ display: "flex", gap: 8, padding: "10px 20px", borderBottom: "1px solid #F0EDE8", flexWrap: "wrap" }}>
-                  <button onClick={function() { applyReviewActions(weeklyItems.map(function(it) { return { item: it, action: "carry" }; }), true); }}
-                    style={{ fontSize: 12, padding: "6px 12px", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 6, cursor: "pointer", color: "#4338CA", fontWeight: 600 }}>📌 전체 오늘로 이월</button>
+                  <button disabled={bulkCarry !== "idle"} onClick={async function() {
+                    setBulkCarry("processing");
+                    // 아직 이월 안 된 항목만 (이미 done인 건 중복 삽입 방지 위해 제외)
+                    var pending = weeklyItems.filter(function(it) { return reviewStatus[it.noteId + ":" + it.lineIdx] !== "done"; });
+                    setReviewStatus(function(p) { var n = Object.assign({}, p); pending.forEach(function(it) { n[it.noteId + ":" + it.lineIdx] = "processing"; }); return n; });
+                    if (pending.length) await applyReviewActions(pending.map(function(it) { return { item: it, action: "carry" }; }), false);
+                    setReviewStatus(function(p) { var n = Object.assign({}, p); weeklyItems.forEach(function(it) { n[it.noteId + ":" + it.lineIdx] = "done"; }); return n; });
+                    setBulkCarry("done");
+                    // 모달은 닫지 않고 완료 표시를 보여준다. 다만 이번 주는 다시 안 뜨게 기록만.
+                    var me2 = profile?.name; if (me2) { try { localStorage.setItem(weeklyKey(weeklyMode, me2), mondayOf(todayStr)); } catch (e) {} }
+                  }}
+                    style={{ fontSize: 12, padding: "6px 12px", background: bulkCarry === "done" ? "#DCFCE7" : "#EEF2FF", border: "1px solid " + (bulkCarry === "done" ? "#86EFAC" : "#C7D2FE"), borderRadius: 6, cursor: bulkCarry === "idle" ? "pointer" : "default", color: bulkCarry === "done" ? "#15803D" : "#4338CA", fontWeight: 600, opacity: bulkCarry === "processing" ? 0.7 : 1 }}>
+                    {bulkCarry === "processing" ? "처리 중..." : bulkCarry === "done" ? "✅ 전체 이월 완료" : "📌 전체 오늘로 이월"}
+                  </button>
                   <button onClick={function() { applyReviewActions(weeklyItems.map(function(it) { return { item: it, action: "done" }; }), true); }}
                     style={{ fontSize: 12, padding: "6px 12px", background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: 6, cursor: "pointer", color: "#15803D", fontWeight: 600 }}>✅ 전체 완료</button>
                   <button onClick={markWeeklyReviewed} title="이번 주는 더 이상 표시하지 않음"
@@ -11007,8 +11025,11 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
                 <div style={{ overflowY: "auto", padding: "8px 12px", flex: 1 }}>
                   {weeklyItems.map(function(it) {
                     var key = it.noteId + ":" + it.lineIdx;
+                    var st = reviewStatus[key]; // undefined | 'processing' | 'done'
+                    var carried = !!st;
+                    var rowBg = st === "done" ? "#F0FDF4" : st === "processing" ? "#FFFBEB" : "transparent";
                     return (
-                      <div key={key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 8px", borderBottom: "1px solid #F7F6F3" }}>
+                      <div key={key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 8px", borderBottom: "1px solid #F7F6F3", background: rowBg, borderRadius: 6, transition: "background 0.2s" }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 13, color: "#1A1917", lineHeight: 1.5 }}>{it.text}</div>
                           <div style={{ fontSize: 10, color: "#999", marginTop: 2 }}>
@@ -11016,12 +11037,20 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
                           </div>
                         </div>
                         <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
-                          <button onClick={function() { applyReviewActions([{ item: it, action: "carry" }], false); }} title="오늘 노트로 이월"
-                            style={{ fontSize: 11, padding: "5px 9px", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 6, cursor: "pointer", color: "#4338CA", fontWeight: 600, whiteSpace: "nowrap" }}>오늘로 이월</button>
-                          <button onClick={function() { applyReviewActions([{ item: it, action: "done" }], false); }} title="완료 처리"
-                            style={{ fontSize: 11, padding: "5px 9px", background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: 6, cursor: "pointer", color: "#15803D", fontWeight: 600, whiteSpace: "nowrap" }}>완료</button>
-                          <button onClick={function() { applyReviewActions([{ item: it, action: "delete" }], false); }} title="이 항목 삭제"
-                            style={{ fontSize: 11, padding: "5px 9px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6, cursor: "pointer", color: "#B91C1C", fontWeight: 600, whiteSpace: "nowrap" }}>삭제</button>
+                          <button disabled={carried} title="오늘 노트로 이월"
+                            onClick={async function() {
+                              setReviewStatus(function(p) { var n = Object.assign({}, p); n[key] = "processing"; return n; });
+                              await applyReviewActions([{ item: it, action: "carry" }], false);
+                              setReviewStatus(function(p) { var n = Object.assign({}, p); n[key] = "done"; return n; });
+                            }}
+                            style={{ fontSize: 11, padding: "5px 9px", borderRadius: 6, fontWeight: 600, whiteSpace: "nowrap", cursor: carried ? "default" : "pointer",
+                              background: st === "done" ? "#DCFCE7" : "#EEF2FF", border: "1px solid " + (st === "done" ? "#86EFAC" : "#C7D2FE"), color: st === "done" ? "#15803D" : "#4338CA", opacity: st === "processing" ? 0.7 : 1 }}>
+                            {st === "processing" ? "처리 중..." : st === "done" ? "✅ 이월됨" : "오늘로 이월"}
+                          </button>
+                          <button disabled={carried} onClick={function() { applyReviewActions([{ item: it, action: "done" }], false); }} title="완료 처리"
+                            style={{ fontSize: 11, padding: "5px 9px", background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: 6, cursor: carried ? "default" : "pointer", color: "#15803D", fontWeight: 600, whiteSpace: "nowrap", opacity: carried ? 0.4 : 1 }}>완료</button>
+                          <button disabled={carried} onClick={function() { applyReviewActions([{ item: it, action: "delete" }], false); }} title="이 항목 삭제"
+                            style={{ fontSize: 11, padding: "5px 9px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6, cursor: carried ? "default" : "pointer", color: "#B91C1C", fontWeight: 600, whiteSpace: "nowrap", opacity: carried ? 0.4 : 1 }}>삭제</button>
                         </div>
                       </div>
                     );
