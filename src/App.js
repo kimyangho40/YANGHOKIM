@@ -17527,16 +17527,19 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                     <div key={note.id} style={{ background: "#fff", border: "2px solid #4338CA", borderRadius: 8, padding: "12px" }}>
                       <div style={{ fontSize: 11, fontWeight: 700, color: "#4338CA", marginBottom: 8 }}>✏️ 수정 중</div>
                       <div style={{ marginBottom: 8 }}>
-                        <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 2 }}>제목</label>
-                        <input type="text" value={editingDraft.title}
-                          onChange={function(e) { var v = e.target.value; setEditingDraft(function(p) { return Object.assign({}, p, { title: v }); }); }}
+                        <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 2 }}>제목 <span style={{ color: "#94A3B8" }}>· @업체명 입력 시 파란색 표시</span></label>
+                        <MentionField multiline={false} companiesList={companiesList}
+                          value={editingDraft.title || ""} placeholder="예: @메이크올 7월 신청 준비"
+                          onChange={function(v) { setEditingDraft(function(p) { return Object.assign({}, p, { title: v }); }); }}
                           style={{ width: "100%", padding: "6px 10px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 12, boxSizing: "border-box", outline: "none" }} />
                       </div>
                       <div style={{ marginBottom: 8 }}>
-                        <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 2 }}>업무 내용</label>
-                        <textarea value={editingDraft.content}
-                          onChange={function(e) { var v = e.target.value; setEditingDraft(function(p) { return Object.assign({}, p, { content: v }); }); }}
-                          style={{ width: "100%", padding: "6px 10px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 12, lineHeight: 1.6, resize: "vertical", minHeight: 60, boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+                        <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 2 }}>업무 내용 <span style={{ color: "#94A3B8" }}>· @업체명 연결</span></label>
+                        <MentionField multiline={true} companiesList={companiesList}
+                          value={editingDraft.content || ""} placeholder="어떤 업무를 누가 가져가야 하는지 상세하게 (@업체명 연결)"
+                          rows={Math.max(3, (editingDraft.content || "").split("\n").length)}
+                          onChange={function(v) { setEditingDraft(function(p) { return Object.assign({}, p, { content: v }); }); }}
+                          style={{ width: "100%", padding: "6px 10px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 12, lineHeight: 1.6, resize: "vertical", minHeight: 60, boxSizing: "border-box", outline: "none", fontFamily: "inherit" }} />
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 }}>
                         <div>
@@ -17579,19 +17582,27 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                               return (
                                 <div key={item.id || idx} style={{ display: "flex", gap: 4, alignItems: "flex-start" }}>
                                   <span style={{ color: locked ? "#AAA" : "#CCC", fontSize: 11, marginTop: 5 }}>☐</span>
-                                  <textarea value={item.text} disabled={locked}
-                                    rows={Math.max(1, (item.text || "").split("\n").length)}
-                                    onChange={function(e) {
-                                      var v = e.target.value;
-                                      setEditingDraft(function(p) {
-                                        var arr = (p.checklist || []).slice();
-                                        arr[idx] = Object.assign({}, arr[idx], { text: v });
-                                        return Object.assign({}, p, { checklist: arr });
-                                      });
-                                    }}
-                                    placeholder="항목 내용 (Enter로 줄바꿈)"
-                                    title={locked ? item.taken_by + "님이 가져간 항목은 수정 불가" : ""}
-                                    style={{ flex: 1, padding: "4px 8px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, boxSizing: "border-box", outline: "none", background: locked ? "#F0EDE8" : "#fff", color: locked ? "#888" : "#1A1917", textDecoration: locked ? "line-through" : "none", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, overflow: "hidden" }} />
+                                  {locked ? (
+                                    <textarea value={item.text} disabled
+                                      rows={Math.max(1, (item.text || "").split("\n").length)}
+                                      title={item.taken_by + "님이 가져간 항목은 수정 불가"}
+                                      style={{ flex: 1, padding: "4px 8px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, boxSizing: "border-box", outline: "none", background: "#F0EDE8", color: "#888", textDecoration: "line-through", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, overflow: "hidden" }} />
+                                  ) : (
+                                    <div style={{ flex: 1 }}>
+                                      <MentionField multiline={true} companiesList={companiesList}
+                                        value={item.text || ""}
+                                        rows={Math.max(1, (item.text || "").split("\n").length)}
+                                        placeholder="예: @업체명 사업자등록증 받기 (Enter로 줄바꿈)"
+                                        onChange={function(v) {
+                                          setEditingDraft(function(p) {
+                                            var arr = (p.checklist || []).slice();
+                                            arr[idx] = Object.assign({}, arr[idx], { text: v });
+                                            return Object.assign({}, p, { checklist: arr });
+                                          });
+                                        }}
+                                        style={{ width: "100%", padding: "4px 8px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, boxSizing: "border-box", outline: "none", background: "#fff", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, overflow: "hidden" }} />
+                                    </div>
+                                  )}
                                   {locked ? (
                                     <span style={{ fontSize: 9, color: "#1E40AF", fontWeight: 700, padding: "2px 5px", background: "#DBEAFE", borderRadius: 3, whiteSpace: "nowrap" }}>👤 {item.taken_by}</span>
                                   ) : (
