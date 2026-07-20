@@ -2796,6 +2796,11 @@ function CRMApp({ profile, session }) {
   const [quickMemoCompany, setQuickMemoCompany] = useState(null); // 선택된 업체 {id, name}
   const [quickMemoQuery, setQuickMemoQuery] = useState("");        // 업체 검색어
   const [quickMemoSaved, setQuickMemoSaved] = useState(0);         // 연속 저장 카운트(피드백)
+  // 📝 빠른 업무 등록 (날짜별 업무노트 체크리스트에 바로 추가)
+  const [showQuickTask, setShowQuickTask] = useState(false);
+  const [quickTaskText, setQuickTaskText] = useState("");
+  const [quickTaskDate, setQuickTaskDate] = useState("");
+  const [quickTaskSaved, setQuickTaskSaved] = useState(0);
   const [menuExpanded, setMenuExpanded] = useState(false);
   const [agencyRefreshKey, setAgencyRefreshKey] = useState(0);
   const [notifications, setNotifications] = useState([]);
@@ -2819,6 +2824,16 @@ function CRMApp({ profile, session }) {
     window.addEventListener("keydown", onKey);
     return function() { window.removeEventListener("keydown", onKey); };
   }, []);
+
+  // 📝 빠른 업무 팝업 ESC — 작성 중이면 확인 후 닫기
+  useEffect(function() {
+    if (!showQuickTask) return;
+    var onKey = function(e) {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); if (confirmDiscard(quickTaskText.trim())) setShowQuickTask(false); }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return function() { window.removeEventListener("keydown", onKey, true); };
+  }, [showQuickTask, quickTaskText]);
 
   // 📅 월별 업무 자동생성 — 매월 첫 접속 시 담당자 월 업무노트 1건 자동 생성 (중복 방지)
   useEffect(function() {
@@ -2910,7 +2925,13 @@ function CRMApp({ profile, session }) {
           }
           return true; // 일반 할 일은 is_done=false이면 미완료
         }).length;
-        setWorkNotesBadge(incomplete);
+        // 📩 안읽은(pending) 업무 요청 수도 배지에 포함
+        var reqUnread = 0;
+        try {
+          var rq = await supabase.from("work_requests").select("id").eq("request_to", profileName).eq("status", "pending");
+          if (!rq.error && rq.data) reqUnread = rq.data.length;
+        } catch(e2) {}
+        setWorkNotesBadge(incomplete + reqUnread);
       }
     } catch(e) {}
   };
@@ -3566,6 +3587,76 @@ function CRMApp({ profile, session }) {
         );
       })()}
 
+      {/* 📝 빠른 업무 등록 팝업 — 날짜별 업무노트 체크리스트에 바로 추가 · 연속 입력 */}
+      {showQuickTask && (function() {
+        var me = profile?.name || "";
+        var qtDate = quickTaskDate || kstDate();
+        var qtLines = quickTaskText.split("\n").map(function(s) { return s.trim(); }).filter(Boolean);
+        var closeQuickTask = function() { if (confirmDiscard(quickTaskText.trim())) setShowQuickTask(false); };
+        var qtSave = async function() {
+          if (!me || qtLines.length === 0) return;
+          var block = qtLines.map(function(t) { return buildItemLine({ checked: false, text: t }); }).join("\n");
+          var found = await supabase.from("work_notes").select("*").eq("assignee", me).eq("note_date", qtDate).is("deleted_at", null).order("created_at", { ascending: false }).limit(1);
+          if (found.error) { alert("저장 실패: " + found.error.message); return; }
+          if (found.data && found.data.length) {
+            var tn = found.data[0];
+            var nc = tn.content ? tn.content + "\n" + block : block;
+            var up = await supabase.from("work_notes").update({ content: nc, is_todo: true, updated_at: new Date().toISOString() }).eq("id", tn.id);
+            if (up.error) { alert("저장 실패: " + up.error.message); return; }
+          } else {
+            var ins = { assignee: me, title: noteAutoTitle(me, qtDate), content: block, is_todo: true, created_by: me, note_date: qtDate };
+            var ir = await supabase.from("work_notes").insert(ins);
+            if (ir.error) { alert("저장 실패: " + ir.error.message); return; }
+          }
+          setQuickTaskText("");
+          setQuickTaskSaved(function(n) { return n + 1; });
+          fetchWorkNotesBadge(me);
+          showToast("✅ 저장됨");
+        };
+        var dateBtn = function(label, ds) {
+          var active = qtDate === ds;
+          return (<button onClick={function() { setQuickTaskDate(ds); }}
+            style={{ padding: "6px 12px", fontSize: 12, fontWeight: 600, borderRadius: 6, cursor: "pointer", border: "1px solid " + (active ? "#15803D" : "#E8E5E0"), background: active ? "#15803D" : "#fff", color: active ? "#fff" : "#666" }}>{label}</button>);
+        };
+        return (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 14, padding: "22px", width: 440, maxWidth: "92vw", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div style={{ fontSize: 15, fontWeight: 800 }}>📝 빠른 업무 <span style={{ fontSize: 11, fontWeight: 500, color: "#888" }}>· 날짜별 업무노트에 추가</span></div>
+              <button onClick={closeQuickTask} style={{ background: "none", border: "none", cursor: "pointer" }}><Icon name="x" size={18} color="#888" /></button>
+            </div>
+            {/* 날짜 선택 */}
+            <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+              {dateBtn("오늘", kstDate())}
+              {dateBtn("내일", kstDate(1))}
+              {dateBtn("모레", kstDate(2))}
+              <input type="date" value={qtDate} onChange={function(e) { setQuickTaskDate(e.target.value); }}
+                style={{ padding: "6px 10px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 12, outline: "none", marginLeft: 4 }} />
+            </div>
+            {/* 내용 (한 줄 = 체크리스트 1개 · @업체 자동완성) */}
+            <MentionField multiline={true} companiesList={companies}
+              value={quickTaskText} rows={5}
+              placeholder="업무 내용 (한 줄 = 체크리스트 1개 · @업체명 연결)"
+              onChange={function(v) { setQuickTaskText(v); }}
+              onKeyDown={function(e) { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); qtSave(); } }}
+              style={{ width: "100%", padding: "12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.6, boxSizing: "border-box", outline: "none", resize: "vertical", fontFamily: "inherit", background: "#fff" }} />
+            <div style={{ fontSize: 11, color: "#888", marginTop: 6 }}>💡 여러 줄 입력하면 각 줄이 <b>- [ ] 체크리스트</b> 항목으로 저장돼요 (Ctrl+Enter로 저장)</div>
+            {quickTaskSaved > 0 && <div style={{ fontSize: 11, color: "#15803D", marginTop: 6 }}>✅ 이번 세션 {quickTaskSaved}건 저장됨 · 계속 입력할 수 있어요</div>}
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button onClick={qtSave} disabled={qtLines.length === 0}
+                style={{ flex: 1, padding: "11px", background: qtLines.length ? "#15803D" : "#E8E5E0", color: qtLines.length ? "#fff" : "#AAA", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: qtLines.length ? "pointer" : "not-allowed" }}>
+                업무노트에 저장
+              </button>
+              <button onClick={closeQuickTask}
+                style={{ padding: "11px 16px", background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+        );
+      })()}
+
       {/* 사이드바 */}
       <div className="crm-sidebar" style={{ position: "fixed", left: 0, top: 0, width: 220, height: "100vh", background: "#1A1917", display: "flex", flexDirection: "column", zIndex: 100 }}>
         <div style={{ padding: "24px 20px 14px" }}>
@@ -3673,6 +3764,10 @@ function CRMApp({ profile, session }) {
             <button onClick={() => { setQuickMemoText(""); setQuickMemoCompany(null); setQuickMemoQuery(""); setQuickMemoSaved(0); setQuickMemo(true); }}
               style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "7px 6px", background: "#4338CA", border: "none", borderRadius: 6, color: "#fff", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>
               ✏️ 빠른 메모
+            </button>
+            <button onClick={() => { setQuickTaskText(""); setQuickTaskDate(kstDate()); setQuickTaskSaved(0); setShowQuickTask(true); }}
+              style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "7px 6px", background: "#15803D", border: "none", borderRadius: 6, color: "#fff", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>
+              📝 빠른 업무
             </button>
             <button onClick={() => setShowTodayAlert(true)}
               style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "7px 10px", background: "#2E2C29", border: "none", borderRadius: 6, color: "#888", fontSize: 11, cursor: "pointer" }}>
@@ -9955,6 +10050,9 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   const [reqCompanyId, setReqCompanyId] = useState(null);
   const [incomingReqCount, setIncomingReqCount] = useState(0); // 받은 미읽음 요청 수(배지)
   const [sentRequests, setSentRequests] = useState([]); // 내가 보낸 요청
+  const [incomingRequests, setIncomingRequests] = useState([]); // 내가 받은 요청 (요청 현황용)
+  const [showReqStatus, setShowReqStatus] = useState(false); // 📋 요청 현황 모달
+  const [reqTab, setReqTab] = useState("received"); // "received" | "sent"
   const [showSent, setShowSent] = useState(false);
   const reqReadRef = useRef(false);
 
@@ -10477,6 +10575,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     var inc = await supabase.from("work_requests").select("*").eq("request_to", me).order("created_at", { ascending: false });
     if (inc.error) return; // 테이블 미생성/접근불가 → 요청 기능 조용히 비활성
     var incoming = inc.data || [];
+    setIncomingRequests(incoming);
     var pending = incoming.filter(function(r) { return r.status === "pending"; });
     setIncomingReqCount(pending.length); // 이번 방문에 "새 요청 N건" 배지
     if (!reqReadRef.current && pending.length) {
@@ -10485,6 +10584,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     }
     var sent = await supabase.from("work_requests").select("*").eq("request_from", me).order("created_at", { ascending: false });
     if (!sent.error) setSentRequests(sent.data || []);
+    if (onBadgeUpdate) onBadgeUpdate(); // 읽음 처리 반영 → 사이드바 배지 갱신
   };
   useEffect(function() { if (!loading && profile?.name) loadRequests(); }, [loading, profile]);
 
@@ -10786,6 +10886,10 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             {incomingReqCount > 0 && (
               <span style={{ position: "absolute", top: -6, right: -6, background: "#EF4444", color: "#fff", fontSize: 10, fontWeight: 700, borderRadius: 99, minWidth: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }}>{incomingReqCount}</span>
             )}
+          </button>
+          <button onClick={function() { setReqTab("received"); setShowReqStatus(true); }} title="보낸/받은 요청 현황"
+            style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            📋 요청 현황
           </button>
           <button onClick={openTrash}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
@@ -11137,6 +11241,77 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <button onClick={closeRequest} style={{ padding: "10px 16px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer", color: "#888" }}>취소</button>
               <button onClick={sendRequest} style={{ padding: "10px 20px", background: "#B45309", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>요청 보내기</button>
+            </div>
+          </div>
+        </div>
+        );
+      })()}
+
+      {/* 📋 요청 현황 모달 — 보낸/받은 요청 2탭 */}
+      {showReqStatus && (function() {
+        var fmtT = function(ts) { return String(ts || "").slice(0, 16).replace("T", " "); };
+        var sortReq = function(arr) {
+          return (arr || []).slice().sort(function(a, b) {
+            var ad = a.status === "done" ? 1 : 0, bd = b.status === "done" ? 1 : 0;
+            if (ad !== bd) return ad - bd; // 미완료 먼저
+            return String(b.created_at || "").localeCompare(String(a.created_at || ""));
+          });
+        };
+        var sentSorted = sortReq(sentRequests);
+        var recvSorted = sortReq(incomingRequests);
+        var gotoNote = function(req) {
+          setShowReqStatus(false);
+          if (!req.note_id) return;
+          var n = (notes || []).find(function(x) { return x.id === req.note_id; });
+          var nd = n ? (n.note_date || (n.created_at ? String(n.created_at).slice(0, 10) : null)) : null;
+          if (nd) { setViewMode("list"); setSelectedDate(nd); }
+        };
+        var sentBadge = function(st) {
+          var map = { pending: { t: "안읽음", c: "#B91C1C", b: "#FEE2E2" }, read: { t: "읽음", c: "#B45309", b: "#FEF3C7" }, done: { t: "완료", c: "#15803D", b: "#DCFCE7" } };
+          var s = map[st] || map.pending;
+          return <span style={{ fontSize: 10, fontWeight: 700, color: s.c, background: s.b, borderRadius: 99, padding: "2px 8px", whiteSpace: "nowrap" }}>{s.t}</span>;
+        };
+        var recvBadge = function(st) {
+          var done = st === "done";
+          return <span style={{ fontSize: 10, fontWeight: 700, color: done ? "#15803D" : "#B45309", background: done ? "#DCFCE7" : "#FEF3C7", borderRadius: 99, padding: "2px 8px", whiteSpace: "nowrap" }}>{done ? "완료" : "미완료"}</span>;
+        };
+        var list = reqTab === "sent" ? sentSorted : recvSorted;
+        return (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 560, maxHeight: "82vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: "1px solid #E8E5E0" }}>
+              <div style={{ fontSize: 15, fontWeight: 800 }}>📋 요청 현황</div>
+              <button onClick={function() { setShowReqStatus(false); }} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#888", lineHeight: 1 }}>✕</button>
+            </div>
+            {/* 탭 */}
+            <div style={{ display: "flex", gap: 6, padding: "10px 20px", borderBottom: "1px solid #F0EDE8" }}>
+              {[{ id: "received", label: "받은 요청 " + recvSorted.length }, { id: "sent", label: "보낸 요청 " + sentSorted.length }].map(function(t) {
+                var active = reqTab === t.id;
+                return (<button key={t.id} onClick={function() { setReqTab(t.id); }}
+                  style={{ padding: "7px 16px", fontSize: 13, fontWeight: 700, borderRadius: 8, cursor: "pointer", border: "1px solid " + (active ? "#1A1917" : "#E8E5E0"), background: active ? "#1A1917" : "#fff", color: active ? "#fff" : "#666" }}>{t.label}</button>);
+              })}
+            </div>
+            <div style={{ overflowY: "auto", padding: "10px 14px", flex: 1 }}>
+              {list.length === 0 ? (
+                <div style={{ padding: "48px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>{reqTab === "sent" ? "보낸 요청이 없어요." : "받은 요청이 없어요."}</div>
+              ) : list.map(function(r) {
+                var clickable = reqTab === "received";
+                return (
+                  <div key={r.id} onClick={clickable ? function() { gotoNote(r); } : undefined}
+                    style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 10px", borderBottom: "1px solid #F5F5F4", borderRadius: 8, cursor: clickable ? "pointer" : "default", background: r.status !== "done" ? "#FFFEF7" : "transparent" }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 11, color: "#888", marginBottom: 3, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                        <span style={{ fontWeight: 700, color: "#4338CA" }}>{reqTab === "sent" ? "→ " + r.request_to : "← " + r.request_from}</span>
+                        {r.urgent && <span style={{ color: "#B91C1C", fontWeight: 700 }}>🚨 긴급</span>}
+                        <span>{fmtT(r.created_at)}</span>
+                      </div>
+                      <div style={{ fontSize: 13, color: "#1A1917", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{r.content}</div>
+                      {clickable && <div style={{ fontSize: 10, color: "#4338CA", marginTop: 3 }}>클릭하면 해당 업무노트로 이동 →</div>}
+                    </div>
+                    {reqTab === "sent" ? sentBadge(r.status) : recvBadge(r.status)}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
