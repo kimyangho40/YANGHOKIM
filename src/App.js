@@ -228,21 +228,43 @@ function judgeSojinggong(company, so) {
   };
 }
 
-// 마일스톤 후보 추천 (참고·확정 아님): 평균매출이 규모기준의 130%를 넘겼지만
-// 상시근로자수는 아직 기준보다 2명 이상 여유 → 곧 규모 졸업이 예상되는 후보.
-// 매출은 이미 높은데 인력이 적어 규모 판정이 아직 소상공인/소기업에 머무는 경우를 잡아준다.
-function judgeMilestoneCandidate(company) {
+// 🎓 졸업후보 판정 (참고·확정 아님): 규모 졸업(소상공인/소기업 상한 이탈)이 임박한 후보.
+// 두 축을 각각 본다 —
+//   · 매출축: 평균매출이 소기업 규모기준의 130%를 초과 → 매출로는 이미 졸업선
+//   · 인력축: 상시근로자수가 소상공인 상한에 1명 이내로 근접/도달
+// 둘 중 하나라도 해당하면 후보. 반환 객체에 축별 수치를 담아 상세패널에서 풀어 보여준다.
+function judgeGraduationCandidate(company) {
   if (isGraduationHidden(company)) return null; // 사용자가 수동으로 배지를 숨김
   var small = judgeSmallBiz(company);
   if (!small || small.status === "unknown" || small.cap == null || small.avg == null) return null;
   var capWon = small.cap.amount * 1e8;
-  if (capWon <= 0 || !(small.avg > capWon * 1.3)) return null; // 매출 기준 130% 초과 아님
+  if (capWon <= 0) return null;
+  var avg = small.avg;
+  var revenuePct = Math.round(avg / capWon * 100);
+  var revenueQualifies = avg > capWon * 1.3; // 매출 규모기준 130% 초과
+
   var limit = sosangEmpLimit(company && company.industry);
   var emp = parseInt(company && company.employee_count, 10);
-  if (isNaN(emp)) return null;                 // 근로자수 미입력이면 판정 보류
-  if (!(emp <= limit - 2)) return null;         // 기준보다 2명 이상 여유가 아님
+  var hasEmp = !isNaN(emp);
+  var empQualifies = hasEmp && emp >= limit - 1; // 소상공인 상한에 1명 이내 근접/도달
+
+  if (!revenueQualifies && !empQualifies) return null;
+
+  var axes = [];
+  if (revenueQualifies) axes.push("매출");
+  if (empQualifies) axes.push("인력");
+  var both = revenueQualifies && empQualifies;
   return {
-    reason: "마일스톤 후보(참고·확정 아님)\n평균매출 " + (small.avg / 1e8).toFixed(1) + "억 > 규모기준 " + small.cap.amount + "억의 130%(" + (small.cap.amount * 1.3).toFixed(1) + "억)\n상시근로자 " + emp + "명 (기준 " + limit + "명, 여유 " + (limit - emp) + "명 ≥ 2)",
+    capEok: small.cap.amount, capKey: small.cap.key,
+    avg: avg, revenuePct: revenuePct, revenueQualifies: revenueQualifies,
+    hasEmp: hasEmp, emp: hasEmp ? emp : null, limit: limit, empQualifies: empQualifies,
+    empRoom: hasEmp ? (limit - emp) : null,
+    axes: axes, both: both,
+    axesLabel: both ? "매출·인력 둘 다 해당" : (revenueQualifies ? "매출만 해당" : "인력만 해당"),
+    reason: "🎓 졸업후보 (참고·확정 아님)\n" +
+      "· 매출: 평균 " + (avg / 1e8).toFixed(1) + "억 = 규모기준 " + small.cap.amount + "억의 " + revenuePct + "%" + (revenueQualifies ? " → 초과(해당)" : " (130% 이하)") + "\n" +
+      (hasEmp ? ("· 인력: 상시근로자 " + emp + "명 / 소상공인 기준 " + limit + "명" + (empQualifies ? " → 근접(해당)" : (" (여유 " + (limit - emp) + "명)"))) : "· 인력: 근로자수 미입력") + "\n" +
+      "→ " + (both ? "매출·인력 둘 다 해당" : (revenueQualifies ? "매출만 해당" : "인력만 해당")),
   };
 }
 
@@ -255,7 +277,7 @@ function BizScaleBadges({ company, size, editable, onChange, onHideGraduation })
   var so = judgeSososang(company);
   var jg = judgeJunginggong(company, so);
   var sj = judgeSojinggong(company, so);
-  var ms = judgeMilestoneCandidate(company); // 마일스톤 후보 (참고용)
+  var ms = judgeGraduationCandidate(company); // 🎓 졸업후보 (참고용)
   var ov = bizOverride(company);
   var fs = size === "sm" ? 9 : 10;      // 1줄: 규모 배지
   var fsAgency = size === "sm" ? 8 : 9; // 2줄: 기관 배지 (살짝 작게)
@@ -319,18 +341,18 @@ function BizScaleBadges({ company, size, editable, onChange, onHideGraduation })
           </button>
         )}
       </div>
-      {/* 2줄: 기관 배지 — eligible === true 인 것만 표시 (불가/모름은 렌더 안 함) + 마일스톤 후보(참고) */}
+      {/* 2줄: 기관 배지 — eligible === true 인 것만 표시 (불가/모름은 렌더 안 함) + 🎓졸업후보(참고) */}
       {(jg.eligible === true || sj.eligible === true || ms) && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 3, alignItems: "center" }}>
           {jg.eligible === true && chip("jg", "중진공 가능", jg.reason, "#F5F3FF", "#6D28D9", fsAgency, jg.manual)}
           {sj.eligible === true && chip("sj", "소진공 " + sjLabel, sj.reason, "#FFF7ED", "#C2410C", fsAgency, sj.manual)}
           {ms && (onHideGraduation ? (
-            <span key="ms" title={ms.reason} style={{ fontSize: fsAgency, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: "#ECFEFF", color: "#0E7490", whiteSpace: "nowrap", lineHeight: 1.5, display: "inline-flex", alignItems: "center", gap: 3 }}>
-              마일스톤 후보?
+            <span key="ms" title={ms.reason} style={{ fontSize: fsAgency, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: "#ECFEFF", color: "#0E7490", whiteSpace: "nowrap", lineHeight: 1.5, display: "inline-flex", alignItems: "center", gap: 3, cursor: "help" }}>
+              🎓졸업후보?
               <span onClick={function(e) { e.stopPropagation(); onHideGraduation(); }} title="이 배지 숨기기 (다시 안 뜨게)"
                 style={{ cursor: "pointer", fontWeight: 900, fontSize: fsAgency + 2, lineHeight: 1, color: "#0E7490", opacity: 0.7 }}>×</span>
             </span>
-          ) : chip("ms", "마일스톤 후보?", ms.reason, "#ECFEFF", "#0E7490", fsAgency, false))}
+          ) : chip("ms", "🎓졸업후보?", ms.reason, "#ECFEFF", "#0E7490", fsAgency, false))}
         </div>
       )}
       {/* 보정 패널 — 자동판정보다 항상 우선. "자동판정"을 고르면 원래 로직으로 복귀 */}
@@ -7093,12 +7115,43 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 var r = await supabase.from("companies").update({ graduation_override: null }).eq("id", data.id);
                 if (r.error) { alert("복구 실패: " + r.error.message); return; }
                 setData(function(p) { return Object.assign({}, p, { graduation_override: null }); });
-              }} title="숨긴 졸업(마일스톤) 후보 배지를 다시 표시"
+              }} title="숨긴 🎓졸업후보 배지를 다시 표시"
                 style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 99, cursor: "pointer", background: "#ECFEFF", color: "#0E7490", border: "1px solid #A5F3FC" }}>
                 ↩ 졸업후보 다시 표시
               </button>
             )}
           </div>
+          {/* 🎓 졸업후보 상세 — 매출/인력 축별 충족 현황 */}
+          {(function() {
+            var g = judgeGraduationCandidate(data);
+            if (!g) return null;
+            return (
+              <div style={{ background: "#ECFEFF", border: "1px solid #A5F3FC", borderRadius: 10, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, color: "#0E7490" }}>
+                  🎓 졸업후보 상세
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 99, background: g.both ? "#0E7490" : "#CFFAFE", color: g.both ? "#fff" : "#0E7490" }}>{g.axesLabel}</span>
+                  <span style={{ fontSize: 10, color: "#67809A", fontWeight: 400 }}>참고·확정 아님</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#334155" }}>
+                  <span style={{ width: 34, color: "#0E7490", fontWeight: 700, flexShrink: 0 }}>매출</span>
+                  <span>평균 <b>{(g.avg / 1e8).toFixed(1)}억</b> = 규모기준 {g.capEok}억의 <b>{g.revenuePct}%</b></span>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 99, background: g.revenueQualifies ? "#DCFCE7" : "#F1F5F9", color: g.revenueQualifies ? "#15803D" : "#94A3B8" }}>{g.revenueQualifies ? "해당(130%초과)" : "미해당"}</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#334155" }}>
+                  <span style={{ width: 34, color: "#0E7490", fontWeight: 700, flexShrink: 0 }}>인력</span>
+                  {g.hasEmp ? (
+                    <span>상시근로자 <b>{g.emp}명</b> / 소상공인 기준 {g.limit}명 {g.empQualifies ? "" : "(여유 " + g.empRoom + "명)"}</span>
+                  ) : (
+                    <span style={{ color: "#94A3B8" }}>근로자수 미입력 (기준 {g.limit}명)</span>
+                  )}
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 99, background: g.empQualifies ? "#DCFCE7" : "#F1F5F9", color: g.empQualifies ? "#15803D" : "#94A3B8" }}>{g.empQualifies ? "해당(근접)" : "미해당"}</span>
+                </div>
+                <div style={{ fontSize: 10, color: "#64748B", borderTop: "1px solid #CFFAFE", paddingTop: 5 }}>
+                  업종매칭: {g.capKey || "-"} · 매출축은 규모기준 130% 초과, 인력축은 소상공인 상한 1명 이내 근접 시 해당
+                </div>
+              </div>
+            );
+          })()}
           {(data.next_action || data.issue) && (
             <div style={{ fontSize: 12, color: "#555", display: "flex", gap: 6, alignItems: "flex-start" }}>
               <span style={{ color: "#999", fontWeight: 600, flexShrink: 0 }}>최근활동</span>
