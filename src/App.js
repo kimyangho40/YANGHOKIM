@@ -111,6 +111,15 @@ function bizOverride(company) {
 }
 var MANUAL_TAG = "✎ 사람이 직접 수정함 (자동판정 무시)";
 
+// graduation_override(JSONB): { "hidden": true } 이면 졸업(마일스톤) 후보 배지를 자동판별돼도 숨김.
+function graduationOverride(company) {
+  var v = company && company.graduation_override;
+  if (!v) return {};
+  if (typeof v === "string") { try { v = JSON.parse(v); } catch (e) { return {}; } }
+  return (v && typeof v === "object" && !Array.isArray(v)) ? v : {};
+}
+function isGraduationHidden(company) { return graduationOverride(company).hidden === true; }
+
 // 소기업 여부: 평균매출액 ≤ 업종별 규모기준
 // ※ 규모 보정이 있으면 위계(소상공인 ⊂ 소기업)에 따라 소기업 여부도 그 값으로 확정된다.
 function judgeSmallBiz(company) {
@@ -223,6 +232,7 @@ function judgeSojinggong(company, so) {
 // 상시근로자수는 아직 기준보다 2명 이상 여유 → 곧 규모 졸업이 예상되는 후보.
 // 매출은 이미 높은데 인력이 적어 규모 판정이 아직 소상공인/소기업에 머무는 경우를 잡아준다.
 function judgeMilestoneCandidate(company) {
+  if (isGraduationHidden(company)) return null; // 사용자가 수동으로 배지를 숨김
   var small = judgeSmallBiz(company);
   if (!small || small.status === "unknown" || small.cap == null || small.avg == null) return null;
   var capWon = small.cap.amount * 1e8;
@@ -239,7 +249,7 @@ function judgeMilestoneCandidate(company) {
 // 규모/기관 판정 배지 (참고용 · 마우스 오버 시 근거 tooltip)
 // editable=true 이면 "✎ 보정" 버튼으로 수동 보정 패널을 연다 (기업목록은 자리가 좁아 읽기전용 유지).
 // onChange(next)로 biz_match_override 객체를 올려보낸다. 빈 객체 {} = 보정 전부 해제.
-function BizScaleBadges({ company, size, editable, onChange }) {
+function BizScaleBadges({ company, size, editable, onChange, onHideGraduation }) {
   var [editing, setEditing] = useState(false);
   var small = judgeSmallBiz(company);
   var so = judgeSososang(company);
@@ -314,7 +324,13 @@ function BizScaleBadges({ company, size, editable, onChange }) {
         <div style={{ display: "flex", flexWrap: "wrap", gap: 3, alignItems: "center" }}>
           {jg.eligible === true && chip("jg", "중진공 가능", jg.reason, "#F5F3FF", "#6D28D9", fsAgency, jg.manual)}
           {sj.eligible === true && chip("sj", "소진공 " + sjLabel, sj.reason, "#FFF7ED", "#C2410C", fsAgency, sj.manual)}
-          {ms && chip("ms", "마일스톤 후보?", ms.reason, "#ECFEFF", "#0E7490", fsAgency, false)}
+          {ms && (onHideGraduation ? (
+            <span key="ms" title={ms.reason} style={{ fontSize: fsAgency, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: "#ECFEFF", color: "#0E7490", whiteSpace: "nowrap", lineHeight: 1.5, display: "inline-flex", alignItems: "center", gap: 3 }}>
+              마일스톤 후보?
+              <span onClick={function(e) { e.stopPropagation(); onHideGraduation(); }} title="이 배지 숨기기 (다시 안 뜨게)"
+                style={{ cursor: "pointer", fontWeight: 900, fontSize: fsAgency + 2, lineHeight: 1, color: "#0E7490", opacity: 0.7 }}>×</span>
+            </span>
+          ) : chip("ms", "마일스톤 후보?", ms.reason, "#ECFEFF", "#0E7490", fsAgency, false))}
         </div>
       )}
       {/* 보정 패널 — 자동판정보다 항상 우선. "자동판정"을 고르면 원래 로직으로 복귀 */}
@@ -5772,6 +5788,34 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
   const [editNameVal, setEditNameVal] = useState("");
   const [editRegionId, setEditRegionId] = useState(null);
   const [editRegionVal, setEditRegionVal] = useState("");
+  // 연필(수정) 버튼 → 행 전체 인라인 편집 (사이드패널 대신)
+  const [editRowId, setEditRowId] = useState(null);
+  const [editRow, setEditRow] = useState({});
+  const startRowEdit = function(co) {
+    setEditNameId(null); setEditRegionId(null); setEditingEtcId(null);
+    setEditRowId(co.id);
+    setEditRow({
+      name: co.name || "", region: co.region || "", industry: co.industry || "",
+      representative: co.representative || "",
+      credit_score_kcb: co.credit_score_kcb == null ? "" : String(co.credit_score_kcb),
+      credit_score_nice: co.credit_score_nice == null ? "" : String(co.credit_score_nice),
+    });
+  };
+  const saveRowEdit = async function(co) {
+    var payload = {
+      name: (editRow.name || "").trim() || co.name,
+      region: (editRow.region || "").trim() || null,
+      industry: (editRow.industry || "").trim() || null,
+      representative: (editRow.representative || "").trim() || null,
+      credit_score_kcb: String(editRow.credit_score_kcb).trim() === "" ? null : (parseInt(editRow.credit_score_kcb, 10) || null),
+      credit_score_nice: String(editRow.credit_score_nice).trim() === "" ? null : (parseInt(editRow.credit_score_nice, 10) || null),
+    };
+    var r = await supabase.from("companies").update(payload).eq("id", co.id);
+    if (r.error) { alert("저장 실패: " + r.error.message); return; }
+    setCompanies(function(prev) { return prev.map(function(c) { return c.id === co.id ? Object.assign({}, c, payload) : c; }); });
+    setEditRowId(null);
+    if (showToast) showToast("수정됐어요!");
+  };
 
   const saveNameEdit = async function(id) {
     if (!editNameVal.trim()) { setEditNameId(null); return; }
@@ -5888,12 +5932,16 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
             {filtered.map((co, i) => {
               const sc = STAGE_COLORS[co.stage] || {};
               return (
-                <tr key={co.id} onClick={() => editNameId !== co.id && editRegionId !== co.id && onSelect(co)}
-                  style={{ borderBottom: "1px solid #F0EDE8", cursor: editNameId === co.id ? "default" : "pointer", background: i % 2 === 0 ? "#fff" : "#FAFAF8" }}
-                  onMouseOver={e => { if (editNameId !== co.id) e.currentTarget.style.background = "#F0F0EC"; }}
-                  onMouseOut={e => e.currentTarget.style.background = i % 2 === 0 ? "#fff" : "#FAFAF8"}>
-                  <td className="lst-name-cell" style={{ padding: "11px 8px", fontSize: 13, fontWeight: 600, whiteSpace: "normal", wordBreak: "keep-all", overflowWrap: "anywhere", boxSizing: "border-box", position: "sticky", left: 0, background: i % 2 === 0 ? "#fff" : "#FAFAF8", zIndex: 1, boxShadow: "2px 0 4px -2px rgba(0,0,0,0.08)" }} onClick={e => e.stopPropagation()}>
-                    {editNameId === co.id ? (
+                <tr key={co.id} onClick={() => editNameId !== co.id && editRegionId !== co.id && editRowId !== co.id && onSelect(co)}
+                  style={{ borderBottom: "1px solid #F0EDE8", cursor: (editNameId === co.id || editRowId === co.id) ? "default" : "pointer", background: editRowId === co.id ? "#F5F7FF" : (i % 2 === 0 ? "#fff" : "#FAFAF8") }}
+                  onMouseOver={e => { if (editNameId !== co.id && editRowId !== co.id) e.currentTarget.style.background = "#F0F0EC"; }}
+                  onMouseOut={e => e.currentTarget.style.background = editRowId === co.id ? "#F5F7FF" : (i % 2 === 0 ? "#fff" : "#FAFAF8")}>
+                  <td className="lst-name-cell" style={{ padding: "11px 8px", fontSize: 13, fontWeight: 600, whiteSpace: "normal", wordBreak: "keep-all", overflowWrap: "anywhere", boxSizing: "border-box", position: "sticky", left: 0, background: editRowId === co.id ? "#F5F7FF" : (i % 2 === 0 ? "#fff" : "#FAFAF8"), zIndex: 1, boxShadow: "2px 0 4px -2px rgba(0,0,0,0.08)" }} onClick={e => e.stopPropagation()}>
+                    {editRowId === co.id ? (
+                      <input value={editRow.name} onChange={function(e) { var v = e.target.value; setEditRow(function(p) { return Object.assign({}, p, { name: v }); }); }} autoFocus
+                        placeholder="업체명" onKeyDown={function(e) { if (e.key === "Enter") saveRowEdit(co); if (e.key === "Escape") setEditRowId(null); }}
+                        style={{ width: 150, padding: "4px 7px", border: "1px solid #4338CA", borderRadius: 5, fontSize: 13, fontWeight: 600, outline: "none" }} />
+                    ) : editNameId === co.id ? (
                       <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
                         <input value={editNameVal} onChange={function(e) { var v = e.target.value; setEditNameVal(v); }} autoFocus
                           onKeyDown={e => { if (e.key === "Enter") saveNameEdit(co.id); if (e.key === "Escape") setEditNameId(null); }}
@@ -5918,7 +5966,11 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                   </td>
                   <td className="lst-hide-tablet" style={{ padding: "11px 8px", whiteSpace: "nowrap" }}><span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 99, background: co.type === "법인" ? "#EEF2FF" : "#F0FDF4", color: co.type === "법인" ? "#4338CA" : "#15803D", fontWeight: 600 }}>{co.type === "법인" ? "법인사업자" : "개인사업자"}</span></td>
                   <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 90, overflow: "hidden", textOverflow: "ellipsis" }} onClick={e => e.stopPropagation()}>
-                    {editRegionId === co.id ? (
+                    {editRowId === co.id ? (
+                      <input value={editRow.region} onChange={function(e) { var v = e.target.value; setEditRow(function(p) { return Object.assign({}, p, { region: v }); }); }}
+                        placeholder="지역" onKeyDown={function(e) { if (e.key === "Enter") saveRowEdit(co); if (e.key === "Escape") setEditRowId(null); }}
+                        style={{ width: 84, padding: "3px 6px", border: "1px solid #4338CA", borderRadius: 4, fontSize: 12, outline: "none" }} />
+                    ) : editRegionId === co.id ? (
                       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                         <input value={editRegionVal} onChange={function(e) { var v = e.target.value; setEditRegionVal(v); }} autoFocus
                           onKeyDown={function(e) { if (e.key === "Enter") saveRegionEdit(co.id); if (e.key === "Escape") setEditRegionId(null); }}
@@ -5941,12 +5993,32 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                     )}
                   </td>
                   <td className="lst-hide-tablet" style={{ padding: "6px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 120 }} onClick={function(e) { e.stopPropagation(); }}>
-                    <IndustryCell co={co} setCompanies={setCompanies} companies={companies} />
+                    {editRowId === co.id ? (
+                      <input value={editRow.industry} onChange={function(e) { var v = e.target.value; setEditRow(function(p) { return Object.assign({}, p, { industry: v }); }); }}
+                        placeholder="업종" onKeyDown={function(e) { if (e.key === "Enter") saveRowEdit(co); if (e.key === "Escape") setEditRowId(null); }}
+                        style={{ width: 112, padding: "3px 6px", border: "1px solid #4338CA", borderRadius: 4, fontSize: 12, outline: "none" }} />
+                    ) : (
+                      <IndustryCell co={co} setCompanies={setCompanies} companies={companies} />
+                    )}
                   </td>
                   <td className="lst-hide-tablet" style={{ padding: "8px 8px", verticalAlign: "middle", boxSizing: "border-box", width: listColWidths["규모/기관"], minWidth: listColWidths["규모/기관"], maxWidth: listColWidths["규모/기관"] }} onClick={function(e) { e.stopPropagation(); }}>
-                    <BizScaleBadges company={co} size="sm" />
+                    {editRowId === co.id ? (
+                      <BizScaleBadges company={co} size="sm" />
+                    ) : (
+                      <BizScaleBadges company={co} size="sm" onHideGraduation={async function() {
+                        var r = await supabase.from("companies").update({ graduation_override: { hidden: true } }).eq("id", co.id);
+                        if (r.error) { alert("저장 실패: " + r.error.message); return; }
+                        setCompanies(function(prev) { return prev.map(function(c) { return c.id === co.id ? Object.assign({}, c, { graduation_override: { hidden: true } }) : c; }); });
+                        if (showToast) showToast("졸업후보 배지를 숨겼어요. (업체상세에서 다시 표시 가능)");
+                      }} />
+                    )}
                   </td>
-                  <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis" }}>{co.representative || "-"}</td>
+                  <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis" }} onClick={function(e) { e.stopPropagation(); }}>
+                    {editRowId === co.id
+                      ? <input value={editRow.representative} onChange={function(e) { var v = e.target.value; setEditRow(function(p) { return Object.assign({}, p, { representative: v }); }); }}
+                          placeholder="대표자" style={{ width: 66, padding: "3px 6px", border: "1px solid #4338CA", borderRadius: 4, fontSize: 12, outline: "none" }} />
+                      : (co.representative || "-")}
+                  </td>
                   <td style={{ padding: "11px 13px", fontSize: 12, whiteSpace: "nowrap" }}>{co.assignee || "-"}</td>
                   <td style={{ padding: "11px 13px", whiteSpace: "nowrap" }}><span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, fontWeight: 600 }}>{co.stage}</span>{(function(){ var ms = masterStatus(co.name); return ms ? <span style={{ display: "inline-block", marginLeft: 4, fontSize: 9, padding: "3px 7px", borderRadius: 99, background: ms.bg, color: ms.text, fontWeight: 700 }} title="여러 기관 종합 상태">{ms.label}</span> : null; })()}</td>
                   <td className="lst-hide-tablet" style={{ padding: "11px 13px", textAlign: "center" }}>{(function() { var cnt = isListDup(co); return cnt ? <span title={"같은 사업장이 총 " + cnt + "건 등록됨"} style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", whiteSpace: "nowrap" }}>중복</span> : null; })()}</td>
@@ -5977,7 +6049,19 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                   <td className="lst-hide-tablet" style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.agency || "-"}</td>
                   <td className="lst-hide-tablet" style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", boxSizing: "border-box" }}>{[formatRevenue(co.revenue_2023), formatRevenue(co.revenue_2024), formatRevenue(co.revenue_2025)].filter(r=>r&&r!=="-").join(" / ") || "-"}</td>
                   <td className="lst-hide-tablet" style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap" }}>{formatRevenue(co.revenue_2026_h1) || "-"}</td>
-                  <td className="lst-hide-tablet" style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap" }}>{(co.credit_score_kcb || co.credit_score_nice) ? ((co.credit_score_kcb || "-") + " / " + (co.credit_score_nice || "-")) : "-"}</td>
+                  <td className="lst-hide-tablet" style={{ padding: "11px 13px", fontSize: 11, color: "#555", whiteSpace: "nowrap" }} onClick={function(e) { if (editRowId === co.id) e.stopPropagation(); }}>
+                    {editRowId === co.id ? (
+                      <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+                        <input value={editRow.credit_score_kcb} onChange={function(e) { var v = e.target.value; setEditRow(function(p) { return Object.assign({}, p, { credit_score_kcb: v }); }); }}
+                          placeholder="KCB" onKeyDown={function(e) { if (e.key === "Enter") saveRowEdit(co); if (e.key === "Escape") setEditRowId(null); }}
+                          style={{ width: 40, padding: "3px 5px", border: "1px solid #4338CA", borderRadius: 4, fontSize: 11, outline: "none" }} />
+                        <span style={{ color: "#AAA" }}>/</span>
+                        <input value={editRow.credit_score_nice} onChange={function(e) { var v = e.target.value; setEditRow(function(p) { return Object.assign({}, p, { credit_score_nice: v }); }); }}
+                          placeholder="NICE" onKeyDown={function(e) { if (e.key === "Enter") saveRowEdit(co); if (e.key === "Escape") setEditRowId(null); }}
+                          style={{ width: 40, padding: "3px 5px", border: "1px solid #4338CA", borderRadius: 4, fontSize: 11, outline: "none" }} />
+                      </div>
+                    ) : ((co.credit_score_kcb || co.credit_score_nice) ? ((co.credit_score_kcb || "-") + " / " + (co.credit_score_nice || "-")) : "-")}
+                  </td>
                   <td className="lst-hide-tablet" style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                     onClick={function(e) { e.stopPropagation(); }}
                     onDoubleClick={function() { setEditingEtcId(co.id); setEditingEtcVal(co.next_action || ""); }}
@@ -5991,11 +6075,19 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                     ) : (co.next_action || "-")}
                   </td>
                   <td style={{ padding: "11px 8px", whiteSpace: "nowrap" }} onClick={function(e) { e.stopPropagation(); }}>
+                    {editRowId === co.id ? (
+                      <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
+                        <button onClick={function() { saveRowEdit(co); }} title="저장"
+                          style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 4, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontWeight: 700 }}>저장</button>
+                        <button onClick={function() { setEditRowId(null); }} title="취소"
+                          style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 4, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>취소</button>
+                      </div>
+                    ) : (
                     <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
-                      {/* 작업 버튼은 각각 다른 탭으로 연다 — 같은 onSelect(co)로 두면 셋 다 상세보기만 열려 구분이 없어짐 */}
+                      {/* 💬 = 소통내역/상세패널, ✎ = 행 인라인 수정, ✕ = 삭제 */}
                       <button onClick={function() { onSelect(co, "history"); }} title="상담메모 (이슈·액션 · 소통내역)"
                         style={{ background: "#EEF2FF", border: "none", borderRadius: 4, padding: "3px 7px", fontSize: 11, cursor: "pointer", color: "#4338CA", fontWeight: 600 }}>💬</button>
-                      <button onClick={function() { onSelect(co, "info"); }} title="수정 (기본정보)"
+                      <button onClick={function() { startRowEdit(co); }} title="수정 (이 줄에서 바로 편집)"
                         style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
                         <Icon name="edit" size={14} color="#888" />
                       </button>
@@ -6011,6 +6103,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                         <Icon name="x" size={14} color="#CCC" />
                       </button>
                     </div>
+                    )}
                   </td>
                 </tr>
               );
@@ -6986,10 +7079,25 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
             })}
           </div>
           {/* 규모/기관 판정 배지 (목록과 동일 로직 · 마우스오버 근거) */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <span style={{ color: "#999", fontWeight: 600, fontSize: 12, flexShrink: 0 }}>규모/기관</span>
             <BizScaleBadges company={data} editable
-              onChange={function(next) { setData(function(p) { return Object.assign({}, p, { biz_match_override: next }); }); }} />
+              onChange={function(next) { setData(function(p) { return Object.assign({}, p, { biz_match_override: next }); }); }}
+              onHideGraduation={async function() {
+                var r = await supabase.from("companies").update({ graduation_override: { hidden: true } }).eq("id", data.id);
+                if (r.error) { alert("저장 실패: " + r.error.message); return; }
+                setData(function(p) { return Object.assign({}, p, { graduation_override: { hidden: true } }); });
+              }} />
+            {isGraduationHidden(data) && (
+              <button onClick={async function() {
+                var r = await supabase.from("companies").update({ graduation_override: null }).eq("id", data.id);
+                if (r.error) { alert("복구 실패: " + r.error.message); return; }
+                setData(function(p) { return Object.assign({}, p, { graduation_override: null }); });
+              }} title="숨긴 졸업(마일스톤) 후보 배지를 다시 표시"
+                style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 99, cursor: "pointer", background: "#ECFEFF", color: "#0E7490", border: "1px solid #A5F3FC" }}>
+                ↩ 졸업후보 다시 표시
+              </button>
+            )}
           </div>
           {(data.next_action || data.issue) && (
             <div style={{ fontSize: 12, color: "#555", display: "flex", gap: 6, alignItems: "flex-start" }}>
