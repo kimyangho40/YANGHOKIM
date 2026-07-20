@@ -824,7 +824,7 @@ function PolicyBadges({ company }) {
         </div>
       )}
       {popup && (
-        <div onMouseDown={function(e) { if (e.target === e.currentTarget) setPopup(null); }}
+        <div
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div style={{ background: "#fff", borderRadius: 12, width: 420, maxWidth: "100%", padding: "22px 24px", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
@@ -1527,6 +1527,11 @@ function canAccessChannel(channel, name) {
   if (channel === "individual") return CHAT_TEAMS.individual.indexOf(name) >= 0;
   if (channel.indexOf("dm:") === 0) return channel.slice(3).split("|").indexOf(name) >= 0;
   return false;
+}
+// 모달 닫기 전 확인 — 작성 중 내용이 있으면 재확인, 없으면 그냥 닫기 허용.
+// 반환 true = 닫아도 됨. (모든 모달의 X/닫기/취소/ESC 에서 공통 사용)
+function confirmDiscard(hasContent) {
+  return !hasContent || window.confirm("작성 중인 내용이 있습니다. 닫으시겠습니까?");
 }
 // 메시지 텍스트에서 @업체 태그된 업체 목록 추출 ({id, name})
 function findTaggedCompanies(text, companiesList) {
@@ -3408,7 +3413,7 @@ function CRMApp({ profile, session }) {
         const stagnantList = companies.filter(c => c.stagnant_days >= 7);
         return (
           <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center" }}
-            onClick={() => setShowTodayAlert(false)}>
+            >
             <div style={{ background: "#fff", borderRadius: 16, padding: "24px", width: 400, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}
               onClick={e => e.stopPropagation()}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
@@ -3494,14 +3499,17 @@ function CRMApp({ profile, session }) {
           setQuickMemoSaved(function(n) { return n + 1; });
           showToast("📝 '" + quickMemoCompany.name + "' 소통내역에 기록했어요!");
         };
+        // 닫기 — 작성 중 내용 있으면 확인 (바깥 클릭으로는 절대 안 닫힘)
+        var closeQuickMemo = function() {
+          if (quickMemoText.trim() && !window.confirm("작성 중인 내용이 있습니다. 닫으시겠습니까?")) return;
+          setQuickMemo(false); setQuickMemoSaved(0);
+        };
         return (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={() => setQuickMemo(false)}>
-          <div style={{ background: "#fff", borderRadius: 14, padding: "22px", width: 400, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}
-            onClick={e => e.stopPropagation()}>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 14, padding: "22px", width: 400, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
               <div style={{ fontSize: 15, fontWeight: 800 }}>✏️ 빠른 메모 <span style={{ fontSize: 11, fontWeight: 500, color: "#888" }}>· 업체 소통내역에 기록</span></div>
-              <button onClick={() => setQuickMemo(false)} style={{ background: "none", border: "none", cursor: "pointer" }}>
+              <button onClick={closeQuickMemo} style={{ background: "none", border: "none", cursor: "pointer" }}>
                 <Icon name="x" size={18} color="#888" />
               </button>
             </div>
@@ -3548,7 +3556,7 @@ function CRMApp({ profile, session }) {
                 style={{ flex: 1, padding: "11px", background: (quickMemoCompany && quickMemoText.trim()) ? "#1A1917" : "#E8E5E0", color: (quickMemoCompany && quickMemoText.trim()) ? "#fff" : "#AAA", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: (quickMemoCompany && quickMemoText.trim()) ? "pointer" : "not-allowed" }}>
                 소통내역에 저장
               </button>
-              <button onClick={() => { setQuickMemo(false); setQuickMemoSaved(0); }}
+              <button onClick={closeQuickMemo}
                 style={{ padding: "11px 16px", background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>
                 닫기
               </button>
@@ -3884,7 +3892,7 @@ function AiSearchModal({ companies, onClose, onSelectCompany }) {
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
-      onClick={onClose}>
+      >
       <div style={{ background: "#fff", borderRadius: 14, width: 640, maxWidth: "100%", height: "80vh", maxHeight: 720, display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.25)", overflow: "hidden" }}
         onClick={function(e) { e.stopPropagation(); }}>
         {/* 헤더 */}
@@ -6172,7 +6180,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
       {/* 기업목록 휴지통 모달 */}
       {showCompanyTrash && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowCompanyTrash(false); }}>
+          >
           <div style={{ background: "#fff", borderRadius: 14, width: 640, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ 기업목록 휴지통 ({trashedCompanies.length}건)</h2>
@@ -8236,7 +8244,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
 
         {/* 기업현황표 자동입력 미리보기 모달 */}
         {xlsxPreview && (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={function() { setXlsxPreview(null); setXlsxCommDraft(""); }}>
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
             <div onClick={function(e) { e.stopPropagation(); }} style={{ background: "#fff", borderRadius: 12, maxWidth: 460, width: "100%", maxHeight: "80vh", overflow: "auto", padding: 22, boxSizing: "border-box" }}>
               <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>📄 {xlsxPreview.kind === "시트지" ? "시트지" : "기업현황표"} 자동 입력 미리보기</div>
               <div style={{ fontSize: 11.5, color: "#888", marginBottom: 14, lineHeight: 1.5 }}>인식된 항목은 기업정보로 채워지고, <b style={{ color: "#075985" }}>나머지 내용은 소통내역에 자동 기록</b>됩니다. 기존 값이 있으면 <b style={{ color: "#B45309" }}>덮어쓰기</b> 됩니다.</div>
@@ -8279,7 +8287,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               </div>
               <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
                 <button onClick={applyXlsxPreview} style={{ flex: 1, background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>✓ 적용하기</button>
-                <button onClick={function() { setXlsxPreview(null); setXlsxCommDraft(""); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "11px 18px", fontSize: 13, cursor: "pointer" }}>취소</button>
+                <button onClick={function() { if (confirmDiscard((xlsxCommDraft || "").trim())) { setXlsxPreview(null); setXlsxCommDraft(""); } }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "11px 18px", fontSize: 13, cursor: "pointer" }}>취소</button>
               </div>
               <div style={{ fontSize: 11, color: "#AAA", marginTop: 10, textAlign: "center" }}>적용 후 반드시 저장 버튼을 눌러야 DB에 반영됩니다</div>
             </div>
@@ -8289,7 +8297,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
         {/* 🗑️ 소통 내역 휴지통 모달 (기업목록 휴지통과 동일 UX) */}
         {showCommTrash && (
           <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
-            onMouseDown={function(e) { if (e.target === e.currentTarget) setShowCommTrash(false); }}>
+            >
             <div style={{ background: "#fff", borderRadius: 14, width: 640, maxWidth: "100%", maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
               <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
                 <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ 소통 내역 휴지통 ({trashedCommLogs.length}건)</h2>
@@ -8519,14 +8527,14 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-      onMouseDown={function(e) { if (e.target === e.currentTarget) onClose(); }}>
+      >
       <div style={{ background: "#fff", borderRadius: 14, width: 480, maxHeight: "92vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ padding: "20px 24px 14px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
           <div>
             <div style={{ display: "inline-block", padding: "2px 8px", background: "#EEF2FF", color: "#4338CA", borderRadius: 4, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>신규 등록</div>
             <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>새 업체 추가</h2>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><Icon name="x" size={18} color="#888" /></button>
+          <button onClick={function() { if (confirmDiscard(["name","representative","phone","industry","company_info_memo"].some(function(k){ return (form[k]||"").toString().trim(); }))) onClose(); }} style={{ background: "none", border: "none", cursor: "pointer" }}><Icon name="x" size={18} color="#888" /></button>
         </div>
 
         {/* 📄 기업현황표 첨부 영역 */}
@@ -10941,7 +10949,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
             <button onClick={saveNew} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "10px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
-            <button onClick={function() { setShowAdd(false); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 16px", fontSize: 13, cursor: "pointer" }}>취소</button>
+            <button onClick={function() { if (confirmDiscard((newNote.title||"").trim() || (newNote.content||"").trim() || (newNote.checkItems||[]).some(function(it){ return (it.text||"").trim(); }))) setShowAdd(false); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 16px", fontSize: 13, cursor: "pointer" }}>취소</button>
           </div>
         </div>
       )}
@@ -10957,7 +10965,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
 
       {/* 📋 이전 미완료 가져오기(이월) 모달 */}
       {showCarry && (
-        <div onClick={function() { setShowCarry(false); }}
+        <div
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
           <div onClick={function(e) { e.stopPropagation(); }}
             style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 560, maxHeight: "82vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
@@ -11096,14 +11104,16 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       )}
 
       {/* 📩 업무 요청 모달 */}
-      {showRequest && (
-        <div onClick={function() { setShowRequest(false); }}
+      {showRequest && (function() {
+        var closeRequest = function() { if (confirmDiscard(reqText.trim())) setShowRequest(false); };
+        return (
+        <div
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
           <div onClick={function(e) { e.stopPropagation(); }}
             style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 460, padding: 22, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <div style={{ fontSize: 16, fontWeight: 800 }}>📩 업무 요청 보내기</div>
-              <button onClick={function() { setShowRequest(false); }} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#888" }}>✕</button>
+              <button onClick={closeRequest} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#888" }}>✕</button>
             </div>
             <label style={{ fontSize: 12, color: "#888", display: "block", marginBottom: 4 }}>받는 사람</label>
             <select value={reqTo} onChange={function(e) { setReqTo(e.target.value); }}
@@ -11125,12 +11135,13 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             {reqCompanyId && <div style={{ fontSize: 12, color: "#4338CA", marginBottom: 8 }}>🔗 업체 연결됨 <span onClick={function() { setReqCompanyId(null); }} style={{ cursor: "pointer", color: "#6366F1" }}>✕</span></div>}
             <div style={{ fontSize: 11, color: "#94A3B8", marginBottom: 14, lineHeight: 1.5 }}>받는 사람의 <b>오늘 업무노트 체크리스트</b>에 <b>📩 요청 항목</b>으로 자동 추가돼요. (오늘 노트가 없으면 새로 만듭니다)</div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button onClick={function() { setShowRequest(false); }} style={{ padding: "10px 16px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer", color: "#888" }}>취소</button>
+              <button onClick={closeRequest} style={{ padding: "10px 16px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer", color: "#888" }}>취소</button>
               <button onClick={sendRequest} style={{ padding: "10px 20px", background: "#B45309", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>요청 보내기</button>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* 📤 내가 보낸 요청 (읽음/완료 추적) */}
       {sentRequests.length > 0 && (
@@ -11422,7 +11433,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       {/* 휴지통 모달 */}
       {showTrash && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowTrash(false); }}>
+          >
           <div style={{ background: "#fff", borderRadius: 14, width: 560, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ 업무노트 휴지통 ({trashedNotes.length}건)</h2>
@@ -11639,7 +11650,7 @@ function PartnersView() {
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button onClick={save} style={{ flex: 1, background: "#534AB7", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>{editing ? "저장" : "추가"}</button>
-              <button onClick={function() { setShowForm(false); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "12px 18px", fontSize: 14, cursor: "pointer" }}>취소</button>
+              <button onClick={function() { if (confirmDiscard(["name","org","phone","email","role","memo"].some(function(k){ return (form[k]||"").trim(); }))) setShowForm(false); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "12px 18px", fontSize: 14, cursor: "pointer" }}>취소</button>
             </div>
           </div>
         </div>
@@ -11937,7 +11948,7 @@ function LeaveView({ profile, profiles }) {
 
             <div style={{ display: "flex", gap: 8 }}>
               <button onClick={submitRequest} style={{ flex: 1, background: "#534AB7", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>{editId ? "수정하기" : "신청하기"}</button>
-              <button onClick={function() { setShowForm(false); setEditId(null); setNewReq({ type: "연차", start_date: "", end_date: "", reason: "" }); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "12px 18px", fontSize: 14, cursor: "pointer" }}>취소</button>
+              <button onClick={function() { if (confirmDiscard((newReq.start_date||"") || (newReq.end_date||"") || (newReq.reason||"").trim())) { setShowForm(false); setEditId(null); setNewReq({ type: "연차", start_date: "", end_date: "", reason: "" }); } }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "12px 18px", fontSize: 14, cursor: "pointer" }}>취소</button>
             </div>
           </div>
         </div>
@@ -12385,11 +12396,11 @@ function SettlementView() {
       {/* 직접 등록 모달 */}
       {showAddManual && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowAddManual(false); }}>
+          >
           <div style={{ background: "#fff", borderRadius: 14, width: 520, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>정산 직접 등록 ({activeMonth}월)</h2>
-              <button onClick={function() { setShowAddManual(false); }} style={{ background: "none", border: "none", cursor: "pointer" }}><Icon name="x" size={18} color="#888" /></button>
+              <button onClick={function() { if (confirmDiscard(Object.keys(newManual).some(function(k){ return k!=="year" && k!=="month" && newManual[k] !== "" && newManual[k] !== false && newManual[k] != null; }))) setShowAddManual(false); }} style={{ background: "none", border: "none", cursor: "pointer" }}><Icon name="x" size={18} color="#888" /></button>
             </div>
             <div style={{ padding: "20px 24px" }}>
               <div style={{ marginBottom: 13 }}>
@@ -13080,12 +13091,12 @@ function CalendarView({ companies, onSelectCompany, profile }) {
       {/* 일정 추가 모달 */}
       {showAddEvent && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={() => setShowAddEvent(false)}>
+          >
           <div style={{ background: "#fff", borderRadius: 14, padding: "22px", width: 380, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}
             onClick={e => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <div style={{ fontSize: 15, fontWeight: 800 }}>📅 일정 추가</div>
-              <button onClick={() => setShowAddEvent(false)} style={{ background: "none", border: "none", cursor: "pointer" }}>
+              <button onClick={() => { if (confirmDiscard((newEvent.title||"").trim() || (newEvent.memo||"").trim() || (newEvent.time||"").trim())) setShowAddEvent(false); }} style={{ background: "none", border: "none", cursor: "pointer" }}>
                 <Icon name="x" size={18} color="#888" />
               </button>
             </div>
@@ -13259,7 +13270,7 @@ function QuickLinksView() {
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={saveLink} style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "9px 20px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
-            <button onClick={function() { setShowAdd(false); setEditId(null); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "9px 16px", fontSize: 13, cursor: "pointer" }}>취소</button>
+            <button onClick={function() { if (confirmDiscard((form.name||"").trim() || (form.url||"").trim() || (form.category||"").trim())) { setShowAdd(false); setEditId(null); } }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "9px 16px", fontSize: 13, cursor: "pointer" }}>취소</button>
           </div>
         </div>
       )}
@@ -14692,7 +14703,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       )}
       {showPriorityModal && priorityTarget && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowPriorityModal(false); }}>
+          >
           <div style={{ background: "#fff", borderRadius: 16, width: 720, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.25)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <div>
@@ -14793,14 +14804,14 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       {/* 부결/반려 재신청 체크리스트 모달 */}
       {showRejectModal && rejectTarget && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowRejectModal(false); }}>
+          >
           <div style={{ background: "#fff", borderRadius: 16, width: 460, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.25)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <div>
                 <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#B91C1C" }}>부결/반려 재신청 체크리스트</h2>
                 <div style={{ fontSize: 12, color: "#888", marginTop: 3 }}>{rejectTarget.business_name} · {rejectTarget.status}</div>
               </div>
-              <button onClick={function() { setShowRejectModal(false); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#888" }}>✕</button>
+              <button onClick={function() { if (confirmDiscard((rejectChecks.reject_reason_memo||"").trim())) setShowRejectModal(false); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#888" }}>✕</button>
             </div>
             <div style={{ padding: "20px 24px" }}>
               <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 10, background: rejectChecks.rep_contacted ? "#F0FDF4" : "#FAFAFA", border: "1px solid " + (rejectChecks.rep_contacted ? "#BBF7D0" : "#EDEBE8"), cursor: "pointer", marginBottom: 10 }}>
@@ -14856,7 +14867,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
               })()}
             </div>
             <div style={{ padding: "0 24px 20px", display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button onClick={function() { setShowRejectModal(false); }} style={{ background: "#fff", color: "#666", border: "1px solid #E8E5E0", borderRadius: 8, padding: "9px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>나중에</button>
+              <button onClick={function() { if (confirmDiscard((rejectChecks.reject_reason_memo||"").trim())) setShowRejectModal(false); }} style={{ background: "#fff", color: "#666", border: "1px solid #E8E5E0", borderRadius: 8, padding: "9px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>나중에</button>
               <button onClick={saveRejectChecks} style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, padding: "9px 20px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
             </div>
           </div>
@@ -14866,7 +14877,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       {/* 휴지통 모달 */}
       {showTrash && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowTrash(false); }}>
+          >
           <div style={{ background: "#fff", borderRadius: 14, width: 600, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ 휴지통 ({trashedCases.length}건)</h2>
@@ -14901,11 +14912,11 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       {/* 신규 진행건 추가 모달 (자동완성 포함) */}
       {showAddCase && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onMouseDown={function(e) { if (e.target === e.currentTarget) { setShowAddCase(false); setCompanySuggestions([]); } }}>
+          >
           <div style={{ background: "#fff", borderRadius: 14, width: 520, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>신규 진행건 추가 ({activeGroup} {activeMonth}월)</h2>
-              <button onClick={function() { setShowAddCase(false); setCompanySuggestions([]); }} style={{ background: "none", border: "none", cursor: "pointer" }}>
+              <button onClick={function() { if (confirmDiscard(["business_name","representative","business_number","assignee","request_amount","region","notes"].some(function(k){ return (newCase[k]||"").toString().trim(); }))) { setShowAddCase(false); setCompanySuggestions([]); } }} style={{ background: "none", border: "none", cursor: "pointer" }}>
                 <Icon name="x" size={18} color="#888" />
               </button>
             </div>
@@ -15731,7 +15742,7 @@ function DBLeadsView({ canExport }) {
         )}
       </div>
 
-      {showDupModal && (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center" }} onMouseDown={function(e) { if (e.target === e.currentTarget) setShowDupModal(false); }}>
+      {showDupModal && (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div style={{ background: "#fff", borderRadius: 12, padding: 24, width: 520, maxWidth: "90vw", maxHeight: "80vh", overflowY: "auto" }} onClick={function(e) { e.stopPropagation(); }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
             <span style={{ fontSize: 20 }}>⚠️</span>
@@ -15764,9 +15775,9 @@ function DBLeadsView({ canExport }) {
         </div>
       </div>)}
 
-      {showAddLead && (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onMouseDown={function(e) { if (e.target === e.currentTarget) setShowAddLead(false); }}>
+      {showAddLead && (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div style={{ background: "#fff", borderRadius: 14, width: 520, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
-          <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center" }}><h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>신규 DB 등록 ({activeMonth}월)</h2><button onClick={function() { setShowAddLead(false); }} style={{ background: "none", border: "none", cursor: "pointer" }}><Icon name="x" size={18} color="#888" /></button></div>
+          <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center" }}><h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>신규 DB 등록 ({activeMonth}월)</h2><button onClick={function() { if (confirmDiscard(["business_name","contact","assignee","assigned_by","call_1","call_2","call_3","call_4","call_5","etc"].some(function(k){ return (newLead[k]||"").toString().trim(); }))) setShowAddLead(false); }} style={{ background: "none", border: "none", cursor: "pointer" }}><Icon name="x" size={18} color="#888" /></button></div>
           <div style={{ padding: "20px 24px" }}>
             <div style={{ marginBottom: 13 }}><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>사업자명 *</label><input value={newLead.business_name || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { business_name: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} /></div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 13 }}><div><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>연락처</label><input value={newLead.contact || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { contact: e.target.value }); }); }} placeholder="010-0000-0000" style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} /></div><div><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>상태</label><select value={newLead.status || "미연락"} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { status: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>{LEAD_STATUSES.map(function(s) { return <option key={s} value={s}>{s}</option>; })}</select></div></div>
@@ -15982,7 +15993,7 @@ function DBLeadsView({ canExport }) {
       {/* DB리스트 휴지통 모달 */}
       {showLeadTrash && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onMouseDown={function(e) { if (e.target === e.currentTarget) setShowLeadTrash(false); }}>
+          >
           <div style={{ background: "#fff", borderRadius: 14, width: 600, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ DB리스트 휴지통 ({trashedLeads.length}건)</h2>
@@ -16482,7 +16493,7 @@ function ApprovalCasesView({ profile }) {
             </div>
 
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button onClick={function() { setShowForm(false); }}
+              <button onClick={function() { if (confirmDiscard(editingCase && (["business_name","product","result","initial_issue","resolution","key_point","result_reason","blog_memo","applied_amount","approved_amount","industry","region"].some(function(k){ return (editingCase[k]||"").toString().trim(); }) || (editingCase.tags||[]).length>0))) setShowForm(false); }}
                 style={{ padding: "10px 18px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>취소</button>
               <button onClick={saveCase}
                 style={{ padding: "10px 18px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
@@ -16556,7 +16567,7 @@ function GlobalSearchModal({ companies, query, setQuery, onClose, onSelectCompan
   var totalCount = matchedCompanies.length + matchedNotes.length + matchedAgency.length + matchedApprovalCases.length;
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 2000, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: 80 }} onClick={onClose}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 2000, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: 80 }}>
       <div onClick={function(e) { e.stopPropagation(); }}
         style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 640, maxHeight: "70vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
         {/* 검색창 */}
@@ -17932,7 +17943,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
               </div>
             </div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button onClick={function() { setShowAdd(false); }}
+              <button onClick={function() { if (confirmDiscard((newNote.title||"").trim() || (newNote.content||"").trim() || (newNote.checklist||[]).some(function(it){ return (it.text||"").trim(); }))) setShowAdd(false); }}
                 style={{ padding: "10px 18px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>취소</button>
               <button onClick={addTeamNote}
                 style={{ padding: "10px 18px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>등록</button>
