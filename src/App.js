@@ -18067,8 +18067,10 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     });
   }, [allTeamNotes, activeTab]);
 
-  // 완료/가져간(비open) 카드 수 — "완료된 업무 N건 보기" 토글 라벨용
-  var doneCount = useMemo(function() { return tabNotes.filter(function(n) { return n.status !== "open"; }).length; }, [tabNotes]);
+  // 완료된(done) 카드 수 — "완료된 업무 N건 보기" 토글 라벨용
+  // ⚠️ 반드시 status === "done"만 집계. "taken"(가져감=진행중)은 완료가 아니므로 제외한다.
+  //    (과거 버그: status !== "open"으로 집계해 '가져가기'가 완료로 오인됨)
+  var doneCount = useMemo(function() { return tabNotes.filter(function(n) { return n.status === "done"; }).length; }, [tabNotes]);
 
   var PRI_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
   // 📌 공지로 등록됐고 대기중이며 아직 전원 확인 전인 카드는 최상단 고정 (전원 확인되면 고정 해제 → 접힘)
@@ -18080,7 +18082,10 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
   };
   // 탭별 노트 (📌공지 고정 먼저 → 긴급 먼저 → 최신순). 완료/가져간 카드는 토글에 따라 표시
   var displayNotes = useMemo(function() {
-    var list = tabNotes.filter(function(n) { return showDone || n.status === "open"; });
+    // 기본 화면: 대기중(open) + 진행중(taken) 모두 표시. 완료(done)만 숨김(토글 시 표시).
+    // ⚠️ '가져가기'는 taken(진행중)일 뿐 완료가 아니므로 절대 숨기지 않는다.
+    //    (진행중 카드가 보여야 담당자가 '✅ 완료처리' 버튼을 눌러 직접 완료할 수 있다)
+    var list = tabNotes.filter(function(n) { return showDone || n.status !== "done"; });
     return list.slice().sort(function(a, b) {
       var pa = isPinnedAnnounce(a) ? 0 : 1, pb = isPinnedAnnounce(b) ? 0 : 1;
       if (pa !== pb) return pa - pb; // 공지 고정 카드 최상단
@@ -18506,7 +18511,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
             <div style={{ textAlign: "center", padding: 30, color: "#AAA", fontSize: 12 }}>불러오는 중...</div>
           ) : displayNotes.length === 0 ? (
             <div style={{ textAlign: "center", padding: 30, color: "#AAA", fontSize: 13, background: "#F7F6F3", borderRadius: 8 }}>
-              {showDone ? "이 팀에 노트가 없어요" : "대기중인 업무가 없어요. 새 업무를 등록해보세요."}
+              {showDone ? "이 팀에 노트가 없어요" : "대기·진행중인 업무가 없어요. 새 업무를 등록해보세요."}
             </div>
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
