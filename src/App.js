@@ -5981,7 +5981,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
   }
 
   // 태블릿(768~1024px)에서 숨길 부가 컬럼 — 핵심(업체명·지역·대표자·담당·진행단계·정체일수·신청기관·작업)만 남김
-  const LIST_TABLET_HIDE = ["유형", "업종", "규모/기관", "중복", "계약일", "진행기관", "23년~25년 매출", "26년 상반기 매출", "신용점수", "기타"];
+  const LIST_TABLET_HIDE = ["유형", "지역", "업종", "규모/기관", "중복", "정체일수", "신청기관", "계약일", "진행기관", "23년~25년 매출", "26년 상반기 매출", "신용점수", "기타"];
   // 컬럼 너비 수동 조절 (헤더 경계 드래그) - 브라우저(localStorage)에 자동 저장
   const DEFAULT_LIST_COL_WIDTHS = {
     "업체명": 200, "유형": 80, "지역": 90, "업종": 120, "규모/기관": 130, "대표자": 80, "담당": 60,
@@ -6204,7 +6204,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
         )}
       </div>
       {/* 태블릿(768~1024px)에서 부가 컬럼 숨기고 업체명에 여유 주기 */}
-      <style>{"@media (min-width:768px) and (max-width:1024px){.lst-hide-tablet{display:none !important;}.lst-table{min-width:0 !important;}.lst-name-cell{width:auto !important;min-width:200px !important;max-width:none !important;}}"}</style>
+      <style>{"@media (max-width:1024px){.lst-hide-tablet{display:none !important;}.lst-table{min-width:0 !important;}.lst-name-cell{width:auto !important;min-width:180px !important;max-width:none !important;}.lst-name-inner{flex-wrap:wrap !important;align-items:flex-start !important;row-gap:4px !important;}.lst-name-text{flex:0 0 100% !important;font-size:15px !important;-webkit-line-clamp:3 !important;}.lst-region-tablet{display:inline-flex !important;}}"}</style>
       <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
         <div style={{ overflowX: "auto", maxHeight: "calc(100vh - 220px)", overflowY: "auto" }}>
         <table className="lst-table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 1200, tableLayout: "fixed" }}>
@@ -6247,9 +6247,10 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                         <button onClick={() => setEditNameId(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#888" }}>취소</button>
                       </div>
                     ) : (
-                      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                        <span style={{ minWidth: 0, whiteSpace: "normal", wordBreak: "keep-all", overflowWrap: "anywhere", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", lineHeight: 1.3 }}>{co.name}</span>
+                      <div className="lst-name-inner" style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                        <span className="lst-name-text" style={{ minWidth: 0, whiteSpace: "normal", wordBreak: "keep-all", overflowWrap: "anywhere", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", lineHeight: 1.3 }}>{co.name}</span>
                         {(function() { var tm = teamOf(co); return <span title="팀 (저장값 우선 · 없으면 업체명 기준 자동)" style={{ flexShrink: 0, fontSize: 9, padding: "2px 6px", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap", background: tm === "법인팀" ? "#EEF2FF" : "#F0FDF4", color: tm === "법인팀" ? "#4338CA" : "#15803D" }}>{tm}</span>; })()}
+                        {co.region ? (function() { var rc = getRegionColor(co.region); return <span className="lst-region-tablet" style={{ display: "none", flexShrink: 0, fontSize: 11, padding: "2px 8px", borderRadius: 6, fontWeight: 600, background: rc.bg, color: rc.text, whiteSpace: "nowrap" }}>{co.region}</span>; })() : null}
                         {co.stagnant_days >= 7 && <span style={{ fontSize: 10, color: "#DC2626" }}>⚠</span>}
                         {(function() { var yr = youthReapplyStatus(co, (agencyByName[co.name] || []).map(function(x) { return x.product; })); return yr && yr.eligible ? <span title={"청년창업 부결 " + yr.rejectedDate + " · 6개월 경과(재신청 가능일 " + yr.reapplyDate + ")"} style={{ flexShrink: 0, fontSize: 9, padding: "2px 6px", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap", background: "#DCFCE7", color: "#15803D", border: "1px solid #86EFAC" }}>재신청 가능</span> : null; })()}
                         <button onClick={e => { e.stopPropagation(); setEditNameId(co.id); setEditNameVal(co.name); }}
@@ -6262,7 +6263,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                     )}
                   </td>
                   <td className="lst-hide-tablet" style={{ padding: "11px 8px", whiteSpace: "nowrap" }}><span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 99, background: co.type === "법인" ? "#EEF2FF" : "#F0FDF4", color: co.type === "법인" ? "#4338CA" : "#15803D", fontWeight: 600 }}>{co.type === "법인" ? "법인사업자" : "개인사업자"}</span></td>
-                  <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 90, overflow: "hidden", textOverflow: "ellipsis" }} onClick={e => e.stopPropagation()}>
+                  <td className="lst-hide-tablet" style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 90, overflow: "hidden", textOverflow: "ellipsis" }} onClick={e => e.stopPropagation()}>
                     {editRowId === co.id ? (
                       <input value={editRow.region} onChange={function(e) { var v = e.target.value; setEditRow(function(p) { return Object.assign({}, p, { region: v }); }); }}
                         placeholder="지역" onKeyDown={function(e) { if (e.key === "Enter") saveRowEdit(co); if (e.key === "Escape") setEditRowId(null); }}
@@ -6319,8 +6320,8 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                   <td style={{ padding: "11px 13px", fontSize: 12, whiteSpace: "nowrap" }}>{co.assignee || "-"}</td>
                   <td style={{ padding: "11px 13px", whiteSpace: "nowrap" }}><span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, fontWeight: 600 }}>{co.stage}</span>{(function(){ var ms = masterStatus(co.name); return ms ? <span style={{ display: "inline-block", marginLeft: 4, fontSize: 9, padding: "3px 7px", borderRadius: 99, background: ms.bg, color: ms.text, fontWeight: 700 }} title="여러 기관 종합 상태">{ms.label}</span> : null; })()}</td>
                   <td className="lst-hide-tablet" style={{ padding: "11px 13px", textAlign: "center" }}>{(function() { var cnt = isListDup(co); return cnt ? <span title={"같은 사업장이 총 " + cnt + "건 등록됨"} style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", whiteSpace: "nowrap" }}>중복</span> : null; })()}</td>
-                  <td style={{ padding: "11px 13px", whiteSpace: "nowrap", textAlign: "center" }}>{(function() { var d = co.stagnant_days || 0; if (d >= 14) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", fontWeight: 700 }}>⚠ {d}일</span>; if (d >= 7) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEF3C7", color: "#B45309", fontWeight: 700 }}>{d}일</span>; return <span style={{ fontSize: 11, color: "#AAA" }}>{d}일</span>; })()}</td>
-                  <td style={{ padding: "8px 8px", fontSize: 11, verticalAlign: "middle" }}>
+                  <td className="lst-hide-tablet" style={{ padding: "11px 13px", whiteSpace: "nowrap", textAlign: "center" }}>{(function() { var d = co.stagnant_days || 0; if (d >= 14) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", fontWeight: 700 }}>⚠ {d}일</span>; if (d >= 7) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEF3C7", color: "#B45309", fontWeight: 700 }}>{d}일</span>; return <span style={{ fontSize: 11, color: "#AAA" }}>{d}일</span>; })()}</td>
+                  <td className="lst-hide-tablet" style={{ padding: "8px 8px", fontSize: 11, verticalAlign: "middle" }}>
                     {(function() {
                       var cs = agencyByName[co.name] || [];
                       var byGroup = {};
