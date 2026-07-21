@@ -1528,6 +1528,13 @@ function canAccessChannel(channel, name) {
   if (channel.indexOf("dm:") === 0) return channel.slice(3).split("|").indexOf(name) >= 0;
   return false;
 }
+// 채널 id → 사람이 읽는 라벨 (알림 표시용)
+function chatChannelLabel(channel, me) {
+  if (!channel) return "채팅";
+  if (channel.indexOf("dm:") === 0) return "💬 " + dmPartner(channel, me);
+  var cc = CHAT_CHANNELS.find(function(c) { return c.id === channel; });
+  return cc ? cc.emoji + " " + cc.label : channel;
+}
 // 모달 닫기 전 확인 — 작성 중 내용이 있으면 재확인, 없으면 그냥 닫기 허용.
 // 반환 true = 닫아도 됨. (모든 모달의 X/닫기/취소/ESC 에서 공통 사용)
 function confirmDiscard(hasContent) {
@@ -2136,10 +2143,10 @@ function MobileApp({ profile, session }) {
 }
 
 // ── 실시간 팀 채팅 ────────────────────────────────────────────────────────────
-function ChatView({ profile, onUnreadChange }) {
+function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onChannelChange }) {
   const me = profile?.name || "";
   const isAdmin = profile?.role === "admin" || me === "양호"; // 관리자는 남의 메시지도 삭제 가능
-  const [channel, setChannel] = useState("general");
+  const [channel, setChannel] = useState(function() { return pendingChannel || "general"; });
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -2153,6 +2160,22 @@ function ChatView({ profile, onUnreadChange }) {
   const markedRef = useRef({}); // 이미 읽음 처리한 메시지 id (중복 update 방지)
   const onUnreadRef = useRef(onUnreadChange); // App 재렌더로 콜백이 바뀌어도 effect 재실행 안 되게 고정
   onUnreadRef.current = onUnreadChange;
+  const onChannelRef = useRef(onChannelChange);
+  onChannelRef.current = onChannelChange;
+
+  // 현재 열람 중인 채널을 App에 보고 (알림음 억제 판단용) + 채팅 화면 나갈 때 초기화
+  useEffect(function() {
+    if (onChannelRef.current) onChannelRef.current(channel);
+    return function() { if (onChannelRef.current) onChannelRef.current(null); };
+  }, [channel]);
+
+  // 알림함/브라우저 알림 클릭으로 특정 채널 열기 요청 → 그 채널로 전환 후 소비 처리
+  useEffect(function() {
+    if (pendingChannel && canAccessChannel(pendingChannel, me)) {
+      setChannel(pendingChannel);
+    }
+    if (pendingChannel && onJumpConsumed) onJumpConsumed();
+  }, [pendingChannel, me, onJumpConsumed]);
 
   // 접근 가능한 팀 채널
   const teamChannels = CHAT_CHANNELS.filter(function(c) { return canAccessChannel(c.id, me); });
@@ -2791,6 +2814,23 @@ function CRMApp({ profile, session }) {
   const [showTodayAlert, setShowTodayAlert] = useState(false);
   const [workNotesBadge, setWorkNotesBadge] = useState(0);
   const [chatUnread, setChatUnread] = useState(0);
+  const [chatUnreadList, setChatUnreadList] = useState([]); // 안 읽은 채팅 메시지 목록(알림함)
+  const [showChatNotif, setShowChatNotif] = useState(false); // 채팅 알림함 드롭다운 열림
+  const [chatPendingChannel, setChatPendingChannel] = useState(null); // 알림 클릭 시 이동할 채널
+  const [chatSoundOn, setChatSoundOn] = useState(function() {
+    try { return localStorage.getItem("crm_chat_sound") !== "off"; } catch (e) { return true; }
+  });
+  const activeChatChannelRef = useRef(null); // ChatView가 보고하는 현재 열람 채널
+  const chatSeenRef = useRef({});            // 알림음/브라우저알림 이미 처리한 메시지 id
+  const chatAudioCtxRef = useRef(null);
+  const chatBaseTitleRef = useRef("");
+  const goToChatRef = useRef(function() {});
+  const chatSoundRef = useRef(true);
+  const meRef = useRef("");
+  const viewRef = useRef("dashboard");
+  chatSoundRef.current = chatSoundOn;
+  meRef.current = profile?.name || "";
+  viewRef.current = view;
   const [quickMemo, setQuickMemo] = useState(false);
   const [quickMemoText, setQuickMemoText] = useState("");
   const [quickMemoCompany, setQuickMemoCompany] = useState(null); // 선택된 업체 {id, name}
@@ -2943,17 +2983,18 @@ function CRMApp({ profile, session }) {
     if (!name) return;
     try {
       var r = await supabase.from("chat_messages")
-        .select("id, sender, channel, read_by, deleted_at")
+        .select("id, sender, channel, message, read_by, deleted_at, created_at")
         .order("created_at", { ascending: false }).limit(1000);
       if (r.error || !r.data) return;
-      var cnt = r.data.filter(function(m) {
+      var list = r.data.filter(function(m) {
         if (m.deleted_at) return false;
         if (m.sender === name) return false;
         var rb = Array.isArray(m.read_by) ? m.read_by : [];
         if (rb.indexOf(name) >= 0) return false;
         return canAccessChannel(m.channel, name);
-      }).length;
-      setChatUnread(cnt);
+      });
+      setChatUnread(list.length);
+      setChatUnreadList(list); // 최신순(내림차순 정렬 그대로)
     } catch (e) {}
   }, []);
 
@@ -2995,17 +3036,118 @@ function CRMApp({ profile, session }) {
     if (profile?.name) fetchWorkNotesBadge(profile.name);
   }, [fetchAll]);
 
-  // 채팅 안 읽은 수 로드 + 실시간 갱신 (새 메시지/읽음 처리 시 배지 갱신)
+  // ── 채팅 알림 (알림음 · 브라우저 알림 · 알림함 이동) ─────────────────────────
+  // 알림음: WebAudio로 2음 차임 생성 (별도 음원 파일 불필요)
+  const playChatSound = useCallback(function() {
+    try {
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      if (!chatAudioCtxRef.current) chatAudioCtxRef.current = new Ctx();
+      var ctx = chatAudioCtxRef.current;
+      if (ctx.state === "suspended") ctx.resume();
+      var t0 = ctx.currentTime;
+      [880, 1174.66].forEach(function(freq, i) {
+        var osc = ctx.createOscillator();
+        var gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        var s = t0 + i * 0.13;
+        gain.gain.setValueAtTime(0.0001, s);
+        gain.gain.exponentialRampToValueAtTime(0.22, s + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, s + 0.12);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(s); osc.stop(s + 0.13);
+      });
+    } catch (e) {}
+  }, []);
+
+  // 알림/알림함 클릭 → 채팅 화면 + 해당 채널로 이동
+  const goToChat = useCallback(function(ch) {
+    if (ch) setChatPendingChannel(ch);
+    setView("chat");
+    setShowChatNotif(false);
+  }, []);
+  goToChatRef.current = goToChat;
+
+  // 알림함 항목 클릭: 그 메시지만 읽음 처리 (채널 직접 열람 전까진 나머지는 유지)
+  const markChatItemRead = useCallback(async function(m) {
+    var meName = profile?.name;
+    if (!meName || !m) return;
+    var rb = Array.isArray(m.read_by) ? m.read_by.slice() : [];
+    if (rb.indexOf(meName) < 0) {
+      rb.push(meName);
+      await supabase.from("chat_messages").update({ read_by: rb }).eq("id", m.id);
+    }
+    fetchChatUnread(meName);
+  }, [profile?.name, fetchChatUnread]);
+
+  // 브라우저 알림 표시 (requireInteraction: 사용자가 닫기 전까지 화면에 유지)
+  const showChatBrowserNotif = useCallback(function(row) {
+    try {
+      if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+      var meName = meRef.current;
+      var n = new Notification(row.sender + " · " + chatChannelLabel(row.channel, meName), {
+        body: (row.message || "").slice(0, 120),
+        tag: "chat-" + row.channel, // 같은 채널 알림은 최신 것으로 교체
+        renotify: true,
+        requireInteraction: true,   // 자동으로 안 사라짐
+      });
+      n.onclick = function() { window.focus(); goToChatRef.current(row.channel); n.close(); };
+    } catch (e) {}
+  }, []);
+
+  // 새 메시지 처리 — 본인 메시지·현재 보고 있는 채널은 알림 없이 조용히
+  const handleIncomingChat = useCallback(function(row) {
+    var meName = meRef.current;
+    if (!row || row.deleted_at || !meName) return;
+    if (row.sender === meName) return;                  // 내가 보낸 건 소리 없음
+    if (!canAccessChannel(row.channel, meName)) return; // 내 채널 아니면 무시
+    if (chatSeenRef.current[row.id]) return;
+    chatSeenRef.current[row.id] = true;
+    // 지금 그 채널을 실제로 보고 있으면(탭 활성) 알림 없이 읽힘
+    var viewingThis = viewRef.current === "chat"
+      && activeChatChannelRef.current === row.channel
+      && document.visibilityState === "visible"
+      && document.hasFocus();
+    if (viewingThis) return;
+    if (chatSoundRef.current) playChatSound();
+    showChatBrowserNotif(row);
+  }, [playChatSound, showChatBrowserNotif]);
+
+  // 브라우저 알림 권한 요청(최초 1회) + 탭 기본 제목 기억
+  useEffect(function() {
+    if (!chatBaseTitleRef.current) {
+      chatBaseTitleRef.current = (document.title || "CRM").replace(/^\(\d+\)\s*/, "");
+    }
+    if (!profile?.name) return;
+    if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      try { Notification.requestPermission(); } catch (e) {}
+    }
+  }, [profile?.name]);
+
+  // 안 읽은 채팅 수 → 탭 제목 앞 "(N) " 표시
+  useEffect(function() {
+    var base = chatBaseTitleRef.current || "CRM";
+    document.title = chatUnread > 0 ? "(" + chatUnread + ") " + base : base;
+  }, [chatUnread]);
+
+  // 알림음 on/off 설정 저장
+  useEffect(function() {
+    try { localStorage.setItem("crm_chat_sound", chatSoundOn ? "on" : "off"); } catch (e) {}
+  }, [chatSoundOn]);
+
+  // 채팅 안 읽은 수 로드 + 실시간 갱신 (새 메시지/읽음 처리 시 배지 갱신 + 알림)
   useEffect(() => {
     if (!profile?.name) return;
     fetchChatUnread(profile.name);
     var ch = supabase.channel("chat-badge")
-      .on("postgres_changes", { event: "*", schema: "public", table: "chat_messages" }, function() {
+      .on("postgres_changes", { event: "*", schema: "public", table: "chat_messages" }, function(payload) {
         fetchChatUnread(profile.name);
+        if (payload.eventType === "INSERT") handleIncomingChat(payload.new);
       })
       .subscribe();
     return function() { supabase.removeChannel(ch); };
-  }, [profile?.name, fetchChatUnread]);
+  }, [profile?.name, fetchChatUnread, handleIncomingChat]);
 
   // 로그인 시 오늘 할 일 알림 - 최초 1회만
   const alertShownRef = useRef(false);
@@ -3822,6 +3964,13 @@ function CRMApp({ profile, session }) {
                 <span style={{ position: "absolute", top: -3, right: -3, minWidth: 16, height: 16, background: "#DC2626", borderRadius: 99, fontSize: 9, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }}>{notifications.length}</span>
               )}
             </button>
+            <button onClick={function() { setShowChatNotif(function(p) { return !p; }); }} title="안 읽은 채팅"
+              style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", padding: "7px 10px", background: "#2E2C29", border: "none", borderRadius: 6, color: "#888", fontSize: 14, cursor: "pointer" }}>
+              💬
+              {chatUnread > 0 && (
+                <span style={{ position: "absolute", top: -3, right: -3, minWidth: 16, height: 16, background: "#DC2626", borderRadius: 99, fontSize: 9, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }}>{chatUnread}</span>
+              )}
+            </button>
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             <button onClick={fetchAll} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "6px", background: "#2E2C29", border: "none", borderRadius: 6, color: "#888", fontSize: 11, cursor: "pointer" }}>
@@ -3876,6 +4025,52 @@ function CRMApp({ profile, session }) {
         </div>
       )}
 
+      {/* 💬 안 읽은 채팅 알림함 */}
+      {showChatNotif && (
+        <div style={{ position: "fixed", top: 0, left: 220, right: 0, bottom: 0, zIndex: 900 }} onClick={function() { setShowChatNotif(false); }}>
+          <div style={{ position: "absolute", top: 0, left: 0, width: 360, maxHeight: "100vh", background: "#fff", boxShadow: "4px 0 24px rgba(0,0,0,0.15)", overflowY: "auto" }}
+            onClick={function(e) { e.stopPropagation(); }}>
+            <div style={{ padding: "20px 20px 14px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "flex-start", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>💬 안 읽은 채팅</div>
+                <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{chatUnread > 0 ? chatUnread + "개의 새 메시지" : "모두 읽었어요"}</div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button onClick={function() { setChatSoundOn(function(p) { return !p; }); }} title="알림음 켜기/끄기"
+                  style={{ fontSize: 11, color: chatSoundOn ? "#4338CA" : "#888", background: chatSoundOn ? "#EEF2FF" : "#F3F3F1", border: "1px solid " + (chatSoundOn ? "#C7D2FE" : "#E8E5E0"), borderRadius: 6, padding: "4px 8px", cursor: "pointer", whiteSpace: "nowrap" }}>
+                  {chatSoundOn ? "🔊 알림음 켜짐" : "🔇 알림음 꺼짐"}
+                </button>
+                <button onClick={function() { setShowChatNotif(false); }} style={{ background: "none", border: "none", fontSize: 18, color: "#888", cursor: "pointer", lineHeight: 1 }}>✕</button>
+              </div>
+            </div>
+            <div style={{ padding: "12px 16px" }}>
+              {chatUnreadList.length === 0 ? (
+                <div style={{ padding: "40px 0", textAlign: "center", color: "#888", fontSize: 13 }}>
+                  <div style={{ fontSize: 32, marginBottom: 8 }}>💬</div>
+                  안 읽은 메시지가 없어요
+                </div>
+              ) : (
+                chatUnreadList.map(function(m) {
+                  return (
+                    <div key={m.id} style={{ background: "#F8F9FF", border: "1px solid #E0E7FF", borderRadius: 10, padding: "12px 14px", marginBottom: 10, cursor: "pointer" }}
+                      onClick={function() { markChatItemRead(m); goToChat(m.channel); }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, gap: 8 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#1A1917", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.sender}</div>
+                        <div style={{ fontSize: 10, fontWeight: 600, color: "#4338CA", background: "#EEF2FF", borderRadius: 99, padding: "2px 8px", whiteSpace: "nowrap", flexShrink: 0 }}>{chatChannelLabel(m.channel, profile?.name)}</div>
+                      </div>
+                      <div style={{ fontSize: 12, color: "#555", lineHeight: 1.5, whiteSpace: "pre-wrap", maxHeight: 42, overflow: "hidden" }}>{m.message}</div>
+                      <div style={{ fontSize: 11, color: "#AAA", marginTop: 6 }}>
+                        {new Date(m.created_at).toLocaleString("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 메인 */}
       <div className="crm-main" style={{ marginLeft: 220, padding: "28px 32px", minHeight: "100vh" }}>
         {loading ? (
@@ -3892,7 +4087,9 @@ function CRMApp({ profile, session }) {
             {view === "settlement" && <SettlementView />}
             {view === "activitylog" && <ActivityLogView />}
             {view === "worknotes" && <WorkNotesView profile={profile} onBadgeUpdate={function() { fetchWorkNotesBadge(profile?.name); }} />}
-            {view === "chat" && <ChatView profile={profile} onUnreadChange={function() { fetchChatUnread(profile?.name); }} />}
+            {view === "chat" && <ChatView profile={profile} onUnreadChange={function() { fetchChatUnread(profile?.name); }}
+              pendingChannel={chatPendingChannel} onJumpConsumed={function() { setChatPendingChannel(null); }}
+              onChannelChange={function(ch) { activeChatChannelRef.current = ch; }} />}
             {view === "leave" && <LeaveView profile={profile} profiles={profiles} />}
             {view === "partners" && <PartnersView />}
             {view === "calendar" && <CalendarView companies={companies} onSelectCompany={setSelectedCompany} profile={profile} />}
