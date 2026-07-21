@@ -3039,6 +3039,23 @@ function CRMApp({ profile, session }) {
     };
   }, []);
 
+  // 🔔 각 사용자 알림 권한 상태를 DB(notif_status)에 기록 — 관리자가 한 곳에서 전원 확인
+  //    notifPerm 이 로드/권한변경/요청결과/탭복귀 때마다 갱신되므로 여기서 자동 반영된다.
+  useEffect(function() {
+    if (!profile?.name || !notifPerm) return;
+    var ua = "";
+    try { ua = (navigator.userAgent || "").slice(0, 300); } catch (e) {}
+    supabase.from("notif_status").upsert({
+      user_name: profile.name,
+      permission: notifPerm,
+      user_agent: ua,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "user_name" }).then(function(r) {
+      if (r.error) console.log("[알림진단] notif_status 기록 실패:", r.error.message);
+      else console.log("[알림진단] notif_status 기록 완료 — 권한 =", notifPerm);
+    });
+  }, [profile?.name, notifPerm]);
+
   // 권한 허용 요청 (배너에서 클릭)
   var requestNotifPermission = function() {
     if (!("Notification" in window)) return;
