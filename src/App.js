@@ -2764,7 +2764,10 @@ var _chatBadgeSubActive = 0; // 현재 살아있는 구독 수
 // ── 🔔 알림음 (Web Audio API "띵동" 2음 차임, 약 1.5초) ──────────────────────
 // 음원 파일 없이 브라우저에서 직접 합성 → 로딩/캐시 문제 없이 또렷하게 재생
 var _notifAudioCtx = null;
-function playNotifChime() {
+function playNotifChime(source) {
+  // 🩺 5분 무입력 검증용: 업무노트 차임도 호출되면 무조건 로그를 남긴다.
+  console.log("[알림진단] playNotifChime 호출 — 시각=" + new Date().toISOString()
+    + " / 메시지id=없음(업무노트) / 경로=" + (source || "미상"));
   try {
     var AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
@@ -3005,7 +3008,9 @@ function CRMApp({ profile, session }) {
   useEffect(function() {
     if (!profile) return;
     var lastChecked = localStorage.getItem("notif_last_checked_" + profile.name) || new Date(0).toISOString();
-    var isFirst = true; // 첫 로드(밀린 알림 다량)에는 소리 안 울리고, 이후 새로 도착한 것만 소리
+    // ⚠️ 여기서는 절대 소리를 내지 않는다.
+    //    (과거: 30초 폴링마다 playNotifChime 호출 → 새 메시지가 없어도 반복적으로 소리가 나던 유령 경로.
+    //     업무노트 알림은 벨 배지/패널로 '조용히'만 표시한다.)
     var checkNotifs = async function() {
       var r = await supabase.from("work_notes")
         .select("*").eq("assignee", profile.name)
@@ -3015,11 +3020,9 @@ function CRMApp({ profile, session }) {
         setNotifications(function(prev) {
           var ids = new Set(prev.map(function(n) { return n.id; }));
           var newOnes = r.data.filter(function(n) { return !ids.has(n.id); });
-          if (newOnes.length > 0 && !isFirst) playNotifChime(); // 🔔 새로 도착한 알림에만 소리
           return newOnes.concat(prev).slice(0, 20);
         });
       }
-      isFirst = false;
     };
     checkNotifs();
     var interval = setInterval(checkNotifs, 30000);
@@ -3086,7 +3089,7 @@ function CRMApp({ profile, session }) {
           user_name: profile.name,
           subscription: { endpoint: "browser-" + profile.name, type: "notification" }
         }, { onConflict: "user_name" });
-        playNotifChime(); // 허용 직후 사운드 테스트 겸 확인음
+        playNotifChime("알림권한 허용 직후 1회 테스트음(사용자 클릭)"); // 유휴 아님·사용자 액션
       }
     });
   };
@@ -3200,6 +3203,12 @@ function CRMApp({ profile, session }) {
     chatSoundCallCountRef.current += 1;
     var callNo = chatSoundCallCountRef.current;
 
+    // 🩺 5분 무입력 검증용: 소리 함수가 '호출' 되기만 해도 무조건 이 줄이 찍힌다.
+    //    아무 메시지 없이 대기 중 이 로그가 하나라도 뜨면 유령 호출 경로가 살아있다는 뜻.
+    console.log("[알림진단] playChatSound 호출 — 시각=" + new Date(now).toISOString()
+      + " / 메시지id=" + (info.id != null ? info.id : "없음")
+      + " / 경로=" + (info.reason || "미상"));
+
     // 🔒 하드 중복 차단: 같은 메시지 id가 2초 내에 다시 소리 내려 하면 무시.
     //    (구독 중복/멀티 마운트로 동일 이벤트가 두 번 흘러들어와도 한 번만 울리게 하는 최종 방어선)
     var last = lastChatSoundRef.current;
@@ -3273,6 +3282,7 @@ function CRMApp({ profile, session }) {
         tag: "chat-" + row.channel, // 같은 채널 알림은 최신 것으로 교체
         renotify: true,
         requireInteraction: true,   // 자동으로 안 사라짐
+        silent: true,               // 🔇 브라우저 기본 알림음 끔 → 커스텀 차임(띵동)만 재생(소리 2개 겹침 방지)
       });
       console.log("[알림진단] ✅ Notification 생성 완료");
       n.onclick = function() { window.focus(); goToChatRef.current(row.channel); n.close(); };
@@ -10651,6 +10661,7 @@ async function sendPushToUser(userName, payload) {
               icon: "/favicon.ico",
               tag: "crm-worknote",
               requireInteraction: false,
+              silent: true,           // 🔇 브라우저 기본 알림음 끔 (앱 내 유일한 소리는 채팅 차임)
             });
             n.onclick = function() { window.focus(); };
           }
