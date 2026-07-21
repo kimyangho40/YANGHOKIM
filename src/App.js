@@ -2823,6 +2823,18 @@ function logNotifPermission(where) {
   } catch (e) {}
 }
 
+// ── 타임스탬프 → epoch ms (타임존 표기 누락 방어) ────────────────────────────
+// Supabase Realtime payload 의 timestamptz 는 "...+00" / "...Z" 로 올 수도,
+// 드물게 타임존 없이("2026-07-21 07:57:20.317") 올 수도 있다.
+// 후자를 로컬시각으로 오해하면(KST면 9시간 오차) 알림 판정이 어긋나므로 UTC로 고정.
+function parseTsMs(s) {
+  if (!s) return NaN;
+  var str = String(s).trim().replace(" ", "T");
+  str = str.replace(/([+\-]\d{2})$/, "$1:00");             // 짧은 오프셋 +00 → +00:00 ('T' 형식은 짧은 오프셋 거부)
+  if (!/([zZ]|[+\-]\d{2}:?\d{2})$/.test(str)) str += "Z";  // 타임존 표기 없으면 UTC로 간주
+  return Date.parse(str);
+}
+
 // ── CRM 메인 앱 ───────────────────────────────────────────────────────────────
 function CRMApp({ profile, session }) {
   const [dashboardFilter, setDashboardFilter] = useState(null);
@@ -3252,7 +3264,7 @@ function CRMApp({ profile, session }) {
 
     // ① 오탐 방지: 앱 구동(구독 시작) 이후 실제로 새로 INSERT된 메시지에만 반응.
     //    재구독/리렌더로 다시 흘러들어온 과거·초기로드 메시지는 무시 (30초 여유 = 서버·클라 시계 오차 대비).
-    var createdMs = row.created_at ? Date.parse(row.created_at) : NaN;
+    var createdMs = parseTsMs(row.created_at);
     if (!isNaN(createdMs) && createdMs < notifSinceRef.current - 30000) {
       console.log("[알림진단] ⏭️ 과거 메시지 무시 — created_at=" + row.created_at + " (구독 시작 이전 메시지)");
       return;
@@ -3301,14 +3313,29 @@ function CRMApp({ profile, session }) {
   // 채팅 안 읽은 수 로드 + 실시간 갱신 (새 메시지/읽음 처리 시 배지 갱신 + 알림)
   useEffect(() => {
     if (!profile?.name) return;
-    fetchChatUnread(profile.name);
+    var meName = profile.name;
+    var cancelled = false;
+
+    // 🔒 오탐 방지 핵심: 구독 시작 시점에 '이미 존재하는 모든 메시지 id'를 seen 으로 등록.
+    //    → Realtime 재연결/재구독으로 기존 메시지가 다시 들어오거나(redeliver),
+    //      초기 로드 목록이 이벤트로 흘러들어와도 chatSeenRef 에서 걸러져 절대 소리 안 남.
+    //    실제로 이 시점 이후 새로 INSERT되는 메시지만 seen 에 없으므로 알림 대상이 된다.
+    supabase.from("chat_messages").select("id")
+      .order("created_at", { ascending: false }).limit(2000)
+      .then(function(r) {
+        if (cancelled || r.error || !r.data) return;
+        r.data.forEach(function(m) { chatSeenRef.current[m.id] = true; });
+        console.log("[알림진단] 🧰 기존 메시지 " + r.data.length + "건 seen 등록 (초기로드·재구독 오탐 방지)");
+      });
+
+    fetchChatUnread(meName);
     var ch = supabase.channel("chat-badge")
       .on("postgres_changes", { event: "*", schema: "public", table: "chat_messages" }, function(payload) {
-        fetchChatUnread(profile.name);
+        fetchChatUnread(meName);
         if (payload.eventType === "INSERT") handleIncomingChat(payload.new);
       })
       .subscribe();
-    return function() { supabase.removeChannel(ch); };
+    return function() { cancelled = true; supabase.removeChannel(ch); };
   }, [profile?.name, fetchChatUnread, handleIncomingChat]);
 
   // 로그인 시 오늘 할 일 알림 - 최초 1회만
