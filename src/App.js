@@ -1895,6 +1895,7 @@ function MobileApp({ profile, session }) {
   var TABS = [
     { key: "home", label: "홈", icon: "🏠" },
     { key: "notes", label: "업무노트", icon: "📝" },
+    { key: "team", label: "팀업무", icon: "📋" },
     { key: "search", label: "업체검색", icon: "🔍" },
     { key: "me", label: "내정보", icon: "👤" }
   ];
@@ -1906,7 +1907,7 @@ function MobileApp({ profile, session }) {
       {/* 상단 상태바 */}
       <div style={{ position: "sticky", top: 0, zIndex: 50, background: "#15803D", color: "#fff", padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "-0.02em" }}>
-          {tab === "home" ? "홈" : tab === "notes" ? "업무노트" : tab === "search" ? "업체검색" : "내정보"}
+          {tab === "home" ? "홈" : tab === "notes" ? "업무노트" : tab === "team" ? "팀업무" : tab === "search" ? "업체검색" : "내정보"}
         </div>
         <div style={{ fontSize: 13, opacity: 0.9 }}>{myName} 님</div>
       </div>
@@ -2034,6 +2035,21 @@ function MobileApp({ profile, session }) {
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {/* ── 팀업무 (데스크톱 TeamNotesSection 재사용 · 반응형 1열) ── */}
+            {tab === "team" && (
+              <div>
+                <TeamNotesSection
+                  profile={profile}
+                  companiesList={companiesList}
+                  onTakenToMyNote={function(nd) {
+                    // 가져가기로 생성/갱신된 내 work_note를 모바일 노트 목록에도 즉시 반영
+                    if (!nd) return;
+                    setNotes(function(prev) { return [nd].concat(prev.filter(function(x) { return x.id !== nd.id; })); });
+                  }}
+                />
               </div>
             )}
 
