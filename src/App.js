@@ -2797,6 +2797,7 @@ function SetupProfile({ userId, email, onDone }) {
 // 재구독 누적/멀티 마운트로 구독이 2개 이상이면 같은 메시지가 여러 번 처리될 수 있으므로 경고를 남긴다.
 var _chatBadgeSubSeq = 0;    // 지금까지 만들어진 구독 일련번호
 var _chatBadgeSubActive = 0; // 현재 살아있는 구독 수
+var _wnAlertSubSeq = 0;      // 업무요청·팀노트 알림 구독 일련번호(고유 토픽용 — 멀티마운트 중복 방지)
 
 // ── 🔔 알림음 (Web Audio API "띵동" 2음 차임, 약 1.5초) ──────────────────────
 // 음원 파일 없이 브라우저에서 직접 합성 → 로딩/캐시 문제 없이 또렷하게 재생
@@ -2940,6 +2941,12 @@ function CRMApp({ profile, session }) {
   const [chatUnread, setChatUnread] = useState(0);
   const [chatUnreadList, setChatUnreadList] = useState([]); // 안 읽은 채팅 메시지 목록(알림함)
   const [showChatNotif, setShowChatNotif] = useState(false); // 채팅 알림함 드롭다운 열림
+  // 🔔 알림 확장: 업무 요청·팀 업무노트도 채팅과 같은 알림함/탭배지에 합류
+  const [reqAlertList, setReqAlertList] = useState([]);        // 나에게 온 미확인(pending) 업무 요청
+  const [teamAlertList, setTeamAlertList] = useState([]);      // 내 팀 미확인(read_by에 내가 없는) 공지
+  const [sentReplyAlertList, setSentReplyAlertList] = useState([]); // 내가 보낸 요청 중 새 답장(reply_unread)
+  const extraSeenRef = useRef({});   // 요청/팀노트 알림음 이미 처리한 이벤트 키 (초기로드·재구독 오탐 방지)
+  const goToWorkNotesRef = useRef(function() {});
   const [chatPendingChannel, setChatPendingChannel] = useState(null); // 알림 클릭 시 이동할 채널
   const [chatSoundOn, setChatSoundOn] = useState(function() {
     try { return localStorage.getItem("crm_chat_sound") !== "off"; } catch (e) { return true; }
@@ -3383,11 +3390,12 @@ function CRMApp({ profile, session }) {
     }
   }, [profile?.name]);
 
-  // 안 읽은 채팅 수 → 탭 제목 앞 "(N) " 표시
+  // 안 읽은 알림(채팅+요청+팀공지+답장) 총합 → 탭 제목 앞 "(N) " 표시
   useEffect(function() {
     var base = chatBaseTitleRef.current || "CRM";
-    document.title = chatUnread > 0 ? "(" + chatUnread + ") " + base : base;
-  }, [chatUnread]);
+    var total = chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length;
+    document.title = total > 0 ? "(" + total + ") " + base : base;
+  }, [chatUnread, reqAlertList, teamAlertList, sentReplyAlertList]);
 
   // 알림음 on/off 설정 저장
   useEffect(function() {
@@ -3437,6 +3445,161 @@ function CRMApp({ profile, session }) {
       supabase.removeChannel(ch);
     };
   }, [profile?.name, fetchChatUnread, handleIncomingChat]);
+
+  // ── 🔔 알림 확장: 업무요청 · 팀 업무노트 → 기존 채팅 알림 인프라 재사용 ──────
+  //  · 소리: playChatSound (채팅과 100% 동일 함수)
+  //  · 팝업: showGenericBrowserNotif (채팅 showChatBrowserNotif 와 동일한 new Notification 패턴, silent:true)
+  //  · 알림함/탭배지: chatUnread 옆에 3개 목록을 나란히 두고 합산(totalUnread)
+  //  · 새 폴링 없음 — 채팅과 동일한 Realtime INSERT/UPDATE 구독 방식만 사용
+
+  // 브라우저 팝업 (채팅과 동일한 호출부 재사용 — 커스텀 차임만 울리도록 silent:true)
+  const showGenericBrowserNotif = useCallback(function(opts) {
+    try {
+      if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+      var n = new Notification(opts.title, {
+        body: (opts.body || "").slice(0, 120),
+        tag: opts.tag || "crm-alert",
+        renotify: true,
+        requireInteraction: true,
+        silent: true,
+      });
+      n.onclick = function() { window.focus(); if (opts.onClick) opts.onClick(); n.close(); };
+    } catch (e) {}
+  }, []);
+
+  // 알림함/알림 클릭 → 업무노트 화면으로 이동
+  const goToWorkNotes = useCallback(function() {
+    setView("worknotes");
+    setShowChatNotif(false);
+  }, []);
+  goToWorkNotesRef.current = goToWorkNotes;
+
+  // 미확인 업무요청 / 미확인 팀 공지 / 내가 보낸 요청의 새 답장 로드 (배지·알림함 공용)
+  const fetchExtraAlerts = useCallback(async (name) => {
+    if (!name) return;
+    try {
+      // 받은 미확인(pending) 요청 — 답장 컬럼과 무관하게 항상 동작
+      var rq = await supabase.from("work_requests")
+        .select("id, request_from, content, urgent, created_at, note_id, status")
+        .eq("request_to", name).eq("status", "pending")
+        .order("created_at", { ascending: false }).limit(200);
+      if (!rq.error && rq.data) setReqAlertList(rq.data);
+    } catch (e) {}
+    try {
+      // 내가 보낸 요청의 새 답장 — 답장 컬럼(SQL 적용) 있을 때만
+      var sr = await supabase.from("work_requests")
+        .select("id, request_to, content, replies, reply_unread, created_at")
+        .eq("request_from", name).eq("reply_unread", true)
+        .order("created_at", { ascending: false }).limit(200);
+      if (!sr.error && sr.data) setSentReplyAlertList(sr.data);
+    } catch (e) {}
+    try {
+      var tn = await supabase.from("team_notes")
+        .select("id, team, title, content, read_by, status, is_announcement, posted_by, created_at")
+        .is("deleted_at", null).eq("status", "open")
+        .order("created_at", { ascending: false }).limit(300);
+      if (!tn.error && tn.data) {
+        setTeamAlertList(tn.data.filter(function(n) {
+          if (!n.is_announcement) return false;               // 공지만 알림함에 상주(일반 항목은 아래 실시간 소리/팝업으로 처리)
+          if (teamRoster(n.team).indexOf(name) < 0) return false; // 내 팀 아님
+          var rb = Array.isArray(n.read_by) ? n.read_by : [];
+          return rb.indexOf(name) < 0;                         // 아직 확인 안 함
+        }));
+      }
+    } catch (e) {}
+  }, []);
+
+  // 새 업무 요청 수신 (INSERT) — 나에게 온 것 & 내가 보낸 게 아니면 소리+팝업
+  const handleIncomingRequest = useCallback(function(row) {
+    var meName = meRef.current;
+    if (!row || !meName) return;
+    if (row.request_to !== meName || row.request_from === meName) return; // 내가 받은 것만, 본인행동 제외
+    var key = "req_" + row.id;
+    if (extraSeenRef.current[key]) return;
+    extraSeenRef.current[key] = true;
+    var createdMs = parseTsMs(row.created_at);
+    if (!isNaN(createdMs) && createdMs < notifSinceRef.current - 30000) return; // 초기로드·재구독 과거 이벤트 무시
+    if (chatSoundRef.current) playChatSound({ id: key, sender: row.request_from, reason: "업무 요청" });
+    showGenericBrowserNotif({
+      tag: "crm-req-" + row.id,
+      title: (row.urgent ? "🚨 긴급 " : "📩 ") + "업무 요청 · " + row.request_from,
+      body: row.content || "",
+      onClick: function() { goToWorkNotesRef.current(); },
+    });
+  }, [playChatSound, showGenericBrowserNotif]);
+
+  // 내가 보낸 요청에 답장 도착 (UPDATE) — 원 요청자에게만 소리+팝업 (내가 쓴 답장은 조용히)
+  const handleRequestReplyAlert = useCallback(function(row) {
+    var meName = meRef.current;
+    if (!row || !meName) return;
+    if (row.request_from !== meName || !row.reply_unread) return;
+    var reps = Array.isArray(row.replies) ? row.replies : (function() { try { return JSON.parse(row.replies || "[]"); } catch (e) { return []; } })();
+    var last = reps[reps.length - 1];
+    if (!last || last.by === meName) return; // 내가 쓴 답장이면 알림 없음
+    var key = "reqreply_" + row.id + "_" + reps.length;
+    if (extraSeenRef.current[key]) return;
+    extraSeenRef.current[key] = true;
+    if (chatSoundRef.current) playChatSound({ id: key, sender: last.by, reason: "요청 답장" });
+    showGenericBrowserNotif({
+      tag: "crm-reqreply-" + row.id,
+      title: "💬 요청에 답장 · " + last.by,
+      body: last.text || "",
+      onClick: function() { goToWorkNotesRef.current(); },
+    });
+  }, [playChatSound, showGenericBrowserNotif]);
+
+  // 새 팀 업무/공지 등록 (INSERT) — 내 팀 & 남이 올렸 & 아직 확인 안 했으면 소리+팝업
+  //  (UPDATE는 대부분 '확인(read_by)/가져가기' 같은 잡음 → 소리 없이 목록만 갱신. 재발방지: 과다알림 회피)
+  const handleIncomingTeamNote = useCallback(function(row) {
+    var meName = meRef.current;
+    if (!row || row.deleted_at || !meName) return;
+    if (row.posted_by === meName) return;               // 본인이 올린 건 제외
+    if (teamRoster(row.team).indexOf(meName) < 0) return; // 내 팀 아님
+    var rb = Array.isArray(row.read_by) ? row.read_by : [];
+    if (rb.indexOf(meName) >= 0) return;                // 이미 확인함
+    var key = "tn_" + row.id;
+    if (extraSeenRef.current[key]) return;
+    extraSeenRef.current[key] = true;
+    var createdMs = parseTsMs(row.created_at);
+    if (!isNaN(createdMs) && createdMs < notifSinceRef.current - 30000) return;
+    if (chatSoundRef.current) playChatSound({ id: key, sender: row.posted_by, reason: "팀 업무" });
+    var label = row.team === "corporate" ? "[법인팀]" : row.team === "all" ? "[전체]" : "[개인팀]";
+    showGenericBrowserNotif({
+      tag: "crm-team-" + row.id,
+      title: (row.is_announcement ? "📌 공지 " : "📋 팀 업무 ") + label,
+      body: row.title || row.content || "새 팀 업무",
+      onClick: function() { goToWorkNotesRef.current(); },
+    });
+  }, [playChatSound, showGenericBrowserNotif]);
+
+  // 요청·팀노트 Realtime 구독 (채팅 chat-badge 구독과 동일 패턴 — INSERT/UPDATE 기반)
+  useEffect(() => {
+    if (!profile?.name) return;
+    var meName = profile.name;
+    var cancelled = false;
+
+    // 구독 시작 시점의 기존 id 를 seen 등록 → 재구독/초기 재전송 오탐 방지 (채팅과 동일 방어)
+    supabase.from("work_requests").select("id").order("created_at", { ascending: false }).limit(1000)
+      .then(function(r) { if (!cancelled && !r.error && r.data) r.data.forEach(function(x) { extraSeenRef.current["req_" + x.id] = true; }); });
+    supabase.from("team_notes").select("id").order("created_at", { ascending: false }).limit(1000)
+      .then(function(r) { if (!cancelled && !r.error && r.data) r.data.forEach(function(x) { extraSeenRef.current["tn_" + x.id] = true; }); });
+
+    fetchExtraAlerts(meName);
+
+    _wnAlertSubSeq += 1;
+    var ch = supabase.channel("worknote-alert-" + _wnAlertSubSeq)
+      .on("postgres_changes", { event: "*", schema: "public", table: "work_requests" }, function(payload) {
+        fetchExtraAlerts(meName);
+        if (payload.eventType === "INSERT") handleIncomingRequest(payload.new);
+        else if (payload.eventType === "UPDATE") handleRequestReplyAlert(payload.new);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "team_notes" }, function(payload) {
+        fetchExtraAlerts(meName);
+        if (payload.eventType === "INSERT") handleIncomingTeamNote(payload.new);
+      })
+      .subscribe();
+    return function() { cancelled = true; supabase.removeChannel(ch); };
+  }, [profile?.name, fetchExtraAlerts, handleIncomingRequest, handleRequestReplyAlert, handleIncomingTeamNote]);
 
   // 로그인 시 오늘 할 일 알림 - 최초 1회만
   const alertShownRef = useRef(false);
@@ -4331,11 +4494,11 @@ function CRMApp({ profile, session }) {
                 <span style={{ position: "absolute", top: -3, right: -3, minWidth: 16, height: 16, background: "#DC2626", borderRadius: 99, fontSize: 9, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }}>{notifications.length}</span>
               )}
             </button>
-            <button onClick={function() { setShowChatNotif(function(p) { return !p; }); }} title="안 읽은 채팅"
+            <button onClick={function() { setShowChatNotif(function(p) { return !p; }); }} title="안 읽은 알림"
               style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", padding: "7px 10px", background: "#2E2C29", border: "none", borderRadius: 6, color: "#888", fontSize: 14, cursor: "pointer" }}>
               💬
-              {chatUnread > 0 && (
-                <span style={{ position: "absolute", top: -3, right: -3, minWidth: 16, height: 16, background: "#DC2626", borderRadius: 99, fontSize: 9, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }}>{chatUnread}</span>
+              {(chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length) > 0 && (
+                <span style={{ position: "absolute", top: -3, right: -3, minWidth: 16, height: 16, background: "#DC2626", borderRadius: 99, fontSize: 9, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }}>{chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length}</span>
               )}
             </button>
           </div>
@@ -4399,8 +4562,8 @@ function CRMApp({ profile, session }) {
             onClick={function(e) { e.stopPropagation(); }}>
             <div style={{ padding: "20px 20px 14px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "flex-start", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <div>
-                <div style={{ fontSize: 16, fontWeight: 700 }}>💬 안 읽은 채팅</div>
-                <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{chatUnread > 0 ? chatUnread + "개의 새 메시지" : "모두 읽었어요"}</div>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>💬 안 읽은 알림</div>
+                {(function() { var t = chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length; return <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{t > 0 ? t + "개의 새 알림" : "모두 읽었어요"}</div>; })()}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <button onClick={function() { setChatSoundOn(function(p) { return !p; }); }} title="알림음 켜기/끄기"
@@ -4411,10 +4574,55 @@ function CRMApp({ profile, session }) {
               </div>
             </div>
             <div style={{ padding: "12px 16px" }}>
-              {chatUnreadList.length === 0 ? (
+              {/* 📩 나에게 온 미확인 업무 요청 */}
+              {reqAlertList.map(function(r) {
+                return (
+                  <div key={"req-" + r.id} style={{ background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 10, padding: "12px 14px", marginBottom: 10, cursor: "pointer" }}
+                    onClick={function() { goToWorkNotes(); }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, gap: 8 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#9A3412", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{(r.urgent ? "🚨 " : "📩 ") + r.request_from}</div>
+                      <div style={{ fontSize: 10, fontWeight: 600, color: "#B45309", background: "#FFEDD5", borderRadius: 99, padding: "2px 8px", whiteSpace: "nowrap", flexShrink: 0 }}>업무 요청</div>
+                    </div>
+                    <div style={{ fontSize: 12, color: "#555", lineHeight: 1.5, whiteSpace: "pre-wrap", maxHeight: 42, overflow: "hidden" }}>{r.content}</div>
+                    <div style={{ fontSize: 11, color: "#AAA", marginTop: 6 }}>{new Date(r.created_at).toLocaleString("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</div>
+                  </div>
+                );
+              })}
+              {/* 💬 내가 보낸 요청에 온 새 답장 */}
+              {sentReplyAlertList.map(function(r) {
+                var reps = Array.isArray(r.replies) ? r.replies : (function() { try { return JSON.parse(r.replies || "[]"); } catch (e) { return []; } })();
+                var last = reps[reps.length - 1] || {};
+                return (
+                  <div key={"rr-" + r.id} style={{ background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 10, padding: "12px 14px", marginBottom: 10, cursor: "pointer" }}
+                    onClick={function() { goToWorkNotes(); }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, gap: 8 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#5B21B6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{"💬 " + (last.by || r.request_to) + " → 답장"}</div>
+                      <div style={{ fontSize: 10, fontWeight: 600, color: "#6D28D9", background: "#EDE9FE", borderRadius: 99, padding: "2px 8px", whiteSpace: "nowrap", flexShrink: 0 }}>내 요청</div>
+                    </div>
+                    <div style={{ fontSize: 12, color: "#555", lineHeight: 1.5, whiteSpace: "pre-wrap", maxHeight: 42, overflow: "hidden" }}>{last.text || ""}</div>
+                    <div style={{ fontSize: 11, color: "#AAA", marginTop: 6 }}>원 요청: {r.content}</div>
+                  </div>
+                );
+              })}
+              {/* 📌 내 팀 미확인 공지 */}
+              {teamAlertList.map(function(n) {
+                var label = n.team === "corporate" ? "[법인팀]" : n.team === "all" ? "[전체]" : "[개인팀]";
+                return (
+                  <div key={"tn-" + n.id} style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 10, padding: "12px 14px", marginBottom: 10, cursor: "pointer" }}
+                    onClick={function() { goToWorkNotes(); }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, gap: 8 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#B91C1C", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{"📌 " + (n.title || "공지")}</div>
+                      <div style={{ fontSize: 10, fontWeight: 600, color: "#DC2626", background: "#FEE2E2", borderRadius: 99, padding: "2px 8px", whiteSpace: "nowrap", flexShrink: 0 }}>{label} 공지</div>
+                    </div>
+                    {n.content && <div style={{ fontSize: 12, color: "#555", lineHeight: 1.5, whiteSpace: "pre-wrap", maxHeight: 42, overflow: "hidden" }}>{n.content}</div>}
+                    <div style={{ fontSize: 11, color: "#AAA", marginTop: 6 }}>작성자: {n.posted_by} · {new Date(n.created_at).toLocaleString("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</div>
+                  </div>
+                );
+              })}
+              {(chatUnreadList.length === 0 && reqAlertList.length === 0 && teamAlertList.length === 0 && sentReplyAlertList.length === 0) ? (
                 <div style={{ padding: "40px 0", textAlign: "center", color: "#888", fontSize: 13 }}>
                   <div style={{ fontSize: 32, marginBottom: 8 }}>💬</div>
-                  안 읽은 메시지가 없어요
+                  안 읽은 알림이 없어요
                 </div>
               ) : (
                 chatUnreadList.map(function(m) {
@@ -10540,9 +10748,25 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
 }
 
 // ── 업무노트 카드 (독립 컴포넌트 - 입력버그 방지) ──────────────────────────────
-function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditingId, toggleDone, togglePin, deleteNote, fmtDate, currentUserName, onChecklistChange, moveNoteDate, setWaitReason, editable }) {
+function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditingId, toggleDone, togglePin, deleteNote, fmtDate, currentUserName, onChecklistChange, moveNoteDate, setWaitReason, editable, getRequestForItem, onAddRequestReply }) {
   var isEditing = editingId === note.id;
   var isMyNote = editable !== false; // 본인 노트만 수정/체크 가능 (공유그룹으로 보이는 남의 노트는 읽기 전용)
+  var [replyOpenIdx, setReplyOpenIdx] = useState(null); // 답장 입력창 펼친 📩 항목 idx
+  var [replyDraft, setReplyDraft] = useState("");
+  var relTime = function(iso) {
+    var ms = iso ? (new Date(iso)).getTime() : NaN;
+    if (isNaN(ms)) return "";
+    var diff = Date.now() - ms;
+    if (diff < 60000) return "방금 전";
+    if (diff < 3600000) return Math.floor(diff / 60000) + "분 전";
+    if (diff < 86400000) return Math.floor(diff / 3600000) + "시간 전";
+    return (new Date(ms)).toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
+  };
+  var sendItemReply = function(reqRow) {
+    var t = (replyDraft || "").trim(); if (!t || !reqRow) return;
+    if (onAddRequestReply) onAddRequestReply(reqRow, t);
+    setReplyOpenIdx(null); setReplyDraft("");
+  };
 
   // 체크리스트 파싱: "- [ ] 항목" 또는 "- [x] 항목" 형식
   var parseChecklist = function(content) {
@@ -10650,10 +10874,54 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
                 ) : null;
               }
               var isReq = /^📩/.test(item.text); // 팀원 업무 요청 항목
+              if (isReq) {
+                var reqRow = getRequestForItem ? getRequestForItem(note, item.text) : null;
+                var replies = reqRow ? (Array.isArray(reqRow.replies) ? reqRow.replies : (function() { try { return JSON.parse(reqRow.replies || "[]"); } catch (e) { return []; } })()) : [];
+                var replyOpen = replyOpenIdx === item.idx;
+                return (
+                  <div key={item.idx} style={{ background: "#FFF7ED", borderLeft: "3px solid #F59E0B", borderRadius: 6, padding: "6px 8px", marginBottom: 4 }}>
+                    <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+                      <input type="checkbox" checked={item.checked} onChange={function() { toggleCheckItem(item.idx); }}
+                        style={{ width: 15, height: 15, marginTop: 3, cursor: "pointer", accentColor: "#F59E0B", flexShrink: 0 }} />
+                      <span style={{ fontSize: 13, color: item.checked ? "#AAA" : "#333", textDecoration: item.checked ? "line-through" : "none", lineHeight: 1.8, whiteSpace: "pre-wrap" }}>{item.text}</span>
+                      {item.waitReason && !item.checked && (
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 99, padding: "1px 7px", whiteSpace: "nowrap", flexShrink: 0, marginTop: 2 }}>⏳ {item.waitReason}</span>
+                      )}
+                    </label>
+                    {/* 답장 스레드 */}
+                    {replies.length > 0 && (
+                      <div style={{ marginTop: 6, marginLeft: 23, display: "flex", flexDirection: "column", gap: 4 }}>
+                        {replies.map(function(rp, ri) {
+                          return (
+                            <div key={ri} style={{ fontSize: 12, background: "#fff", border: "1px solid #FDE68A", borderRadius: 6, padding: "4px 8px", lineHeight: 1.5 }}>
+                              <span style={{ color: "#166534", fontWeight: 600, whiteSpace: "pre-wrap" }}>✅ {rp.text}</span>
+                              <span style={{ color: "#A1A1AA", marginLeft: 6, whiteSpace: "nowrap" }}>— {rp.by}, {relTime(rp.at)}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {/* 답장 입력 / 버튼 */}
+                    {reqRow ? (replyOpen ? (
+                      <div style={{ marginTop: 6, marginLeft: 23, display: "flex", gap: 6, alignItems: "center" }}>
+                        <input autoFocus value={replyDraft} onChange={function(e) { setReplyDraft(e.target.value); }}
+                          onKeyDown={function(e) { if (e.key === "Enter") { e.preventDefault(); sendItemReply(reqRow); } if (e.key === "Escape") { setReplyOpenIdx(null); setReplyDraft(""); } }}
+                          placeholder="답장 입력 후 Enter…"
+                          style={{ flex: 1, fontSize: 12, padding: "5px 8px", border: "1px solid #FDBA74", borderRadius: 6, outline: "none", boxSizing: "border-box" }} />
+                        <button onClick={function() { sendItemReply(reqRow); }} style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "#B45309", border: "none", borderRadius: 6, padding: "5px 12px", cursor: "pointer", whiteSpace: "nowrap" }}>전송</button>
+                        <button onClick={function() { setReplyOpenIdx(null); setReplyDraft(""); }} style={{ fontSize: 11, color: "#888", background: "none", border: "none", cursor: "pointer" }}>취소</button>
+                      </div>
+                    ) : (
+                      <button onClick={function() { setReplyOpenIdx(item.idx); setReplyDraft(""); }}
+                        style={{ marginTop: 6, marginLeft: 23, fontSize: 11, fontWeight: 600, color: "#B45309", background: "#FFEDD5", border: "1px solid #FED7AA", borderRadius: 6, padding: "3px 12px", cursor: "pointer" }}>💬 답장</button>
+                    )) : null}
+                  </div>
+                );
+              }
               return (
-                <label key={item.idx} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: (item.waitReason || isReq) ? "6px 8px" : "6px 0", cursor: "pointer", background: isReq ? "#FFF7ED" : item.waitReason ? "#FFFBEB" : "transparent", borderLeft: isReq ? "3px solid #F59E0B" : "1px solid transparent", border: !isReq && item.waitReason ? "1px solid #FDE68A" : undefined, borderRadius: isReq ? 6 : 8 }}>
+                <label key={item.idx} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: item.waitReason ? "6px 8px" : "6px 0", cursor: "pointer", background: item.waitReason ? "#FFFBEB" : "transparent", borderLeft: "1px solid transparent", border: item.waitReason ? "1px solid #FDE68A" : undefined, borderRadius: 8 }}>
                   <input type="checkbox" checked={item.checked} onChange={function() { toggleCheckItem(item.idx); }}
-                    style={{ width: 15, height: 15, marginTop: 3, cursor: "pointer", accentColor: isReq ? "#F59E0B" : "#1A1917", flexShrink: 0 }} />
+                    style={{ width: 15, height: 15, marginTop: 3, cursor: "pointer", accentColor: "#1A1917", flexShrink: 0 }} />
                   <span style={{ fontSize: 13, color: item.checked ? "#AAA" : "#333", textDecoration: item.checked ? "line-through" : "none", lineHeight: 1.8, whiteSpace: "pre-wrap" }}>{item.text}</span>
                   {item.waitReason && !item.checked && (
                     <span style={{ fontSize: 10, fontWeight: 700, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 99, padding: "1px 7px", whiteSpace: "nowrap", flexShrink: 0, marginTop: 2 }}>⏳ {item.waitReason}</span>
@@ -10759,6 +11027,8 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   const [showReqStatus, setShowReqStatus] = useState(false); // 📋 요청 현황 모달
   const [reqTab, setReqTab] = useState("received"); // "received" | "sent"
   const [showSent, setShowSent] = useState(false);
+  const [reqReplyId, setReqReplyId] = useState(null);   // 요청 현황 모달에서 답장 작성 중인 요청 id
+  const [reqReplyText, setReqReplyText] = useState("");
   const reqReadRef = useRef(false);
 
   // 📱 업무노트 모바일 최적화 CSS 주입 (휴대폰에서 작성 편하게)
@@ -11350,6 +11620,48 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     }
   };
 
+  // 📩 요청 답장 스레드 추가 (받은이가 답장 → 원 요청자에게 안읽음 표시 + 상대 클라이언트가 실시간 소리/팝업)
+  var addRequestReply = async function(reqRow, text) {
+    var t = (text || "").trim(); if (!reqRow || !t) return;
+    var me = profile?.name || "";
+    var replies = Array.isArray(reqRow.replies) ? reqRow.replies.slice()
+      : (function() { try { return JSON.parse(reqRow.replies || "[]"); } catch (e) { return []; } })();
+    replies.push({ by: me, text: t, at: new Date().toISOString() });
+    var markUnread = me !== reqRow.request_from; // 원 요청자 본인이 남긴 답장은 안읽음 아님
+    var upd = { replies: replies };
+    if (markUnread) upd.reply_unread = true;
+    var r = await supabase.from("work_requests").update(upd).eq("id", reqRow.id);
+    if (r.error) {
+      if (/replies|reply_unread|column/.test(r.error.message || "")) alert("답장 기능 컬럼이 아직 없습니다.\n'업무요청_답장_알림확장_컬럼추가.sql'을 Supabase에서 실행해주세요.");
+      else alert("답장 저장 실패: " + r.error.message);
+      return;
+    }
+    var patch = function(list) { return (list || []).map(function(x) { return x.id === reqRow.id ? Object.assign({}, x, { replies: replies, reply_unread: markUnread ? true : x.reply_unread }) : x; }); };
+    setIncomingRequests(patch); setSentRequests(patch);
+  };
+
+  // 원 요청자가 보낸 요청의 안읽은 답장 표시 해제 (요청 현황 '보낸 요청' 탭 열람 시)
+  var clearSentReplyUnread = async function() {
+    var me = profile?.name; if (!me) return;
+    var targets = (sentRequests || []).filter(function(r) { return r.reply_unread; });
+    if (!targets.length) return;
+    setSentRequests(function(prev) { return (prev || []).map(function(r) { return r.reply_unread ? Object.assign({}, r, { reply_unread: false }) : r; }); });
+    await supabase.from("work_requests").update({ reply_unread: false }).eq("request_from", me).eq("reply_unread", true);
+  };
+
+  // 📩 체크리스트 항목(📩 …) → 매칭되는 받은 요청 행 찾기 (답장 UI 연결용)
+  var getRequestForItem = function(note, itemText) {
+    if (!incomingRequests || !incomingRequests.length) return null;
+    var m = String(itemText || "").match(/^📩\s*(\S+)\s*요청:\s*([\s\S]+?)\s*$/);
+    if (!m) return null;
+    var from = m[1];
+    var body = m[2].replace(/→.*이월\s*$/, "").trim(); // item.text는 이미 디코드된 상태
+    var cands = incomingRequests.filter(function(r) { return r.request_from === from && (note.id ? r.note_id === note.id : true); });
+    if (!cands.length) cands = incomingRequests.filter(function(r) { return r.request_from === from; });
+    var best = cands.find(function(r) { var c = String(r.content || ""); return body && (body.indexOf(c.slice(0, 16)) >= 0 || c.indexOf(body.slice(0, 16)) >= 0); });
+    return best || cands[0] || null;
+  };
+
   var saveNew = async function() {
     // checkItems가 있으면 content로 변환해서 합치기 (마감일 [YYYY-MM-DD] 포함, 체크 상태도 반영)
     var checkContent = (newNote.checkItems && newNote.checkItems.length > 0)
@@ -11594,10 +11906,18 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
               <span style={{ position: "absolute", top: -6, right: -6, background: "#EF4444", color: "#fff", fontSize: 10, fontWeight: 700, borderRadius: 99, minWidth: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }}>{incomingReqCount}</span>
             )}
           </button>
-          <button onClick={function() { setReqTab("received"); setShowReqStatus(true); }} title="보낸/받은 요청 현황"
-            style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+          {(function() {
+            var replyUnread = (sentRequests || []).filter(function(r) { return r.reply_unread; }).length;
+            return (
+          <button onClick={function() { if (replyUnread > 0) { setReqTab("sent"); clearSentReplyUnread(); } else { setReqTab("received"); } setShowReqStatus(true); }} title="보낸/받은 요청 현황"
+            style={{ position: "relative", display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
             📋 요청 현황
+            {replyUnread > 0 && (
+              <span style={{ position: "absolute", top: -6, right: -6, background: "#7C3AED", color: "#fff", fontSize: 10, fontWeight: 700, borderRadius: 99, minWidth: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }} title="새 답장">{replyUnread}</span>
+            )}
           </button>
+            );
+          })()}
           <button onClick={openTrash}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
             🗑️ 휴지통
@@ -11984,6 +12304,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       {/* 📋 요청 현황 모달 — 보낸/받은 요청 2탭 */}
       {showReqStatus && (function() {
         var fmtT = function(ts) { return String(ts || "").slice(0, 16).replace("T", " "); };
+        var parseReplies = function(r) { return Array.isArray(r.replies) ? r.replies : (function() { try { return JSON.parse(r.replies || "[]"); } catch (e) { return []; } })(); };
         var sortReq = function(arr) {
           return (arr || []).slice().sort(function(a, b) {
             var ad = a.status === "done" ? 1 : 0, bd = b.status === "done" ? 1 : 0;
@@ -12021,7 +12342,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div style={{ display: "flex", gap: 6, padding: "10px 20px", borderBottom: "1px solid #F0EDE8" }}>
               {[{ id: "received", label: "받은 요청 " + recvSorted.length }, { id: "sent", label: "보낸 요청 " + sentSorted.length }].map(function(t) {
                 var active = reqTab === t.id;
-                return (<button key={t.id} onClick={function() { setReqTab(t.id); }}
+                return (<button key={t.id} onClick={function() { setReqTab(t.id); setReqReplyId(null); if (t.id === "sent") clearSentReplyUnread(); }}
                   style={{ padding: "7px 16px", fontSize: 13, fontWeight: 700, borderRadius: 8, cursor: "pointer", border: "1px solid " + (active ? "#1A1917" : "#E8E5E0"), background: active ? "#1A1917" : "#fff", color: active ? "#fff" : "#666" }}>{t.label}</button>);
               })}
             </div>
@@ -12030,17 +12351,50 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
                 <div style={{ padding: "48px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>{reqTab === "sent" ? "보낸 요청이 없어요." : "받은 요청이 없어요."}</div>
               ) : list.map(function(r) {
                 var clickable = reqTab === "received";
+                var replies = parseReplies(r);
+                var composing = reqReplyId === r.id;
+                var stop = function(e) { e.stopPropagation(); };
                 return (
-                  <div key={r.id} onClick={clickable ? function() { gotoNote(r); } : undefined}
-                    style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 10px", borderBottom: "1px solid #F5F5F4", borderRadius: 8, cursor: clickable ? "pointer" : "default", background: r.status !== "done" ? "#FFFEF7" : "transparent" }}>
+                  <div key={r.id}
+                    style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 10px", borderBottom: "1px solid #F5F5F4", borderRadius: 8, background: r.status !== "done" ? "#FFFEF7" : "transparent" }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 11, color: "#888", marginBottom: 3, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                        <span style={{ fontWeight: 700, color: "#4338CA" }}>{reqTab === "sent" ? "→ " + r.request_to : "← " + r.request_from}</span>
-                        {r.urgent && <span style={{ color: "#B91C1C", fontWeight: 700 }}>🚨 긴급</span>}
-                        <span>{fmtT(r.created_at)}</span>
+                      <div onClick={clickable ? function() { gotoNote(r); } : undefined} style={{ cursor: clickable ? "pointer" : "default" }}>
+                        <div style={{ fontSize: 11, color: "#888", marginBottom: 3, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                          <span style={{ fontWeight: 700, color: "#4338CA" }}>{reqTab === "sent" ? "→ " + r.request_to : "← " + r.request_from}</span>
+                          {r.urgent && <span style={{ color: "#B91C1C", fontWeight: 700 }}>🚨 긴급</span>}
+                          {reqTab === "sent" && r.reply_unread && <span style={{ color: "#fff", background: "#7C3AED", fontWeight: 700, borderRadius: 99, padding: "1px 8px", fontSize: 10 }}>💬 새 답장</span>}
+                          <span>{fmtT(r.created_at)}</span>
+                        </div>
+                        <div style={{ fontSize: 13, color: "#1A1917", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{r.content}</div>
+                        {clickable && <div style={{ fontSize: 10, color: "#4338CA", marginTop: 3 }}>클릭하면 해당 업무노트로 이동 →</div>}
                       </div>
-                      <div style={{ fontSize: 13, color: "#1A1917", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{r.content}</div>
-                      {clickable && <div style={{ fontSize: 10, color: "#4338CA", marginTop: 3 }}>클릭하면 해당 업무노트로 이동 →</div>}
+                      {/* 답장 스레드 */}
+                      {replies.length > 0 && (
+                        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+                          {replies.map(function(rp, ri) {
+                            return (
+                              <div key={ri} style={{ fontSize: 12, background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 6, padding: "4px 8px", lineHeight: 1.5 }}>
+                                <span style={{ color: "#166534", fontWeight: 600, whiteSpace: "pre-wrap" }}>✅ {rp.text}</span>
+                                <span style={{ color: "#94A3B8", marginLeft: 6 }}>— {rp.by}, {fmtT(rp.at)}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {/* 답장 작성 */}
+                      {composing ? (
+                        <div onClick={stop} style={{ marginTop: 6, display: "flex", gap: 6, alignItems: "center" }}>
+                          <input autoFocus value={reqReplyText} onChange={function(e) { setReqReplyText(e.target.value); }}
+                            onKeyDown={function(e) { if (e.key === "Enter") { e.preventDefault(); addRequestReply(r, reqReplyText); setReqReplyId(null); setReqReplyText(""); } if (e.key === "Escape") { setReqReplyId(null); setReqReplyText(""); } }}
+                            placeholder="답장 입력 후 Enter…"
+                            style={{ flex: 1, fontSize: 12, padding: "5px 8px", border: "1px solid #C7D2FE", borderRadius: 6, outline: "none", boxSizing: "border-box" }} />
+                          <button onClick={function() { addRequestReply(r, reqReplyText); setReqReplyId(null); setReqReplyText(""); }} style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "#4338CA", border: "none", borderRadius: 6, padding: "5px 12px", cursor: "pointer", whiteSpace: "nowrap" }}>전송</button>
+                          <button onClick={function() { setReqReplyId(null); setReqReplyText(""); }} style={{ fontSize: 11, color: "#888", background: "none", border: "none", cursor: "pointer" }}>취소</button>
+                        </div>
+                      ) : (
+                        <button onClick={function(e) { stop(e); setReqReplyId(r.id); setReqReplyText(""); }}
+                          style={{ marginTop: 6, fontSize: 11, fontWeight: 600, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 6, padding: "3px 12px", cursor: "pointer" }}>💬 답장</button>
+                      )}
                     </div>
                     {reqTab === "sent" ? sentBadge(r.status) : recvBadge(r.status)}
                   </div>
@@ -12059,6 +12413,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <span style={{ fontSize: 13 }}>{showSent ? "▼" : "▶"}</span>
             <span style={{ fontSize: 13, fontWeight: 700 }}>📤 내가 보낸 요청 {sentRequests.length}건</span>
             {(function() { var unread = sentRequests.filter(function(r) { return r.status === "pending"; }).length; return unread > 0 ? <span style={{ fontSize: 11, color: "#B91C1C", background: "#FEE2E2", borderRadius: 99, padding: "1px 8px", fontWeight: 700 }}>안읽음 {unread}</span> : null; })()}
+            {(function() { var ru = sentRequests.filter(function(r) { return r.reply_unread; }).length; return ru > 0 ? <span style={{ fontSize: 11, color: "#fff", background: "#7C3AED", borderRadius: 99, padding: "1px 8px", fontWeight: 700 }}>💬 새 답장 {ru}</span> : null; })()}
           </div>
           {showSent && (
             <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
@@ -12261,7 +12616,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
                   {notesForSelectedDate.map(function(note) {
-                    return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} />;
+                    return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} />;
                   })}
                 </div>
               )}
@@ -12323,7 +12678,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#B45309", letterSpacing: "0.05em", marginBottom: 10 }}>📌 고정된 노트</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} />; })}
+                {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} />; })}
               </div>
             </div>
           )}
@@ -12332,7 +12687,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div>
               {pinned.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: "#888", letterSpacing: "0.05em", marginBottom: 10 }}>전체 노트</div>}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} />; })}
+                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} />; })}
               </div>
             </div>
           )}
