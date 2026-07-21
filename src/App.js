@@ -2756,6 +2756,11 @@ function SetupProfile({ userId, email, onDone }) {
   );
 }
 
+// 채팅 배지 구독 진단용 — 활성 "chat-badge" 구독 수를 모듈 전역에서 추적.
+// 재구독 누적/멀티 마운트로 구독이 2개 이상이면 같은 메시지가 여러 번 처리될 수 있으므로 경고를 남긴다.
+var _chatBadgeSubSeq = 0;    // 지금까지 만들어진 구독 일련번호
+var _chatBadgeSubActive = 0; // 현재 살아있는 구독 수
+
 // ── 🔔 알림음 (Web Audio API "띵동" 2음 차임, 약 1.5초) ──────────────────────
 // 음원 파일 없이 브라우저에서 직접 합성 → 로딩/캐시 문제 없이 또렷하게 재생
 var _notifAudioCtx = null;
@@ -2903,6 +2908,8 @@ function CRMApp({ profile, session }) {
   const chatSeenRef = useRef({});            // 알림음/브라우저알림 이미 처리한 메시지 id
   const notifSinceRef = useRef(Date.now());  // 이 시각 이후 INSERT된 메시지에만 알림 (재구독/초기로드 오탐 방지)
   const chatAudioCtxRef = useRef(null);
+  const chatSoundCallCountRef = useRef(0);          // 알림음 함수 누적 호출 횟수(진단용)
+  const lastChatSoundRef = useRef({ id: null, at: 0 }); // 마지막으로 소리 낸 메시지 id·시각(하드 중복차단)
   const chatBaseTitleRef = useRef("");
   const goToChatRef = useRef(function() {});
   const chatSoundRef = useRef(true);
@@ -3186,7 +3193,28 @@ function CRMApp({ profile, session }) {
 
   // ── 채팅 알림 (알림음 · 브라우저 알림 · 알림함 이동) ─────────────────────────
   // 알림음: WebAudio로 2음 차임 생성 (별도 음원 파일 불필요)
-  const playChatSound = useCallback(function() {
+  const playChatSound = useCallback(function(ctxInfo) {
+    // ctxInfo = { id, sender, reason } — 어떤 메시지 때문에 왜 울리는지 진단 로그로 남긴다.
+    var info = ctxInfo || {};
+    var now = Date.now();
+    chatSoundCallCountRef.current += 1;
+    var callNo = chatSoundCallCountRef.current;
+
+    // 🔒 하드 중복 차단: 같은 메시지 id가 2초 내에 다시 소리 내려 하면 무시.
+    //    (구독 중복/멀티 마운트로 동일 이벤트가 두 번 흘러들어와도 한 번만 울리게 하는 최종 방어선)
+    var last = lastChatSoundRef.current;
+    if (info.id != null && last.id === info.id && (now - last.at) < 2000) {
+      console.log("[알림음] #" + callNo + " 🔁 중복 억제 — 같은 메시지가 " + (now - last.at)
+        + "ms 만에 재요청됨. id=" + info.id + " 보낸이=" + info.sender + " 나=" + meRef.current
+        + " (구독 중복 의심 → 위 '구독' 로그의 활성 구독 수 확인)");
+      return;
+    }
+    lastChatSoundRef.current = { id: info.id != null ? info.id : last.id, at: now };
+
+    console.log("[알림음] #" + callNo + " 🔊 재생 — id=" + info.id
+      + " 보낸이=" + info.sender + " 나=" + meRef.current
+      + " 이유=" + (info.reason || "-") + " 활성구독수=" + _chatBadgeSubActive);
+
     try {
       var Ctx = window.AudioContext || window.webkitAudioContext;
       if (!Ctx) return;
@@ -3257,9 +3285,17 @@ function CRMApp({ profile, session }) {
   const handleIncomingChat = useCallback(function(row) {
     var meName = meRef.current;
     if (!row || row.deleted_at || !meName) return;
-    if (row.sender === meName) return;                  // 내가 보낸 건 소리 없음
+    if (row.sender === meName) {                         // 내가 보낸 건 소리 없음
+      console.log("[알림음] ⏭️ 본인 메시지 — 소리 생략. id=" + row.id
+        + " 보낸이=" + row.sender + " 나=" + meName);
+      return;
+    }
     if (!canAccessChannel(row.channel, meName)) return; // 내 채널 아니면 무시
-    if (chatSeenRef.current[row.id]) return;
+    if (chatSeenRef.current[row.id]) {
+      console.log("[알림음] ⏭️ 이미 처리한 메시지 — 소리 생략(중복 이벤트). id=" + row.id
+        + " 보낸이=" + row.sender + " 나=" + meName);
+      return;
+    }
     chatSeenRef.current[row.id] = true;
 
     // ① 오탐 방지: 앱 구동(구독 시작) 이후 실제로 새로 INSERT된 메시지에만 반응.
@@ -3284,7 +3320,8 @@ function CRMApp({ profile, session }) {
       + " → " + (viewingThisChannel ? "그 채팅창 열람중이라 알림 생략" : "알림(소리+팝업) 발생"));
     if (viewingThisChannel) return;
 
-    if (chatSoundRef.current) playChatSound();
+    if (chatSoundRef.current) playChatSound({ id: row.id, sender: row.sender, reason: "새 채팅 수신" });
+    else console.log("[알림음] 🔇 알림음 꺼짐 설정이라 소리 생략. id=" + row.id + " 보낸이=" + row.sender);
     showChatBrowserNotif(row);
   }, [playChatSound, showChatBrowserNotif]);
 
@@ -3329,13 +3366,29 @@ function CRMApp({ profile, session }) {
       });
 
     fetchChatUnread(meName);
-    var ch = supabase.channel("chat-badge")
+
+    _chatBadgeSubSeq += 1;
+    _chatBadgeSubActive += 1;
+    var subId = _chatBadgeSubSeq;
+    console.log("[구독] ▶️ chat-badge 구독 생성 #" + subId + " — 현재 활성 구독 수=" + _chatBadgeSubActive
+      + (_chatBadgeSubActive > 1 ? " ⚠️ 2개 이상! 같은 메시지가 여러 번 처리될 수 있음(재구독 누적/멀티 탭·마운트 의심)" : ""));
+
+    var ch = supabase.channel("chat-badge-" + subId)  // 구독마다 고유 토픽 → 어떤 구독이 이벤트를 받는지 추적 가능
       .on("postgres_changes", { event: "*", schema: "public", table: "chat_messages" }, function(payload) {
         fetchChatUnread(meName);
-        if (payload.eventType === "INSERT") handleIncomingChat(payload.new);
+        if (payload.eventType === "INSERT") {
+          console.log("[구독] 📥 구독#" + subId + " INSERT 이벤트 수신 — id=" + (payload.new && payload.new.id)
+            + " 보낸이=" + (payload.new && payload.new.sender));
+          handleIncomingChat(payload.new);
+        }
       })
       .subscribe();
-    return function() { cancelled = true; supabase.removeChannel(ch); };
+    return function() {
+      cancelled = true;
+      _chatBadgeSubActive = Math.max(0, _chatBadgeSubActive - 1);
+      console.log("[구독] ⏹️ chat-badge 구독 해제 #" + subId + " — 남은 활성 구독 수=" + _chatBadgeSubActive);
+      supabase.removeChannel(ch);
+    };
   }, [profile?.name, fetchChatUnread, handleIncomingChat]);
 
   // 로그인 시 오늘 할 일 알림 - 최초 1회만
