@@ -2889,6 +2889,7 @@ function CRMApp({ profile, session }) {
   });
   const activeChatChannelRef = useRef(null); // ChatView가 보고하는 현재 열람 채널
   const chatSeenRef = useRef({});            // 알림음/브라우저알림 이미 처리한 메시지 id
+  const notifSinceRef = useRef(Date.now());  // 이 시각 이후 INSERT된 메시지에만 알림 (재구독/초기로드 오탐 방지)
   const chatAudioCtxRef = useRef(null);
   const chatBaseTitleRef = useRef("");
   const goToChatRef = useRef(function() {});
@@ -3202,16 +3203,25 @@ function CRMApp({ profile, session }) {
   // 브라우저 알림 표시 (requireInteraction: 사용자가 닫기 전까지 화면에 유지)
   const showChatBrowserNotif = useCallback(function(row) {
     try {
-      if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+      var supported = typeof Notification !== "undefined";
+      var perm = supported ? Notification.permission : "unsupported";
+      if (!supported || perm !== "granted") {
+        console.log("[알림진단] 🔕 팝업 생략 — 브라우저 알림 권한 = " + perm + " (granted 아님)");
+        return;
+      }
       var meName = meRef.current;
+      console.log("[알림진단] 🔔 new Notification() 호출 시도 — 채널=" + row.channel + " / 보낸이=" + row.sender);
       var n = new Notification(row.sender + " · " + chatChannelLabel(row.channel, meName), {
         body: (row.message || "").slice(0, 120),
         tag: "chat-" + row.channel, // 같은 채널 알림은 최신 것으로 교체
         renotify: true,
         requireInteraction: true,   // 자동으로 안 사라짐
       });
+      console.log("[알림진단] ✅ Notification 생성 완료");
       n.onclick = function() { window.focus(); goToChatRef.current(row.channel); n.close(); };
-    } catch (e) {}
+    } catch (e) {
+      console.log("[알림진단] ❌ Notification 생성 실패:", (e && e.message) ? e.message : e);
+    }
   }, []);
 
   // 새 메시지 처리 — 본인 메시지·현재 보고 있는 채널은 알림 없이 조용히
@@ -3222,12 +3232,29 @@ function CRMApp({ profile, session }) {
     if (!canAccessChannel(row.channel, meName)) return; // 내 채널 아니면 무시
     if (chatSeenRef.current[row.id]) return;
     chatSeenRef.current[row.id] = true;
-    // 지금 그 채널을 실제로 보고 있으면(탭 활성) 알림 없이 읽힘
-    var viewingThis = viewRef.current === "chat"
+
+    // ① 오탐 방지: 앱 구동(구독 시작) 이후 실제로 새로 INSERT된 메시지에만 반응.
+    //    재구독/리렌더로 다시 흘러들어온 과거·초기로드 메시지는 무시 (30초 여유 = 서버·클라 시계 오차 대비).
+    var createdMs = row.created_at ? Date.parse(row.created_at) : NaN;
+    if (!isNaN(createdMs) && createdMs < notifSinceRef.current - 30000) {
+      console.log("[알림진단] ⏭️ 과거 메시지 무시 — created_at=" + row.created_at + " (구독 시작 이전 메시지)");
+      return;
+    }
+
+    // ② 알림 생략은 오직 "지금 그 채널 채팅창을 실제로 열람 중일 때"만.
+    //    대시보드·기업목록·기관별현황 등 다른 화면이면 탭이 활성이어도 소리+팝업 울림.
+    var viewingThisChannel = viewRef.current === "chat"
       && activeChatChannelRef.current === row.channel
       && document.visibilityState === "visible"
       && document.hasFocus();
-    if (viewingThis) return;
+    console.log("[알림진단] 📨 새 메시지 수신 — 채널=" + row.channel
+      + " / view=" + viewRef.current
+      + " / 열람채널=" + activeChatChannelRef.current
+      + " / 화면표시=" + document.visibilityState
+      + " / 포커스=" + document.hasFocus()
+      + " → " + (viewingThisChannel ? "그 채팅창 열람중이라 알림 생략" : "알림(소리+팝업) 발생"));
+    if (viewingThisChannel) return;
+
     if (chatSoundRef.current) playChatSound();
     showChatBrowserNotif(row);
   }, [playChatSound, showChatBrowserNotif]);
