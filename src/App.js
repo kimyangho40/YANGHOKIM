@@ -2756,6 +2756,73 @@ function SetupProfile({ userId, email, onDone }) {
   );
 }
 
+// ── 🔔 알림음 (Web Audio API "띵동" 2음 차임, 약 1.5초) ──────────────────────
+// 음원 파일 없이 브라우저에서 직접 합성 → 로딩/캐시 문제 없이 또렷하게 재생
+var _notifAudioCtx = null;
+function playNotifChime() {
+  try {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    if (!_notifAudioCtx) _notifAudioCtx = new AC();
+    var ctx = _notifAudioCtx;
+    // 사용자 상호작용 이후 정지(suspended)된 컨텍스트 복구
+    if (ctx.state === "suspended" && ctx.resume) ctx.resume();
+    var now = ctx.currentTime;
+
+    // 마스터 볼륨 (전체적으로 존재감 있게)
+    var master = ctx.createGain();
+    master.gain.value = 0.9;
+    master.connect(ctx.destination);
+
+    // "띵동" — 두 음(높은 음 → 낮은 음)을 각각 배음(2개)으로 도톰하게 구성
+    // ding: E6(1319Hz) / dong: A5(880Hz)  → 도어벨 느낌, 또렷하고 밝게
+    function tone(startAt, freq, dur) {
+      // 기음
+      var osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, startAt);
+      // 배음(옥타브 위, 살짝 얇게 섞어 또렷함 강화)
+      var osc2 = ctx.createOscillator();
+      osc2.type = "sine";
+      osc2.frequency.setValueAtTime(freq * 2, startAt);
+      var g2 = ctx.createGain();
+      g2.gain.value = 0.28;
+      var g = ctx.createGain();
+      // 어택은 빠르게, 릴리즈는 길게 → 종소리처럼 여운
+      g.gain.setValueAtTime(0.0001, startAt);
+      g.gain.exponentialRampToValueAtTime(1.0, startAt + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, startAt + dur);
+      osc.connect(g);
+      osc2.connect(g2); g2.connect(g);
+      g.connect(master);
+      osc.start(startAt); osc.stop(startAt + dur + 0.05);
+      osc2.start(startAt); osc2.stop(startAt + dur + 0.05);
+    }
+
+    tone(now, 1318.5, 0.75);        // 띵 (E6)
+    tone(now + 0.42, 880.0, 1.05);  // 동 (A5) — 뒤 음을 더 길게 = 총 ~1.5초 여운
+  } catch (e) {
+    // 오디오 실패해도 알림 자체는 정상 동작
+  }
+}
+
+// ── 🔔 알림 권한 상태 진단 로그 (안 되는 사람 화면에서 개발자도구로 바로 확인) ──
+function logNotifPermission(where) {
+  try {
+    var supported = "Notification" in window;
+    var perm = supported ? Notification.permission : "unsupported";
+    var emoji = perm === "granted" ? "✅" : perm === "denied" ? "🚫" : perm === "default" ? "❔" : "⚠️";
+    console.log(
+      "%c[알림진단]%c " + emoji + " 브라우저 알림 권한 = " + perm + (where ? "  (" + where + ")" : ""),
+      "background:#4338CA;color:#fff;padding:2px 6px;border-radius:4px;font-weight:700",
+      "color:#4338CA;font-weight:600"
+    );
+    if (perm === "denied") console.log("[알림진단] 👉 차단 상태입니다. 주소창 자물쇠 아이콘 → 알림 → 허용으로 바꿔주세요.");
+    if (perm === "default") console.log("[알림진단] 👉 아직 허용하지 않았습니다. 알림 권한 요청 창에서 '허용'을 눌러주세요.");
+    if (!supported) console.log("[알림진단] ⚠️ 이 브라우저는 Notification API를 지원하지 않습니다.");
+  } catch (e) {}
+}
+
 // ── CRM 메인 앱 ───────────────────────────────────────────────────────────────
 function CRMApp({ profile, session }) {
   const [dashboardFilter, setDashboardFilter] = useState(null);
@@ -2848,6 +2915,12 @@ function CRMApp({ profile, session }) {
   const [notifications, setNotifications] = useState([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const notifRef = useRef(null);
+  // 🔔 브라우저 알림 권한 상태 (granted / denied / default / unsupported)
+  const [notifPerm, setNotifPerm] = useState(function() {
+    return ("Notification" in window) ? Notification.permission : "unsupported";
+  });
+  const [showNotifHelp, setShowNotifHelp] = useState(false); // 설정 안내 모달
+  const [notifBannerDismissed, setNotifBannerDismissed] = useState(false); // 이번 세션 배너 닫기
   const [showGlobalSearch, setShowGlobalSearch] = useState(false);
   const [globalSearchQ, setGlobalSearchQ] = useState("");
   const [showAiSearch, setShowAiSearch] = useState(false);
@@ -2912,6 +2985,7 @@ function CRMApp({ profile, session }) {
   useEffect(function() {
     if (!profile) return;
     var lastChecked = localStorage.getItem("notif_last_checked_" + profile.name) || new Date(0).toISOString();
+    var isFirst = true; // 첫 로드(밀린 알림 다량)에는 소리 안 울리고, 이후 새로 도착한 것만 소리
     var checkNotifs = async function() {
       var r = await supabase.from("work_notes")
         .select("*").eq("assignee", profile.name)
@@ -2921,9 +2995,11 @@ function CRMApp({ profile, session }) {
         setNotifications(function(prev) {
           var ids = new Set(prev.map(function(n) { return n.id; }));
           var newOnes = r.data.filter(function(n) { return !ids.has(n.id); });
+          if (newOnes.length > 0 && !isFirst) playNotifChime(); // 🔔 새로 도착한 알림에만 소리
           return newOnes.concat(prev).slice(0, 20);
         });
       }
+      isFirst = false;
     };
     checkNotifs();
     var interval = setInterval(checkNotifs, 30000);
@@ -2934,6 +3010,48 @@ function CRMApp({ profile, session }) {
     if (profile) localStorage.setItem("notif_last_checked_" + profile.name, new Date().toISOString());
     setNotifications([]);
     setShowNotifPanel(false);
+  };
+
+  // 🔔 알림 권한 상태 진단 로그 + 실시간 추적 (배너 표시/숨김 판단)
+  useEffect(function() {
+    logNotifPermission("앱 로드");
+    if (!("Notification" in window)) { setNotifPerm("unsupported"); return; }
+    setNotifPerm(Notification.permission);
+    // 권한 변경 실시간 감지 (사용자가 주소창에서 허용/차단 바꾸면 즉시 반영)
+    var permStatus = null;
+    var onChange = function() {
+      setNotifPerm(Notification.permission);
+      logNotifPermission("권한 변경 감지");
+    };
+    if (navigator.permissions && navigator.permissions.query) {
+      navigator.permissions.query({ name: "notifications" }).then(function(status) {
+        permStatus = status;
+        status.onchange = onChange;
+      }).catch(function() {});
+    }
+    // 탭 다시 볼 때 재확인 (설정 바꾸고 돌아온 경우)
+    var onVisible = function() { if (!document.hidden) setNotifPerm(Notification.permission); };
+    document.addEventListener("visibilitychange", onVisible);
+    return function() {
+      if (permStatus) permStatus.onchange = null;
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+
+  // 권한 허용 요청 (배너에서 클릭)
+  var requestNotifPermission = function() {
+    if (!("Notification" in window)) return;
+    Notification.requestPermission().then(function(perm) {
+      setNotifPerm(perm);
+      logNotifPermission("사용자 요청 결과");
+      if (perm === "granted" && profile && profile.name) {
+        supabase.from("push_subscriptions").upsert({
+          user_name: profile.name,
+          subscription: { endpoint: "browser-" + profile.name, type: "notification" }
+        }, { onConflict: "user_name" });
+        playNotifChime(); // 허용 직후 사운드 테스트 겸 확인음
+      }
+    });
   };
 
   const showToast = (msg, type = "success") => {
@@ -3561,6 +3679,7 @@ function CRMApp({ profile, session }) {
           .crm-sidebar { display: none !important; }
           .crm-mobile-nav { display: flex !important; }
           .crm-main { margin-left: 0 !important; padding: 16px !important; padding-bottom: 70px !important; }
+          .crm-notif-banner { left: 0 !important; flex-wrap: wrap !important; }
         }
         @media (min-width: 769px) {
           .crm-mobile-nav { display: none !important; }
@@ -3576,6 +3695,83 @@ function CRMApp({ profile, session }) {
         <div style={{ position: "fixed", top: 20, right: 20, zIndex: 9999, background: toast.type === "success" ? "#15803D" : "#DC2626", color: "#fff", padding: "11px 18px", borderRadius: 8, fontSize: 13, fontWeight: 500, boxShadow: "0 4px 20px rgba(0,0,0,0.2)", animation: "fadein 0.2s ease" }}>
           <style>{`@keyframes fadein{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}`}</style>
           {toast.msg}
+        </div>
+      )}
+
+      {/* 🔔 브라우저 알림 권한 안내 배너 (차단 or 아직 허용 안 함일 때만) */}
+      {(notifPerm === "denied" || notifPerm === "default") && !notifBannerDismissed && (
+        <div className="crm-notif-banner" style={{
+          position: "fixed", top: 0, left: 220, right: 0, zIndex: 950,
+          background: notifPerm === "denied" ? "#FEF2F2" : "#FFFBEB",
+          borderBottom: "1px solid " + (notifPerm === "denied" ? "#FCA5A5" : "#FCD34D"),
+          padding: "10px 20px", display: "flex", alignItems: "center", gap: 12,
+          boxShadow: "0 2px 8px rgba(0,0,0,0.06)"
+        }}>
+          <span style={{ fontSize: 18, flexShrink: 0 }}>🔔</span>
+          <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: "#78350F", lineHeight: 1.5 }}>
+            {notifPerm === "denied" ? (
+              <><b>브라우저 알림이 차단되어 있어요.</b> 주소창의 자물쇠 아이콘 → 알림 → <b>허용</b>으로 바꿔주세요. 새 업무 알림을 놓치지 않아요.</>
+            ) : (
+              <><b>브라우저 알림이 아직 꺼져있어요.</b> 알림을 켜면 새 업무가 도착할 때 소리와 팝업으로 바로 알려드려요.</>
+            )}
+          </div>
+          {notifPerm === "default" && (
+            <button onClick={requestNotifPermission} style={{
+              flexShrink: 0, padding: "7px 14px", background: "#4338CA", color: "#fff",
+              border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer"
+            }}>알림 켜기</button>
+          )}
+          <button onClick={function() { setShowNotifHelp(true); }} style={{
+            flexShrink: 0, padding: "7px 14px", background: "#fff", color: "#4338CA",
+            border: "1px solid #C7D2FE", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer"
+          }}>설정 확인하는 법 보기</button>
+          <button onClick={function() { setNotifBannerDismissed(true); }} title="닫기" style={{
+            flexShrink: 0, background: "none", border: "none", fontSize: 18, color: "#B45309", cursor: "pointer", lineHeight: 1, padding: "0 2px"
+          }}>✕</button>
+        </div>
+      )}
+
+      {/* 🔔 알림 권한 설정 안내 모달 */}
+      {showNotifHelp && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+          onClick={function() { setShowNotifHelp(false); }}>
+          <div style={{ background: "#fff", borderRadius: 14, maxWidth: 460, width: "100%", padding: 24, boxShadow: "0 12px 48px rgba(0,0,0,0.25)" }}
+            onClick={function(e) { e.stopPropagation(); }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+              <div style={{ fontSize: 17, fontWeight: 700, color: "#1A1917" }}>🔔 브라우저 알림 켜는 법</div>
+              <button onClick={function() { setShowNotifHelp(false); }} style={{ background: "none", border: "none", fontSize: 20, color: "#888", cursor: "pointer", lineHeight: 1 }}>✕</button>
+            </div>
+            <div style={{ fontSize: 13, color: "#444", lineHeight: 1.7 }}>
+              <div style={{ background: "#F8F9FF", border: "1px solid #E0E7FF", borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
+                <div style={{ fontWeight: 700, color: "#4338CA", marginBottom: 6 }}>PC (크롬 · 엣지)</div>
+                <ol style={{ margin: 0, paddingLeft: 18 }}>
+                  <li>주소창 왼쪽의 <b>자물쇠(🔒) 또는 설정 아이콘</b> 클릭</li>
+                  <li>메뉴에서 <b>[알림]</b> 항목 찾기</li>
+                  <li><b>[허용]</b>으로 변경</li>
+                  <li>페이지 <b>새로고침(F5)</b></li>
+                </ol>
+              </div>
+              <div style={{ background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
+                <div style={{ fontWeight: 700, color: "#15803D", marginBottom: 6 }}>휴대폰 (안드로이드 크롬)</div>
+                <ol style={{ margin: 0, paddingLeft: 18 }}>
+                  <li>주소창의 <b>⋮ (점 3개)</b> → <b>[설정]</b></li>
+                  <li><b>[사이트 설정]</b> → <b>[알림]</b></li>
+                  <li>이 사이트 <b>[허용]</b>으로 변경</li>
+                </ol>
+              </div>
+              <div style={{ fontSize: 12, color: "#888" }}>
+                현재 권한 상태: <b style={{ color: notifPerm === "granted" ? "#15803D" : notifPerm === "denied" ? "#DC2626" : "#B45309" }}>
+                  {notifPerm === "granted" ? "✅ 허용됨" : notifPerm === "denied" ? "🚫 차단됨" : notifPerm === "default" ? "❔ 미설정" : "⚠️ 미지원"}
+                </b>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
+              {notifPerm === "default" && (
+                <button onClick={function() { requestNotifPermission(); }} style={{ flex: 1, padding: "10px", background: "#4338CA", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>지금 알림 켜기</button>
+              )}
+              <button onClick={function() { setShowNotifHelp(false); }} style={{ flex: notifPerm === "default" ? 0 : 1, padding: "10px 18px", background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>닫기</button>
+            </div>
+          </div>
         </div>
       )}
 
