@@ -1769,6 +1769,7 @@ function MobileApp({ profile, session }) {
   const [newTitle, setNewTitle] = useState("");
   const [newItems, setNewItems] = useState([]);
   const [newCompanyId, setNewCompanyId] = useState(null);
+  const [newAssignee, setNewAssignee] = useState(""); // 대표(관리자)가 다른 직원에게 업무 배정 시 담당자
 
   // 업체 검색
   const [q, setQ] = useState("");
@@ -1851,11 +1852,18 @@ function MobileApp({ profile, session }) {
   var saveNote = async function() {
     var content = newItems.filter(function(i) { return (i.text || "").trim(); }).map(function(i) { return buildItemLine({ checked: false, text: i.text }); }).join("\n");
     if (!newTitle.trim() && !content.trim()) return;
-    var ins = { assignee: myName, title: newTitle.trim() || noteAutoTitle(myName, todayStr), content: content, is_todo: newItems.length > 0, created_by: myName, note_date: todayStr };
+    // 담당자: 기본 본인. 대표(관리자)가 직원을 지정하면 그 직원에게 배정(=업무 주기)
+    var asg = (wnIsAdmin(myName) && newAssignee) ? newAssignee : myName;
+    var ins = { assignee: asg, title: newTitle.trim() || noteAutoTitle(asg, todayStr), content: content, is_todo: newItems.length > 0, created_by: myName, note_date: todayStr };
     if (newCompanyId) ins.company_id = newCompanyId;
     var r = await supabase.from("work_notes").insert(ins).select().single();
     if (r.error && /company_id/.test(r.error.message || "")) { delete ins.company_id; r = await supabase.from("work_notes").insert(ins).select().single(); }
-    if (!r.error && r.data) { setNotes(function(prev) { return [r.data].concat(prev); }); setNewTitle(""); setNewItems([]); setNewCompanyId(null); setComposing(false); }
+    if (!r.error && r.data) {
+      // 내 노트일 때만 목록에 추가 (남에게 배정한 노트는 내 목록에 안 뜸)
+      if (asg === myName) setNotes(function(prev) { return [r.data].concat(prev); });
+      else alert("📩 " + asg + " 님에게 업무를 배정했어요.");
+      setNewTitle(""); setNewItems([]); setNewCompanyId(null); setNewAssignee(""); setComposing(false);
+    }
     else if (r.error) alert("저장 실패: " + r.error.message);
   };
 
@@ -1977,6 +1985,19 @@ function MobileApp({ profile, session }) {
                 ) : (
                   <div style={Object.assign({}, card, { border: "2px solid #86EFAC", background: "#F0FDF4" })}>
                     <div style={{ fontSize: 14, fontWeight: 700, color: "#15803D", marginBottom: 10 }}>✏️ 새 노트</div>
+                    {wnIsAdmin(myName) && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: "#15803D", whiteSpace: "nowrap" }}>👤 담당자</span>
+                        <select value={newAssignee} onChange={function(e) { setNewAssignee(e.target.value); }}
+                          style={{ flex: 1, padding: "10px 12px", border: "1px solid #86EFAC", borderRadius: 10, background: "#fff", fontWeight: 600, color: "#15803D", outline: "none" }}>
+                          <option value="">{myName} (본인)</option>
+                          {ASSIGNEES.filter(function(n) { return n !== myName; }).map(function(n) { return <option key={n} value={n}>{n}</option>; })}
+                        </select>
+                      </div>
+                    )}
+                    {wnIsAdmin(myName) && newAssignee && (
+                      <div style={{ fontSize: 12, color: "#B45309", marginBottom: 10 }}>📩 {newAssignee} 님에게 업무를 배정합니다</div>
+                    )}
                     <div style={{ position: "relative", marginBottom: 10 }}>
                       <MentionField multiline={false} companiesList={companiesList} value={newTitle} placeholder="제목 (비우면 자동: 오늘 날짜)"
                         onChange={function(v) { setNewTitle(v); }} onLink={function(co) { setNewCompanyId(co.id); }}
@@ -2001,7 +2022,7 @@ function MobileApp({ profile, session }) {
                     {newCompanyId && <div style={{ fontSize: 12, color: "#4338CA", marginBottom: 8 }}>🔗 업체 연결됨</div>}
                     <div style={{ display: "flex", gap: 8 }}>
                       <button onClick={saveNote} className="m-tap" style={{ flex: 1, background: "#15803D", color: "#fff", border: "none", borderRadius: 10, padding: "12px", fontWeight: 700, cursor: "pointer" }}>저장</button>
-                      <button onClick={function() { setComposing(false); setNewTitle(""); setNewItems([]); setNewCompanyId(null); }} className="m-tap" style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 10, padding: "12px 18px", cursor: "pointer" }}>취소</button>
+                      <button onClick={function() { setComposing(false); setNewTitle(""); setNewItems([]); setNewCompanyId(null); setNewAssignee(""); }} className="m-tap" style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 10, padding: "12px 18px", cursor: "pointer" }}>취소</button>
                     </div>
                   </div>
                 )}
@@ -10908,7 +10929,8 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   var myName = profile?.name || "";
   var isWnAdmin = wnIsAdmin(myName);
   var viewableNames = useMemo(function() { return wnViewable(myName); }, [myName]);
-  var canEditNote = function(n) { return (n.assignee || "") === myName; }; // 수정/체크는 본인 노트만
+  // 수정/체크 권한: 본인 노트 + 관리자(대표 양호)는 모든 직원 노트 편집·체크 가능
+  var canEditNote = function(n) { return (n.assignee || "") === myName || isWnAdmin; };
 
   var filtered = useMemo(function() {
     return notes.filter(function(n) {
@@ -11336,7 +11358,8 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     var finalContent = newNote.content.trim();
     if (checkContent) finalContent = finalContent ? finalContent + "\n" + checkContent : checkContent;
     if (!newNote.title.trim() && !finalContent.trim()) { alert("제목 또는 내용을 입력해주세요."); return; }
-    var assigneeName = profile?.name || "전체"; // 업무노트는 본인 노트만 작성 (assignee 본인 고정)
+    // 담당자: 기본은 본인. 관리자(대표 양호)가 담당자를 지정했으면 그 직원에게 배정(=업무 주기)
+    var assigneeName = (isWnAdmin && newNote.target_assignee) ? newNote.target_assignee : (profile?.name || "전체");
     var insertObj = {
       assignee: assigneeName,
       title: newNote.title.trim(),
@@ -11656,10 +11679,37 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             </label>
           </div>
           <div style={{ marginBottom: 10 }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 12px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, background: "#F0FDF4", color: "#15803D", fontWeight: 600 }}>
-              👤 {profile?.name} <span style={{ fontSize: 11, color: "#16A34A", fontWeight: 400 }}>· 본인 노트 (담당자 고정)</span>
-            </span>
-            <span style={{ fontSize: 11, color: "#94A3B8", marginLeft: 8 }}>다른 사람에게 맡길 일은 📩 업무 요청을 이용하세요</span>
+            {isWnAdmin ? (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, background: "#fff", color: "#15803D", fontWeight: 600 }}>
+                  👤 담당자
+                  <select value={newNote.target_assignee || ""}
+                    onChange={function(e) { var v = e.target.value; setNewNote(function(p) {
+                      var newAsg = v || (profile?.name || "");
+                      var upd = { target_assignee: v };
+                      // 자동제목이면 새 담당자 기준으로 갱신 (직접 쓴 제목은 보존)
+                      var autoSelf = noteAutoTitle(profile?.name || "", p.note_date);
+                      var autoPrev = noteAutoTitle((p.target_assignee || profile?.name || ""), p.note_date);
+                      if (!p.title || p.title === autoSelf || p.title === autoPrev) upd.title = noteAutoTitle(newAsg, p.note_date);
+                      return Object.assign({}, p, upd);
+                    }); }}
+                    style={{ border: "1px solid #86EFAC", borderRadius: 6, padding: "5px 8px", fontSize: 13, fontWeight: 600, color: "#15803D", background: "#F0FDF4", outline: "none", cursor: "pointer" }}>
+                    <option value="">{profile?.name} (본인)</option>
+                    {ASSIGNEES.filter(function(n) { return n !== profile?.name; }).map(function(n) { return <option key={n} value={n}>{n}</option>; })}
+                  </select>
+                </label>
+                <span style={{ fontSize: 11, color: newNote.target_assignee ? "#B45309" : "#94A3B8" }}>
+                  {newNote.target_assignee ? "📩 " + newNote.target_assignee + " 님에게 업무를 배정합니다 (알림 전송)" : "대표 권한 · 직원에게 업무를 줄 수 있어요"}
+                </span>
+              </span>
+            ) : (
+              <>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 12px", border: "1px solid #86EFAC", borderRadius: 8, fontSize: 13, background: "#F0FDF4", color: "#15803D", fontWeight: 600 }}>
+                  👤 {profile?.name} <span style={{ fontSize: 11, color: "#16A34A", fontWeight: 400 }}>· 본인 노트 (담당자 고정)</span>
+                </span>
+                <span style={{ fontSize: 11, color: "#94A3B8", marginLeft: 8 }}>다른 사람에게 맡길 일은 📩 업무 요청을 이용하세요</span>
+              </>
+            )}
           </div>
           <div style={{ position: "relative", marginBottom: 10 }}>
             <MentionField multiline={false} companiesList={companiesList}
