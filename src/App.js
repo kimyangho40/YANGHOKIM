@@ -3270,12 +3270,16 @@ function CRMApp({ profile, session }) {
         await supabase.from("activity_logs").insert(changeLog);
       }
       // 기관별 현황 자동 동기화: 회사명이 같은 모든 agency_cases의 정보를 최신화
+      // (companies = 원본 → agency_cases 단방향. agency_cases 수정은 companies로 반영 안 함)
       if (rest.name && prevData) {
         var syncUpdates = {};
         if (rest.representative !== prevData.representative) syncUpdates.representative = rest.representative || null;
         if (rest.business_number !== prevData.business_number) syncUpdates.business_number = rest.business_number || null;
         if (rest.region !== prevData.region) syncUpdates.region = rest.region || null;
         if (rest.contract_date !== prevData.contract_date) syncUpdates.contract_date = rest.contract_date || null;
+        if (rest.industry !== prevData.industry) syncUpdates.industry = rest.industry || null;
+        if (rest.employee_count !== prevData.employee_count) syncUpdates.employee_count = rest.employee_count != null ? String(rest.employee_count) : null;
+        if (rest.credit_score !== prevData.credit_score) syncUpdates.credit_score = rest.credit_score != null && rest.credit_score !== "" ? String(rest.credit_score) : null;
         var prevAssignee = Array.isArray(prevData.assignee) ? prevData.assignee.join(", ") : (prevData.assignee || "");
         var newAssignee = Array.isArray(rest.assignee) ? rest.assignee.join(", ") : (rest.assignee || "");
         if (newAssignee !== prevAssignee) syncUpdates.assignee = newAssignee;
@@ -3284,9 +3288,13 @@ function CRMApp({ profile, session }) {
         if (nameChanged) syncUpdates.business_name = rest.name;
         if (Object.keys(syncUpdates).length > 0) {
           var oldName = nameChanged ? prevData.name : rest.name;
+          // 이름으로 매칭되는 케이스는 이 회사 것이므로 company_id도 함께 연결(미연결분 보정)
+          syncUpdates.company_id = rest.id;
           var syncResult = await supabase.from("agency_cases").update(syncUpdates).eq("business_name", oldName).is("deleted_at", null);
-          if (!syncResult.error && syncResult.count !== 0) {
-            // 동기화 성공 (조용히 처리)
+          if (syncResult.error) {
+            // company_id 등 일부 컬럼 미지원 방어: 빼고 재시도
+            var su2 = Object.assign({}, syncUpdates); delete su2.company_id;
+            await supabase.from("agency_cases").update(su2).eq("business_name", oldName).is("deleted_at", null);
           }
         }
       }
@@ -3916,6 +3924,7 @@ function CRMApp({ profile, session }) {
       {showAiSearch && (
         <AiSearchModal
           companies={companies}
+          myName={profile?.name || ""}
           onClose={function() { setShowAiSearch(false); }}
           onSelectCompany={function(c) { setSelectedCompany(c); setShowAiSearch(false); }}
         />
@@ -3957,13 +3966,56 @@ function CRMApp({ profile, session }) {
 }
 
 // ── 전체 검색형 AI 상담 모달 ────────────────────────────────────────────────────
-function AiSearchModal({ companies, onClose, onSelectCompany }) {
+function AiSearchModal({ companies, myName, onClose, onSelectCompany }) {
   const [msgs, setMsgs] = useState([]); // { role, content }
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
   const [loadingSnap, setLoadingSnap] = useState(true);
+  const [convId, setConvId] = useState(null); // 현재 대화 id (null이면 새 대화)
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyList, setHistoryList] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const today = new Date().toISOString().slice(0, 10);
+
+  // 대화 자동 저장(메시지 보낼 때마다): convId 있으면 update, 없으면 insert 후 id 확보
+  var persistChat = async function(allMsgs) {
+    if (!allMsgs || allMsgs.length === 0) return;
+    var firstUser = allMsgs.find(function(m) { return m.role === "user"; });
+    var title = (firstUser ? firstUser.content : "새 대화").slice(0, 60);
+    try {
+      if (convId) {
+        await supabase.from("ai_chat_history").update({ messages: allMsgs, title: title, updated_at: new Date().toISOString() }).eq("id", convId);
+      } else {
+        var r = await supabase.from("ai_chat_history").insert({ user_name: myName || null, title: title, messages: allMsgs }).select().single();
+        if (!r.error && r.data) setConvId(r.data.id);
+        else if (r.error) console.warn("AI 대화 저장 실패:", r.error.message);
+      }
+    } catch (e) { console.warn("AI 대화 저장 오류:", e); }
+  };
+
+  var loadHistoryList = async function() {
+    setLoadingHistory(true);
+    var qy = supabase.from("ai_chat_history").select("id,title,messages,created_at,updated_at").order("updated_at", { ascending: false }).limit(100);
+    if (myName) qy = qy.eq("user_name", myName);
+    var r = await qy;
+    setHistoryList(r.error ? [] : (r.data || []));
+    setLoadingHistory(false);
+  };
+  var openHistory = function() { setShowHistory(true); loadHistoryList(); };
+  var newConversation = function() { setMsgs([]); setConvId(null); setInput(""); setShowHistory(false); };
+  var selectConversation = function(conv) {
+    setMsgs(Array.isArray(conv.messages) ? conv.messages : []);
+    setConvId(conv.id);
+    setShowHistory(false);
+  };
+  var deleteConversation = async function(id, e) {
+    if (e) e.stopPropagation();
+    if (!window.confirm("이 대화를 삭제할까요?")) return;
+    await supabase.from("ai_chat_history").delete().eq("id", id);
+    if (id === convId) newConversation();
+    setHistoryList(function(prev) { return prev.filter(function(c) { return c.id !== id; }); });
+  };
 
   useEffect(function() {
     var pick = function(obj, keys) {
@@ -3995,9 +4047,11 @@ function AiSearchModal({ companies, onClose, onSelectCompany }) {
     var q = input.trim();
     if (!q || loading || !snapshot) return;
     var history = msgs.slice(-8);
-    setMsgs(function(p) { return p.concat([{ role: "user", content: q }]); });
+    var base = msgs.concat([{ role: "user", content: q }]);
+    setMsgs(base);
     setInput("");
     setLoading(true);
+    var finalMsgs = base;
     try {
       var resp = await fetch("/api/ai-search", {
         method: "POST",
@@ -4006,11 +4060,14 @@ function AiSearchModal({ companies, onClose, onSelectCompany }) {
       });
       var d = await resp.json();
       if (!resp.ok) throw new Error(d.error || "요청 실패");
-      setMsgs(function(p) { return p.concat([{ role: "assistant", content: d.answer || "(빈 응답)" }]); });
+      finalMsgs = base.concat([{ role: "assistant", content: d.answer || "(빈 응답)" }]);
+      setMsgs(finalMsgs);
     } catch (e) {
-      setMsgs(function(p) { return p.concat([{ role: "assistant", content: "❌ 오류: " + (e && e.message ? e.message : e) }]); });
+      finalMsgs = base.concat([{ role: "assistant", content: "❌ 오류: " + (e && e.message ? e.message : e) }]);
+      setMsgs(finalMsgs);
     } finally {
       setLoading(false);
+      persistChat(finalMsgs); // 메시지 보낼 때마다 자동 저장
     }
   };
 
@@ -4019,7 +4076,7 @@ function AiSearchModal({ companies, onClose, onSelectCompany }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
       >
-      <div style={{ background: "#fff", borderRadius: 14, width: 640, maxWidth: "100%", height: "80vh", maxHeight: 720, display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.25)", overflow: "hidden" }}
+      <div style={{ position: "relative", background: "#fff", borderRadius: 14, width: 640, maxWidth: "100%", height: "80vh", maxHeight: 720, display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.25)", overflow: "hidden" }}
         onClick={function(e) { e.stopPropagation(); }}>
         {/* 헤더 */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: "1px solid #E8E5E0", background: "#F7F6F3" }}>
@@ -4035,10 +4092,61 @@ function AiSearchModal({ companies, onClose, onSelectCompany }) {
               </div>
             </div>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}>
-            <Icon name="x" size={18} color="#888" />
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <button onClick={openHistory} title="과거 대화 불러오기"
+              style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 700, color: "#555", cursor: "pointer", whiteSpace: "nowrap" }}>
+              🕘 이전 대화
+            </button>
+            <button onClick={newConversation} title="새 대화 시작"
+              style={{ background: "#4338CA", border: "none", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 700, color: "#fff", cursor: "pointer", whiteSpace: "nowrap" }}>
+              ✎ 새 대화
+            </button>
+            <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}>
+              <Icon name="x" size={18} color="#888" />
+            </button>
+          </div>
         </div>
+
+        {/* 이전 대화 목록 오버레이 */}
+        {showHistory && (
+          <div style={{ position: "absolute", top: 61, left: 0, right: 0, bottom: 0, background: "#fff", zIndex: 5, display: "flex", flexDirection: "column" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px", borderBottom: "1px solid #E8E5E0" }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#1A1917" }}>🕘 이전 대화</div>
+              <button onClick={function() { setShowHistory(false); }}
+                style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 700, color: "#555", cursor: "pointer" }}>닫기</button>
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
+              {loadingHistory ? (
+                <div style={{ textAlign: "center", padding: "40px 0", color: "#AAA", fontSize: 13 }}>불러오는 중…</div>
+              ) : historyList.length === 0 ? (
+                <div style={{ textAlign: "center", padding: "50px 20px", color: "#AAA", fontSize: 13 }}>
+                  <div style={{ fontSize: 30, marginBottom: 10 }}>💬</div>
+                  저장된 대화가 없어요.<br />질문을 보내면 자동으로 저장됩니다.
+                </div>
+              ) : historyList.map(function(conv) {
+                var d = conv.updated_at || conv.created_at || "";
+                var dateStr = d ? d.slice(0, 16).replace("T", " ") : "";
+                var count = Array.isArray(conv.messages) ? conv.messages.length : 0;
+                var isCur = conv.id === convId;
+                return (
+                  <div key={conv.id} onClick={function() { selectConversation(conv); }}
+                    style={{ padding: "12px 20px", cursor: "pointer", borderBottom: "1px solid #F0EDE8", background: isCur ? "#EEF2FF" : "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}
+                    onMouseEnter={function(e) { if (!isCur) e.currentTarget.style.background = "#F7F6F3"; }}
+                    onMouseLeave={function(e) { if (!isCur) e.currentTarget.style.background = "#fff"; }}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#1A1917", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {isCur ? "▶ " : ""}{conv.title || "(제목 없음)"}
+                      </div>
+                      <div style={{ fontSize: 11, color: "#999", marginTop: 3 }}>{dateStr} · {count}개 메시지</div>
+                    </div>
+                    <button onClick={function(e) { deleteConversation(conv.id, e); }} title="대화 삭제"
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "#CCC", fontSize: 16, padding: "2px 6px", flexShrink: 0 }}>🗑</button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {msgs.length === 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "12px 20px 0" }}>
@@ -13775,6 +13883,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   const [activeGroup, setActiveGroup] = useState(jumpToGroup || "소상공인시장진흥공단");
   const [activeMonth, setActiveMonth] = useState(jumpToMonth || new Date().getMonth() + 1);
   const [statusFilter, setStatusFilter] = useState("all"); // "all" | "approved" | "inProgress" | "rejected"
+  const [searchQ, setSearchQ] = useState(""); // 업체명·대표자명 검색 (탭 전환해도 유지)
   const [cases, setCases] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState(null);
@@ -13926,6 +14035,29 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     if (!result.error) setCompaniesList(result.data || []);
   };
 
+  // 기존 데이터 company_id 매칭: 업체명 정확 일치하는 미연결 건을 기업 목록과 자동 연결
+  var autoLinkCompanies = async function() {
+    var nameToId = {};
+    companiesList.forEach(function(co) { if (co.name) nameToId[co.name.trim()] = co.id; });
+    var targets = cases.filter(function(c) {
+      return !c.deleted_at && !c.company_id && nameToId[(c.business_name || "").trim()];
+    });
+    if (targets.length === 0) { alert("업체명이 정확히 일치하는 미연결 건이 없어요.\n(이름이 다른 건은 신규 추가 시 자동완성으로 연결하거나 직접 확인해주세요.)"); return; }
+    if (!window.confirm("업체명이 정확히 일치하는 미연결 " + targets.length + "건을 기업 목록과 자동 연결할까요?")) return;
+    var ok = 0;
+    await Promise.all(targets.map(async function(c) {
+      var r = await supabase.from("agency_cases").update({ company_id: nameToId[c.business_name.trim()] }).eq("id", c.id);
+      if (!r.error) ok++;
+    }));
+    setCases(function(prev) {
+      return prev.map(function(c) {
+        var id = nameToId[(c.business_name || "").trim()];
+        return (!c.deleted_at && !c.company_id && id) ? Object.assign({}, c, { company_id: id }) : c;
+      });
+    });
+    alert(ok + "건을 기업 목록과 연결했어요.");
+  };
+
   // 순서 이동 함수 - dir: -1(위) 또는 +1(아래)
   var moveCaseOrder = async function(caseId, dir) {
     // 현재 보이는 순서(filtered)에서 위치를 바꾸고, 전체에 sort_order를 1,2,3...으로 다시 부여 (일부만 교환하면 순서가 꼬임)
@@ -14003,15 +14135,20 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   };
 
   var filtered = useMemo(function() {
+    var q = (searchQ || "").trim().toLowerCase();
     var list = cases.filter(function(c) {
       var matchMonth = activeMonth === "all" ? true : Number(c.month) === Number(activeMonth);
       var matchStatus = statusFilter === "all" ? true : groupOf(c.status) === statusFilter;
+      var matchSearch = !q
+        || (c.business_name || "").toLowerCase().indexOf(q) >= 0
+        || (c.representative || "").toLowerCase().indexOf(q) >= 0;
       return c.agency_group === activeGroup
         && matchMonth
         && Number(c.year) === currentYear
         && !c.deleted_at
         && (filterAssignee.length === 0 || filterAssignee.some(function(n) { return (c.assignee || "").split(",").map(function(x) { return x.trim(); }).includes(n); }))
-        && matchStatus;
+        && matchStatus
+        && matchSearch;
     });
     // "전체"일 때: 같은 업체(기관+사업자명+대표자명)가 여러 달에 있으면 가장 최근 월만 표시
     if (activeMonth === "all") {
@@ -14038,10 +14175,15 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       if (bOrder != null) return 1;
       return (a.created_at || "").localeCompare(b.created_at || "");
     });
-  }, [cases, activeGroup, activeMonth, filterAssignee, currentYear, statusFilter]);
+  }, [cases, activeGroup, activeMonth, filterAssignee, currentYear, statusFilter, searchQ]);
 
   var trashedCases = useMemo(function() {
     return cases.filter(function(c) { return !!c.deleted_at; });
+  }, [cases]);
+
+  // 기업 목록에 연결 안 된(company_id 없는) 활성 케이스 수
+  var unlinkedCount = useMemo(function() {
+    return cases.filter(function(c) { return !c.deleted_at && !c.company_id; }).length;
   }, [cases]);
 
   var monthsWithData = useMemo(function() {
@@ -14082,14 +14224,28 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   var groupColor = activeGroupObj ? activeGroupObj.color : "#4338CA";
 
   var onBusinessNameChange = function(value) {
-    setNewCase(function(p) { return Object.assign({}, p, { business_name: value }); });
+    setNewCase(function(p) {
+      // 자동채움 후 업체명을 직접 바꾸면 "가져옴" 연결 해제 (신규 업체로 간주)
+      var next = Object.assign({}, p, { business_name: value });
+      if (p._fromCompany && value !== p._fromCompany) { next.company_id = null; next._fromCompany = ""; }
+      return next;
+    });
     if (!value || value.length < 1) { setCompanySuggestions([]); return; }
     var matches = companiesList.filter(function(co) {
-      return (co.name || "").toLowerCase().indexOf(value.toLowerCase()) >= 0;
+      return (co.name || "").toLowerCase().indexOf(value.toLowerCase()) >= 0
+        || (co.representative || "").toLowerCase().indexOf(value.toLowerCase()) >= 0;
     }).slice(0, 8);
     setCompanySuggestions(matches);
   };
 
+  // companies → agency_cases 자동채움: 두 테이블에 공통으로 있는 필드 전부 가져옴
+  //  (연락처/매출/법인구분 등 agency_cases에 대응 컬럼이 없는 값은 채우지 않음)
+  var creditFromCompany = function(co) {
+    var v = co.credit_score != null && co.credit_score !== "" ? co.credit_score
+      : (co.credit_score_kcb != null && co.credit_score_kcb !== "" ? co.credit_score_kcb
+      : (co.credit_score_nice != null && co.credit_score_nice !== "" ? co.credit_score_nice : ""));
+    return v === "" || v == null ? "" : String(v);
+  };
   var selectCompany = function(co) {
     setNewCase(function(p) {
       return Object.assign({}, p, {
@@ -14097,7 +14253,12 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         representative: co.representative || "",
         business_number: co.business_number || "",
         region: co.region || "",
-        assignee: co.assignee || "",
+        assignee: Array.isArray(co.assignee) ? co.assignee.join(", ") : (co.assignee || ""),
+        industry: co.industry || "",
+        credit_score: creditFromCompany(co),
+        employee_count: co.employee_count != null ? String(co.employee_count) : "",
+        company_id: co.id || null,
+        _fromCompany: co.name || "", // "기업 목록에서 가져옴" 표시용 (저장 시 제외)
         notes: "",
       });
     });
@@ -14128,8 +14289,24 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       request_amount: newCase.request_amount || null,
       region: newCase.region || null,
       notes: newCase.notes || null,
+      industry: newCase.industry || null,
+      credit_score: newCase.credit_score || null,
+      employee_count: newCase.employee_count || null,
+      company_id: newCase.company_id || null,
     };
     var result = await supabase.from("agency_cases").insert(insertData).select().single();
+    // 선택 컬럼(company_id 등) 미지원 환경 방어: 실패 시 핵심 컬럼만 재시도
+    if (result.error) {
+      console.warn("agency_cases insert 1차 실패, 핵심 컬럼만 재시도:", result.error.message);
+      var minimal = {
+        agency_group: activeGroup, year: currentYear, month: Number(activeMonth),
+        business_name: newCase.business_name, representative: newCase.representative || null,
+        business_number: newCase.business_number || null, assignee: newCase.assignee || null,
+        status: newCase.status || "시작 전", request_amount: newCase.request_amount || null,
+        region: newCase.region || null, notes: newCase.notes || null,
+      };
+      result = await supabase.from("agency_cases").insert(minimal).select().single();
+    }
     if (!result.error && result.data) {
       setCases(function(prev) { return prev.concat([result.data]); });
       setShowAddCase(false);
@@ -14428,6 +14605,12 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                 style={{ marginLeft: 4, color: "#92400E", opacity: 0.6, fontSize: 14, lineHeight: 1 }} title="클립보드 비우기">×</span>
             </button>
           )}
+          {unlinkedCount > 0 && (
+            <button onClick={autoLinkCompanies} title="업체명이 일치하는 미연결 건을 기업 목록과 자동 연결"
+              style={{ display: "flex", alignItems: "center", gap: 6, background: "#FEF3C7", color: "#92400E", border: "1px solid #FCD34D", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+              🔗 미연결 {unlinkedCount}건 연결
+            </button>
+          )}
           <button onClick={function() { setShowTrash(true); }}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
             🗑️ 휴지통{trashedCases.length > 0 ? " (" + trashedCases.length + ")" : ""}
@@ -14437,6 +14620,20 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
             <Icon name="refresh" size={13} color="#555" /> 새로고침
           </button>
         </div>
+      </div>
+
+      {/* 검색바 (탭 위 · 탭 전환해도 검색어 유지) */}
+      <div style={{ position: "relative", marginBottom: 14, maxWidth: 420 }}>
+        <span style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }}>
+          <Icon name="search" size={15} color="#AAA" />
+        </span>
+        <input value={searchQ} onChange={function(e) { setSearchQ(e.target.value); }}
+          placeholder="업체명 · 대표자명 검색"
+          style={{ width: "100%", padding: "10px 36px 10px 38px", border: "1px solid #E8E5E0", borderRadius: 10, fontSize: 13, boxSizing: "border-box", outline: "none", background: "#fff" }} />
+        {searchQ && (
+          <span onClick={function() { setSearchQ(""); }} title="검색어 지우기"
+            style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", cursor: "pointer", color: "#AAA", fontSize: 16, lineHeight: 1 }}>×</span>
+        )}
       </div>
 
       {/* 기관 탭 */}
@@ -15131,10 +15328,13 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
               <div style={{ marginBottom: 13, position: "relative" }}>
                 <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>
                   사업자명 * <span style={{ color: "#4338CA", fontWeight: 400, marginLeft: 6 }}>(기업 목록 {companiesList.length}개 로드됨 — 입력 시 자동완성)</span>
+                  {newCase._fromCompany && (
+                    <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: "#15803D", background: "#DCFCE7", padding: "2px 8px", borderRadius: 99 }}>✓ 기업 목록에서 가져옴</span>
+                  )}
                 </label>
-                <input value={newCase.business_name || ""} placeholder="사업자명 입력"
+                <input value={newCase.business_name || ""} placeholder="사업자명 입력 (기업 목록에 없으면 직접 입력)"
                   onChange={function(e) { onBusinessNameChange(e.target.value); }}
-                  style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+                  style={{ width: "100%", padding: "10px 13px", border: newCase._fromCompany ? "1px solid #86EFAC" : "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
                 {companySuggestions.length > 0 && (
                   <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, marginTop: 4, maxHeight: 240, overflowY: "auto", zIndex: 10, boxShadow: "0 4px 12px rgba(0,0,0,0.08)" }}>
                     {companySuggestions.map(function(co) {
@@ -15191,6 +15391,23 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
                 <div>
                   <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>지역</label>
                   <input value={newCase.region || ""} placeholder="예: 서울_강남" onChange={function(e) { var v = e.target.value; setNewCase(function(p) { return Object.assign({}, p, { region: v }); }); }}
+                    style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 13 }}>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>업종</label>
+                  <input value={newCase.industry || ""} placeholder="예: 음식점업" onChange={function(e) { var v = e.target.value; setNewCase(function(p) { return Object.assign({}, p, { industry: v }); }); }}
+                    style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>신용점수</label>
+                  <input value={newCase.credit_score || ""} placeholder="예: 820" onChange={function(e) { var v = e.target.value; setNewCase(function(p) { return Object.assign({}, p, { credit_score: v }); }); }}
+                    style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>상시근로자수</label>
+                  <input value={newCase.employee_count || ""} placeholder="예: 5" onChange={function(e) { var v = e.target.value; setNewCase(function(p) { return Object.assign({}, p, { employee_count: v }); }); }}
                     style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
                 </div>
               </div>
