@@ -19110,8 +19110,9 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                             </div>
                             <span style={{ fontSize: 10, fontWeight: 700, color: "#1A1917" }}>{takenCount}/{cl.length} 가져감</span>
                           </div>
-                          {/* 항목들 */}
-                          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                          {/* 항목들 — 6개 이상이면 항목 5개 높이로 고정하고 이 목록 안에서만 세로 스크롤.
+                              상단(진행률바)·하단(가져가기/완료 버튼)은 이 div 바깥이라 스크롤과 무관하게 항상 고정 노출된다. */}
+                          <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: cl.length > 5 ? 182 : "none", overflowY: cl.length > 5 ? "auto" : "visible", overflowX: "hidden", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", paddingRight: cl.length > 5 ? 4 : 0 }}>
                             {cl.map(function(item) {
                               var taken = !!item.taken_by;
                               var mine = item.taken_by === profile?.name;
