@@ -1264,7 +1264,7 @@ function workbookHasCells(wb) {
 //  · 먼저 표준 읽기를 시도(정상 엑셀은 여기서 끝 — fflate 미로드, 성능·동작 변화 없음).
 //  · 셀이 하나도 안 잡히면(한셀/한컴 파일 의심) XML을 정규화해 재시도.
 async function readUploadedWorkbook(data, opts) {
-  var XLSX = window.XLSX;
+  var XLSX = await ensureXLSX();
   var wb;
   try { wb = XLSX.read(data, opts); } catch (e) { wb = null; }
   if (wb && workbookHasCells(wb)) return wb;
@@ -1294,16 +1294,7 @@ async function readUploadedWorkbook(data, opts) {
 
 // 기업현황표(xlsx) 파싱 공용 함수 - 신규등록/상세패널 양쪽에서 사용
 async function parseHyeonhwangpyo(file) {
-  if (typeof window.XLSX === "undefined") {
-    await new Promise(function(resolve, reject) {
-      var script = document.createElement("script");
-      script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-      script.onload = resolve;
-      script.onerror = function() { reject(new Error("SheetJS 라이브러리 로드 실패. 인터넷 연결을 확인해주세요.")); };
-      document.head.appendChild(script);
-    });
-  }
-  var XLSX = window.XLSX;
+  var XLSX = await ensureXLSX();
   var data = await file.arrayBuffer();
   var wb = await readUploadedWorkbook(data, { type: "array", cellDates: true });
   var sheetName = wb.SheetNames.find(function(n) { return n.indexOf("기업개요") >= 0; }) || wb.SheetNames[0];
@@ -1429,18 +1420,12 @@ async function parseHyeonhwangpyo(file) {
   return { updates: updates, auto: auto };
 }
 
-// SheetJS(XLSX) 라이브러리 로더 - 여러 파서에서 공용
+// SheetJS(XLSX) 라이브러리 로더 - 여러 파서에서 공용.
+//  로컬 번들에서 동적 import(같은 오리진 청크, 외부 CDN 불필요) + xlsx 파싱이 필요할 때만
+//  로드되는 지연 로딩(별도 청크). ESM 네임스페이스/CJS default 어느 쪽이든 .read를 가진 객체 반환.
 async function ensureXLSX() {
-  if (typeof window.XLSX === "undefined") {
-    await new Promise(function(resolve, reject) {
-      var script = document.createElement("script");
-      script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-      script.onload = resolve;
-      script.onerror = function() { reject(new Error("SheetJS 라이브러리 로드 실패. 인터넷 연결을 확인해주세요.")); };
-      document.head.appendChild(script);
-    });
-  }
-  return window.XLSX;
+  var mod = await import("xlsx");
+  return (mod && mod.read) ? mod : ((mod && mod.default) ? mod.default : mod);
 }
 
 // 라벨 기반 범용 시트지 파서 - 표준 기업현황표가 아닌 임의 양식(상담 시트지 등)에서
@@ -7509,16 +7494,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
     if (!/\.(xlsx|xls)$/i.test(file.name || "")) { alert("xlsx 파일만 첨부할 수 있습니다."); return; }
     setInfoSheetLoading(true);
     try {
-      if (typeof window.XLSX === "undefined") {
-        await new Promise(function(resolve, reject) {
-          var script = document.createElement("script");
-          script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-          script.onload = resolve;
-          script.onerror = function() { reject(new Error("SheetJS 라이브러리 로드 실패. 인터넷 연결을 확인해주세요.")); };
-          document.head.appendChild(script);
-        });
-      }
-      var XLSX = window.XLSX;
+      var XLSX = await ensureXLSX();
       var data = await file.arrayBuffer();
       var wb = await readUploadedWorkbook(data, { type: "array", cellDates: true });
       var sheetName = wb.SheetNames.find(function(n) { return n.indexOf("스크립트 정보시트") >= 0; })
