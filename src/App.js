@@ -1215,18 +1215,10 @@ const formatRevenue = (val) => {
 // ── 아이콘 ────────────────────────────────────────────────────────────────────
 
 // fflate(압축 해제) 지연 로더 — 한셀/한컴오피스로 만든 xlsx 정규화 폴백 전용.
-//  표준 엑셀 업로드에서는 절대 로드되지 않는다(폴백 경로에서만 호출).
+//  로컬 번들에서 동적 import(같은 오리진 청크, 외부 CDN 불필요) + 폴백 경로에서만 로드되어
+//  표준 엑셀 업로드에서는 절대 내려받지 않는다.
 async function ensureFflate() {
-  if (typeof window.fflate === "undefined") {
-    await new Promise(function(resolve, reject) {
-      var script = document.createElement("script");
-      script.src = "https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js";
-      script.onload = resolve;
-      script.onerror = function() { reject(new Error("압축 해제 라이브러리 로드 실패. 인터넷 연결을 확인해주세요.")); };
-      document.head.appendChild(script);
-    });
-  }
-  return window.fflate;
+  return await import("fflate");
 }
 
 // 한셀(한컴오피스)로 저장한 xlsx는 표준 엑셀과 달리
