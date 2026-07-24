@@ -1213,6 +1213,93 @@ const formatRevenue = (val) => {
 };
 
 // ── 아이콘 ────────────────────────────────────────────────────────────────────
+
+// fflate(압축 해제) 지연 로더 — 한셀/한컴오피스로 만든 xlsx 정규화 폴백 전용.
+//  표준 엑셀 업로드에서는 절대 로드되지 않는다(폴백 경로에서만 호출).
+async function ensureFflate() {
+  if (typeof window.fflate === "undefined") {
+    await new Promise(function(resolve, reject) {
+      var script = document.createElement("script");
+      script.src = "https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js";
+      script.onload = resolve;
+      script.onerror = function() { reject(new Error("압축 해제 라이브러리 로드 실패. 인터넷 연결을 확인해주세요.")); };
+      document.head.appendChild(script);
+    });
+  }
+  return window.fflate;
+}
+
+// 한셀(한컴오피스)로 저장한 xlsx는 표준 엑셀과 달리
+//  (1) 모든 요소 태그에 spreadsheetml 네임스페이스 접두사(<x:row>, <x:c>, <x:si> …)를 붙이고
+//  (2) 리치텍스트/스타일에 haansoft 전용 확장(<hs:size> 등)을 mc:AlternateContent 블록으로 섞는다.
+//  SheetJS(정규식 파서)는 이 둘 때문에 셀 데이터를 하나도 못 읽거나 "Unrecognized rich format" 예외로 실패한다.
+//  → 데이터(셀 값)만 필요하므로, XML을 표준형으로 정규화한다:
+//    · mc:AlternateContent → 표준 대체본(mc:Fallback) 내용으로 치환(hs 확장 제거)
+//    · 남은 haansoft(hs:) 요소/속성 제거(안전망)
+//    · spreadsheetml 접두사 제거 + 기본 네임스페이스로 승격(SheetJS는 루트 xmlns를 요구)
+function normalizeHancellXml(xml) {
+  // 1) 마크업 호환성 블록을 표준 대체본으로 치환 (호환 소비자의 표준 처리 방식)
+  xml = xml.replace(/<mc:AlternateContent\b[\s\S]*?<\/mc:AlternateContent>/g, function(block) {
+    var fb = block.match(/<mc:Fallback\b[^>]*>([\s\S]*?)<\/mc:Fallback>/);
+    return fb ? fb[1] : "";
+  });
+  // 2) 혹시 남은 haansoft 확장 요소/속성 제거
+  xml = xml
+    .replace(/<hs:[A-Za-z0-9]+\b[^>]*\/>/g, "")
+    .replace(/<hs:[A-Za-z0-9]+\b[^>]*>[\s\S]*?<\/hs:[A-Za-z0-9]+>/g, "")
+    .replace(/\s+hs:[A-Za-z0-9]+="[^"]*"/g, "");
+  // 3) spreadsheetml 네임스페이스 접두사 제거 + 기본 네임스페이스로 승격
+  var m = xml.match(/xmlns:([A-Za-z0-9]+)="http:\/\/schemas\.openxmlformats\.org\/spreadsheetml\/2006\/main"/);
+  if (m) {
+    var p = m[1];
+    xml = xml
+      .replace(new RegExp("<" + p + ":", "g"), "<")
+      .replace(new RegExp("</" + p + ":", "g"), "</")
+      .replace(new RegExp("xmlns:" + p + "=", "g"), "xmlns=");
+  }
+  return xml;
+}
+
+// 워크북에 실제 데이터 셀이 하나라도 있는지(!로 시작하는 메타 키 제외)
+function workbookHasCells(wb) {
+  return (wb && wb.SheetNames || []).some(function(n) {
+    var ws = wb.Sheets[n];
+    return ws && Object.keys(ws).some(function(k) { return k.charAt(0) !== "!"; });
+  });
+}
+
+// 업로드된 xlsx를 최대한 안전하게 읽는다.
+//  · 먼저 표준 읽기를 시도(정상 엑셀은 여기서 끝 — fflate 미로드, 성능·동작 변화 없음).
+//  · 셀이 하나도 안 잡히면(한셀/한컴 파일 의심) XML을 정규화해 재시도.
+async function readUploadedWorkbook(data, opts) {
+  var XLSX = window.XLSX;
+  var wb;
+  try { wb = XLSX.read(data, opts); } catch (e) { wb = null; }
+  if (wb && workbookHasCells(wb)) return wb;
+  // 폴백: 한셀/한컴 네임스페이스 파일 정규화 후 재시도
+  try {
+    var fflate = await ensureFflate();
+    var u8 = data instanceof Uint8Array ? data : new Uint8Array(data);
+    var files = fflate.unzipSync(u8);
+    var td = new TextDecoder(), te = new TextEncoder();
+    var changed = false;
+    Object.keys(files).forEach(function(name) {
+      if (!/\.xml$/i.test(name)) return;
+      var s = td.decode(files[name]);
+      if (s.indexOf("spreadsheetml/2006/main") < 0 && s.indexOf("haansoft") < 0 && s.indexOf("<mc:AlternateContent") < 0) return;
+      var fixed = normalizeHancellXml(s);
+      if (fixed !== s) { files[name] = te.encode(fixed); changed = true; }
+    });
+    if (changed) {
+      var clean = fflate.zipSync(files);
+      var wb2 = XLSX.read(clean, opts);
+      if (wb2 && workbookHasCells(wb2)) return wb2;
+    }
+  } catch (e) { /* 정규화 실패 시 원본 결과로 진행 */ }
+  if (wb) return wb;
+  throw new Error("엑셀 파일을 읽을 수 없습니다.");
+}
+
 // 기업현황표(xlsx) 파싱 공용 함수 - 신규등록/상세패널 양쪽에서 사용
 async function parseHyeonhwangpyo(file) {
   if (typeof window.XLSX === "undefined") {
@@ -1226,7 +1313,7 @@ async function parseHyeonhwangpyo(file) {
   }
   var XLSX = window.XLSX;
   var data = await file.arrayBuffer();
-  var wb = XLSX.read(data, { type: "array", cellDates: true });
+  var wb = await readUploadedWorkbook(data, { type: "array", cellDates: true });
   var sheetName = wb.SheetNames.find(function(n) { return n.indexOf("기업개요") >= 0; }) || wb.SheetNames[0];
   var ws = wb.Sheets[sheetName];
   var rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
@@ -1449,7 +1536,7 @@ function parseSheetGeneric(rows) {
 async function parseUploadedSheet(file) {
   var XLSX = await ensureXLSX();
   var data = await file.arrayBuffer();
-  var wb = XLSX.read(data, { type: "array", cellDates: true });
+  var wb = await readUploadedWorkbook(data, { type: "array", cellDates: true });
   var hasGaeyo = wb.SheetNames.some(function(n) { return n.indexOf("기업개요") >= 0; });
   if (hasGaeyo) {
     // 표준 기업현황표: 기존 파서 그대로 사용(기업정보 항목은 기업정보 탭으로), 비고 메모는 소통내역 텍스트로도 제공
@@ -7441,7 +7528,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
       }
       var XLSX = window.XLSX;
       var data = await file.arrayBuffer();
-      var wb = XLSX.read(data, { type: "array", cellDates: true });
+      var wb = await readUploadedWorkbook(data, { type: "array", cellDates: true });
       var sheetName = wb.SheetNames.find(function(n) { return n.indexOf("스크립트 정보시트") >= 0; })
         || wb.SheetNames.find(function(n) { return n.indexOf("정보시트") >= 0; })
         || wb.SheetNames[0];
