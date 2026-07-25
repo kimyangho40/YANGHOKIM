@@ -5230,9 +5230,13 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
   const contractDone = companies.filter(c => c.fee_status === "수수료수령완료").length;
   const contracted = companies.filter(c => c.fee_status !== "미수령").length;
   // const thisWeek = companies.filter(c => c.next_contact && c.next_contact <= "2026-05-15").length;
-  const stageCount = STAGES.reduce((a, s) => ({ ...a, [s]: companies.filter(c => c.stage === s).length }), {});
-
   const [agencyCases, setAgencyCases] = useState([]);
+  const [pipeCards, setPipeCards] = useState([]); // 파이프라인 조합카드(위젯 카드기준 집계)
+  // 파이프라인 단계별 집계: 조합카드 기준(카드 없으면 기존 companies.stage 폴백)
+  const stageCount = pipeCards.length > 0
+    ? STAGES.reduce((a, s) => ({ ...a, [s]: pipeCards.filter(c => c.stage === s).length }), {})
+    : STAGES.reduce((a, s) => ({ ...a, [s]: companies.filter(c => c.stage === s).length }), {});
+  const stageTotal = STAGES.reduce((s, st) => s + (stageCount[st] || 0), 0); // 위젯 % 분모(카드 총수)
   const [kpiGoals, setKpiGoals] = useState([]);
   const [editingKpi, setEditingKpi] = useState(false);
   const [kpiEdits, setKpiEdits] = useState({});
@@ -5255,6 +5259,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
   useEffect(function() {
     supabase.from("agency_cases").select("*").is("deleted_at", null).limit(10000).then(function(r) {
       if (!r.error) setAgencyCases(r.data || []);
+    });
+    supabase.from("pipeline_cards").select("stage").then(function(r) {
+      if (!r.error) setPipeCards(r.data || []);
     });
     supabase.from("kpi_goals").select("*").eq("year", thisYear).eq("month", thisMonth).then(function(r) {
       if (!r.error) setKpiGoals(r.data || []);
@@ -5700,9 +5707,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
           {STAGES.map((stage, i) => {
             const c = STAGE_COLORS[stage];
             const count = stageCount[stage] || 0;
-            const pct = companies.length ? Math.round(count / companies.length * 100) : 0;
+            const pct = stageTotal ? Math.round(count / stageTotal * 100) : 0;
             return (
-              <div key={stage} onClick={() => { setView("list"); setFilterStage(stage); }}
+              <div key={stage} onClick={() => { setView("pipeline"); setFilterStage(stage); }}
                 style={{ flex: 1, background: c.bg, border: `1px solid ${c.border}`, borderRadius: 10, padding: "14px 16px", cursor: "pointer" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
                   <span style={{ fontSize: 11, fontWeight: 600, color: c.text }}>0{i+1}</span>
@@ -6235,6 +6242,31 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
     }
   };
 
+  // 카드 동기화 모드 토글: 자동↔수동. 수동→자동 전환 시 최신 기관상태로 단계 재조정.
+  var toggleSyncMode = async function(e, row) {
+    e.stopPropagation();
+    var card = row.card;
+    if (!card.agency_group) return; // 기관 미지정은 동기화 대상 아님
+    if (card.sync_mode !== "manual") {
+      // 자동 → 수동 고정
+      var r = await supabase.from("pipeline_cards").update({ sync_mode: "manual", updated_at: new Date().toISOString() }).eq("id", card.id);
+      if (r.error) { alert("변경 실패: " + r.error.message); return; }
+      if (setPipelineCards) setPipelineCards(function(prev) { return prev.map(function(x) { return x.id === card.id ? Object.assign({}, x, { sync_mode: "manual" }) : x; }); });
+    } else {
+      // 수동 → 자동: 최신 기관 상태로 재동기화
+      if (!confirm("'" + row.co.name + " · " + agencyLabel(card.agency_group) + "'를 자동 동기화로 전환할까요?\n(현재 기관현황 최신 상태로 단계가 재조정됩니다)")) return;
+      await supabase.from("pipeline_cards").update({ sync_mode: "auto", updated_at: new Date().toISOString() }).eq("id", card.id);
+      var cq = supabase.from("agency_cases").select("status,year,month").is("deleted_at", null);
+      cq = card.company_id ? cq.eq("company_id", card.company_id) : cq.eq("business_name", card.business_name);
+      cq = cq.eq("agency_group", card.agency_group).order("year", { ascending: false }).order("month", { ascending: false }).limit(1);
+      var lc = await cq;
+      var latest = (lc.data || [])[0];
+      if (latest) await syncPipelineFromCase({ company_id: card.company_id, business_name: card.business_name, agency_group: card.agency_group, status: latest.status, year: latest.year, month: latest.month });
+      var fresh = await supabase.from("pipeline_cards").select("*");
+      if (fresh.data && setPipelineCards) setPipelineCards(fresh.data);
+    }
+  };
+
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 22 }}>
@@ -6325,6 +6357,11 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
                         <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 99, background: co.type === "법인" ? "#EEF2FF" : "#F0FDF4", color: co.type === "법인" ? "#4338CA" : "#15803D", fontWeight: 600 }}>{co.type}</span>
                         <span style={{ fontSize: 10, color: "#888" }}>{co.assignee}</span>
                         {card.needs_mapping && <span style={{ fontSize: 9, color: "#B45309", fontWeight: 800, background: "#FEF3C7", padding: "1px 5px", borderRadius: 4 }}>매핑 필요</span>}
+                        {!isUnassigned && (card.sync_mode === "manual"
+                          ? <span title="수동 고정 — 기관현황이 바뀌어도 자동 이동 안 함. 클릭하면 자동 동기화로 전환" onClick={function(e) { toggleSyncMode(e, row); }}
+                              style={{ fontSize: 9, color: "#6D28D9", fontWeight: 800, background: "#F5F3FF", border: "1px solid #DDD6FE", padding: "1px 5px", borderRadius: 4, cursor: "pointer", marginLeft: "auto" }}>📌 수동</span>
+                          : <span title="자동 동기화 — 기관현황 상태에 따라 단계 이동. 클릭하면 수동 고정" onClick={function(e) { toggleSyncMode(e, row); }}
+                              style={{ fontSize: 9, color: "#059669", fontWeight: 700, background: "#ECFDF5", border: "1px solid #A7F3D0", padding: "1px 5px", borderRadius: 4, cursor: "pointer", marginLeft: "auto" }}>🔄 자동</span>)}
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <div style={{ flex: 1, height: 3, background: "#E8E5E0", borderRadius: 99 }}>
@@ -7723,6 +7760,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(company.name || "");
   const [agencyCases, setAgencyCases] = useState([]);
+  const [pipeCards, setPipeCards] = useState([]); // 이 회사의 파이프라인 조합카드(기관별 단계)
   const [settlements, setSettlements] = useState([]);
   const [commLogs, setCommLogs] = useState([]);
   // 🕒 타임라인 탭: 연결된 업무노트 + 전체 활동로그 병합
@@ -8028,10 +8066,12 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
       supabase.from("agency_cases").select("*").eq("business_name", company.name).order("created_at", { ascending: false }),
       supabase.from("settlement_manual").select("*").eq("business_name", company.name).is("deleted_at", null).order("created_at", { ascending: false }),
       supabase.from("activity_logs").select("*").eq("company_id", company.id).is("deleted_at", null).order("created_at", { ascending: false }),
-    ]).then(function([r1, r2, r3]) {
+      supabase.from("pipeline_cards").select("*").eq("company_id", company.id),
+    ]).then(function([r1, r2, r3, r4]) {
       if (!r1.error) setAgencyCases(r1.data || []);
       if (!r2.error) setSettlements(r2.data || []);
       if (!r3.error) { setCommLogs(r3.data || []); }
+      if (r4 && !r4.error) setPipeCards(r4.data || []);
       setLoadingExtra(false);
     });
   }, [company.id, company.name]);
@@ -9349,6 +9389,28 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           {/* 기관별 진행현황 탭 */}
           {tab === "agency" && (
             <div>
+              {/* 회사가 신청한 모든 기관의 파이프라인 단계를 한눈에 (조합카드 요약) */}
+              {pipeCards.length > 0 && (
+                <div style={{ background: "#F7F6F3", borderRadius: 12, padding: "12px 14px", marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#555", marginBottom: 8 }}>📊 파이프라인 단계 (기관별)</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {pipeCards.slice().sort(function(a, b) { return STAGES.indexOf(a.stage) - STAGES.indexOf(b.stage); }).map(function(pc) {
+                      var si = STAGES.indexOf(pc.stage);
+                      var scc = STAGE_COLORS[pc.stage] || {};
+                      return (
+                        <div key={pc.id} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 11, fontWeight: 800, minWidth: 74, color: pc.agency_group ? agencyColor(pc.agency_group) : "#9CA3AF" }}>{agencyLabel(pc.agency_group)}</span>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: scc.text, background: scc.bg, border: "1px solid " + (scc.border || "#E8E5E0"), padding: "2px 8px", borderRadius: 99 }}>{"STEP" + (si + 1) + " " + pc.stage}</span>
+                          {pc.sync_mode === "manual"
+                            ? <span style={{ fontSize: 9, color: "#6D28D9", fontWeight: 700 }}>📌 수동</span>
+                            : <span style={{ fontSize: 9, color: "#059669", fontWeight: 700 }}>🔄 자동</span>}
+                          {pc.needs_mapping && <span style={{ fontSize: 9, color: "#B45309", fontWeight: 800 }}>매핑 필요</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               {loadingExtra ? (
                 <div style={{ textAlign: "center", padding: "40px 0", color: "#AAA", fontSize: 13 }}>불러오는 중...</div>
               ) : agencyCases.length === 0 ? (
