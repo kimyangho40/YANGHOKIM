@@ -1,5 +1,5 @@
 /* eslint-disable no-unused-vars, react-hooks/exhaustive-deps, no-redeclare */
-import { useState, useMemo, useEffect, useCallback, useRef, Fragment } from "react";
+import { useState, useMemo, useEffect, useLayoutEffect, useCallback, useRef, Fragment } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 // ── Supabase 설정 ─────────────────────────────────────────────────────────────
@@ -5407,7 +5407,26 @@ function VoiceModeOverlay({ myName, onClose }) {
   const [draft, setDraft] = useState("");         // 인식 결과 누적 버퍼 — 전송 전까지 여기 쌓인다
   const [fatal, setFatal] = useState("");
   const draftRef = useRef("");
+  const taRef = useRef(null);     // 입력칸 DOM
+  const caretRef = useRef(null);  // 음성 이어붙이기 직전의 커서 위치(타이핑 중이면 보존)
   var setDraftBoth = function(v) { draftRef.current = v; setDraft(v); };
+
+  // 음성으로 이어붙이기 — 사용자가 칸 중간을 고치고 있었다면 커서가 끝으로 튀지 않게 위치를 되살린다
+  var appendByVoice = function(t) {
+    var el = taRef.current;
+    if (el && typeof document !== "undefined" && document.activeElement === el) {
+      var s = el.selectionStart, e2 = el.selectionEnd;
+      if (s != null && s < (draftRef.current || "").length) caretRef.current = [s, e2];
+    }
+    setDraftBoth(appendToDraft(draftRef.current, t));
+  };
+  useLayoutEffect(function() {
+    var c = caretRef.current;
+    if (!c) return;
+    caretRef.current = null;
+    var el = taRef.current;
+    if (el && document.activeElement === el) { try { el.setSelectionRange(c[0], c[1]); } catch (e) {} }
+  }, [draft]);
 
   const recRef = useRef(null);
   const aliveRef = useRef(true);
@@ -5679,17 +5698,21 @@ function VoiceModeOverlay({ myName, onClose }) {
     if (RE_VOICE_END_ONLY.test(w)) { endMode("음성 모드를 종료합니다."); return; }
 
     // 그 밖의 말은 전부 누적만 한다 — 숨 쉬거나 끊겨도 전송되지 않음
-    setDraftBoth(appendToDraft(draftRef.current, t));
+    appendByVoice(t);
   };
   var handleRef = useRef(onFinalTranscript);
   handleRef.current = onFinalTranscript;
   var submitRef = useRef(submitDraft);
   submitRef.current = submitDraft;
 
-  // Enter 로 전송 (확인 대기 중에는 버튼/음성으로만 답하도록 막는다)
+  // Enter 로 전송.
+  // 단, 입력칸(textarea) 안에서 누른 Enter는 줄바꿈으로 둔다 —
+  // 아이패드 등 Shift+Enter를 누르기 어려운 환경을 고려한 선택. 전송은 버튼/음성으로.
   useEffect(function() {
     var onKey = function(e) {
-      if (e.key !== "Enter" || e.shiftKey) return;
+      if (e.key !== "Enter") return;
+      var tag = (e.target && e.target.tagName) || "";
+      if (tag === "TEXTAREA" || tag === "INPUT") return;
       if (phaseRef.current === "confirm" || busyRef.current) return;
       e.preventDefault();
       submitRef.current();
@@ -5819,16 +5842,17 @@ function VoiceModeOverlay({ myName, onClose }) {
           {/* 인식 누적 영역 — 전송하기 전까지 여기 쌓인다 (침묵으로는 전송 안 됨) */}
           {phase !== "confirm" && (
             <div style={{ padding: "0 18px 10px" }}>
-              <div style={{ background: "#111827", border: "1px solid " + (draft ? "#4338CA" : "#1F2937"), borderRadius: 14, padding: "12px 14px", minHeight: 74 }}>
-                {draft || interim ? (
-                  <div style={{ fontSize: 15, lineHeight: 1.65, color: "#E5E7EB", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                    {draft}
-                    {interim && <span style={{ color: "#6B7280", fontStyle: "italic" }}>{(draft ? " " : "") + interim + "…"}</span>}
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 14, color: "#4B5563" }}>말씀하시면 여기에 쌓입니다…</div>
-                )}
-              </div>
+              {/* 말하는 동안에도 직접 고칠 수 있는 입력칸. 음성 인식은 계속 돌아가며 '이어붙이기'만 하므로
+                  타이핑한 내용이 덮어써지지 않는다(항상 현재 칸의 내용 뒤에 붙는다). */}
+              <textarea ref={taRef} value={draft} onChange={function(e) { setDraftBoth(e.target.value); }}
+                placeholder="말씀하시면 여기에 쌓입니다. 직접 고쳐도 됩니다."
+                style={{ width: "100%", boxSizing: "border-box", minHeight: 86, maxHeight: 190, resize: "vertical",
+                  background: "#111827", border: "1px solid " + (draft ? "#4338CA" : "#1F2937"), borderRadius: 14,
+                  padding: "12px 14px", fontSize: 15, lineHeight: 1.65, color: "#E5E7EB", outline: "none",
+                  fontFamily: "inherit" }} />
+              {interim && (
+                <div style={{ fontSize: 13, color: "#6B7280", fontStyle: "italic", padding: "4px 4px 0", wordBreak: "break-word" }}>{interim}…</div>
+              )}
               <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                 <button onClick={function() { submitRef.current(); }} disabled={!draft.trim()}
                   style={{ flex: 1, padding: "14px 0", borderRadius: 12, border: "none", cursor: draft.trim() ? "pointer" : "default",
