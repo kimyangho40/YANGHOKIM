@@ -5392,12 +5392,22 @@ const RE_VOICE_NO = /(^|\s)(아니|아뇨|아니요|아니오|취소|말아|하�
 const RE_VOICE_SEND_ONLY = /^(전송|전송해|전송해줘|전송하기|보내|보내줘|보내기|보내주세요|send)$/i;
 const RE_VOICE_END_ONLY = /^(그만|그만해|그만하기|종료|종료해|종료해줘|끝|끝내|끝내줘|중지|스톱|stop)$/i;
 function voiceControlWord(t) { return String(t || "").replace(/[\s.,!?~·・…]/g, ""); }
-// 인식 조각을 누적 버퍼 뒤에 이어붙인다 (앞뒤 공백 정리)
-function appendToDraft(prev, add) {
-  var p = (prev || "").replace(/\s+$/, "");
+// 누적 버퍼는 '한 줄 = 한 문단'. 말한 조각마다 새 줄로 쌓아 클릭·삽입 단위를 눈에 보이게 한다.
+function draftLines(s) { return String(s || "").split("\n"); }
+// afterIdx 줄 '다음'에 새 조각을 끼워 넣는다. afterIdx가 null이거나 마지막 줄이면 맨 뒤에 붙인다.
+// 반환 at = 다음 조각이 들어갈 기준 줄(방금 넣은 줄) — 여러 문장을 이어 말해도 순서가 유지된다.
+function insertIntoDraft(prev, add, afterIdx) {
   var a = String(add || "").trim();
-  if (!a) return p;
-  return p ? p + " " + a : a;
+  var p = String(prev == null ? "" : prev);
+  if (!a) return { text: p, at: afterIdx };
+  if (!p.trim()) return { text: a, at: null };
+  var lines = p.split("\n");
+  if (afterIdx == null || afterIdx < 0 || afterIdx >= lines.length - 1) {
+    lines.push(a);
+    return { text: lines.join("\n"), at: null };
+  }
+  lines.splice(afterIdx + 1, 0, a);
+  return { text: lines.join("\n"), at: afterIdx + 1 };
 }
 
 function VoiceModeOverlay({ myName, onClose }) {
@@ -5408,25 +5418,49 @@ function VoiceModeOverlay({ myName, onClose }) {
   const [fatal, setFatal] = useState("");
   const draftRef = useRef("");
   const taRef = useRef(null);     // 입력칸 DOM
-  const caretRef = useRef(null);  // 음성 이어붙이기 직전의 커서 위치(타이핑 중이면 보존)
+  const caretRef = useRef(null);  // 갱신 후 커서 처리 지시 ["keep",s,e] | ["set",pos]
   var setDraftBoth = function(v) { draftRef.current = v; setDraft(v); };
 
-  // 음성으로 이어붙이기 — 사용자가 칸 중간을 고치고 있었다면 커서가 끝으로 튀지 않게 위치를 되살린다
+  // 삽입 지점 — 이 줄 '다음'에 새 말이 들어간다. null이면 맨 뒤(기본).
+  const [insertLine, setInsertLine] = useState(null);
+  const insertRef = useRef(null);
+  var setInsertBoth = function(v) { insertRef.current = v; setInsertLine(v); };
+
+  // 음성 조각을 삽입 지점에 넣는다
   var appendByVoice = function(t) {
     var el = taRef.current;
-    if (el && typeof document !== "undefined" && document.activeElement === el) {
-      var s = el.selectionStart, e2 = el.selectionEnd;
-      if (s != null && s < (draftRef.current || "").length) caretRef.current = [s, e2];
+    var focused = el && typeof document !== "undefined" && document.activeElement === el;
+    var r = insertIntoDraft(draftRef.current, t, insertRef.current);
+    if (focused) {
+      if (r.at == null) {
+        // 맨 뒤에 붙는 경우: 칸 중간을 고치던 중이면 커서가 끝으로 튀지 않게 위치 유지
+        var s = el.selectionStart, e2 = el.selectionEnd;
+        if (s != null && s < (draftRef.current || "").length) caretRef.current = ["keep", s, e2];
+      } else {
+        // 중간에 끼워 넣은 경우: 방금 넣은 줄 끝으로 커서를 옮겨 어디에 들어갔는지 보이게 한다
+        caretRef.current = ["set", r.text.split("\n").slice(0, r.at + 1).join("\n").length];
+      }
     }
-    setDraftBoth(appendToDraft(draftRef.current, t));
+    setInsertBoth(r.at);
+    setDraftBoth(r.text);
   };
   useLayoutEffect(function() {
     var c = caretRef.current;
     if (!c) return;
     caretRef.current = null;
     var el = taRef.current;
-    if (el && document.activeElement === el) { try { el.setSelectionRange(c[0], c[1]); } catch (e) {} }
+    if (!el || document.activeElement !== el) return;
+    try { c[0] === "keep" ? el.setSelectionRange(c[1], c[2]) : el.setSelectionRange(c[1], c[1]); } catch (e) {}
   }, [draft]);
+
+  // 칸을 직접 클릭/이동했을 때 커서가 있는 줄을 삽입 지점으로 삼는다(마지막 줄이면 '맨 뒤'와 같음)
+  var syncInsertFromCaret = function() {
+    var el = taRef.current;
+    if (!el || el.selectionStart == null) return;
+    var idx = el.value.slice(0, el.selectionStart).split("\n").length - 1;
+    var last = el.value.split("\n").length - 1;
+    setInsertBoth(idx >= last ? null : idx);
+  };
 
   const recRef = useRef(null);
   const aliveRef = useRef(true);
@@ -5636,6 +5670,7 @@ function VoiceModeOverlay({ myName, onClose }) {
     setInterim("");
     addLine("me", t);
     setDraftBoth("");
+    setInsertBoth(null);
     try {
       goPhase("thinking");
       var action = null;
@@ -5842,10 +5877,37 @@ function VoiceModeOverlay({ myName, onClose }) {
           {/* 인식 누적 영역 — 전송하기 전까지 여기 쌓인다 (침묵으로는 전송 안 됨) */}
           {phase !== "confirm" && (
             <div style={{ padding: "0 18px 10px" }}>
-              {/* 말하는 동안에도 직접 고칠 수 있는 입력칸. 음성 인식은 계속 돌아가며 '이어붙이기'만 하므로
-                  타이핑한 내용이 덮어써지지 않는다(항상 현재 칸의 내용 뒤에 붙는다). */}
+              {/* 문단 선택기 — 한 줄 = 한 문단. 문단을 누르면 그 다음에 이어 말한 내용이 끼워 들어간다.
+                  아무것도 안 고르면 기본은 맨 뒤. 칸을 직접 눌러 커서를 옮겨도 같은 값이 따라간다. */}
+              {draftLines(draft).length > 1 && (
+                <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 8, alignItems: "center" }}>
+                  <span style={{ fontSize: 11, color: "#6B7280", fontWeight: 700, flexShrink: 0 }}>삽입 위치</span>
+                  {draftLines(draft).map(function(ln, i) {
+                    var on = insertLine === i;
+                    var txt = (ln || "").trim();
+                    return (
+                      <button key={i} onClick={function() { setInsertBoth(i); }}
+                        title={"이 문단 다음에 이어 말하기" + (txt ? " — " + txt : "")}
+                        style={{ flexShrink: 0, maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                          padding: "5px 10px", borderRadius: 99, cursor: "pointer", fontSize: 11.5, fontWeight: 700,
+                          border: "1px solid " + (on ? "#818CF8" : "#374151"), background: on ? "#312E81" : "#111827",
+                          color: on ? "#E0E7FF" : "#9CA3AF" }}>
+                        {(i + 1) + ". " + (txt ? txt.slice(0, 14) : "(빈 줄)")}
+                      </button>
+                    );
+                  })}
+                  <button onClick={function() { setInsertBoth(null); }} title="맨 뒤에 이어 말하기 (기본)"
+                    style={{ flexShrink: 0, padding: "5px 10px", borderRadius: 99, cursor: "pointer", fontSize: 11.5, fontWeight: 700,
+                      border: "1px solid " + (insertLine == null ? "#818CF8" : "#374151"), background: insertLine == null ? "#312E81" : "#111827",
+                      color: insertLine == null ? "#E0E7FF" : "#9CA3AF" }}>맨 뒤</button>
+                </div>
+              )}
+
+              {/* 말하는 동안에도 직접 고칠 수 있는 입력칸. 음성 인식은 계속 돌아가며 '끼워넣기'만 하므로
+                  타이핑한 내용이 덮어써지지 않는다. */}
               <textarea ref={taRef} value={draft} onChange={function(e) { setDraftBoth(e.target.value); }}
-                placeholder="말씀하시면 여기에 쌓입니다. 직접 고쳐도 됩니다."
+                onClick={syncInsertFromCaret} onSelect={syncInsertFromCaret} onKeyUp={syncInsertFromCaret}
+                placeholder="말씀하시면 한 줄씩 쌓입니다. 직접 고쳐도 됩니다."
                 style={{ width: "100%", boxSizing: "border-box", minHeight: 86, maxHeight: 190, resize: "vertical",
                   background: "#111827", border: "1px solid " + (draft ? "#4338CA" : "#1F2937"), borderRadius: 14,
                   padding: "12px 14px", fontSize: 15, lineHeight: 1.65, color: "#E5E7EB", outline: "none",
@@ -5853,13 +5915,20 @@ function VoiceModeOverlay({ myName, onClose }) {
               {interim && (
                 <div style={{ fontSize: 13, color: "#6B7280", fontStyle: "italic", padding: "4px 4px 0", wordBreak: "break-word" }}>{interim}…</div>
               )}
+              {insertLine != null && (
+                <div style={{ fontSize: 11.5, color: "#A5B4FC", padding: "5px 4px 0", lineHeight: 1.5 }}>
+                  ↳ 다음에 말하는 내용은 <b>{insertLine + 1}번째 줄 다음</b>에 들어갑니다
+                  <button onClick={function() { setInsertBoth(null); }}
+                    style={{ marginLeft: 8, border: "none", background: "transparent", color: "#6B7280", fontSize: 11.5, textDecoration: "underline", cursor: "pointer", padding: 0 }}>맨 뒤로</button>
+                </div>
+              )}
               <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                 <button onClick={function() { submitRef.current(); }} disabled={!draft.trim()}
                   style={{ flex: 1, padding: "14px 0", borderRadius: 12, border: "none", cursor: draft.trim() ? "pointer" : "default",
                     background: draft.trim() ? "#4338CA" : "#1F2937", color: draft.trim() ? "#fff" : "#4B5563", fontSize: 16, fontWeight: 800 }}>
                   전송
                 </button>
-                <button onClick={function() { setDraftBoth(""); setInterim(""); }} disabled={!draft.trim()}
+                <button onClick={function() { setDraftBoth(""); setInsertBoth(null); setInterim(""); }} disabled={!draft.trim()}
                   style={{ padding: "14px 18px", borderRadius: 12, border: "1px solid #374151", background: "#111827", color: draft.trim() ? "#E5E7EB" : "#4B5563", fontSize: 14, fontWeight: 700, cursor: draft.trim() ? "pointer" : "default" }}>
                   지우기
                 </button>
