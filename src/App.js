@@ -1954,6 +1954,9 @@ function MobileApp({ profile, session }) {
   const [newCompanyId, setNewCompanyId] = useState(null);
   const [newAssignee, setNewAssignee] = useState(""); // 대표(관리자)가 다른 직원에게 업무 배정 시 담당자
 
+  // 🎙 운전 중 음성 전용 모드
+  const [showVoice, setShowVoice] = useState(false);
+
   // 업체 검색
   const [q, setQ] = useState("");
   const [selCompany, setSelCompany] = useState(null);
@@ -2095,6 +2098,8 @@ function MobileApp({ profile, session }) {
 
   return (
     <div className="m-root" style={{ minHeight: "100vh", background: "#F5F5F4", color: "#1A1917", paddingBottom: 76, fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>
+      {/* 🎙 운전 중 음성 전용 모드 */}
+      {showVoice && <VoiceModeOverlay myName={myName} onClose={function() { setShowVoice(false); loadAll(); }} />}
       {/* 상단 상태바 */}
       <div style={{ position: "sticky", top: 0, zIndex: 50, background: "#15803D", color: "#fff", padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "-0.02em" }}>
@@ -2114,6 +2119,17 @@ function MobileApp({ profile, session }) {
               <div>
                 <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 2 }}>{todayLabel}</div>
                 <div style={{ fontSize: 14, color: "#888", marginBottom: 14 }}>오늘도 화이팅이에요, {myName} 님 💪</div>
+
+                {/* 🎙 운전 중에도 말로만 지시 — 화면을 보지 않아도 됨 */}
+                <button onClick={function() { setShowVoice(true); }} className="m-tap"
+                  style={{ width: "100%", marginBottom: 12, padding: "20px 18px", borderRadius: 16, border: "none", cursor: "pointer",
+                    background: "linear-gradient(135deg,#0B1020,#312E81)", color: "#fff", textAlign: "left", display: "flex", alignItems: "center", gap: 14 }}>
+                  <span style={{ fontSize: 30 }}>🎙</span>
+                  <span>
+                    <span style={{ display: "block", fontSize: 18, fontWeight: 800 }}>음성 모드</span>
+                    <span style={{ display: "block", fontSize: 12.5, opacity: 0.8, marginTop: 2 }}>운전 중 말로 업무 지시·업체 등록</span>
+                  </span>
+                </button>
 
                 <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
                   <div onClick={function() { setTab("notes"); }} className="m-tap" style={{ flex: 1, background: "linear-gradient(135deg,#15803D,#22C55E)", color: "#fff", borderRadius: 14, padding: 16 }}>
@@ -3159,6 +3175,7 @@ function CRMApp({ profile, session }) {
   const [quickMemoSaved, setQuickMemoSaved] = useState(0);         // 연속 저장 카운트(피드백)
   // 📝 빠른 업무 등록 (날짜별 업무노트 체크리스트에 바로 추가)
   const [showQuickTask, setShowQuickTask] = useState(false);
+  const [showVoice, setShowVoice] = useState(false); // 🎙 운전 중 음성 전용 모드
   const [quickTaskText, setQuickTaskText] = useState("");
   const [quickTaskDate, setQuickTaskDate] = useState("");
   const [quickTaskSaved, setQuickTaskSaved] = useState(0);
@@ -4501,6 +4518,9 @@ function CRMApp({ profile, session }) {
       })()}
 
       {/* 빠른 메모 팝업 — 업체 검색(자동완성) + 메모 → 해당 업체 소통내역(activity_logs)에 기록 · 연속 입력 */}
+      {/* 🎙 운전 중 음성 전용 모드 — 종료 시 화면 데이터 최신화 */}
+      {showVoice && <VoiceModeOverlay myName={profile?.name} onClose={function() { setShowVoice(false); fetchAll(); }} />}
+
       {quickMemo && (function() {
         var qmq = (quickMemoQuery || "").trim().toLowerCase();
         var qmMatches = qmq ? (companies || []).filter(function(c) {
@@ -4786,6 +4806,11 @@ function CRMApp({ profile, session }) {
               <div style={{ color: "#555", fontSize: 11 }}>{profile.team} · {profile.role === "admin" ? "관리자" : "팀원"}</div>
             </div>
           </div>
+          {/* 🎙 운전 중 음성 전용 모드 */}
+          <button onClick={function() { setShowVoice(true); }}
+            style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 6px", marginBottom: 6, background: "linear-gradient(135deg,#0B1020,#312E81)", border: "1px solid #4338CA", borderRadius: 6, color: "#fff", fontSize: 11.5, cursor: "pointer", fontWeight: 700 }}>
+            🎙 음성 모드
+          </button>
           <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
             <button onClick={() => { setQuickMemoText(""); setQuickMemoCompany(null); setQuickMemoQuery(""); setQuickMemoSaved(0); setQuickMemo(true); }}
               style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "7px 6px", background: "#4338CA", border: "none", borderRadius: 6, color: "#fff", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>
@@ -5304,6 +5329,404 @@ function AiSearchModal({ companies, myName, onClose, onSelectCompany }) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── 🎙 음성 전용 모드 (자비스 모드) ───────────────────────────────────────────
+// 운전 중 화면을 보지 않고 말로만 CRM을 다루기 위한 대화형 모드.
+//  · 인식: 브라우저 내장 Web Speech API (키 불필요) — 계속 듣기(continuous)
+//  · 이해: /api/voice-command (Claude) 가 문장을 "무엇을 실행할지"로 구조화
+//  · 응답: speechSynthesis 로 소리 내어 읽어줌 (화면 없이도 확인 가능)
+//  · 안전: 업무요청·할일추가·업체등록은 실행 전 음성 확인("네") 단계를 절대 건너뛰지 않음
+//  · 종료: "그만/종료" 또는 무음 90초
+const VOICE_SILENCE_MS = 90000;
+const RE_VOICE_YES = /(^|\s)(네|넵|예|응|어|그래|맞아|맞습니다|맞아요|좋아|좋아요|해줘|해주세요|보내|보내줘|등록|확인|오케이|오케|ok|yes)/i;
+const RE_VOICE_NO = /(^|\s)(아니|아뇨|아니요|아니오|취소|말아|하지마|안돼|안 돼|no)/i;
+const RE_VOICE_END = /(그만|종료|끝내|끝낼|나가|중지|스톱|stop)/i;
+
+function VoiceModeOverlay({ myName, onClose }) {
+  const [phase, setPhase] = useState("starting"); // starting|listening|thinking|confirm|ended
+  const [lines, setLines] = useState([]);         // 화면 보조용 대화 로그
+  const [interim, setInterim] = useState("");     // 실시간 인식 중간 결과
+  const [fatal, setFatal] = useState("");
+
+  const recRef = useRef(null);
+  const aliveRef = useRef(true);
+  const busyRef = useRef(false);      // 서버 호출/TTS 중 — 이때 들어온 인식은 무시(자기 목소리 되먹임 방지)
+  const pendingRef = useRef(null);    // 확인 대기 중인 실행 계획
+  const phaseRef = useRef("starting");
+  const silenceRef = useRef(null);
+  const ctxRef = useRef({ members: [], teams: {}, companyRows: [] });
+
+  var goPhase = function(p) { phaseRef.current = p; setPhase(p); };
+  var addLine = function(who, text) {
+    setLines(function(prev) { return prev.concat([{ who: who, text: text }]).slice(-40); });
+  };
+
+  var startRec = function() {
+    if (!aliveRef.current || !recRef.current) return;
+    try { recRef.current.start(); } catch (e) { /* 이미 시작됨 */ }
+  };
+  var stopRec = function() { try { recRef.current && recRef.current.stop(); } catch (e) {} };
+
+  var resetSilence = function() {
+    if (silenceRef.current) clearTimeout(silenceRef.current);
+    silenceRef.current = setTimeout(function() {
+      if (aliveRef.current) endMode("오래 말씀이 없어서 음성 모드를 종료합니다.");
+    }, VOICE_SILENCE_MS);
+  };
+
+  // 소리 내어 읽기. 재생 중에는 인식을 멈춰 자기 목소리를 다시 받아쓰지 않게 한다.
+  var speak = function(text) {
+    return new Promise(function(resolve) {
+      if (!text) { resolve(); return; }
+      addLine("ai", text);
+      stopRec();
+      if (typeof window === "undefined" || !window.speechSynthesis) { resolve(); return; }
+      try { window.speechSynthesis.cancel(); } catch (e) {}
+      var u = new window.SpeechSynthesisUtterance(text);
+      u.lang = "ko-KR";
+      u.rate = 1.03;
+      var done = false;
+      var finish = function() { if (done) return; done = true; resolve(); };
+      u.onend = finish;
+      u.onerror = finish;
+      // 일부 브라우저에서 onend가 오지 않는 경우 대비(길이에 비례한 상한)
+      setTimeout(finish, Math.min(25000, 1800 + text.length * 95));
+      try { window.speechSynthesis.speak(u); } catch (e) { finish(); }
+    });
+  };
+
+  var endMode = async function(msg) {
+    if (!aliveRef.current) return;
+    aliveRef.current = false;
+    goPhase("ended");
+    if (silenceRef.current) clearTimeout(silenceRef.current);
+    stopRec();
+    if (msg) await speak(msg);
+    onClose();
+  };
+
+  // 업체명 → 등록된 회사 행 찾기(정확히 → 부분일치)
+  var matchCompany = function(nameRaw) {
+    var n = (nameRaw || "").trim();
+    if (!n) return null;
+    var rows = ctxRef.current.companyRows;
+    var hit = rows.find(function(c) { return (c.name || "").trim() === n; });
+    if (hit) return hit;
+    return rows.find(function(c) { return (c.name || "").indexOf(n) >= 0 || n.indexOf((c.name || "").trim()) >= 0; }) || null;
+  };
+
+  // 어떤 담당자의 오늘 업무노트에 체크리스트 한 줄을 덧붙인다(없으면 새로 만든다)
+  var appendTodoLine = async function(assignee, line, companyId) {
+    var day = kstDate();
+    var found = await supabase.from("work_notes").select("*").eq("assignee", assignee).eq("note_date", day)
+      .is("deleted_at", null).order("created_at", { ascending: false }).limit(1);
+    if (!found.error && found.data && found.data.length) {
+      var tn = found.data[0];
+      var nc = tn.content ? tn.content + "\n" + line : line;
+      await supabase.from("work_notes").update({ content: nc, is_todo: true, updated_at: new Date().toISOString() }).eq("id", tn.id);
+      return tn.id;
+    }
+    var ins = { assignee: assignee, title: noteAutoTitle(assignee, day), content: line, is_todo: true, created_by: myName, note_date: day };
+    if (companyId) ins.company_id = companyId;
+    var ir = await supabase.from("work_notes").insert(ins).select().single();
+    if (ir.error && /company_id/.test(ir.error.message || "")) {
+      delete ins.company_id;
+      ir = await supabase.from("work_notes").insert(ins).select().single();
+    }
+    if (ir.error) throw new Error(ir.error.message);
+    return ir.data ? ir.data.id : null;
+  };
+
+  // ① 업무 요청 — 빠른업무와 같은 경로(업무노트 항목 + work_requests + 푸시)
+  var execRequest = async function(req) {
+    var to = (req && Array.isArray(req.to) ? req.to : []).map(function(s) { return (s || "").trim(); }).filter(Boolean);
+    if (!to.length) return "받는 사람을 찾지 못해서 보내지 않았습니다.";
+    var co = matchCompany(req.company);
+    var body = ((req.company ? req.company + " " : "") + (req.content || "")).trim();
+    if (!body) return "요청 내용을 알아듣지 못해서 보내지 않았습니다.";
+    for (var i = 0; i < to.length; i++) {
+      var name = to[i];
+      var text = name === myName ? body : "📩 " + myName + " 요청: " + body;
+      var noteId = await appendTodoLine(name, buildItemLine({ checked: false, text: text }), co ? co.id : null);
+      if (name === myName) continue;
+      var rr = { request_from: myName, request_to: name, content: body, urgent: !!req.urgent, note_id: noteId, status: "pending" };
+      if (co) rr.company_id = co.id;
+      var qr = await supabase.from("work_requests").insert(rr);
+      if (qr.error && /company_id/.test(qr.error.message || "")) { delete rr.company_id; await supabase.from("work_requests").insert(rr); }
+      try {
+        await sendPushToUser(name, {
+          title: (req.urgent ? "🚨 긴급 " : "📩 ") + "업무 요청",
+          body: myName + ": " + body,
+          url: window.location.origin + "?view=worknotes",
+        });
+      } catch (e) {}
+    }
+    return to.join(", ") + "님에게 " + body + " 요청을 보냈습니다.";
+  };
+
+  // ② 내 할일 추가
+  var execTodo = async function(td) {
+    var co = matchCompany(td && td.company);
+    var text = (((td && td.company) ? td.company + " " : "") + ((td && td.text) || "")).trim();
+    if (!text) return "추가할 할 일을 알아듣지 못했습니다.";
+    var due = (td && /^\d{4}-\d{2}-\d{2}$/.test(td.due || "")) ? td.due : null;
+    await appendTodoLine(myName, buildItemLine({ checked: false, text: text, dueDate: due }), co ? co.id : null);
+    return "내 할 일에 " + text + " 를 추가했습니다.";
+  };
+
+  // ③ 신규 업체 등록 — 말한 항목만 채우고 나머지는 비워 둔다(사무실에서 보완)
+  var execCompany = async function(c) {
+    var name = ((c && c.name) || "").trim();
+    if (!name) return "업체명을 알아듣지 못해서 등록하지 않았습니다.";
+    var dup = matchCompany(name);
+    if (dup && (dup.name || "").trim() === name) return name + " 은 이미 등록된 업체입니다.";
+    var row = { name: name, stage: STAGES[0], assignee: myName };
+    ["representative", "phone", "business_number", "region", "industry"].forEach(function(k) {
+      if (c[k] && String(c[k]).trim()) row[k] = String(c[k]).trim();
+    });
+    if (c.type === "법인" || c.type === "개인") row.type = c.type;
+    var r = await supabase.from("companies").insert(row).select().single();
+    if (r.error || !r.data) throw new Error(r.error ? r.error.message : "등록 실패");
+    try { await supabase.from("documents").insert(DOC_LIST.map(function(d) { return { company_id: r.data.id, doc_name: d, received: false }; })); } catch (e) {}
+    try { await supabase.from("companies").update({ team: teamByName(name) }).eq("id", r.data.id); } catch (e) {}
+    // 말로 덧붙인 메모는 소통내역으로 남긴다(companies에는 메모 컬럼이 없음)
+    if (c.memo && String(c.memo).trim()) {
+      try {
+        await supabase.from("activity_logs").insert({
+          company_id: r.data.id, business_name: name, log_type: "quick_memo",
+          memo: "🎙 음성 등록 메모: " + String(c.memo).trim(), logged_by: myName, assignee: myName,
+        });
+      } catch (e) {}
+    }
+    ctxRef.current.companyRows = ctxRef.current.companyRows.concat([{ id: r.data.id, name: name }]);
+    return name + (row.representative ? ", 대표 " + row.representative : "") + "로 등록했습니다.";
+  };
+
+  var runPending = async function() {
+    var a = pendingRef.current;
+    pendingRef.current = null;
+    goPhase("thinking");
+    var msg = "";
+    try {
+      if (a.intent === "work_request") msg = await execRequest(a.request);
+      else if (a.intent === "my_todo") msg = await execTodo(a.todo);
+      else if (a.intent === "new_company") msg = await execCompany(a.company);
+      else msg = "실행할 내용을 찾지 못했습니다.";
+    } catch (e) {
+      msg = "저장 중 문제가 생겼습니다. " + (e && e.message ? e.message : "");
+    }
+    goPhase("listening");
+    await speak(msg);
+  };
+
+  // 최종 인식 문장 1건 처리
+  var handleUtterance = async function(text) {
+    if (!aliveRef.current || busyRef.current) return;
+    var t = (text || "").trim();
+    if (!t) return;
+    busyRef.current = true;
+    stopRec();
+    setInterim("");
+    addLine("me", t);
+    try {
+      // 확인 대기 중이면 네/아니오만 받는다 (오인식 사고 방지 — 이 단계는 생략 불가)
+      if (phaseRef.current === "confirm" && pendingRef.current) {
+        if (RE_VOICE_NO.test(t)) {
+          pendingRef.current = null;
+          goPhase("listening");
+          await speak("취소했습니다. 다시 말씀해 주세요.");
+        } else if (RE_VOICE_YES.test(t)) {
+          await runPending();
+        } else {
+          await speak("네 또는 아니오로 답해 주세요. " + (pendingRef.current.speech || ""));
+        }
+        return;
+      }
+      if (RE_VOICE_END.test(t)) { await endMode("음성 모드를 종료합니다."); return; }
+
+      goPhase("thinking");
+      var action = null;
+      try {
+        var res = await fetch("/api/voice-command", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            transcript: t,
+            me: myName,
+            members: ctxRef.current.members,
+            teams: ctxRef.current.teams,
+            companies: ctxRef.current.companyRows.map(function(c) { return c.name; }),
+            today: kstDate(),
+          }),
+        });
+        var d = await res.json();
+        if (!res.ok) throw new Error(d && d.error ? d.error : "해석 실패");
+        action = d.action;
+      } catch (e) {
+        goPhase("listening");
+        await speak("잘 못 알아들었어요. 다시 말씀해 주세요.");
+        return;
+      }
+      if (!action) { goPhase("listening"); await speak("다시 말씀해 주세요."); return; }
+      if (action.intent === "end") { await endMode("음성 모드를 종료합니다."); return; }
+
+      var actionable = action.intent === "work_request" || action.intent === "my_todo" || action.intent === "new_company";
+      if (actionable) {
+        // 실행 전 음성 확인 — 숫자(전화·사업자번호)는 서버가 speech에 되읽기를 넣어 준다
+        pendingRef.current = action;
+        goPhase("confirm");
+        await speak(action.speech || "실행할까요?");
+        return;
+      }
+      goPhase("listening");
+      await speak(action.speech || "무슨 말씀인지 잘 모르겠어요. 다시 말씀해 주세요.");
+    } finally {
+      busyRef.current = false;
+      if (aliveRef.current && phaseRef.current !== "ended") {
+        resetSilence();
+        setTimeout(startRec, 220);
+      }
+    }
+  };
+  var handleRef = useRef(handleUtterance);
+  handleRef.current = handleUtterance;
+
+  // 마운트: 팀원·업체 목록 로드 → 인식기 준비 → 인사말
+  useEffect(function() {
+    aliveRef.current = true;
+    var SR = (typeof window !== "undefined") && (window.SpeechRecognition || window.webkitSpeechRecognition);
+    if (!SR) {
+      setFatal("이 브라우저는 음성 인식을 지원하지 않습니다. (크롬/안드로이드 크롬 권장)");
+      goPhase("ended");
+      return;
+    }
+    (async function() {
+      var r = await Promise.all([
+        supabase.from("profiles").select("name,team"),
+        supabase.from("companies").select("id,name").is("deleted_at", null).limit(3000),
+      ]);
+      if (!aliveRef.current) return;
+      var profs = (!r[0].error && r[0].data) ? r[0].data : [];
+      var seen = {}, members = [], teams = {};
+      profs.forEach(function(p) {
+        if (!p.name || seen[p.name]) return;
+        seen[p.name] = true;
+        members.push(p.name);
+        var tm = p.team || "기타";
+        if (!teams[tm]) teams[tm] = [];
+        teams[tm].push(p.name);
+      });
+      ctxRef.current = {
+        members: members,
+        teams: teams,
+        companyRows: ((!r[1].error && r[1].data) ? r[1].data : []).filter(function(c) { return c.name; }),
+      };
+
+      var rec = new SR();
+      rec.lang = "ko-KR";
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.onresult = function(e) {
+        if (busyRef.current) return;
+        var finalText = "", partial = "";
+        for (var i = e.resultIndex; i < e.results.length; i++) {
+          var seg = e.results[i][0] ? e.results[i][0].transcript : "";
+          if (e.results[i].isFinal) finalText += seg;
+          else partial += seg;
+        }
+        setInterim(partial);
+        if (finalText.trim()) handleRef.current(finalText);
+      };
+      rec.onerror = function(e) {
+        if (e && (e.error === "not-allowed" || e.error === "service-not-allowed")) {
+          setFatal("마이크 권한이 없어 음성 모드를 쓸 수 없습니다. 브라우저 설정에서 마이크를 허용해 주세요.");
+          aliveRef.current = false;
+          goPhase("ended");
+        }
+      };
+      rec.onend = function() {
+        // 브라우저가 무음에서 자동 종료 → 계속 듣도록 재시작
+        if (aliveRef.current && !busyRef.current) setTimeout(startRec, 250);
+      };
+      recRef.current = rec;
+
+      goPhase("listening");
+      resetSilence();
+      await speak("음성 모드입니다. 말씀하세요.");
+      if (aliveRef.current) startRec();
+    })();
+
+    return function() {
+      aliveRef.current = false;
+      if (silenceRef.current) clearTimeout(silenceRef.current);
+      try { recRef.current && recRef.current.abort(); } catch (e) {}
+      try { window.speechSynthesis && window.speechSynthesis.cancel(); } catch (e) {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  var label = phase === "confirm" ? "확인 대기 — '네' 또는 '아니오'"
+    : phase === "thinking" ? "생각하는 중…"
+    : phase === "listening" ? "듣고 있어요"
+    : phase === "ended" ? "종료됨" : "준비 중…";
+  var dotColor = phase === "confirm" ? "#B45309" : phase === "thinking" ? "#4338CA" : phase === "listening" ? "#DC2626" : "#9CA3AF";
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#0B1020", zIndex: 3000, display: "flex", flexDirection: "column", color: "#fff" }}>
+      <div style={{ padding: "18px 18px 12px", display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ width: 12, height: 12, borderRadius: 99, background: dotColor, boxShadow: "0 0 0 6px " + dotColor + "33" }} />
+        <div style={{ fontSize: 17, fontWeight: 800 }}>🎙 음성 모드</div>
+        <div style={{ fontSize: 12.5, color: "#9CA3AF" }}>{label}</div>
+        <button onClick={function() { endMode(""); }}
+          style={{ marginLeft: "auto", padding: "8px 14px", borderRadius: 10, border: "1px solid #374151", background: "#111827", color: "#E5E7EB", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>종료</button>
+      </div>
+
+      {fatal ? (
+        <div style={{ padding: 22, fontSize: 14, lineHeight: 1.7, color: "#FCA5A5" }}>{fatal}</div>
+      ) : (
+        <>
+          <div style={{ flex: 1, overflowY: "auto", padding: "6px 18px 18px", display: "flex", flexDirection: "column", gap: 10 }}>
+            {lines.length === 0 && (
+              <div style={{ color: "#6B7280", fontSize: 13, lineHeight: 1.9, marginTop: 8 }}>
+                이렇게 말해 보세요<br />
+                · "관호한테 에이스상사 서류 독촉하라고 전달해줘"<br />
+                · "오늘 내 할일에 에이스상사 전화하기 추가해줘"<br />
+                · "법인팀 전체한테 이번주 실적 정리해달라고 전달해줘"<br />
+                · "신규 업체 등록해줘, 상호는 한빛상사, 대표는 김철수, 연락처는 010-1234-5678"<br />
+                · 끝낼 때는 "그만"
+              </div>
+            )}
+            {lines.map(function(l, i) {
+              var mine = l.who === "me";
+              return (
+                <div key={i} style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "86%", background: mine ? "#1F2937" : "#111827",
+                  border: "1px solid " + (mine ? "#374151" : "#1F2937"), borderRadius: 14, padding: "10px 13px", fontSize: 14, lineHeight: 1.6,
+                  color: mine ? "#E5E7EB" : "#A7F3D0" }}>
+                  {l.text}
+                </div>
+              );
+            })}
+            {interim && (
+              <div style={{ alignSelf: "flex-end", maxWidth: "86%", fontSize: 14, color: "#6B7280", fontStyle: "italic", padding: "2px 4px" }}>{interim}…</div>
+            )}
+          </div>
+
+          {phase === "confirm" && (
+            <div style={{ padding: "0 18px 10px", display: "flex", gap: 10 }}>
+              <button onClick={function() { if (!busyRef.current) handleRef.current("네"); }}
+                style={{ flex: 1, padding: "16px 0", borderRadius: 14, border: "none", background: "#059669", color: "#fff", fontSize: 17, fontWeight: 800, cursor: "pointer" }}>네</button>
+              <button onClick={function() { if (!busyRef.current) handleRef.current("아니오"); }}
+                style={{ flex: 1, padding: "16px 0", borderRadius: 14, border: "1px solid #374151", background: "#111827", color: "#E5E7EB", fontSize: 17, fontWeight: 800, cursor: "pointer" }}>아니오</button>
+            </div>
+          )}
+          <div style={{ padding: "0 18px 22px", fontSize: 11.5, color: "#4B5563", textAlign: "center", lineHeight: 1.7 }}>
+            업무 요청·할일 추가·업체 등록은 <b style={{ color: "#9CA3AF" }}>"네"라고 답해야만</b> 실행됩니다 · 90초 무음이면 자동 종료
+          </div>
+        </>
+      )}
     </div>
   );
 }
