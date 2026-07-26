@@ -5308,18 +5308,23 @@ function AiSearchModal({ companies, myName, onClose, onSelectCompany }) {
   );
 }
 
-// 🌅 오전 알림 요약 배너 — 오늘 마감 · 나한테 온 요청 · 3일 넘긴 미완료 (본인 기준, 숫자 클릭 시 업무노트로 이동)
-function MorningSummaryBanner({ myName, setView, stagnMine }) {
+// ── 🌅 나의 오늘 (대시보드 최상단) ────────────────────────────────────────────
+// 로그인한 본인 기준으로 오늘 마감 · 나한테 온 요청 · 3일 넘긴 미완료 · 정체 카드를 가장 크게 보여준다.
+// 관리자(양호)는 "내 것 ↔ 팀 전체" 토글로 같은 지표를 팀 단위로 전환할 수 있음(일반 팀원은 본인 것만).
+// scope는 Dashboard가 소유 — 아래 '오늘의 할 일' 카드도 같은 토글을 따른다.
+function MyTodaySection({ myName, isAdmin, setView, stagnRows, scope, setScope }) {
   const [sum, setSum] = useState(null);
+  const teamScope = scope === "team";
   useEffect(function() {
     if (!myName) { setSum(null); return; }
     var alive = true;
     async function load() {
+      setSum(null);
       var today = kstDate();
-      var res = await Promise.all([
-        supabase.from("work_notes").select("content,note_date,created_at").eq("assignee", myName).is("deleted_at", null),
-        supabase.from("work_requests").select("id").eq("request_to", myName).neq("status", "done"),
-      ]);
+      var nq = supabase.from("work_notes").select("content,note_date,created_at").is("deleted_at", null);
+      var rq = supabase.from("work_requests").select("id").neq("status", "done");
+      if (!teamScope) { nq = nq.eq("assignee", myName); rq = rq.eq("request_to", myName); }
+      var res = await Promise.all([nq, rq]);
       if (!alive) return;
       var notes = (!res[0].error && res[0].data) ? res[0].data : [];
       var dueToday = 0, stale3 = 0;
@@ -5336,34 +5341,236 @@ function MorningSummaryBanner({ myName, setView, stagnMine }) {
     }
     load();
     return function() { alive = false; };
-  }, [myName]);
-  if (!sum) return null;
-  var jumpNotes = function() { localStorage.setItem("wn_jump_assignee", myName); setView("worknotes"); };
+  }, [myName, teamScope]);
+
+  if (!myName) return null; // 프로필 로딩 전에는 표시하지 않음(무한 로딩 방지)
+
+  // 정체 카드: 내 담당분 / 팀 전체분
+  var stagnCount = (stagnRows || []).filter(function(r) {
+    if (teamScope) return true;
+    return (r.co.assignee || "").split(",").map(function(s) { return s.trim(); }).indexOf(myName) >= 0;
+  }).length;
+
   var d = new Date();
   var w = ["일", "월", "화", "수", "목", "금", "토"][d.getDay()];
   var greet = (function() { var h = d.getHours(); return h < 12 ? "좋은 아침이에요" : h < 18 ? "오늘도 힘내세요" : "마무리 잘 하세요"; })();
+  // 내 업무노트로 이동(팀 전체 보기일 땐 담당자 필터 없이)
+  var jumpNotes = function() {
+    if (teamScope) localStorage.removeItem("wn_jump_assignee");
+    else localStorage.setItem("wn_jump_assignee", myName);
+    setView("worknotes");
+  };
+  var jumpTodo = function() { setView("mytodo"); };
   var Cell = function(props) {
+    var on = props.count > 0;
     return (
-      <div onClick={props.onClick || jumpNotes} title={props.title || "클릭하면 내 업무노트로 이동"}
-        style={{ flex: 1, minWidth: 110, cursor: "pointer", padding: "10px 14px", borderRadius: 10, background: props.count > 0 ? props.bgActive : "#fff", border: "1px solid " + (props.count > 0 ? props.borderActive : "#E8E5E0") }}>
-        <div style={{ fontSize: 12, color: props.count > 0 ? props.fgActive : "#888", fontWeight: 600 }}>{props.icon} {props.label}</div>
-        <div style={{ fontSize: 24, fontWeight: 800, lineHeight: 1.2, color: props.count > 0 ? props.fgActive : "#BBB" }}>{props.count}<span style={{ fontSize: 13, fontWeight: 600 }}>건</span></div>
+      <div onClick={props.onClick} title={props.title}
+        style={{ flex: "1 1 170px", minWidth: 150, cursor: "pointer", padding: "16px 18px", borderRadius: 12,
+          background: on ? props.bgActive : "#fff", border: "1px solid " + (on ? props.borderActive : "#E8E5E0"),
+          transition: "transform 0.12s", }}
+        onMouseEnter={function(e) { e.currentTarget.style.transform = "translateY(-2px)"; }}
+        onMouseLeave={function(e) { e.currentTarget.style.transform = "none"; }}>
+        <div style={{ fontSize: 12.5, color: on ? props.fgActive : "#888", fontWeight: 700 }}>{props.icon} {props.label}</div>
+        <div style={{ fontSize: 34, fontWeight: 800, lineHeight: 1.15, marginTop: 2, color: on ? props.fgActive : "#CCC" }}>
+          {props.count}<span style={{ fontSize: 15, fontWeight: 700 }}>건</span>
+        </div>
+        <div style={{ fontSize: 10.5, color: "#999", marginTop: 3 }}>{props.sub}</div>
       </div>
     );
   };
   return (
-    <div style={{ background: "linear-gradient(135deg, #ECFDF5 0%, #F0FDFA 100%)", border: "1px solid #A7F3D0", borderRadius: 12, padding: "16px 18px", marginBottom: 18 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <span style={{ fontSize: 16 }}>🌅</span>
-        <div style={{ fontSize: 14, fontWeight: 700, color: "#065F46" }}>{d.getMonth() + 1}월 {d.getDate()}일 ({w}) · {greet}, {myName} 님</div>
+    <div style={{ background: "linear-gradient(135deg, #ECFDF5 0%, #F0FDFA 100%)", border: "1px solid #A7F3D0", borderRadius: 14, padding: "18px 20px", marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 18 }}>🌅</span>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "#065F46" }}>
+          {teamScope ? "팀 전체 요약" : "나의 오늘"}
+          <span style={{ fontSize: 12.5, fontWeight: 600, color: "#059669", marginLeft: 8 }}>
+            {d.getMonth() + 1}월 {d.getDate()}일 ({w}) · {greet}{myName ? ", " + myName + " 님" : ""}
+          </span>
+        </div>
+        {isAdmin && (
+          <div style={{ marginLeft: "auto", display: "flex", gap: 4, background: "#fff", border: "1px solid #A7F3D0", borderRadius: 99, padding: 3 }}>
+            {[{ id: "mine", label: "내 것" }, { id: "team", label: "팀 전체" }].map(function(t) {
+              var on = scope === t.id;
+              return (
+                <button key={t.id} onClick={function() { setScope(t.id); }}
+                  style={{ padding: "5px 14px", borderRadius: 99, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
+                    background: on ? "#059669" : "transparent", color: on ? "#fff" : "#6B7280" }}>{t.label}</button>
+              );
+            })}
+          </div>
+        )}
       </div>
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <Cell icon="📅" label="오늘 마감" count={sum.dueToday} bgActive="#FEF9C3" borderActive="#FDE68A" fgActive="#92400E" />
-        <Cell icon="📩" label="나한테 온 요청" count={sum.reqCount} bgActive="#EEF2FF" borderActive="#C7D2FE" fgActive="#4338CA" />
-        <Cell icon="⏳" label="3일 넘긴 미완료" count={sum.stale3} bgActive="#FEE2E2" borderActive="#FCA5A5" fgActive="#B91C1C" />
-        <Cell icon="🚧" label="정체 카드" count={stagnMine || 0} bgActive="#FEF3C7" borderActive="#FDE68A" fgActive="#B45309"
-          onClick={function() { setView("pipeline"); }} title="클릭하면 파이프라인으로 이동 (기준일수 넘긴 내 담당 카드)" />
+      {!sum ? (
+        <div style={{ fontSize: 12, color: "#059669", padding: "18px 0" }}>불러오는 중…</div>
+      ) : (
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Cell icon="📅" label="오늘 마감" count={sum.dueToday} sub={teamScope ? "팀 전체 체크리스트" : "내 업무노트 체크리스트"}
+            bgActive="#FEF9C3" borderActive="#FDE68A" fgActive="#92400E" onClick={jumpTodo} title="클릭하면 할 일 목록으로 이동" />
+          <Cell icon="📩" label={teamScope ? "팀 미완료 요청" : "나한테 온 요청"} count={sum.reqCount} sub={teamScope ? "아직 완료 안 된 요청" : "아직 완료 안 한 요청"}
+            bgActive="#EEF2FF" borderActive="#C7D2FE" fgActive="#4338CA" onClick={jumpNotes} title="클릭하면 업무노트(요청)로 이동" />
+          <Cell icon="⏳" label="3일 넘긴 미완료" count={sum.stale3} sub="작성 후 3일 이상 미완료"
+            bgActive="#FEE2E2" borderActive="#FCA5A5" fgActive="#B91C1C" onClick={jumpTodo} title="클릭하면 할 일 목록으로 이동" />
+          <Cell icon="🚧" label="정체 카드" count={stagnCount} sub="단계별 기준일수 초과"
+            bgActive="#FEF3C7" borderActive="#FDE68A" fgActive="#B45309" onClick={function() { setView("pipeline"); }} title="클릭하면 파이프라인으로 이동" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 👥 우리 팀 활동 로그 ──────────────────────────────────────────────────────
+// 최근 변경사항 타임라인. 소스: activity_logs(기관현황 상태변경·파이프라인 카드 이동·메모),
+// work_requests(요청 생성/완료), companies(신규 업체 등록). 최신순 30건.
+// 기본은 '우리 팀'(내 팀 소속 구성원 활동) — 팀 미상이면 전체. 관리자/필요 시 '전체'로 전환.
+function TeamActivityFeed({ myName, profiles, companies, onSelectCompany }) {
+  const [items, setItems] = useState(null);
+  const [teamOnly, setTeamOnly] = useState(true);
+  // 클릭 시 열 회사 객체 — id만으론 상세 모달이 열리지 않으므로 목록에서 찾아 넘긴다
+  const coById = useMemo(function() {
+    var m = new Map();
+    (companies || []).forEach(function(c) { m.set(c.id, c); });
+    return m;
+  }, [companies]);
+
+  // 내 팀 구성원 이름 집합 (profiles.team: 관리자 / 개인전담 / 법인전담)
+  const myTeamNames = useMemo(function() {
+    var me = (profiles || []).find(function(p) { return p.name === myName; });
+    if (!me || !me.team || me.team === "관리자") return null; // 관리자·팀 미상 → 전체
+    var s = new Set();
+    (profiles || []).forEach(function(p) { if (p.team === me.team && p.name) s.add(p.name); });
+    return s;
+  }, [profiles, myName]);
+  const myTeamLabel = useMemo(function() {
+    var me = (profiles || []).find(function(p) { return p.name === myName; });
+    return me && me.team ? me.team : null;
+  }, [profiles, myName]);
+
+  useEffect(function() {
+    var alive = true;
+    async function load() {
+      var since = new Date(Date.now() - 21 * 86400000).toISOString();
+      var res = await Promise.all([
+        supabase.from("activity_logs").select("id,company_id,business_name,agency_group,log_type,memo,logged_by,assignee,created_at")
+          .is("deleted_at", null).in("log_type", ["status_change", "stage_change", "pipeline_move"])
+          .gt("created_at", since).order("created_at", { ascending: false }).limit(60),
+        supabase.from("work_requests").select("id,request_from,request_to,content,status,created_at,done_at,company_id")
+          .gt("created_at", since).order("created_at", { ascending: false }).limit(40),
+        supabase.from("companies").select("id,name,assignee,created_at").is("deleted_at", null)
+          .gt("created_at", since).order("created_at", { ascending: false }).limit(20),
+      ]);
+      if (!alive) return;
+      var out = [];
+      // 포함할 활동 종류만 — 메모/노트 자동기록은 소통내역 화면에 있으므로 여기선 제외
+      var LOG_KIND = {
+        status_change:   { icon: "🏛", label: "기관 상태",  color: "#0F6E56" },
+        stage_change:    { icon: "🔀", label: "단계 변경",  color: "#4338CA" },
+        pipeline_move:   { icon: "🎯", label: "카드 이동",  color: "#7C3AED" },
+      };
+      ((!res[0].error && res[0].data) || []).forEach(function(l) {
+        var k = LOG_KIND[l.log_type];
+        if (!k) return;
+        out.push({
+          key: "log-" + l.id, at: l.created_at, who: (l.logged_by || l.assignee || "").split(",")[0].trim(),
+          icon: k.icon, kindLabel: k.label, color: k.color,
+          company: l.business_name || "", companyId: l.company_id || null,
+          text: (l.memo || "").replace(/\s+/g, " ").trim(),
+        });
+      });
+      ((!res[1].error && res[1].data) || []).forEach(function(r) {
+        out.push({
+          key: "req-" + r.id, at: r.created_at, who: r.request_from || "",
+          icon: "📩", kindLabel: "업무 요청", color: "#4338CA", companyId: r.company_id || null, company: "",
+          text: (r.request_to ? r.request_to + " 님에게 업무 요청 — " : "업무 요청 — ") + (r.content || "").replace(/\s+/g, " ").trim(),
+        });
+        if (r.status === "done" && r.done_at) {
+          out.push({
+            key: "reqd-" + r.id, at: r.done_at, who: r.request_to || "",
+            icon: "✅", kindLabel: "요청 완료", color: "#059669", companyId: r.company_id || null, company: "",
+            text: "요청 완료 — " + (r.content || "").replace(/\s+/g, " ").trim(),
+          });
+        }
+      });
+      ((!res[2].error && res[2].data) || []).forEach(function(c) {
+        out.push({
+          key: "co-" + c.id, at: c.created_at, who: (c.assignee || "").split(",")[0].trim(),
+          icon: "🏢", kindLabel: "신규 업체", color: "#15803D", company: c.name || "", companyId: c.id,
+          text: "신규 업체로 등록되었습니다" + (c.assignee ? " (담당: " + c.assignee + ")" : ""),
+        });
+      });
+      out.sort(function(a, b) { return new Date(b.at) - new Date(a.at); });
+      setItems(out);
+    }
+    load();
+    return function() { alive = false; };
+  }, []);
+
+  var shown = useMemo(function() {
+    var list = items || [];
+    if (teamOnly && myTeamNames) list = list.filter(function(x) { return !x.who || myTeamNames.has(x.who); });
+    return list.slice(0, 30);
+  }, [items, teamOnly, myTeamNames]);
+
+  var ago = function(iso) {
+    var m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    if (m < 1) return "방금";
+    if (m < 60) return m + "분 전";
+    var h = Math.floor(m / 60);
+    if (h < 24) return h + "시간 전";
+    var d = Math.floor(h / 24);
+    if (d < 7) return d + "일 전";
+    return new Date(iso).toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" });
+  };
+
+  return (
+    <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, padding: "16px 18px", marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 15 }}>👥</span>
+        <div style={{ fontSize: 14, fontWeight: 700 }}>우리 팀 활동 로그</div>
+        <span style={{ fontSize: 11, color: "#888" }}>최근 변경사항 · 최신순</span>
+        {myTeamNames && (
+          <div style={{ marginLeft: "auto", display: "flex", gap: 4, background: "#F7F6F3", border: "1px solid #E8E5E0", borderRadius: 99, padding: 3 }}>
+            {[{ id: true, label: myTeamLabel || "우리 팀" }, { id: false, label: "전체" }].map(function(t) {
+              var on = teamOnly === t.id;
+              return (
+                <button key={String(t.id)} onClick={function() { setTeamOnly(t.id); }}
+                  style={{ padding: "4px 12px", borderRadius: 99, border: "none", cursor: "pointer", fontSize: 11.5, fontWeight: 700,
+                    background: on ? "#1A1917" : "transparent", color: on ? "#fff" : "#888" }}>{t.label}</button>
+              );
+            })}
+          </div>
+        )}
       </div>
+      {items == null ? (
+        <div style={{ fontSize: 12, color: "#AAA", padding: "24px 0", textAlign: "center" }}>불러오는 중…</div>
+      ) : shown.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: "#888", padding: "24px 0", textAlign: "center" }}>최근 3주간 활동이 없어요</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 2, maxHeight: 420, overflowY: "auto" }}>
+          {shown.map(function(it) {
+            var co = it.companyId ? coById.get(it.companyId) : null;
+            var clickable = !!co;
+            return (
+              <div key={it.key}
+                onClick={function() { if (co && onSelectCompany) onSelectCompany(co); }}
+                style={{ display: "flex", alignItems: "flex-start", gap: 9, padding: "8px 10px", borderRadius: 8, cursor: clickable ? "pointer" : "default" }}
+                onMouseEnter={function(e) { e.currentTarget.style.background = "#FAFAF9"; }}
+                onMouseLeave={function(e) { e.currentTarget.style.background = "transparent"; }}>
+                <span style={{ fontSize: 13, flexShrink: 0, marginTop: 1 }}>{it.icon}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    {it.who && <span style={{ fontSize: 12.5, fontWeight: 800, color: it.who === myName ? "#4338CA" : "#1A1917" }}>{it.who}님</span>}
+                    {it.company && <span style={{ fontSize: 12.5, fontWeight: 700, color: "#1A1917" }}>{it.company}</span>}
+                    <span style={{ fontSize: 9.5, fontWeight: 700, color: it.color, background: it.color + "14", borderRadius: 99, padding: "1px 7px" }}>{it.kindLabel}</span>
+                    <span style={{ fontSize: 10.5, color: "#AAA", marginLeft: "auto", flexShrink: 0 }}>{ago(it.at)}</span>
+                  </div>
+                  {it.text && <div style={{ fontSize: 12, color: "#666", lineHeight: 1.5, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{it.text}</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -5440,10 +5647,17 @@ function StagnationAdminWidget({ rows, onSelectCompany, setView }) {
 
 // ── 대시보드 ──────────────────────────────────────────────────────────────────
 function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, setFilterAssignee, setDashboardFilter, onAdd, canExport, myName, stagnRows }) {
-  // 내 담당 정체 카드 수 (오전 요약 배너용)
-  const stagnMine = (stagnRows || []).filter(function(r) {
-    return (r.co.assignee || "").split(",").map(function(s) { return s.trim(); }).indexOf(myName) >= 0;
-  }).length;
+  const isAdmin = myName === "양호";
+  // "나의 오늘" · "오늘의 할 일"이 함께 쓰는 보기 범위. 기본은 본인 기준, 관리자만 팀 전체로 전환 가능.
+  const [scope, setScope] = useState("mine");
+  const mineOnly = scope === "mine" && !!myName;
+  // 본인 담당 업체만 (assignee는 "양호, 유진"처럼 복수 표기)
+  const scopedCompanies = useMemo(function() {
+    if (!mineOnly) return companies || [];
+    return (companies || []).filter(function(c) {
+      return (c.assignee || "").split(",").map(function(s) { return s.trim(); }).indexOf(myName) >= 0;
+    });
+  }, [companies, mineOnly, myName]);
   const contractDone = companies.filter(c => c.fee_status === "수수료수령완료").length;
   const contracted = companies.filter(c => c.fee_status !== "미수령").length;
   // const thisWeek = companies.filter(c => c.next_contact && c.next_contact <= "2026-05-15").length;
@@ -5477,7 +5691,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
     supabase.from("agency_cases").select("*").is("deleted_at", null).limit(10000).then(function(r) {
       if (!r.error) setAgencyCases(r.data || []);
     });
-    supabase.from("pipeline_cards").select("stage").then(function(r) {
+    supabase.from("pipeline_cards").select("stage,closed_at").then(function(r) {
       if (!r.error) setPipeCards(r.data || []);
     });
     supabase.from("kpi_goals").select("*").eq("year", thisYear).eq("month", thisMonth).then(function(r) {
@@ -5577,8 +5791,11 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         </button>
       </div>
 
-      {/* 🌅 오전 알림 요약 (오늘 마감 · 받은 요청 · 3일↑ 미완료) */}
-      <MorningSummaryBanner myName={myName} setView={setView} stagnMine={stagnMine} />
+      {/* ① 🌅 나의 오늘 — 본인 기준(관리자는 팀 전체 토글) */}
+      <MyTodaySection myName={myName} isAdmin={isAdmin} setView={setView} stagnRows={stagnRows} scope={scope} setScope={setScope} />
+
+      {/* ② 👥 우리 팀 활동 로그 — 최근 변경사항 타임라인 */}
+      <TeamActivityFeed myName={myName} profiles={profiles} companies={companies} onSelectCompany={onSelectCompany} />
 
       {/* 🔔 방치 자동 알림 배너 (3일 이상 응답/서류 대기) */}
       <StaleWaitBanner setView={setView} />
@@ -5586,23 +5803,21 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
       {/* 📩 내가 보낸 요청 중 6시간+ 미확인 */}
       <UnreadRequestsBanner myName={myName} setView={setView} />
 
-      {/* 🗂️ 담당자별 미완료 현황 (업무노트 체크리스트 기준) */}
-      <AssigneeUnfinishedWidget myName={myName} setView={setView} />
-
-      {/* 🆕 오늘의 할 일 위젯 */}
+      {/* 🆕 오늘의 할 일 위젯 (④ 본인 담당 기준 — 관리자는 위 토글로 전체 전환) */}
       {(function() {
         var today = kstDate();
         var tomorrow = kstDate(1);
         var weekLater = kstDate(7);
-        var todayItems = companies.filter(function(c) { return c.next_contact === today || c.contract_date === today; });
-        var tomorrowItems = companies.filter(function(c) { return c.next_contact === tomorrow || c.contract_date === tomorrow; });
-        var overdue = companies.filter(function(c) { return c.next_contact && c.next_contact < today; });
-        var stagnant14 = companies.filter(function(c) { return c.stagnant_days >= 14; });
-        var stagnant7 = companies.filter(function(c) { return c.stagnant_days >= 7 && c.stagnant_days < 14; });
-        var weekContracts = companies.filter(function(c) { return c.contract_date && c.contract_date > today && c.contract_date <= weekLater; });
+        // 보기 범위(scope)에 따라 본인 담당 업체만 / 팀 전체
+        var todayItems = scopedCompanies.filter(function(c) { return c.next_contact === today || c.contract_date === today; });
+        var tomorrowItems = scopedCompanies.filter(function(c) { return c.next_contact === tomorrow || c.contract_date === tomorrow; });
+        var overdue = scopedCompanies.filter(function(c) { return c.next_contact && c.next_contact < today; });
+        var stagnant14 = scopedCompanies.filter(function(c) { return c.stagnant_days >= 14; });
+        var stagnant7 = scopedCompanies.filter(function(c) { return c.stagnant_days >= 7 && c.stagnant_days < 14; });
+        var weekContracts = scopedCompanies.filter(function(c) { return c.contract_date && c.contract_date > today && c.contract_date <= weekLater; });
         // 서류 요청 지연: 요청한 지 3일 넘고 아직 수령 안 된 서류
         var overdueDocs = [];
-        (companies || []).forEach(function(c) {
+        (scopedCompanies || []).forEach(function(c) {
           var dates = c.doc_request_dates;
           if (!dates || typeof dates !== "object") return;
           var recv = (c.received_docs || "").split(",").map(function(s) { return s.trim(); });
@@ -5621,6 +5836,10 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
               <span style={{ fontSize: 16 }}>📋</span>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#92400E" }}>오늘의 할 일</div>
+              <span style={{ fontSize: 11, fontWeight: 700, color: mineOnly ? "#B45309" : "#92400E", background: "#fff", border: "1px solid #FCD34D", borderRadius: 99, padding: "2px 9px" }}>
+                {mineOnly ? (myName ? myName + " 님 담당 기준" : "본인 기준") : "팀 전체 기준"}
+              </span>
+              {isAdmin && <span style={{ fontSize: 10.5, color: "#B45309" }}>위 '나의 오늘' 토글로 전환</span>}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
               {/* 📋 내 할일 위젯 - work_notes 체크박스 기반 (항상 표시) */}
@@ -5630,11 +5849,11 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
               <TeamTodoWidget setView={setView} />
 
               {/* 📄 시트지(기업현황표) 미작성 현황 */}
-              <SheetStatusWidget companies={companies} setView={setView} />
+              <SheetStatusWidget companies={scopedCompanies} setView={setView} />
 
               {/* 📅 차기 업무 마감 요약 (next_action 날짜 자동 집계) */}
               {(function() {
-                var acts = (companies || []).filter(function(c) { return c.next_action && nearestActionDate(c.next_action) !== null; }).map(function(c) { return daysUntil(nearestActionDate(c.next_action)); });
+                var acts = (scopedCompanies || []).filter(function(c) { return c.next_action && nearestActionDate(c.next_action) !== null; }).map(function(c) { return daysUntil(nearestActionDate(c.next_action)); });
                 var todayCnt = acts.filter(function(d) { return d === 0; }).length;
                 var soonCnt = acts.filter(function(d) { return d >= 1 && d <= 3; }).length;
                 var overdueCnt = acts.filter(function(d) { return d < 0; }).length;
@@ -5714,6 +5933,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
           </div>
         );
       })()}
+
+      {/* ③ 🗂️ 담당자별 미완료 현황(팀 전체 표) — 개인 섹션 아래로. 관리자는 펼침, 일반 팀원은 접힘 기본 */}
+      <AssigneeUnfinishedWidget myName={myName} setView={setView} defaultOpen={isAdmin} />
 
       {/* 📅 이번 달 예정 업무 (next_action 월 표기 기준 실시간 필터) */}
       {(function() {
@@ -6768,6 +6990,15 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
     if (r.error) { alert("단계 변경 실패: " + r.error.message); return; }
     // 수동 이동 → 이번 정체구간 알림 해제(연결 업무노트 완료 처리)
     if (row.card.alert_note_id) { try { await supabase.from("work_notes").update({ is_done: true }).eq("id", row.card.alert_note_id); } catch (e3) {} }
+    // 팀 활동 로그에 남김 (대시보드 '우리 팀 활동 로그')
+    try {
+      await supabase.from("activity_logs").insert({
+        company_id: row.card.company_id || null, business_name: row.co.name || row.card.business_name || "",
+        agency_group: row.card.agency_group || null, assignee: row.co.assignee || null,
+        log_type: "pipeline_move", logged_by: myName || null,
+        memo: agencyLabel(row.card.agency_group) + " 카드를 '" + oldStage + "' → '" + newStage + "'(으)로 이동",
+      });
+    } catch (e4) {}
     if (setPipelineCards) {
       setPipelineCards(function(prev) {
         return prev.map(function(x) {
@@ -7432,8 +7663,11 @@ function StaleWaitBanner({ setView }) {
 
 // 🗂️ 담당자별 미완료 현황 위젯 — 업무노트 체크리스트 미완료(- [ ])를 담당자별로 집계
 // 각 담당자: 미완료 수 · 3일 이상 방치 수 · 가장 오래된 미완료 노트 날짜. 본인 행 하이라이트, 클릭 시 해당 담당자 업무노트로 이동
-function AssigneeUnfinishedWidget({ myName, setView }) {
+function AssigneeUnfinishedWidget({ myName, setView, defaultOpen }) {
   const [rows, setRows] = useState(null);
+  const [open, setOpen] = useState(!!defaultOpen); // 관리자는 펼침, 일반 팀원은 접힘 기본
+  // 프로필(=관리자 여부)이 늦게 로드되는 경우 기본 상태를 한 번 맞춰 줌
+  useEffect(function() { setOpen(!!defaultOpen); }, [defaultOpen]);
   useEffect(function() {
     async function load() {
       var r = await supabase.from("work_notes").select("assignee,content,note_date,created_at").is("deleted_at", null);
@@ -7465,14 +7699,21 @@ function AssigneeUnfinishedWidget({ myName, setView }) {
   }, []);
   if (rows == null || rows.length === 0) return null;
   var jump = function(name) { localStorage.setItem("wn_jump_assignee", name); setView("worknotes"); };
+  var totalUnfinished = rows.reduce(function(s, r) { return s + r.count; }, 0);
+  var myRow = myName ? rows.find(function(r) { return r.name === myName; }) : null;
   return (
     <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, padding: "16px 18px", marginBottom: 18 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+      <div onClick={function() { setOpen(function(p) { return !p; }); }}
+        style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: open ? 12 : 0, cursor: "pointer", flexWrap: "wrap" }}>
         <span style={{ fontSize: 15 }}>🗂️</span>
         <div style={{ fontSize: 14, fontWeight: 700 }}>담당자별 미완료 현황</div>
-        <span style={{ fontSize: 11, color: "#888", fontWeight: 400 }}>업무노트 체크리스트 기준 · 클릭 시 해당 담당자 노트로</span>
+        <span style={{ fontSize: 11, color: "#888", fontWeight: 400 }}>팀 전체 · 업무노트 체크리스트 기준</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: "#666", background: "#F7F6F3", borderRadius: 99, padding: "2px 9px" }}>
+          {rows.length}명 · {totalUnfinished}건{myRow ? " (내 몫 " + myRow.count + "건)" : ""}
+        </span>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "#888", fontWeight: 600 }}>{open ? "접기 ▲" : "펼치기 ▼"}</span>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <div style={{ display: open ? "flex" : "none", flexDirection: "column", gap: 4 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.9fr 1.1fr 1.2fr", gap: 8, fontSize: 10, color: "#AAA", fontWeight: 600, padding: "0 10px 4px" }}>
           <span>담당자</span><span style={{ textAlign: "right" }}>미완료</span><span style={{ textAlign: "right" }}>3일↑ 방치</span><span style={{ textAlign: "right" }}>가장 오래된</span>
         </div>
