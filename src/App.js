@@ -640,13 +640,45 @@ const INDUSTRY_OPTIONS = ["제조업","농업·어업","숙박업","음식점업
 // ── 정책자금 신규 기능: 상수 & 계산 로직 ─────────────────────────────────────────
 const LEAD_SOURCES = ["콘텐츠(릴스/유튜브)", "네이버 블로그", "지인 소개", "DB 구매", "직접 문의", "기존 고객 재의뢰", "기타"];
 
+// ── 기대출 구분 ───────────────────────────────────────────────────────────────
+// 대출 성격(법인 채무 / 대표자 개인 채무 / 개인사업자 사업자대출)을 구분해
+// 법인기업의 부채비율에 대표자 개인대출이 섞이지 않게 한다.
+const LOAN_KINDS = [
+  { id: "corp",     label: "법인대출",        short: "법인",      color: "#4338CA", bg: "#EEF2FF" },
+  { id: "personal", label: "대표자 개인대출", short: "대표자개인", color: "#BE123C", bg: "#FFE4E6" },
+  { id: "biz",      label: "사업자대출",      short: "사업자",    color: "#0F6E56", bg: "#ECFDF5" },
+];
+const LOAN_KIND_NONE = { id: "", label: "미분류", short: "미분류", color: "#6B7280", bg: "#F3F4F6" };
+function loanKindMeta(id) { return LOAN_KINDS.find(function(k) { return k.id === id; }) || LOAN_KIND_NONE; }
+// 회사 유형별 기본 구분 — 법인이면 법인대출, 그 외(개인사업자)는 사업자대출
+function defaultLoanKind(company) { return (company && company.type === "법인") ? "corp" : "biz"; }
+function loanAmountOf(ln) {
+  var n = parseInt(String((ln && ln.amount) || "").replace(/[^0-9]/g, ""), 10);
+  return isNaN(n) ? 0 : n;
+}
 // 기대출 총액(원) = loans 배열 amount 합
 function totalLoanAmount(company) {
   var loans = Array.isArray(company && company.loans) ? company.loans : [];
-  return loans.reduce(function(s, ln) {
-    var n = parseInt(String((ln && ln.amount) || "").replace(/[^0-9]/g, ""), 10);
-    return s + (isNaN(n) ? 0 : n);
-  }, 0);
+  return loans.reduce(function(s, ln) { return s + loanAmountOf(ln); }, 0);
+}
+// 구분별 소계 — { corp, personal, biz, none, total, noneCount }
+function loanTotalsByKind(company) {
+  var loans = Array.isArray(company && company.loans) ? company.loans : [];
+  var out = { corp: 0, personal: 0, biz: 0, none: 0, total: 0, noneCount: 0 };
+  loans.forEach(function(ln) {
+    var amt = loanAmountOf(ln);
+    var k = (ln && ln.kind) || "";
+    if (k === "corp" || k === "personal" || k === "biz") out[k] += amt;
+    else { out.none += amt; out.noneCount++; }
+    out.total += amt;
+  });
+  return out;
+}
+// 부채비율 계산에 쓸 기대출 기준 부채액.
+// 법인: 법인대출만(대표자 개인대출·미분류 제외) / 개인사업자: 전체 합계(기존 방식 유지)
+function financeDebtFromLoans(company) {
+  var t = loanTotalsByKind(company);
+  return (company && company.type === "법인") ? t.corp : t.total;
 }
 // 원 → "N억/N천만/N만" 표기
 function wonToKor(won) {
@@ -761,6 +793,15 @@ function computeFinanceRatios(company) {
   if (debtSource === null) {
     var mDebt = parseFloat(company && company.debt_ratio);
     if (!isNaN(mDebt)) { debtRatio = mDebt; debtText = (Math.round(mDebt * 10) / 10) + "%"; debtSource = "manual"; }
+  }
+  // 3순위: 기업현황표에 부채총계가 없고 직접입력도 없을 때만 기대출 내역으로 대용.
+  // 법인은 '법인대출'만 합산(대표자 개인대출·미분류 제외), 개인사업자는 전체 합계.
+  if (debtSource === null && capital !== null) {
+    var loanDebt = financeDebtFromLoans(company);
+    if (loanDebt > 0) {
+      if (capital <= 0) { capitalImpaired = true; debtText = "자본잠식"; debtSource = "loans"; }
+      else { debtRatio = (loanDebt / capital) * 100; debtText = (Math.round(debtRatio * 10) / 10) + "%"; debtSource = "loans"; }
+    }
   }
   // 이자보상배율 = 영업이익 / 이자비용 (자동). 계산 불가 시 수동입력(interest_coverage_ratio) 폴백.
   var icr = null, icrText = "데이터 부족", noInterest = false, icrSource = null;
@@ -1506,9 +1547,11 @@ async function parseHyeonhwangpyo(file) {
   if (name && (/^\(주\)|^㈜|주식회사/.test(name))) { updates.business_type = "법인사업자"; updates.type = "법인"; }
   else if (name) { updates.business_type = "개인사업자"; updates.type = "개인"; }
   var loans = [];
+  // 구분 기본값: 법인이면 법인대출, 개인사업자면 사업자대출 (담당자가 화면에서 수정 가능)
+  var loanKindDefault = defaultLoanKind({ type: updates.type });
   for (var lr = 17; lr <= 23; lr++) {
     var inst = getCell(lr, 2), amt = getCell(lr, 5), bank = getCell(lr, 7), sdate = getCell(lr, 8), edate = getCell(lr, 10);
-    if (inst || amt || bank || sdate || edate) { loans.push({ inst: inst, amount: amt, bank: bank, start: sdate, end: edate }); }
+    if (inst || amt || bank || sdate || edate) { loans.push({ inst: inst, amount: amt, bank: bank, start: sdate, end: edate, kind: loanKindDefault }); }
   }
   if (loans.length > 0) { updates.loans = loans; auto.loans = true; }
   var infoItems = [];
@@ -10241,6 +10284,8 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                       var srcBadge = function(src) {
                         if (src === "auto") return <span style={{ marginLeft: 4, fontSize: 9, color: "#15803D", fontWeight: 700 }}>(자동)</span>;
                         if (src === "manual") return <span style={{ marginLeft: 4, fontSize: 9, color: "#B45309", fontWeight: 700 }}>(수동입력)</span>;
+                        if (src === "loans") return <span title={data.type === "법인" ? "기업현황표에 부채총계가 없어 기대출 내역으로 대용 · 법인대출만 합산(대표자 개인대출 제외)" : "기업현황표에 부채총계가 없어 기대출 내역 전체 합계로 대용"}
+                          style={{ marginLeft: 4, fontSize: 9, color: "#4338CA", fontWeight: 700 }}>{data.type === "법인" ? "(기대출·법인분)" : "(기대출)"}</span>;
                         return null;
                       };
                       return (
@@ -10307,12 +10352,13 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
                   <thead>
                     <tr style={{ background: "#F4F4F8" }}>
-                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "26%" }}>기관</th>
-                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "16%" }}>금액</th>
-                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "14%" }}>은행</th>
-                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "19%" }}>실행일</th>
-                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "19%" }}>만기일</th>
-                      <th style={{ padding: "6px 2px", border: "1px solid #E8E5E0", width: "6%" }}></th>
+                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "20%" }}>기관</th>
+                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "15%" }}>구분</th>
+                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "14%" }}>금액</th>
+                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "12%" }}>은행</th>
+                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "17%" }}>실행일</th>
+                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "17%" }}>만기일</th>
+                      <th style={{ padding: "6px 2px", border: "1px solid #E8E5E0", width: "5%" }}></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -10326,9 +10372,18 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                       };
                       var cellStyle = { border: "1px solid #E8E5E0", padding: 0 };
                       var inStyle = { width: "100%", border: "none", padding: "6px 5px", fontSize: 11.5, background: "transparent", outline: "none", boxSizing: "border-box" };
+                      var km = loanKindMeta(ln.kind);
                       return (
                         <tr key={li}>
                           <td style={cellStyle}><input value={ln.inst || ""} onChange={function(e) { updateLoan("inst", e.target.value); }} style={inStyle} /></td>
+                          <td style={{ border: "1px solid #E8E5E0", padding: 0, background: ln.kind ? km.bg : "#FFFBEB" }}>
+                            <select value={ln.kind || ""} onChange={function(e) { updateLoan("kind", e.target.value); }}
+                              title={ln.kind ? km.label : "구분이 지정되지 않았습니다 — 법인기업은 미분류 대출이 부채비율 계산에서 빠집니다"}
+                              style={{ width: "100%", border: "none", padding: "6px 3px", fontSize: 11, background: "transparent", outline: "none", boxSizing: "border-box", cursor: "pointer", fontWeight: 700, color: ln.kind ? km.color : "#B45309" }}>
+                              <option value="">미분류</option>
+                              {LOAN_KINDS.map(function(k) { return <option key={k.id} value={k.id}>{k.label}</option>; })}
+                            </select>
+                          </td>
                           <td style={cellStyle}><input value={ln.amount || ""} onChange={function(e) { updateLoan("amount", e.target.value); }} style={inStyle} /></td>
                           <td style={cellStyle}><input value={ln.bank || ""} onChange={function(e) { updateLoan("bank", e.target.value); }} style={inStyle} /></td>
                           <td style={cellStyle}><input value={ln.start || ""} placeholder="26.01.13" onChange={function(e) { updateLoan("start", e.target.value); }} style={inStyle} /></td>
@@ -10341,12 +10396,47 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                       );
                     })}
                     {(!Array.isArray(data.loans) || data.loans.length === 0) && (
-                      <tr><td colSpan={6} style={{ border: "1px solid #E8E5E0", padding: "10px", textAlign: "center", color: "#888", fontSize: 11 }}>기대출 내역 없음</td></tr>
+                      <tr><td colSpan={7} style={{ border: "1px solid #E8E5E0", padding: "10px", textAlign: "center", color: "#888", fontSize: 11 }}>기대출 내역 없음</td></tr>
                     )}
                   </tbody>
                 </table>
               </div>
-              <button onClick={function() { setData(function(p) { var arr = (Array.isArray(p.loans) ? p.loans : []).slice(); arr.push({ inst: "", amount: "", bank: "", start: "", end: "" }); return Object.assign({}, p, { loans: arr }); }); }}
+
+              {/* 구분별 소계 — 법인은 법인/대표자 개인을 나눠 비교, 개인사업자는 전체 합계 하나 */}
+              {Array.isArray(data.loans) && data.loans.length > 0 && (function() {
+                var t = loanTotalsByKind(data);
+                var isCorp = data.type === "법인";
+                var cell = function(label, won, color, bg) {
+                  return (
+                    <div key={label} style={{ flex: "1 1 150px", minWidth: 130, background: bg, border: "1px solid " + color + "33", borderRadius: 8, padding: "8px 11px" }}>
+                      <div style={{ fontSize: 10.5, color: color, fontWeight: 700 }}>{label}</div>
+                      <div style={{ fontSize: 15, fontWeight: 800, color: "#1A1917", marginTop: 2 }}>{wonToKor(won)}</div>
+                    </div>
+                  );
+                };
+                return (
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {isCorp ? [
+                        cell("법인대출 합계", t.corp, "#4338CA", "#EEF2FF"),
+                        cell("대표자 개인대출 합계", t.personal, "#BE123C", "#FFE4E6"),
+                        t.biz > 0 ? cell("사업자대출 합계", t.biz, "#0F6E56", "#ECFDF5") : null,
+                        cell("전체 합계", t.total, "#6B7280", "#F7F6F3"),
+                      ].filter(Boolean) : [
+                        cell("기대출 전체 합계", t.total, "#6B7280", "#F7F6F3"),
+                      ]}
+                    </div>
+                    {t.noneCount > 0 && (
+                      <div style={{ marginTop: 6, fontSize: 11, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 10px", lineHeight: 1.6 }}>
+                        ⚠ 구분 미분류 {t.noneCount}건 ({wonToKor(t.none)})
+                        {isCorp ? " — 법인기업은 미분류 대출이 부채비율 계산에서 제외됩니다. 하나씩 구분을 지정해 주세요." : " — 구분을 지정하면 성격별로 구분해 볼 수 있습니다."}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              <button onClick={function() { setData(function(p) { var arr = (Array.isArray(p.loans) ? p.loans : []).slice(); arr.push({ inst: "", amount: "", bank: "", start: "", end: "", kind: defaultLoanKind(p) }); return Object.assign({}, p, { loans: arr }); }); }}
                 style={{ background: "#fff", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 7, padding: "6px 12px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", marginBottom: 20 }}>
                 + 대출 행 추가
               </button>
