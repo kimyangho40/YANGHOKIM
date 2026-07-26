@@ -18,7 +18,11 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 });
 
 // ── 상수 ─────────────────────────────────────────────────────────────────────
-const STAGES = ["상담/진단완료", "필수서류 및 인증서요청", "기관신청대기/방문예정", "스크립트 전달 완료", "기관신청완료/방문완료", "심사중/실태조사대기", "실태조사완료/약정완료", "자금집행완료", "수수료대기 및 입금요청", "입금완료/사후관리", "추가 진행 예정", "추가 진행 중", "부결/반려", "기타"];
+// 파이프라인 보드 단계(12). "추가 진행 예정/중"은 2026-07-26 폐지 → 카드의 '새 기관 추가 신청' 버튼으로 대체.
+const STAGES = ["상담/진단완료", "필수서류 및 인증서요청", "기관신청대기/방문예정", "스크립트 전달 완료", "기관신청완료/방문완료", "심사중/실태조사대기", "실태조사완료/약정완료", "자금집행완료", "수수료대기 및 입금요청", "입금완료/사후관리", "부결/반려", "기타"];
+// 폐지된 단계 — companies.stage(구 데이터)에는 아직 남아 있어 목록 필터/편집 셀렉트에서만 노출
+const RETIRED_STAGES = ["추가 진행 예정", "추가 진행 중"];
+const COMPANY_STAGES = STAGES.concat(RETIRED_STAGES);
 const STAGE_COLORS = {
   "상담/진단완료":           { bg: "#EEF2FF", text: "#4338CA", border: "#C7D2FE" },
   "필수서류 및 인증서요청":  { bg: "#FFF7ED", text: "#C2410C", border: "#FED7AA" },
@@ -35,6 +39,23 @@ const STAGE_COLORS = {
   "부결/반려":              { bg: "#FEE2E2", text: "#DC2626", border: "#FCA5A5" },
   "기타":                    { bg: "#F7F6F3", text: "#666",    border: "#D1D5DB" },
 };
+// ── STEP12(기타) 사유 세분화 ──────────────────────────────────────────────────
+// 같은 '기타' 컬럼 안에서도 사유별로 색/라벨을 구분해 재접촉 대상(연락두절 등)을 골라낼 수 있게 함.
+const OTHER_REASONS = [
+  { id: "no_need",    label: "자금 불필요(고객이 원치 않음)", short: "자금 불필요", color: "#6B7280", bg: "#F3F4F6" },
+  { id: "closed",     label: "폐업",                          short: "폐업",       color: "#DC2626", bg: "#FEE2E2" },
+  { id: "no_contact", label: "연락두절",                      short: "연락두절",   color: "#D97706", bg: "#FEF3C7" },
+  { id: "rel_end",    label: "대표자와 관계 단절",            short: "관계 단절",  color: "#BE123C", bg: "#FFE4E6" },
+  { id: "etc",        label: "기타(직접입력)",                short: "기타",       color: "#0369A1", bg: "#E0F2FE" },
+];
+function otherReasonMeta(id) { return OTHER_REASONS.find(function(r) { return r.id === id; }) || null; }
+// 폐업·연락두절로 지정된 지 이 일수를 넘기면 '장기 방치'로 흐리게 표시
+const DORMANT_DAYS = 180;
+function isDormantCard(card) {
+  if (!card || (card.other_reason !== "closed" && card.other_reason !== "no_contact")) return false;
+  return daysSince(card.other_reason_at || card.stage_changed_at) >= DORMANT_DAYS;
+}
+
 // 기관 케이스(agency_cases) 상태 분류 단일 기준 — 승인계열/부결계열을 여기 한 곳에서만 정의
 const DONE_STATUSES = ["승인", "약정", "완료"];
 const REJECT_STATUSES = ["부결", "반려", "신청취소", "진행불가", "신청못함", "중단"];
@@ -478,6 +499,8 @@ const PIPELINE_AGENCY_LABEL = {
 };
 function agencyLabel(g) { return g ? (PIPELINE_AGENCY_LABEL[g] || g) : "기관 미지정"; }
 function agencyColor(g) { var f = AGENCY_GROUPS.find(function(x) { return x.id === g; }); return f ? f.color : "#9CA3AF"; }
+// 특정 시각 이후 경과 일수 (정체 일수 계산)
+function daysSince(iso) { if (!iso) return 0; var ms = Date.now() - new Date(iso).getTime(); return ms > 0 ? Math.floor(ms / 86400000) : 0; }
 
 // 기관현황 → 파이프라인 단방향 자동동기화.
 // (기관, 상태) → status_stage_map 조회(기관별 우선, 없으면 공통 '*') → 해당 회사×기관 카드 stage 갱신.
@@ -507,7 +530,12 @@ async function syncPipelineFromCase(c) {
     if (card) {
       if (card.sync_mode === "manual") return; // 수동 고정 → 자동 덮어쓰기 안 함
       if (stage) {
-        await supabase.from("pipeline_cards").update({ stage: stage, synced_status: c.status, synced_month: c.month || null, needs_mapping: false, updated_at: new Date().toISOString() }).eq("id", card.id);
+        var changed = card.stage !== stage;
+        var upd = { stage: stage, synced_status: c.status, synced_month: c.month || null, needs_mapping: false, updated_at: new Date().toISOString() };
+        // 단계가 실제로 바뀔 때만 정체 타이머 리셋 + 이번 구간 알림 해제
+        if (changed) { upd.stage_changed_at = new Date().toISOString(); upd.alerted_at = null; }
+        await supabase.from("pipeline_cards").update(upd).eq("id", card.id);
+        if (changed && card.alert_note_id) { try { await supabase.from("work_notes").update({ is_done: true }).eq("id", card.alert_note_id); } catch (e2) {} }
       } else if (c.status) {
         await supabase.from("pipeline_cards").update({ needs_mapping: true, updated_at: new Date().toISOString() }).eq("id", card.id);
       }
@@ -3077,6 +3105,8 @@ function CRMApp({ profile, session }) {
   const [profiles, setProfiles] = useState([]);
   const [pipelineCards, setPipelineCards] = useState([]);   // 파이프라인 조합카드(회사×기관)
   const [statusStageMap, setStatusStageMap] = useState([]); // 기관 상태값 → STEP 매핑
+  const [stagnConfig, setStagnConfig] = useState([]);       // 단계별 정체 알림 기준(stage_stagnation_config)
+  const [stagnAlertList, setStagnAlertList] = useState([]); // 내 정체 카드 알림함(세션) — 통합 배지에 합산
   const [loading, setLoading] = useState(true);
   const [selectedCompany, setSelectedCompany] = useState(null);
   // 업체 상세를 열 때 처음 보여줄 탭 (기업목록 "작업" 버튼이 용도별로 지정 · 없으면 기본정보)
@@ -3359,12 +3389,13 @@ function CRMApp({ profile, session }) {
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
-    const [{ data: cos }, { data: profs }, { data: agencyCases }, pcRes, ssmRes] = await Promise.all([
+    const [{ data: cos }, { data: profs }, { data: agencyCases }, pcRes, ssmRes, scRes] = await Promise.all([
       supabase.from("companies").select("*, documents(*)").is("deleted_at", null).order("created_at", { ascending: false }),
       supabase.from("profiles").select("*"),
       supabase.from("agency_cases").select("business_name, region").not("region", "is", null).limit(10000),
       supabase.from("pipeline_cards").select("*"),
       supabase.from("status_stage_map").select("*"),
+      supabase.from("stage_stagnation_config").select("*"),
     ]);
     // 기관별 현황 지역 → 기업 목록 자동 동기화
     var companiesList = cos || [];
@@ -3391,6 +3422,7 @@ function CRMApp({ profile, session }) {
     setProfiles(profs || []);
     setPipelineCards((pcRes && pcRes.data) || []);       // 테이블 없으면 [] (기존 동작 폴백)
     setStatusStageMap((ssmRes && ssmRes.data) || []);
+    setStagnConfig((scRes && scRes.data) || []);
     setLoading(false);
   }, []);
 
@@ -3554,9 +3586,9 @@ function CRMApp({ profile, session }) {
   // 안 읽은 알림(채팅+요청+팀공지+답장) 총합 → 탭 제목 앞 "(N) " 표시
   useEffect(function() {
     var base = chatBaseTitleRef.current || "CRM";
-    var total = chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length;
+    var total = chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length + stagnAlertList.length;
     document.title = total > 0 ? "(" + total + ") " + base : base;
-  }, [chatUnread, reqAlertList, teamAlertList, sentReplyAlertList]);
+  }, [chatUnread, reqAlertList, teamAlertList, sentReplyAlertList, stagnAlertList]);
 
   // 알림음 on/off 설정 저장
   useEffect(function() {
@@ -3784,6 +3816,96 @@ function CRMApp({ profile, session }) {
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [fetchAll]);
+
+  // ── 정체 카드 목록 (설정 기준일수 초과) ─────────────────────────────────────
+  // 알림 트리거 · 대시보드 관리자 위젯 · 오전 요약이 모두 이 한 곳을 사용해 기준이 어긋나지 않게 함.
+  const stagnRows = useMemo(() => {
+    if (!pipelineCards.length || !stagnConfig.length) return [];
+    const cfgMap = {};
+    stagnConfig.forEach(c => { cfgMap[c.stage] = c; });
+    const coMap = new Map();
+    (companies || []).forEach(c => coMap.set(c.id, c));
+    const out = [];
+    pipelineCards.forEach(card => {
+      if (!card.agency_group) return;                        // 기관 미지정 카드는 제외
+      if (card.closed_at) return;                            // 종결 처리한 카드는 정체 대상 아님
+      const cfg = cfgMap[card.stage];
+      if (!cfg || !cfg.enabled) return;                      // 이 단계 알림 미사용
+      const days = daysSince(card.stage_changed_at);
+      if (days < (cfg.threshold_days || 3)) return;          // 기준 미달
+      const co = coMap.get(card.company_id);
+      if (!co) return;
+      out.push({ card: card, co: co, days: days, threshold: cfg.threshold_days || 3 });
+    });
+    return out.sort((a, b) => b.days - a.days);
+  }, [pipelineCards, stagnConfig, companies]);
+
+  // ── 파이프라인 카드 정체 능동 알림 ──────────────────────────────────────────
+  // 로그인 후 최초 1회만 검사(새 폴링 아님). alerted_at로 멱등 → 중복 소리/노트 방지.
+  // 내 담당 카드가 해당 단계에서 기준일수 이상 정체 & 미알림이면: 업무노트 자동생성 +
+  // 기존 알림 함수(playChatSound/showGenericBrowserNotif) 재사용해 소리+팝업 1회.
+  const stagnCheckedRef = useRef(false);
+  useEffect(() => {
+    if (stagnCheckedRef.current) return;
+    if (!profile?.name) return;
+    if (!companies.length || !pipelineCards.length || !stagnConfig.length) return;
+    stagnCheckedRef.current = true;
+    const meName = profile.name;
+    const myStale = stagnRows.filter(r => {
+      if (r.card.alerted_at) return false;                   // 이미 알림함(멱등)
+      const asg = (r.co.assignee || "").split(",").map(x => x.trim()).filter(Boolean);
+      return asg.includes(meName);                           // 내 담당만
+    });
+    if (!myStale.length) return;
+    (async () => {
+      const nowIso = new Date().toISOString();
+      const items = [];
+      for (const it of myStale) {
+        const label = it.co.name + " · " + agencyLabel(it.card.agency_group);
+        const title = "정체 확인 필요: " + label;
+        const content = "- [ ] " + label + " — " + it.card.stage + " " + it.days + "일째 (자금신청/진행 확인)\n";
+        let noteId = null;
+        try {
+          let ins = await supabase.from("work_notes").insert({ assignee: meName, title: title, content: content, is_todo: true, is_done: false, created_by: "시스템", note_date: kstDate(), company_id: it.card.company_id }).select().single();
+          if (ins.error || !ins.data) ins = await supabase.from("work_notes").insert({ assignee: meName, title: title, content: content, is_todo: true, is_done: false, created_by: "시스템", note_date: kstDate() }).select().single();
+          if (!ins.error && ins.data) noteId = ins.data.id;
+        } catch (e) {}
+        try { await supabase.from("pipeline_cards").update({ alerted_at: nowIso, alert_note_id: noteId }).eq("id", it.card.id); } catch (e) {}
+        items.push({ id: it.card.id, label: label, stage: it.card.stage, days: it.days, noteId: noteId });
+      }
+      setPipelineCards(prev => prev.map(x => {
+        const hit = items.find(i => i.id === x.id);
+        return hit ? Object.assign({}, x, { alerted_at: nowIso, alert_note_id: hit.noteId }) : x;
+      }));
+      setStagnAlertList(items);
+      // 기존 알림 함수 재사용 — 소리 1회(고유 id로 2초 디바운스) + 팝업 1회
+      if (chatSoundRef.current) playChatSound({ id: "stagn_batch_" + kstDate(), sender: "시스템", reason: "정체 카드 알림" });
+      showGenericBrowserNotif({ tag: "stagn-batch", title: "정체 카드 " + items.length + "건 확인 필요", body: items.slice(0, 3).map(i => i.label + " (" + i.days + "일)").join(", ") + (items.length > 3 ? " 외" : ""), onClick: function() { goToWorkNotesRef.current(); } });
+      if (profile?.name) fetchWorkNotesBadge(profile.name);
+    })();
+  }, [companies, pipelineCards, stagnConfig, stagnRows, profile]);
+
+  // 정체 알림 하나 확인 처리(알림함에서 제거). 카드 자체의 alerted_at은 그대로 두어 재알림 안 함.
+  const dismissStagnAlert = useCallback(function(cardId) {
+    setStagnAlertList(function(prev) { return prev.filter(function(x) { return x.id !== cardId; }); });
+  }, []);
+
+  // 알림함을 열 때 1회 — 연결된 업무노트를 이미 완료(또는 삭제)했으면 정체 알림도 같이 내림.
+  // (폴링 아님: showChatNotif가 false→true로 바뀔 때만 실행)
+  useEffect(function() {
+    if (!showChatNotif) return;
+    var ids = stagnAlertList.map(function(x) { return x.noteId; }).filter(Boolean);
+    if (!ids.length) return;
+    var alive = true;
+    supabase.from("work_notes").select("id,is_done,deleted_at").in("id", ids).then(function(r) {
+      if (!alive || r.error || !r.data) return;
+      var live = {};
+      r.data.forEach(function(n) { if (!n.is_done && !n.deleted_at) live[n.id] = true; });
+      setStagnAlertList(function(prev) { return prev.filter(function(x) { return !x.noteId || live[x.noteId]; }); });
+    });
+    return function() { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showChatNotif]);
 
   const filtered = useMemo(() => (companies || []).filter(c => {
     const s = search.toLowerCase();
@@ -4690,8 +4812,8 @@ function CRMApp({ profile, session }) {
             <button onClick={function() { setShowChatNotif(function(p) { return !p; }); }} title="안 읽은 알림"
               style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", padding: "7px 10px", background: "#2E2C29", border: "none", borderRadius: 6, color: "#888", fontSize: 14, cursor: "pointer" }}>
               💬
-              {(chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length) > 0 && (
-                <span style={{ position: "absolute", top: -3, right: -3, minWidth: 16, height: 16, background: "#DC2626", borderRadius: 99, fontSize: 9, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }}>{chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length}</span>
+              {(chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length + stagnAlertList.length) > 0 && (
+                <span style={{ position: "absolute", top: -3, right: -3, minWidth: 16, height: 16, background: "#DC2626", borderRadius: 99, fontSize: 9, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }}>{chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length + stagnAlertList.length}</span>
               )}
             </button>
           </div>
@@ -4756,7 +4878,7 @@ function CRMApp({ profile, session }) {
             <div style={{ padding: "20px 20px 14px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "flex-start", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 700 }}>💬 안 읽은 알림</div>
-                {(function() { var t = chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length; return <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{t > 0 ? t + "개의 새 알림" : "모두 읽었어요"}</div>; })()}
+                {(function() { var t = chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length + stagnAlertList.length; return <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{t > 0 ? t + "개의 새 알림" : "모두 읽었어요"}</div>; })()}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <button onClick={function() { setChatSoundOn(function(p) { return !p; }); }} title="알림음 켜기/끄기"
@@ -4797,6 +4919,25 @@ function CRMApp({ profile, session }) {
                   </div>
                 );
               })}
+              {/* ⏳ 정체 카드 — 기준일수 초과로 자동 생성된 확인 요청 */}
+              {stagnAlertList.map(function(s) {
+                return (
+                  <div key={"stagn-" + s.id} style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "12px 14px", marginBottom: 10, cursor: "pointer" }}
+                    onClick={function() { dismissStagnAlert(s.id); goToWorkNotes(); }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, gap: 8 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#92400E", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{"⏳ " + s.label}</div>
+                      <div style={{ fontSize: 10, fontWeight: 600, color: "#B45309", background: "#FEF3C7", borderRadius: 99, padding: "2px 8px", whiteSpace: "nowrap", flexShrink: 0 }}>정체 {s.days}일</div>
+                    </div>
+                    <div style={{ fontSize: 12, color: "#555", lineHeight: 1.5 }}>{s.stage + " 단계에서 " + s.days + "일째 멈춰 있어요. 진행 상황을 확인해 주세요."}</div>
+                    <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                      <button onClick={function(e) { e.stopPropagation(); dismissStagnAlert(s.id); setShowChatNotif(false); setView("pipeline"); }}
+                        style={{ fontSize: 11, color: "#B45309", background: "#fff", border: "1px solid #FDE68A", borderRadius: 6, padding: "3px 10px", cursor: "pointer", fontWeight: 600 }}>파이프라인 보기</button>
+                      <button onClick={function(e) { e.stopPropagation(); dismissStagnAlert(s.id); }}
+                        style={{ fontSize: 11, color: "#888", background: "none", border: "1px solid #E8E5E0", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>확인</button>
+                    </div>
+                  </div>
+                );
+              })}
               {/* 📌 내 팀 미확인 공지 */}
               {teamAlertList.map(function(n) {
                 var label = n.team === "corporate" ? "[법인팀]" : n.team === "all" ? "[전체]" : "[개인팀]";
@@ -4812,7 +4953,7 @@ function CRMApp({ profile, session }) {
                   </div>
                 );
               })}
-              {(chatUnreadList.length === 0 && reqAlertList.length === 0 && teamAlertList.length === 0 && sentReplyAlertList.length === 0) ? (
+              {(chatUnreadList.length === 0 && reqAlertList.length === 0 && teamAlertList.length === 0 && sentReplyAlertList.length === 0 && stagnAlertList.length === 0) ? (
                 <div style={{ padding: "40px 0", textAlign: "center", color: "#888", fontSize: 13 }}>
                   <div style={{ fontSize: 32, marginBottom: 8 }}>💬</div>
                   안 읽은 알림이 없어요
@@ -4849,7 +4990,7 @@ function CRMApp({ profile, session }) {
           </div>
         ) : (
           <>
-            {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setFilterAssignee={setFilterAssignee} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} myName={profile?.name} />}
+            {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setFilterAssignee={setFilterAssignee} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} myName={profile?.name} stagnRows={stagnRows} />}
             {view === "agency" && <AgencyView key={agencyJumpKey} jumpToMonth={agencyJumpMonth} jumpToGroup={agencyJumpGroup} />}
             {view === "dbleads" && <DBLeadsView canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
             {view === "settlement" && <SettlementView />}
@@ -4863,7 +5004,7 @@ function CRMApp({ profile, session }) {
             {view === "calendar" && <CalendarView companies={companies} onSelectCompany={setSelectedCompany} profile={profile} />}
             {view === "manual" && <ManualView />}
             {view === "quicklinks" && <QuickLinksView />}
-            {view === "pipeline" && <PipelineView cardRows={pipelineCardRows} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setPipelineCards={setPipelineCards} canEditMapping={profile?.name === "양호"} />}
+            {view === "pipeline" && <PipelineView cardRows={pipelineCardRows} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setPipelineCards={setPipelineCards} setStagnConfig={setStagnConfig} canEditMapping={profile?.name === "양호"} myName={profile?.name} stagnRows={stagnRows} />}
             {view === "cases" && <ApprovalCasesView profile={profile} />}
             {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={profile?.role === "admin" || profile?.name === "양호"} onSelectCompany={setSelectedCompany} setView={setView} companies={companies} />}
             {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} filterAgency={filterAgency} setFilterAgency={setFilterAgency} filterTeam={filterTeam} setFilterTeam={setFilterTeam} creditFilter={creditFilter} setCreditFilter={setCreditFilter} creditMode={creditMode} setCreditMode={setCreditMode} assignees={assignees} onSelect={openCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
@@ -5168,7 +5309,7 @@ function AiSearchModal({ companies, myName, onClose, onSelectCompany }) {
 }
 
 // 🌅 오전 알림 요약 배너 — 오늘 마감 · 나한테 온 요청 · 3일 넘긴 미완료 (본인 기준, 숫자 클릭 시 업무노트로 이동)
-function MorningSummaryBanner({ myName, setView }) {
+function MorningSummaryBanner({ myName, setView, stagnMine }) {
   const [sum, setSum] = useState(null);
   useEffect(function() {
     if (!myName) { setSum(null); return; }
@@ -5203,7 +5344,7 @@ function MorningSummaryBanner({ myName, setView }) {
   var greet = (function() { var h = d.getHours(); return h < 12 ? "좋은 아침이에요" : h < 18 ? "오늘도 힘내세요" : "마무리 잘 하세요"; })();
   var Cell = function(props) {
     return (
-      <div onClick={jumpNotes} title="클릭하면 내 업무노트로 이동"
+      <div onClick={props.onClick || jumpNotes} title={props.title || "클릭하면 내 업무노트로 이동"}
         style={{ flex: 1, minWidth: 110, cursor: "pointer", padding: "10px 14px", borderRadius: 10, background: props.count > 0 ? props.bgActive : "#fff", border: "1px solid " + (props.count > 0 ? props.borderActive : "#E8E5E0") }}>
         <div style={{ fontSize: 12, color: props.count > 0 ? props.fgActive : "#888", fontWeight: 600 }}>{props.icon} {props.label}</div>
         <div style={{ fontSize: 24, fontWeight: 800, lineHeight: 1.2, color: props.count > 0 ? props.fgActive : "#BBB" }}>{props.count}<span style={{ fontSize: 13, fontWeight: 600 }}>건</span></div>
@@ -5220,13 +5361,89 @@ function MorningSummaryBanner({ myName, setView }) {
         <Cell icon="📅" label="오늘 마감" count={sum.dueToday} bgActive="#FEF9C3" borderActive="#FDE68A" fgActive="#92400E" />
         <Cell icon="📩" label="나한테 온 요청" count={sum.reqCount} bgActive="#EEF2FF" borderActive="#C7D2FE" fgActive="#4338CA" />
         <Cell icon="⏳" label="3일 넘긴 미완료" count={sum.stale3} bgActive="#FEE2E2" borderActive="#FCA5A5" fgActive="#B91C1C" />
+        <Cell icon="🚧" label="정체 카드" count={stagnMine || 0} bgActive="#FEF3C7" borderActive="#FDE68A" fgActive="#B45309"
+          onClick={function() { setView("pipeline"); }} title="클릭하면 파이프라인으로 이동 (기준일수 넘긴 내 담당 카드)" />
       </div>
     </div>
   );
 }
 
+// ── 🚧 정체 카드 전체 목록 (관리자 전용 위젯) ─────────────────────────────────
+// rows = CRMApp의 stagnRows({card, co, days, threshold}) — 설정에서 켠 단계만, 기준일수 초과분.
+function StagnationAdminWidget({ rows, onSelectCompany, setView }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const groups = useMemo(function() {
+    var map = {};
+    (rows || []).forEach(function(r) {
+      var names = (r.co.assignee || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+      if (!names.length) names = ["미지정"];
+      names.forEach(function(n) {
+        if (!map[n]) map[n] = { name: n, items: [] };
+        map[n].items.push(r);
+      });
+    });
+    return Object.keys(map).map(function(k) { return map[k]; })
+      .sort(function(a, b) { return b.items.length - a.items.length; });
+  }, [rows]);
+  var total = (rows || []).length;
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid " + (total > 0 ? "#FDE68A" : "#E8E5E0"), marginBottom: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: total > 0 && !collapsed ? 14 : 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 600 }}>
+          🚧 정체 카드 전체 목록
+          <span style={{ fontSize: 12, color: total > 0 ? "#B45309" : "#888", fontWeight: 700, marginLeft: 8 }}>{total}건</span>
+          <span style={{ fontSize: 11, color: "#AAA", fontWeight: 400, marginLeft: 6 }}>단계별 기준일수를 넘긴 카드 (관리자만 보임)</span>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={function() { setView("pipeline"); }}
+            style={{ fontSize: 11, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontWeight: 600 }}>파이프라인</button>
+          {total > 0 && <button onClick={function() { setCollapsed(function(p) { return !p; }); }}
+            style={{ fontSize: 11, color: "#888", background: "#F7F6F3", border: "1px solid #E8E5E0", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>{collapsed ? "펼치기" : "접기"}</button>}
+        </div>
+      </div>
+      {total === 0 ? (
+        <div style={{ fontSize: 12, color: "#888", marginTop: 10 }}>기준일수를 넘긴 카드가 없어요 👍</div>
+      ) : !collapsed && (
+        <div style={{ maxHeight: 360, overflowY: "auto", display: "flex", flexDirection: "column", gap: 14 }}>
+          {groups.map(function(g) {
+            return (
+              <div key={g.name}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 800 }}>{g.name}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#B45309", background: "#FEF3C7", borderRadius: 99, padding: "1px 8px" }}>{g.items.length}건</span>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {g.items.map(function(r) {
+                    var hot = r.days >= r.threshold * 2;
+                    return (
+                      <div key={g.name + "-" + r.card.id} onClick={function() { onSelectCompany(r.co); }}
+                        style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 8, cursor: "pointer",
+                          background: hot ? "#FEF2F2" : "#F7F6F3", borderLeft: "3px solid " + agencyColor(r.card.agency_group) }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, minWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.co.name}</span>
+                        <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 99, background: agencyColor(r.card.agency_group) + "1A", color: agencyColor(r.card.agency_group), fontWeight: 700, whiteSpace: "nowrap" }}>{agencyLabel(r.card.agency_group)}</span>
+                        <span style={{ fontSize: 11, color: "#666", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.card.stage}</span>
+                        <span style={{ fontSize: 11, fontWeight: 800, color: hot ? "#DC2626" : "#B45309", whiteSpace: "nowrap" }}>{r.days}일째</span>
+                        <span style={{ fontSize: 10, color: "#AAA", whiteSpace: "nowrap" }}>기준 {r.threshold}일</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── 대시보드 ──────────────────────────────────────────────────────────────────
-function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, setFilterAssignee, setDashboardFilter, onAdd, canExport, myName }) {
+function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, setFilterAssignee, setDashboardFilter, onAdd, canExport, myName, stagnRows }) {
+  // 내 담당 정체 카드 수 (오전 요약 배너용)
+  const stagnMine = (stagnRows || []).filter(function(r) {
+    return (r.co.assignee || "").split(",").map(function(s) { return s.trim(); }).indexOf(myName) >= 0;
+  }).length;
   const contractDone = companies.filter(c => c.fee_status === "수수료수령완료").length;
   const contracted = companies.filter(c => c.fee_status !== "미수령").length;
   // const thisWeek = companies.filter(c => c.next_contact && c.next_contact <= "2026-05-15").length;
@@ -5234,7 +5451,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
   const [pipeCards, setPipeCards] = useState([]); // 파이프라인 조합카드(위젯 카드기준 집계)
   // 파이프라인 단계별 집계: 조합카드 기준(카드 없으면 기존 companies.stage 폴백)
   const stageCount = pipeCards.length > 0
-    ? STAGES.reduce((a, s) => ({ ...a, [s]: pipeCards.filter(c => c.stage === s).length }), {})
+    ? STAGES.reduce((a, s) => ({ ...a, [s]: pipeCards.filter(c => c.stage === s && !c.closed_at).length }), {})
     : STAGES.reduce((a, s) => ({ ...a, [s]: companies.filter(c => c.stage === s).length }), {});
   const stageTotal = STAGES.reduce((s, st) => s + (stageCount[st] || 0), 0); // 위젯 % 분모(카드 총수)
   const [kpiGoals, setKpiGoals] = useState([]);
@@ -5361,7 +5578,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
       </div>
 
       {/* 🌅 오전 알림 요약 (오늘 마감 · 받은 요청 · 3일↑ 미완료) */}
-      <MorningSummaryBanner myName={myName} setView={setView} />
+      <MorningSummaryBanner myName={myName} setView={setView} stagnMine={stagnMine} />
 
       {/* 🔔 방치 자동 알림 배너 (3일 이상 응답/서류 대기) */}
       <StaleWaitBanner setView={setView} />
@@ -5726,6 +5943,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         </div>
       </div>
 
+      {/* 🚧 정체 카드 전체 목록 (관리자 전용) */}
+      {myName === "양호" && <StagnationAdminWidget rows={stagnRows || []} onSelectCompany={onSelectCompany} setView={setView} />}
+
       {/* 👥 팀 활동 위젯 */}
       <TeamActivityWidget profiles={profiles} />
 
@@ -6028,9 +6248,11 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
 }
 
 // ── 상태값 → STEP 매핑 관리 모달 ─────────────────────────────────────────────
-function MappingModal({ onClose, setPipelineCards, canEdit }) {
+function MappingModal({ onClose, setPipelineCards, setStagnConfig, canEdit }) {
+  const [tab, setTab] = useState("map");            // "map"=상태매핑 · "stagn"=정체 기준일수
   const [maps, setMaps] = useState([]);
   const [dbStatuses, setDbStatuses] = useState([]); // agency_cases 실제 (기관,상태) 분포
+  const [cfgs, setCfgs] = useState([]);             // stage_stagnation_config
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [newAgency, setNewAgency] = useState("*");
@@ -6042,11 +6264,13 @@ function MappingModal({ onClose, setPipelineCards, canEdit }) {
     var r = await Promise.all([
       supabase.from("status_stage_map").select("*"),
       supabase.from("agency_cases").select("agency_group,status").is("deleted_at", null),
+      supabase.from("stage_stagnation_config").select("*"),
     ]);
     setMaps(r[0].data || []);
     var seen = {};
     (r[1].data || []).forEach(function(x) { if (x.status && x.status.trim()) { var k = (x.agency_group || "") + "||" + x.status; seen[k] = (seen[k] || 0) + 1; } });
     setDbStatuses(Object.keys(seen).map(function(k) { var p = k.split("||"); return { agency_group: p[0], status: p[1], count: seen[k] }; }));
+    setCfgs((r[2] && r[2].data) || []);
     setLoading(false);
   }, []);
   useEffect(function() { reload(); }, [reload]);
@@ -6080,6 +6304,34 @@ function MappingModal({ onClose, setPipelineCards, canEdit }) {
     setMaps(function(prev) { return prev.concat([r.data]); });
     setNewStatus("");
   };
+  // ── 단계별 정체 기준일수 설정 ──
+  var cfgOf = function(stage) {
+    return cfgs.find(function(c) { return c.stage === stage; }) || { stage: stage, threshold_days: 3, enabled: false };
+  };
+  var setCfgLocal = function(stage, patch) {
+    setCfgs(function(prev) {
+      var i = prev.findIndex(function(c) { return c.stage === stage; });
+      if (i < 0) return prev.concat([Object.assign({ stage: stage, threshold_days: 3, enabled: false }, patch)]);
+      var next = prev.slice();
+      next[i] = Object.assign({}, prev[i], patch);
+      return next;
+    });
+  };
+  var saveCfg = async function(stage, patch) {
+    if (!canEdit) return;
+    var cur = cfgOf(stage);
+    var days = parseInt(patch.threshold_days != null ? patch.threshold_days : cur.threshold_days, 10);
+    if (!days || days < 1) days = 1;
+    var row = { stage: stage, threshold_days: days, enabled: patch.enabled != null ? !!patch.enabled : !!cur.enabled, updated_at: new Date().toISOString() };
+    setCfgLocal(stage, row);
+    var r = await supabase.from("stage_stagnation_config").upsert(row, { onConflict: "stage" });
+    if (r.error) { alert("정체 기준 저장 실패: " + r.error.message); reload(); return; }
+    // 대시보드/알림이 쓰는 앱 상태도 같이 갱신
+    if (setStagnConfig) {
+      var fresh = await supabase.from("stage_stagnation_config").select("*");
+      if (!fresh.error) setStagnConfig(fresh.data || []);
+    }
+  };
   var doResync = async function() {
     if (!canEdit) return;
     setBusy(true);
@@ -6105,12 +6357,25 @@ function MappingModal({ onClose, setPipelineCards, canEdit }) {
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div onClick={function(e) { e.stopPropagation(); }} style={{ background: "#fff", borderRadius: 16, width: "min(760px, 96vw)", maxHeight: "88vh", overflow: "auto", padding: 22 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>상태값 → STEP 매핑</h2>
+          <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>파이프라인 설정</h2>
           <button onClick={onClose} style={{ border: "none", background: "#F0EFEB", borderRadius: 8, padding: "5px 10px", cursor: "pointer", fontSize: 13 }}>닫기</button>
         </div>
-        <p style={{ color: "#888", fontSize: 12, margin: "0 0 14px" }}>기관별 현황의 상태값이 파이프라인 몇 단계로 자동 이동할지 지정합니다. {canEdit ? "" : "(편집 권한: 관리자)"}</p>
+        <div style={{ display: "flex", gap: 6, margin: "10px 0 12px" }}>
+          {[{ id: "map", label: "상태값 → STEP 매핑" }, { id: "stagn", label: "🚧 정체 기준일수" }].map(function(t) {
+            var on = tab === t.id;
+            return <button key={t.id} onClick={function() { setTab(t.id); }}
+              style={{ padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                border: "1px solid " + (on ? "#C7D2FE" : "#E8E5E0"), background: on ? "#EEF2FF" : "#fff", color: on ? "#4338CA" : "#888" }}>{t.label}</button>;
+          })}
+        </div>
+        <p style={{ color: "#888", fontSize: 12, margin: "0 0 14px" }}>
+          {tab === "map"
+            ? "기관별 현황의 상태값이 파이프라인 몇 단계로 자동 이동할지 지정합니다."
+            : "각 단계에서 며칠 이상 멈추면 정체로 보고 알림(업무노트·소리·팝업)을 보낼지 정합니다."}
+          {canEdit ? "" : " (편집 권한: 관리자)"}
+        </p>
 
-        {loading ? <div style={{ padding: 30, textAlign: "center", color: "#AAA" }}>불러오는 중…</div> : <>
+        {loading ? <div style={{ padding: 30, textAlign: "center", color: "#AAA" }}>불러오는 중…</div> : tab === "map" ? <>
           {/* 미매핑 경고 */}
           {unmapped.length > 0 && <div style={{ background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 800, color: "#B45309", marginBottom: 8 }}>⚠ 매핑 필요 {unmapped.length}건 — 자동 이동되지 않습니다</div>
@@ -6167,14 +6432,141 @@ function MappingModal({ onClose, setPipelineCards, canEdit }) {
             <button disabled={busy} onClick={doResync} style={{ border: "1px solid #4338CA", background: busy ? "#EEE" : "#EEF2FF", color: "#4338CA", borderRadius: 8, padding: "7px 14px", fontSize: 13, cursor: busy ? "default" : "pointer", fontWeight: 700 }}>{busy ? "재동기화 중…" : "자동카드 전체 재동기화"}</button>
             <span style={{ fontSize: 11, color: "#888" }}>매핑을 바꾼 뒤 누르면 기존 자동카드(수동 고정 제외)에 새 매핑을 반영합니다.</span>
           </div>}
-        </>}
+        </> : (
+          /* 🚧 단계별 정체 기준일수 */
+          <div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {STAGES.map(function(s, i) {
+                var c = cfgOf(s);
+                return (
+                  <div key={s} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 10px", borderRadius: 8, background: c.enabled ? "#FFFBEB" : "#F7F6F3", border: "1px solid " + (c.enabled ? "#FDE68A" : "transparent") }}>
+                    <input type="checkbox" checked={!!c.enabled} disabled={!canEdit}
+                      onChange={function(e) { saveCfg(s, { enabled: e.target.checked }); }}
+                      style={{ width: 15, height: 15, cursor: canEdit ? "pointer" : "default" }} />
+                    <span style={{ fontSize: 11, color: "#AAA", fontWeight: 700, minWidth: 34 }}>{"STEP" + (i + 1)}</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, flex: 1 }}>{s}</span>
+                    <input type="number" min={1} max={365} value={c.threshold_days} disabled={!canEdit}
+                      onChange={function(e) { setCfgLocal(s, { threshold_days: e.target.value }); }}
+                      onBlur={function(e) { if (canEdit) saveCfg(s, { threshold_days: e.target.value }); }}
+                      style={{ width: 58, padding: "4px 7px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 12, textAlign: "right", background: canEdit ? "#fff" : "#F7F6F3" }} />
+                    <span style={{ fontSize: 12, color: "#888", minWidth: 56 }}>일 이상</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: c.enabled ? "#B45309" : "#BBB", minWidth: 42, textAlign: "right" }}>{c.enabled ? "알림 켬" : "끔"}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ background: "#F7F6F3", borderRadius: 10, padding: "12px 14px", marginTop: 14, fontSize: 11, color: "#666", lineHeight: 1.7 }}>
+              · 정체 일수는 <b>카드가 그 단계에 들어온 시각</b>부터 셉니다(수동 이동·기관현황 자동변경 시 초기화).<br />
+              · 알림은 <b>로그인 후 1회</b>만 검사하며, 카드 1건당 한 번만 보냅니다(중복 소리 방지).<br />
+              · 알림이 나가면 담당자의 업무노트에 "정체 확인 필요" 항목이 자동 생성됩니다.<br />
+              · 카드 배지(노랑 3일↑ / 빨강 7일↑)는 이 설정과 무관하게 항상 표시됩니다.
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── 기관 선택 모달 ────────────────────────────────────────────────────────────
+// mode="add"   : 새 기관 추가 신청 → 같은 회사 + 고른 기관 조합 카드를 STEP1로 생성
+// mode="assign": 기관 미지정 카드에 기관 지정
+function AgencyPickModal({ row, mode, onClose, onPick }) {
+  const [busy, setBusy] = useState(false);
+  var isAdd = mode === "add";
+  var pick = async function(id) {
+    if (busy) return;
+    setBusy(true);
+    try { await onPick(id); } finally { setBusy(false); }
+  };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div onClick={function(e) { e.stopPropagation(); }} style={{ background: "#fff", borderRadius: 16, width: "min(420px, 96vw)", padding: 22 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>{isAdd ? "새 기관 추가 신청" : "기관 지정"}</h2>
+          <button onClick={onClose} style={{ border: "none", background: "#F0EFEB", borderRadius: 8, padding: "5px 10px", cursor: "pointer", fontSize: 13 }}>닫기</button>
+        </div>
+        <p style={{ fontSize: 12, color: "#888", margin: "0 0 14px", lineHeight: 1.6 }}>
+          <b style={{ color: "#1A1917" }}>{row.co.name}</b>
+          {isAdd
+            ? <> — 추가로 신청할 기관을 고르면 <b>STEP1 ({STAGES[0]})</b>에 새 카드가 생깁니다.<br />(현재 카드: {agencyLabel(row.card.agency_group)})</>
+            : <> — 이 카드가 어느 기관 건인지 지정합니다. 지정하면 기관현황과 자동 연동됩니다.</>}
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {AGENCY_GROUPS.map(function(g) {
+            var same = row.card.agency_group === g.id;
+            return (
+              <button key={g.id} disabled={busy || same} onClick={function() { pick(g.id); }}
+                style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 12px", borderRadius: 9, cursor: busy || same ? "default" : "pointer",
+                  border: "1px solid " + (same ? "#E8E5E0" : g.color + "44"), background: same ? "#F7F6F3" : "#fff", opacity: same ? 0.5 : 1, textAlign: "left" }}>
+                <span style={{ width: 8, height: 8, borderRadius: 99, background: g.color, flexShrink: 0 }} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: same ? "#AAA" : "#1A1917" }}>{g.label}</span>
+                {same && <span style={{ fontSize: 11, color: "#AAA", marginLeft: "auto" }}>현재 기관</span>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── '기타' 사유 지정 모달 ─────────────────────────────────────────────────────
+function OtherReasonModal({ row, onClose, onSave }) {
+  const [sel, setSel] = useState(row.card.other_reason || "");
+  const [note, setNote] = useState(row.card.other_reason_note || "");
+  const [busy, setBusy] = useState(false);
+  var save = async function(rid) {
+    if (busy) return;
+    if (rid === "etc" && !note.trim()) { alert("기타 사유를 직접 입력해 주세요."); return; }
+    setBusy(true);
+    try { await onSave(rid, note); } finally { setBusy(false); }
+  };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div onClick={function(e) { e.stopPropagation(); }} style={{ background: "#fff", borderRadius: 16, width: "min(430px, 96vw)", padding: 22 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>기타 사유 지정</h2>
+          <button onClick={onClose} style={{ border: "none", background: "#F0EFEB", borderRadius: 8, padding: "5px 10px", cursor: "pointer", fontSize: 13 }}>닫기</button>
+        </div>
+        <p style={{ fontSize: 12, color: "#888", margin: "0 0 14px", lineHeight: 1.6 }}>
+          <b style={{ color: "#1A1917" }}>{row.co.name} · {agencyLabel(row.card.agency_group)}</b> — 왜 '기타'로 분류됐는지 골라 주세요.
+          사유를 지정하면 카드에 라벨이 붙고 <b>사유별 보기</b>로 재접촉 대상을 뽑을 수 있습니다.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {OTHER_REASONS.map(function(r) {
+            var on = sel === r.id;
+            return (
+              <div key={r.id}>
+                <button onClick={function() { setSel(r.id); if (r.id !== "etc") save(r.id); }} disabled={busy}
+                  style={{ width: "100%", display: "flex", alignItems: "center", gap: 9, padding: "9px 12px", borderRadius: 9, cursor: "pointer", textAlign: "left",
+                    border: "1px solid " + (on ? r.color : "#E8E5E0"), background: on ? r.bg : "#fff" }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 99, background: r.color, flexShrink: 0 }} />
+                  <span style={{ fontSize: 13, fontWeight: 700, color: on ? r.color : "#1A1917" }}>{r.label}</span>
+                </button>
+                {r.id === "etc" && sel === "etc" && (
+                  <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                    <input value={note} onChange={function(e) { setNote(e.target.value); }} placeholder="사유를 직접 입력" maxLength={60} autoFocus
+                      style={{ flex: 1, padding: "7px 10px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, outline: "none" }} />
+                    <button disabled={busy} onClick={function() { save("etc"); }}
+                      style={{ border: "none", background: "#0369A1", color: "#fff", borderRadius: 8, padding: "7px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {row.card.other_reason && (
+          <button disabled={busy} onClick={function() { save(""); }}
+            style={{ marginTop: 12, width: "100%", border: "1px solid #E8E5E0", background: "#F7F6F3", color: "#888", borderRadius: 8, padding: "8px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>사유 지정 해제</button>
+        )}
       </div>
     </div>
   );
 }
 
 // ── 파이프라인 ────────────────────────────────────────────────────────────────
-function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, onSelect, setPipelineCards, canEditMapping }) {
+function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, onSelect, setPipelineCards, setStagnConfig, canEditMapping, myName, stagnRows }) {
   // 파이프라인 탭 진입 시 카드 최신화 (기관현황 자동동기화 결과 반영)
   useEffect(function() {
     var alive = true;
@@ -6188,6 +6580,142 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
   const [dragOverStage, setDragOverStage] = useState(null); // 드롭 대상 stage (하이라이트)
   const [selectedId, setSelectedId] = useState(null); // 클릭으로 선택한 카드 (색상 표시)
   const [showMapping, setShowMapping] = useState(false); // 상태→STEP 매핑 관리 모달
+
+  // ── 🛰 관제탑 필터/정렬 ─────────────────────────────────────────────────────
+  const [fAgency, setFAgency] = useState("전체");    // 기관별 보기 ("__none__"=기관 미지정)
+  const [fReason, setFReason] = useState("전체");    // 기타 사유별 보기 ("__unset__"=사유 미지정)
+  const [sortMode, setSortMode] = useState("기본");  // "기본" | "정체일수"
+  const [mineOnly, setMineOnly] = useState(false);   // 내 담당 건만 보기
+  const [stagnOnly, setStagnOnly] = useState(false); // 정체 카드만 모아보기
+  const [showClosed, setShowClosed] = useState(false); // 종결(부결/반려) 카드 포함
+  const [agencyPick, setAgencyPick] = useState(null); // { row, mode: "add" | "assign" }
+  const [reasonEdit, setReasonEdit] = useState(null); // 기타 사유 지정 대상 row
+
+  // 정체 알림 기준(stage_stagnation_config)을 넘긴 카드 id — 알림 기능과 같은 기준을 공유
+  const stagnIds = useMemo(function() {
+    var s = new Set();
+    (stagnRows || []).forEach(function(r) { s.add(r.card.id); });
+    return s;
+  }, [stagnRows]);
+
+  // 보드에 실제로 그릴 카드 (관제탑 필터 + 정렬 적용)
+  const visibleRows = useMemo(function() {
+    var out = (cardRows || []).filter(function(r) {
+      var card = r.card;
+      if (!showClosed && card.closed_at) return false;                       // 종결 카드는 기본 숨김
+      if (fAgency !== "전체") {
+        if (fAgency === "__none__") { if (card.agency_group) return false; }
+        else if (card.agency_group !== fAgency) return false;
+      }
+      if (fReason !== "전체") {
+        if (card.stage !== "기타") return false;
+        if (fReason === "__unset__") { if (card.other_reason) return false; }
+        else if (card.other_reason !== fReason) return false;
+      }
+      if (mineOnly && myName) {
+        var asg = (r.co.assignee || "").split(",").map(function(x) { return x.trim(); });
+        if (asg.indexOf(myName) < 0) return false;
+      }
+      if (stagnOnly && !stagnIds.has(card.id)) return false;
+      return true;
+    });
+    if (sortMode === "정체일수") {
+      out = out.slice().sort(function(a, b) { return daysSince(b.card.stage_changed_at) - daysSince(a.card.stage_changed_at); });
+    }
+    return out;
+  }, [cardRows, showClosed, fAgency, fReason, mineOnly, myName, stagnOnly, stagnIds, sortMode]);
+
+  var filterOn = fAgency !== "전체" || fReason !== "전체" || mineOnly || stagnOnly || showClosed || sortMode !== "기본" || filterAssignee !== "전체";
+  var resetFilters = function() {
+    setFAgency("전체"); setFReason("전체"); setMineOnly(false); setStagnOnly(false);
+    setShowClosed(false); setSortMode("기본"); setFilterAssignee("전체");
+  };
+  // 보드 전체 기준 요약(필터 무관) — 관제탑 상단 배지
+  var closedCount = (cardRows || []).filter(function(r) { return !!r.card.closed_at; }).length;
+  var reviewCount = (cardRows || []).filter(function(r) { return r.card.needs_review && !r.card.closed_at; }).length;
+  var noAgencyCount = (cardRows || []).filter(function(r) { return !r.card.agency_group && !r.card.closed_at; }).length;
+  var reasonUnsetCount = (cardRows || []).filter(function(r) { return r.card.stage === "기타" && !r.card.other_reason && !r.card.closed_at; }).length;
+
+  // 로컬 카드 상태 갱신 (DB 반영 후 화면 즉시 동기화)
+  var patchCard = function(id, patch) {
+    if (setPipelineCards) setPipelineCards(function(prev) { return prev.map(function(x) { return x.id === id ? Object.assign({}, x, patch) : x; }); });
+  };
+
+  // 같은 회사에 이미 그 기관 카드가 있는지 (필터로 화면에서 빠졌을 수도 있어 DB로 확인)
+  var findDupCard = async function(card, agencyId) {
+    var q = supabase.from("pipeline_cards").select("id").eq("agency_group", agencyId);
+    q = card.company_id ? q.eq("company_id", card.company_id) : q.eq("business_name", card.business_name);
+    var r = await q;
+    return (r.data || []).length > 0;
+  };
+
+  // ① 새 기관 추가 신청 — 같은 회사 + 새 기관 조합 카드를 STEP1로 생성 (폐지된 STEP11/12 대체)
+  var addAgencyCard = async function(row, agencyId) {
+    var card = row.card;
+    if (await findDupCard(card, agencyId)) { alert("'" + row.co.name + " · " + agencyLabel(agencyId) + "' 카드가 이미 있습니다."); return; }
+    var nowIso = new Date().toISOString();
+    var ins = await supabase.from("pipeline_cards").insert({
+      company_id: card.company_id || null, business_name: card.business_name || row.co.name || "",
+      agency_group: agencyId, stage: STAGES[0], sync_mode: "auto", needs_mapping: false, stage_changed_at: nowIso,
+    }).select().single();
+    if (ins.error || !ins.data) { alert("카드 생성 실패: " + (ins.error && ins.error.message)); return; }
+    if (setPipelineCards) setPipelineCards(function(prev) { return prev.concat([ins.data]); });
+    setAgencyPick(null);
+    alert("'" + row.co.name + " · " + agencyLabel(agencyId) + "' 카드를 STEP1(" + STAGES[0] + ")에 만들었습니다.");
+  };
+
+  // ② 기관 미지정 카드에 기관 지정
+  var assignAgency = async function(row, agencyId) {
+    var card = row.card;
+    if (await findDupCard(card, agencyId)) { alert("'" + row.co.name + " · " + agencyLabel(agencyId) + "' 카드가 이미 있어요. 이 미지정 카드는 삭제하거나 다른 기관을 골라 주세요."); return; }
+    var upd = { agency_group: agencyId, updated_at: new Date().toISOString() };
+    var r = await supabase.from("pipeline_cards").update(upd).eq("id", card.id);
+    if (r.error) { alert("기관 지정 실패: " + r.error.message); return; }
+    patchCard(card.id, upd);
+    setAgencyPick(null);
+  };
+
+  // ③ 기타 사유 저장/해제
+  var saveOtherReason = async function(row, reasonId, note) {
+    var nowIso = new Date().toISOString();
+    var upd = {
+      other_reason: reasonId || null,
+      other_reason_note: reasonId === "etc" ? (note || "").trim() : null,
+      other_reason_at: reasonId ? nowIso : null,
+      updated_at: nowIso,
+    };
+    var r = await supabase.from("pipeline_cards").update(upd).eq("id", row.card.id);
+    if (r.error) { alert("사유 저장 실패: " + r.error.message); return; }
+    patchCard(row.card.id, upd);
+    setReasonEdit(null);
+  };
+
+  // ④ 부결/반려 종결 처리 ↔ 해제 (종결 카드는 보드에서 숨기고 기업 상세 이력으로만 남김)
+  var toggleClosed = async function(e, row) {
+    e.stopPropagation();
+    var card = row.card, label = row.co.name + " · " + agencyLabel(card.agency_group);
+    var upd;
+    if (card.closed_at) {
+      if (!window.confirm("'" + label + "' 종결 처리를 해제하고 보드에 다시 표시할까요?")) return;
+      upd = { closed_at: null, closed_by: null, updated_at: new Date().toISOString() };
+    } else {
+      if (!window.confirm("'" + label + "'를 종결 처리할까요?\n(보드에서 숨겨지고 기업 상세의 기관진행 이력에는 계속 남습니다)")) return;
+      upd = { closed_at: new Date().toISOString(), closed_by: myName || null, updated_at: new Date().toISOString() };
+    }
+    var r = await supabase.from("pipeline_cards").update(upd).eq("id", card.id);
+    if (r.error) { alert("처리 실패: " + r.error.message); return; }
+    patchCard(card.id, upd);
+  };
+
+  // ⑤ 폐지 단계에서 옮겨온 '확인 필요' 표시 해제
+  var clearNeedsReview = async function(e, row) {
+    e.stopPropagation();
+    if (!window.confirm("'" + row.co.name + "' 카드의 '확인 필요' 표시를 해제할까요?\n(단계가 맞는지 확인한 뒤 눌러 주세요)")) return;
+    var upd = { needs_review: false, needs_review_note: null, updated_at: new Date().toISOString() };
+    var r = await supabase.from("pipeline_cards").update(upd).eq("id", row.card.id);
+    if (r.error) { alert("해제 실패: " + r.error.message); return; }
+    patchCard(row.card.id, upd);
+  };
 
   // 카드 드래그 시작 (row = { card, co })
   var handleDragStart = function(e, row) {
@@ -6230,12 +6758,20 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
     if (!row) return;
     var label = row.co.name + " · " + agencyLabel(row.card.agency_group);
     if (!confirm("'" + label + "' 단계를 '" + oldStage + "' → '" + newStage + "'(으)로 변경할까요?\n(수동 이동 → 이후 기관현황이 바뀌어도 자동으로 덮어쓰지 않습니다)")) return;
-    var r = await supabase.from("pipeline_cards").update({ stage: newStage, sync_mode: "manual", needs_mapping: false, updated_at: new Date().toISOString() }).eq("id", droppedId);
+    var nowIso = new Date().toISOString();
+    var upd = { stage: newStage, sync_mode: "manual", needs_mapping: false, stage_changed_at: nowIso, alerted_at: null, updated_at: nowIso };
+    // 단계를 벗어나면 그 단계 전용 표시는 정리 — 기타 사유 / 부결 종결 / 재배치 확인
+    if (oldStage === "기타" && newStage !== "기타") { upd.other_reason = null; upd.other_reason_note = null; upd.other_reason_at = null; }
+    if (oldStage === "부결/반려" && newStage !== "부결/반려") { upd.closed_at = null; upd.closed_by = null; }
+    if (row.card.needs_review) { upd.needs_review = false; upd.needs_review_note = null; }
+    var r = await supabase.from("pipeline_cards").update(upd).eq("id", droppedId);
     if (r.error) { alert("단계 변경 실패: " + r.error.message); return; }
+    // 수동 이동 → 이번 정체구간 알림 해제(연결 업무노트 완료 처리)
+    if (row.card.alert_note_id) { try { await supabase.from("work_notes").update({ is_done: true }).eq("id", row.card.alert_note_id); } catch (e3) {} }
     if (setPipelineCards) {
       setPipelineCards(function(prev) {
         return prev.map(function(x) {
-          if (x.id === droppedId) return Object.assign({}, x, { stage: newStage, sync_mode: "manual", needs_mapping: false });
+          if (x.id === droppedId) return Object.assign({}, x, upd, { alert_note_id: null });
           return x;
         });
       });
@@ -6275,19 +6811,64 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
           <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>회사+기관 조합 카드 · <span style={{ color: "#4338CA", fontWeight: 600 }}>카드를 드래그해서 단계 변경</span></p>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <span style={{ fontSize: 12, color: "#888" }}>표시 <b style={{ color: "#1A1917" }}>{visibleRows.length}</b> / 전체 {(cardRows || []).length}장</span>
           <button onClick={function() { setShowMapping(true); }}
             style={{ padding: "7px 12px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 13, background: "#fff", cursor: "pointer", fontWeight: 600, color: "#4338CA" }}>⚙ 상태매핑</button>
-          <select value={filterAssignee} onChange={e => setFilterAssignee(e.target.value)}
-            style={{ padding: "7px 12px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 13, background: "#fff", cursor: "pointer" }}>
-            {assignees.map(a => <option key={a}>{a}</option>)}
-          </select>
         </div>
       </div>
-      {showMapping && <MappingModal onClose={function() { setShowMapping(false); }} setPipelineCards={setPipelineCards} canEdit={!!canEditMapping} />}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8, alignItems: "start" }}>
+
+      {/* ── 🛰 관제탑: 필터 · 정렬 ─────────────────────────────────────────── */}
+      <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, padding: "10px 14px", marginBottom: 14, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, fontWeight: 800, color: "#4338CA", marginRight: 2 }}>🛰 관제탑</span>
+        <select value={filterAssignee} onChange={e => setFilterAssignee(e.target.value)} title="담당자별 보기"
+          style={{ padding: "6px 10px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 12, background: "#fff", cursor: "pointer" }}>
+          {assignees.map(a => <option key={a} value={a}>{a === "전체" ? "담당자 전체" : a}</option>)}
+        </select>
+        <select value={fAgency} onChange={e => setFAgency(e.target.value)} title="기관별 보기"
+          style={{ padding: "6px 10px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 12, background: "#fff", cursor: "pointer" }}>
+          <option value="전체">기관 전체</option>
+          {AGENCY_GROUPS.map(function(g) { return <option key={g.id} value={g.id}>{g.label}</option>; })}
+          <option value="__none__">기관 미지정{noAgencyCount ? " (" + noAgencyCount + ")" : ""}</option>
+        </select>
+        <select value={fReason} onChange={e => setFReason(e.target.value)} title="기타 사유별 보기 (재접촉 대상 파악)"
+          style={{ padding: "6px 10px", border: "1px solid " + (fReason !== "전체" ? "#FDE68A" : "#E8E5E0"), borderRadius: 7, fontSize: 12, background: fReason !== "전체" ? "#FFFBEB" : "#fff", cursor: "pointer" }}>
+          <option value="전체">기타 사유 전체</option>
+          {OTHER_REASONS.map(function(r) { return <option key={r.id} value={r.id}>{"기타 · " + r.short}</option>; })}
+          <option value="__unset__">{"기타 · 사유 미지정" + (reasonUnsetCount ? " (" + reasonUnsetCount + ")" : "")}</option>
+        </select>
+        <select value={sortMode} onChange={e => setSortMode(e.target.value)} title="카드 정렬"
+          style={{ padding: "6px 10px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 12, background: "#fff", cursor: "pointer" }}>
+          <option value="기본">정렬: 기본</option>
+          <option value="정체일수">정렬: 정체일수 순</option>
+        </select>
+        {[
+          { on: mineOnly, set: setMineOnly, label: "🙋 내 담당만", title: myName ? myName + " 님 담당 카드만 표시" : "로그인 후 사용", disabled: !myName, c: "#4338CA", bg: "#EEF2FF", bd: "#C7D2FE" },
+          { on: stagnOnly, set: setStagnOnly, label: "🚧 정체 카드만" + (stagnIds.size ? " (" + stagnIds.size + ")" : ""), title: "단계별 기준일수를 넘긴 카드만 모아보기", disabled: false, c: "#B45309", bg: "#FEF3C7", bd: "#FDE68A" },
+          { on: showClosed, set: setShowClosed, label: "🗄 종결 포함" + (closedCount ? " (" + closedCount + ")" : ""), title: "종결 처리한 부결/반려 카드도 보드에 표시", disabled: false, c: "#6B7280", bg: "#F3F4F6", bd: "#D1D5DB" },
+        ].map(function(t, i) {
+          return (
+            <button key={i} title={t.title} disabled={t.disabled} onClick={function() { t.set(function(p) { return !p; }); }}
+              style={{ padding: "6px 11px", borderRadius: 99, fontSize: 12, fontWeight: 700, cursor: t.disabled ? "default" : "pointer",
+                border: "1px solid " + (t.on ? t.bd : "#E8E5E0"), background: t.on ? t.bg : "#fff", color: t.disabled ? "#CCC" : (t.on ? t.c : "#888") }}>{t.label}</button>
+          );
+        })}
+        {reviewCount > 0 && (
+          <span title="폐지된 STEP11/12에서 옮겨온 카드 — 담당자가 단계를 확인해 주세요"
+            style={{ fontSize: 11, fontWeight: 800, color: "#B91C1C", background: "#FEE2E2", border: "1px solid #FECACA", borderRadius: 99, padding: "5px 10px" }}>⚠ 확인 필요 {reviewCount}건</span>
+        )}
+        {filterOn && <button onClick={resetFilters}
+          style={{ marginLeft: "auto", padding: "6px 11px", borderRadius: 7, fontSize: 12, border: "1px solid #E8E5E0", background: "#F7F6F3", color: "#666", cursor: "pointer", fontWeight: 600 }}>필터 초기화</button>}
+      </div>
+
+      {showMapping && <MappingModal onClose={function() { setShowMapping(false); }} setPipelineCards={setPipelineCards} setStagnConfig={setStagnConfig} canEdit={!!canEditMapping} />}
+      {agencyPick && <AgencyPickModal row={agencyPick.row} mode={agencyPick.mode} onClose={function() { setAgencyPick(null); }}
+        onPick={function(agId) { return agencyPick.mode === "add" ? addAgencyCard(agencyPick.row, agId) : assignAgency(agencyPick.row, agId); }} />}
+      {reasonEdit && <OtherReasonModal row={reasonEdit} onClose={function() { setReasonEdit(null); }}
+        onSave={function(rid, note) { return saveOtherReason(reasonEdit, rid, note); }} />}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8, alignItems: "start" }}>
         {STAGES.map((stage, si) => {
           const c = STAGE_COLORS[stage];
-          const items = cardRows.filter(r => r.card.stage === stage);
+          const items = visibleRows.filter(r => r.card.stage === stage);
           // 평균 체류 일수 계산 (회사 단위 stagnant_days 근사)
           var avgStay = 0;
           if (items.length > 0) {
@@ -6295,8 +6876,9 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
             avgStay = Math.round(totalStay / items.length);
           }
           // 다음 단계로의 전환율 (단순화: 현재 단계 + 이후 단계 / 전체)
-          var nextStages = STAGES.slice(si + 1);
-          var afterCount = cardRows.filter(function(r) { return nextStages.includes(r.card.stage); }).length;
+          // 종착 단계(부결/반려·기타)는 '다음 단계'로 치지 않음
+          var nextStages = STAGES.slice(si + 1).filter(function(s) { return s !== "부결/반려" && s !== "기타"; });
+          var afterCount = visibleRows.filter(function(r) { return nextStages.includes(r.card.stage); }).length;
           var conversionPct = items.length + afterCount > 0 ? Math.round(afterCount / (items.length + afterCount) * 100) : 0;
           var isDropTarget = dragOverStage === stage && draggingFrom !== stage;
           return (
@@ -6325,6 +6907,12 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
                   var isDragging = draggingId === card.id;
                   var agColor = agencyColor(card.agency_group);
                   var isUnassigned = !card.agency_group;
+                  var stagnDays = daysSince(card.stage_changed_at); // 이 단계 정체 일수
+                  var stagnHot = stagnDays >= 7, stagnWarn = stagnDays >= 3;
+                  var rMeta = card.stage === "기타" ? otherReasonMeta(card.other_reason) : null;
+                  var dormant = isDormantCard(card);          // 폐업·연락두절 6개월 경과 → 흐리게
+                  var isClosed = !!card.closed_at;            // 종결 처리된 부결/반려
+                  var needsReview = !!card.needs_review;      // 폐지 단계에서 옮겨온 카드
                   return (
                     <div key={card.id}
                       draggable={true}
@@ -6337,20 +6925,24 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
                         onSelect(co);
                       }}
                       style={{
-                        background: isSelected ? "#EEF2FF" : (co.stagnant_days >= 7 ? "#FEF2F2" : "#F7F6F3"),
+                        background: isSelected ? "#EEF2FF" : (stagnHot ? "#FEF2F2" : (isUnassigned ? "#FFFBEB" : "#F7F6F3")),
                         borderRadius: 10, padding: "10px 12px", cursor: isDragging ? "grabbing" : "grab",
-                        border: isSelected ? "2px solid #4338CA" : (co.stagnant_days >= 7 ? "1px solid #FECACA" : "1px solid transparent"),
-                        borderLeftWidth: 3, borderLeftStyle: "solid", borderLeftColor: isUnassigned ? "#D1D5DB" : agColor,
-                        opacity: isDragging ? 0.4 : 1,
+                        border: isSelected ? "2px solid #4338CA"
+                          : needsReview ? "2px solid #F87171"
+                          : isUnassigned ? "2px solid #F59E0B"          // 기관 미지정 → 눈에 띄는 노란 테두리
+                          : (stagnHot ? "1px solid #FECACA" : "1px solid transparent"),
+                        borderLeftWidth: 3, borderLeftStyle: "solid", borderLeftColor: isUnassigned ? "#F59E0B" : agColor,
+                        opacity: isDragging ? 0.4 : (dormant ? 0.45 : (isClosed ? 0.6 : 1)),
+                        filter: dormant ? "grayscale(0.7)" : "none",     // 장기 방치(6개월+) 시각 구분
                         transform: isDragging ? "scale(0.96)" : "scale(1)",
                         transition: "opacity 0.15s, transform 0.15s, border 0.15s, background 0.15s",
                         userSelect: "none",
                       }}
-                      onMouseEnter={e => { if (!isSelected && !isDragging) e.currentTarget.style.background = co.stagnant_days >= 7 ? "#FEE2E2" : "#EDEDE9"; }}
-                      onMouseLeave={e => { if (!isSelected && !isDragging) e.currentTarget.style.background = co.stagnant_days >= 7 ? "#FEF2F2" : "#F7F6F3"; }}>
+                      onMouseEnter={e => { if (!isSelected && !isDragging) e.currentTarget.style.background = stagnHot ? "#FEE2E2" : "#EDEDE9"; }}
+                      onMouseLeave={e => { if (!isSelected && !isDragging) e.currentTarget.style.background = stagnHot ? "#FEF2F2" : "#F7F6F3"; }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
                         <span style={{ fontSize: 12, fontWeight: 700, color: "#1A1917", lineHeight: 1.3 }}>{co.name}</span>
-                        {co.stagnant_days >= 7 && <span style={{ fontSize: 9, color: "#DC2626", fontWeight: 800, background: "#FEE2E2", padding: "2px 5px", borderRadius: 4, flexShrink: 0, marginLeft: 4 }}>⚠{co.stagnant_days}일</span>}
+                        {stagnWarn && <span title={"현재 단계 " + stagnDays + "일째 정체"} style={{ fontSize: 9, color: stagnHot ? "#DC2626" : "#B45309", fontWeight: 800, background: stagnHot ? "#FEE2E2" : "#FEF3C7", padding: "2px 5px", borderRadius: 4, flexShrink: 0, marginLeft: 4 }}>{(stagnHot ? "⚠ " : "") + stagnDays + "일째"}</span>}
                       </div>
                       <div style={{ display: "flex", gap: 5, marginBottom: 6, alignItems: "center", flexWrap: "wrap" }}>
                         <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 99, background: isUnassigned ? "#F3F4F6" : (agColor + "1A"), color: isUnassigned ? "#6B7280" : agColor, fontWeight: 700 }}>{agencyLabel(card.agency_group)}</span>
@@ -6368,6 +6960,48 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
                           <div style={{ height: 3, background: docPct === 100 ? "#15803D" : c.text, borderRadius: 99, width: docPct + "%", transition: "width 0.3s" }} />
                         </div>
                         <span style={{ fontSize: 9, color: "#AAA", flexShrink: 0 }}>서류 {docPct}%</span>
+                      </div>
+
+                      {/* 폐지 단계(STEP11/12)에서 옮겨온 카드 — 담당자 확인 후 재배치 */}
+                      {needsReview && (
+                        <div style={{ marginTop: 6, background: "#FEE2E2", border: "1px solid #FECACA", borderRadius: 6, padding: "5px 7px" }}>
+                          <div style={{ fontSize: 9, fontWeight: 800, color: "#B91C1C", lineHeight: 1.4 }}>⚠ 확인 필요 — 단계 재배치</div>
+                          <div style={{ fontSize: 9, color: "#991B1B", lineHeight: 1.4, marginTop: 1 }}>{card.needs_review_note || "폐지된 단계에서 옮겨온 카드입니다."}</div>
+                          <button onClick={function(e) { clearNeedsReview(e, row); }}
+                            style={{ marginTop: 4, fontSize: 9, fontWeight: 700, color: "#B91C1C", background: "#fff", border: "1px solid #FECACA", borderRadius: 5, padding: "2px 7px", cursor: "pointer" }}>확인 완료</button>
+                        </div>
+                      )}
+
+                      {/* 카드 액션 — 기관 지정 / 새 기관 추가 / 기타 사유 / 종결 처리 */}
+                      <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
+                        {isUnassigned ? (
+                          <button title="이 카드에 기관을 지정합니다" onClick={function(e) { e.stopPropagation(); setAgencyPick({ row: row, mode: "assign" }); }}
+                            style={{ fontSize: 9, fontWeight: 800, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 5, padding: "3px 7px", cursor: "pointer" }}>🏛 기관 지정</button>
+                        ) : (
+                          <button title="같은 회사의 다른 기관 조합 카드를 STEP1에 새로 만듭니다" onClick={function(e) { e.stopPropagation(); setAgencyPick({ row: row, mode: "add" }); }}
+                            style={{ fontSize: 9, fontWeight: 700, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 5, padding: "3px 7px", cursor: "pointer" }}>＋ 새 기관 추가 신청</button>
+                        )}
+
+                        {card.stage === "기타" && (rMeta ? (
+                          <span title={"사유: " + rMeta.label + (card.other_reason_note ? " — " + card.other_reason_note : "") + " (클릭하면 변경)"}
+                            onClick={function(e) { e.stopPropagation(); setReasonEdit(row); }}
+                            style={{ fontSize: 9, fontWeight: 800, color: rMeta.color, background: rMeta.bg, border: "1px solid " + rMeta.color + "55", borderRadius: 5, padding: "3px 7px", cursor: "pointer" }}>
+                            {rMeta.short}{card.other_reason === "etc" && card.other_reason_note ? " · " + card.other_reason_note.slice(0, 8) : ""}
+                          </span>
+                        ) : (
+                          <button title="이 카드가 '기타'로 분류된 사유를 지정합니다" onClick={function(e) { e.stopPropagation(); setReasonEdit(row); }}
+                            style={{ fontSize: 9, fontWeight: 800, color: "#B45309", background: "#FEF3C7", border: "1px dashed #F59E0B", borderRadius: 5, padding: "3px 7px", cursor: "pointer" }}>? 사유 지정</button>
+                        ))}
+                        {dormant && <span title={"'" + (rMeta ? rMeta.short : "") + "' 지정 후 " + daysSince(card.other_reason_at || card.stage_changed_at) + "일 경과"}
+                          style={{ fontSize: 9, fontWeight: 800, color: "#6B7280", background: "#E5E7EB", borderRadius: 5, padding: "3px 7px" }}>💤 장기 방치</span>}
+
+                        {card.stage === "부결/반려" && (isClosed ? (
+                          <button title={"종결 처리됨" + (card.closed_by ? " (" + card.closed_by + ")" : "") + " — 클릭하면 보드로 복원"} onClick={function(e) { toggleClosed(e, row); }}
+                            style={{ fontSize: 9, fontWeight: 700, color: "#6B7280", background: "#F3F4F6", border: "1px solid #D1D5DB", borderRadius: 5, padding: "3px 7px", cursor: "pointer" }}>🗄 종결됨 · 복원</button>
+                        ) : (
+                          <button title="보드에서 숨기고 기업 상세 이력으로만 남깁니다 (재도전 여지가 있으면 그대로 두세요)" onClick={function(e) { toggleClosed(e, row); }}
+                            style={{ fontSize: 9, fontWeight: 700, color: "#DC2626", background: "#fff", border: "1px solid #FECACA", borderRadius: 5, padding: "3px 7px", cursor: "pointer" }}>종결 처리</button>
+                        ))}
                       </div>
                     </div>
                   );
@@ -7352,7 +7986,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
           {creditFilter && <button onClick={function() { setCreditFilter(""); }} style={{ border: "none", background: "transparent", color: "#999", cursor: "pointer", fontSize: 14, padding: "0 4px" }}>✕</button>}
         </div>
         {[
-          { v: filterStage, set: setFilterStage, opts: ["전체", ...STAGES] },
+          { v: filterStage, set: setFilterStage, opts: ["전체", ...COMPANY_STAGES] },
           { v: filterAssignee, set: setFilterAssignee, opts: assignees },
           { v: filterType, set: setFilterType, opts: ["전체", "법인", "개인"] },
           { v: filterAgency, set: setFilterAgency, opts: AGENCY_FILTER_OPTS },
@@ -8508,7 +9142,8 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           </div>
           {/* 단계 변경 */}
           <div style={{ display: "flex", gap: 4, marginTop: 14, flexWrap: "wrap" }}>
-            {STAGES.map(s => (
+            {/* 폐지 단계(추가 진행 예정/중)는 구 데이터가 남아 있을 때만 노출 */}
+            {COMPANY_STAGES.filter(s => !RETIRED_STAGES.includes(s) || data.stage === s).map(s => (
               <button key={s} onClick={() => setData(p => ({ ...p, stage: s }))}
                 style={{ fontSize: 11, padding: "5px 10px", borderRadius: 99, border: `1px solid ${s === data.stage ? STAGE_COLORS[s].text : "#E8E5E0"}`, background: s === data.stage ? STAGE_COLORS[s].text : "#fff", color: s === data.stage ? "#fff" : "#888", cursor: "pointer", fontWeight: s === data.stage ? 700 : 400 }}>
                 {s}
@@ -9394,13 +10029,22 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 <div style={{ background: "#F7F6F3", borderRadius: 12, padding: "12px 14px", marginBottom: 16 }}>
                   <div style={{ fontSize: 12, fontWeight: 800, color: "#555", marginBottom: 8 }}>📊 파이프라인 단계 (기관별)</div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    {pipeCards.slice().sort(function(a, b) { return STAGES.indexOf(a.stage) - STAGES.indexOf(b.stage); }).map(function(pc) {
+                    {/* 종결(부결/반려) 카드는 보드에서만 숨기고 여기 이력에는 계속 남김 */}
+                    {pipeCards.slice().sort(function(a, b) {
+                      if (!!a.closed_at !== !!b.closed_at) return a.closed_at ? 1 : -1;
+                      return STAGES.indexOf(a.stage) - STAGES.indexOf(b.stage);
+                    }).map(function(pc) {
                       var si = STAGES.indexOf(pc.stage);
                       var scc = STAGE_COLORS[pc.stage] || {};
+                      var pcR = pc.stage === "기타" ? otherReasonMeta(pc.other_reason) : null;
                       return (
-                        <div key={pc.id} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <div key={pc.id} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", opacity: pc.closed_at ? 0.55 : 1 }}>
                           <span style={{ fontSize: 11, fontWeight: 800, minWidth: 74, color: pc.agency_group ? agencyColor(pc.agency_group) : "#9CA3AF" }}>{agencyLabel(pc.agency_group)}</span>
-                          <span style={{ fontSize: 10, fontWeight: 700, color: scc.text, background: scc.bg, border: "1px solid " + (scc.border || "#E8E5E0"), padding: "2px 8px", borderRadius: 99 }}>{"STEP" + (si + 1) + " " + pc.stage}</span>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: scc.text, background: scc.bg, border: "1px solid " + (scc.border || "#E8E5E0"), padding: "2px 8px", borderRadius: 99 }}>{(si >= 0 ? "STEP" + (si + 1) + " " : "") + pc.stage}</span>
+                          {pcR && <span style={{ fontSize: 9, fontWeight: 800, color: pcR.color, background: pcR.bg, padding: "2px 7px", borderRadius: 99 }}>{pcR.short}{pc.other_reason === "etc" && pc.other_reason_note ? " · " + pc.other_reason_note : ""}</span>}
+                          {pc.closed_at && <span title={"종결 처리" + (pc.closed_by ? " · " + pc.closed_by : "") + " (" + new Date(pc.closed_at).toLocaleDateString("ko-KR") + ")"}
+                            style={{ fontSize: 9, fontWeight: 800, color: "#6B7280", background: "#F3F4F6", border: "1px solid #D1D5DB", padding: "1px 7px", borderRadius: 99 }}>🗄 종결</span>}
+                          {pc.needs_review && <span style={{ fontSize: 9, color: "#B91C1C", fontWeight: 800 }}>⚠ 확인 필요</span>}
                           {pc.sync_mode === "manual"
                             ? <span style={{ fontSize: 9, color: "#6D28D9", fontWeight: 700 }}>📌 수동</span>
                             : <span style={{ fontSize: 9, color: "#059669", fontWeight: 700 }}>🔄 자동</span>}
