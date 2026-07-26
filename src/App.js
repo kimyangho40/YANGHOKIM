@@ -9093,6 +9093,97 @@ function MembersView({ profiles, onRefresh, showToast }) {
 // initialTab: 열릴 때 처음 보여줄 탭. 기업목록 "작업" 버튼이 용도별로 다른 탭을 지정한다
 // (✏️ 수정 → "info"(기본정보, 입력폼), 💬 상담메모 → "history"(이슈·액션 · 소통내역)).
 // 지정 안 하면 기존과 동일하게 "info".
+// ── 🔍 확대 입력 모드 ─────────────────────────────────────────────────────────
+// 사이드패널은 폭이 좁아 항목이 많은 섹션은 입력이 불편하다.
+// "크게 보기"를 누르면 그 섹션만 화면 중앙 큰 창으로 열어 넉넉하게 입력한다.
+//  · 바깥 클릭으로 닫히지 않음(오버레이에 onClick을 두지 않음) — 실수로 입력이 날아가는 것 방지
+//  · 창을 연 뒤 값이 실제로 바뀐 경우에만 닫기 전 재확인(공용 confirmDiscard) · ESC도 같은 경로
+//  · 입력은 부모(CompanyModal) 상태를 직접 고치므로 창을 닫으면 사이드패널에 그대로 반영된다
+//  · 좁은 화면(모바일)은 사이드패널이 이미 좁아 확대가 늘 필요하므로, 그 섹션의 입력칸을 터치하는 순간
+//    큰 창이 자동으로 열린다(전체화면). 즉 모바일에서는 좁은 칸에 입력할 일이 없다.
+//    섹션 3개를 처음부터 동시에 띄우면 오버레이가 3중으로 겹치므로 '만지는 섹션만' 연다.
+//    인라인 본문에 CSS zoom을 걸면 폭이 부모를 넘쳐 가로 스크롤이 생기므로 쓰지 않는다.
+const ZOOM_NARROW_PX = 900;
+function ZoomSection({ title, hint, value, onSave, children }) {
+  const [open, setOpen] = useState(false);
+  const [narrow, setNarrow] = useState(function() {
+    return typeof window !== "undefined" && window.innerWidth < ZOOM_NARROW_PX;
+  });
+  const snapRef = useRef("");
+
+  useEffect(function() {
+    var onResize = function() { setNarrow(window.innerWidth < ZOOM_NARROW_PX); };
+    window.addEventListener("resize", onResize);
+    return function() { window.removeEventListener("resize", onResize); };
+  }, []);
+
+  var snapshot = function() {
+    try { return JSON.stringify(value === undefined ? null : value); } catch (e) { return ""; }
+  };
+  var openZoom = function() { snapRef.current = snapshot(); setOpen(true); };
+  var closeZoom = function() {
+    if (!confirmDiscard(snapRef.current !== snapshot())) return;
+    setOpen(false);
+  };
+  var closeRef = useRef(closeZoom);
+  closeRef.current = closeZoom;
+
+  useEffect(function() {
+    if (!open) return;
+    var onKey = function(e) { if (e.key === "Escape") { e.stopPropagation(); closeRef.current(); } };
+    window.addEventListener("keydown", onKey, true);
+    return function() { window.removeEventListener("keydown", onKey, true); };
+  }, [open]);
+
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7, marginTop: 6, flexWrap: "wrap" }}>
+        {title && <div style={{ fontSize: 12, fontWeight: 700, color: "#555" }}>{title}</div>}
+        {hint && <div style={{ fontSize: 10.5, color: "#AAA" }}>{hint}</div>}
+        <button onClick={openZoom} title="크게 보기 — 화면 중앙의 큰 창에서 넉넉하게 입력합니다"
+          style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, background: narrow ? "#EEF2FF" : "#fff", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 7, padding: narrow ? "6px 12px" : "4px 10px", fontSize: narrow ? 12 : 11, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>
+          🔍 크게 보기
+        </button>
+      </div>
+
+      {open ? (
+        // 큰 창에 같은 입력칸이 있으므로 인라인은 자리표시만 (입력칸 중복 렌더 방지)
+        <div style={{ background: "#F7F6F3", border: "1px dashed #C7D2FE", borderRadius: 8, padding: "16px 12px", textAlign: "center", color: "#4338CA", fontSize: 12, fontWeight: 700, marginBottom: 14 }}>
+          🔍 큰 창에서 편집 중…
+        </div>
+      ) : (
+        // 모바일: 좁은 칸에 입력하지 않도록, 입력칸을 만지면 바로 큰 창으로 전환
+        <div onFocusCapture={narrow ? openZoom : undefined}>{children}</div>
+      )}
+
+      {open && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1200, display: "flex", alignItems: "center", justifyContent: "center", padding: narrow ? 0 : 24 }}>
+          <div style={{ background: "#fff", borderRadius: narrow ? 0 : 16, width: narrow ? "100%" : "min(920px, 96vw)",
+            height: narrow ? "100%" : "auto", maxHeight: narrow ? "100%" : "92vh",
+            display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+            <div style={{ padding: "14px 18px", borderBottom: "1px solid #E8E5E0", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", flexShrink: 0 }}>
+              <div style={{ fontSize: 16, fontWeight: 800 }}>{title || "확대 입력"}</div>
+              {hint && <div style={{ fontSize: 12, color: "#888" }}>{hint}</div>}
+              <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                {onSave && (
+                  <button onClick={function() { onSave(); setOpen(false); }}
+                    style={{ background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>저장하고 닫기</button>
+                )}
+                <button onClick={closeZoom}
+                  style={{ border: "1px solid #E8E5E0", background: "#F7F6F3", color: "#555", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>닫기</button>
+              </div>
+            </div>
+            {/* zoom 배율로 인라인 스타일에 하드코딩된 글자 크기·여백까지 한 번에 키운다 */}
+            <div style={{ flex: 1, overflowY: "auto", padding: "20px 22px 28px", zoom: "1.25" }}>
+              {children}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAgencyRegistered, companies, initialTab }) {
   const [tab, setTab] = useState(initialTab || "info");
   const [prevTab, setPrevTab] = useState(initialTab || "info");
@@ -10268,6 +10359,9 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           {tab === "bizinfo" && (
             <div>
               {/* 💹 소진공·중진공 재무비율 자동 계산 (부채총계/자본총계/영업이익/이자비용 기반, 실시간) */}
+              <ZoomSection title="💹 재무비율 자동 계산" hint="부채비율·이자보상배율 직접 입력"
+                value={{ ci: data.company_info, dr: data.debt_ratio, icr: data.interest_coverage_ratio }}
+                onSave={function() { onSave(data); }}>
               {(function() {
                 var fr = computeFinanceRatios(data);
                 var fitStyle = function(fit) {
@@ -10278,7 +10372,6 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 var sj = fitStyle(fr.sojinFit), jj = fitStyle(fr.jungjinFit);
                 return (
                   <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 4 }}>💹 재무비율 자동 계산</div>
                     <div style={{ fontSize: 10, color: "#94A3B8", marginBottom: 10 }}>기업현황표 값으로 자동 계산 · 값이 없으면 아래 칸에 직접 입력하면 판정에 바로 반영</div>
                     {(function() {
                       var srcBadge = function(src) {
@@ -10333,6 +10426,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   </div>
                 );
               })()}
+              </ZoomSection>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 8, flexWrap: "wrap" }}>
                 <div style={{ fontSize: 11, color: "#888" }}>기업현황표에서 자동 추출 · 직접 수정 가능</div>
                 <div style={{ display: "flex", gap: 6 }}>
@@ -10347,7 +10441,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               </div>
 
               {/* 기대출 내역 표 */}
-              <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 7 }}>💰 기대출 내역</div>
+              <ZoomSection title="💰 기대출 내역" hint="구분·금액·기간 입력" value={data.loans} onSave={function() { onSave(data); }}>
               <div style={{ overflowX: "auto", marginBottom: 8 }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
                   <thead>
@@ -10440,8 +10534,11 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 style={{ background: "#fff", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 7, padding: "6px 12px", fontSize: 11.5, fontWeight: 600, cursor: "pointer", marginBottom: 20 }}>
                 + 대출 행 추가
               </button>
+              </ZoomSection>
 
               {/* 기업정보 항목 — 기본 6개(고정) + 추가 항목(자유) */}
+              <ZoomSection title="📋 기업정보 항목" hint="기본 항목 + 추가 항목 + 비고"
+                value={{ ci: data.company_info, memo: data.company_info_memo }} onSave={function() { onSave(data); }}>
               {(function() {
                 var DEFAULT_LABELS = ["재창업 조건 (폐업이력)", "수출실적", "연구소", "노란우산공제", "기업인증", "특허 및 상표권"];
                 var infoArr = Array.isArray(data.company_info) ? data.company_info : [];
@@ -10458,7 +10555,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 var extraItems = infoArr.map(function(it, ii) { return { it: it, ii: ii }; }).filter(function(x) { return DEFAULT_LABELS.indexOf(x.it.label) < 0; });
                 return (
                   <>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 7, marginTop: 6 }}>📋 기업정보 (기본 항목)</div>
+                    <div style={{ fontSize: 11.5, fontWeight: 700, color: "#888", marginBottom: 7, marginTop: 2 }}>기본 항목</div>
                     <div style={{ fontSize: 10.5, color: "#AAA", marginBottom: 8 }}>해당되는 것만 입력하세요. 여러 개면 줄바꿈으로 나열 (예: 특허 2건은 각 줄에)</div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 8, marginBottom: 16 }}>
                       {DEFAULT_LABELS.map(function(label) {
@@ -10506,6 +10603,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               <textarea value={data.company_info_memo || ""} placeholder="비고·자유 입력"
                 onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { company_info_memo: v }); }); }}
                 style={{ width: "100%", minHeight: 70, border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, boxSizing: "border-box", outline: "none", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }} />
+              </ZoomSection>
 
               <div style={{ marginTop: 16 }}>
                 <button onClick={function() { onSave(data); }} style={{ width: "100%", display: "flex", justifyContent: "center", alignItems: "center", gap: 6, background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
