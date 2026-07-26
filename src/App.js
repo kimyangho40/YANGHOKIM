@@ -5386,13 +5386,28 @@ function AiSearchModal({ companies, myName, onClose, onSelectCompany }) {
 const VOICE_SILENCE_MS = 90000;
 const RE_VOICE_YES = /(^|\s)(네|넵|예|응|어|그래|맞아|맞습니다|맞아요|좋아|좋아요|해줘|해주세요|보내|보내줘|등록|확인|오케이|오케|ok|yes)/i;
 const RE_VOICE_NO = /(^|\s)(아니|아뇨|아니요|아니오|취소|말아|하지마|안돼|안 돼|no)/i;
-const RE_VOICE_END = /(그만|종료|끝내|끝낼|나가|중지|스톱|stop)/i;
+// 제어 단어는 "그 말만 했을 때"만 트리거로 본다.
+// 문장 안에 섞여 나온 경우(예: "이거 관호한테 보내줘")까지 트리거로 잡으면 본문이 잘려 나가므로,
+// 공백·문장부호를 걷어낸 발화 전체가 정확히 일치할 때만 동작시킨다.
+const RE_VOICE_SEND_ONLY = /^(전송|전송해|전송해줘|전송하기|보내|보내줘|보내기|보내주세요|send)$/i;
+const RE_VOICE_END_ONLY = /^(그만|그만해|그만하기|종료|종료해|종료해줘|끝|끝내|끝내줘|중지|스톱|stop)$/i;
+function voiceControlWord(t) { return String(t || "").replace(/[\s.,!?~·・…]/g, ""); }
+// 인식 조각을 누적 버퍼 뒤에 이어붙인다 (앞뒤 공백 정리)
+function appendToDraft(prev, add) {
+  var p = (prev || "").replace(/\s+$/, "");
+  var a = String(add || "").trim();
+  if (!a) return p;
+  return p ? p + " " + a : a;
+}
 
 function VoiceModeOverlay({ myName, onClose }) {
   const [phase, setPhase] = useState("starting"); // starting|listening|thinking|confirm|ended
   const [lines, setLines] = useState([]);         // 화면 보조용 대화 로그
   const [interim, setInterim] = useState("");     // 실시간 인식 중간 결과
+  const [draft, setDraft] = useState("");         // 인식 결과 누적 버퍼 — 전송 전까지 여기 쌓인다
   const [fatal, setFatal] = useState("");
+  const draftRef = useRef("");
+  var setDraftBoth = function(v) { draftRef.current = v; setDraft(v); };
 
   const recRef = useRef(null);
   const aliveRef = useRef(true);
@@ -5565,31 +5580,44 @@ function VoiceModeOverlay({ myName, onClose }) {
     await speak(msg);
   };
 
-  // 최종 인식 문장 1건 처리
-  var handleUtterance = async function(text) {
-    if (!aliveRef.current || busyRef.current) return;
-    var t = (text || "").trim();
-    if (!t) return;
+  // ── 확인(네/아니오) 응답 처리 — 이 단계에서는 누적하지 않고 즉시 판단 ──────────
+  var answerConfirm = async function(t) {
+    if (!aliveRef.current || busyRef.current || !pendingRef.current) return;
     busyRef.current = true;
     stopRec();
     setInterim("");
     addLine("me", t);
     try {
-      // 확인 대기 중이면 네/아니오만 받는다 (오인식 사고 방지 — 이 단계는 생략 불가)
-      if (phaseRef.current === "confirm" && pendingRef.current) {
-        if (RE_VOICE_NO.test(t)) {
-          pendingRef.current = null;
-          goPhase("listening");
-          await speak("취소했습니다. 다시 말씀해 주세요.");
-        } else if (RE_VOICE_YES.test(t)) {
-          await runPending();
-        } else {
-          await speak("네 또는 아니오로 답해 주세요. " + (pendingRef.current.speech || ""));
-        }
-        return;
+      if (RE_VOICE_NO.test(t)) {
+        pendingRef.current = null;
+        goPhase("listening");
+        await speak("취소했습니다. 다시 말씀해 주세요.");
+      } else if (RE_VOICE_YES.test(t)) {
+        await runPending();
+      } else {
+        await speak("네 또는 아니오로 답해 주세요. " + (pendingRef.current.speech || ""));
       }
-      if (RE_VOICE_END.test(t)) { await endMode("음성 모드를 종료합니다."); return; }
+    } finally {
+      busyRef.current = false;
+      if (aliveRef.current && phaseRef.current !== "ended") {
+        resetSilence();
+        setTimeout(startRec, 220);
+      }
+    }
+  };
 
+  // ── 누적된 문장 전송 — 전송 버튼 / "전송"·"보내줘" 발화 / Enter 로만 실행 ────────
+  // (침묵·말 끊김만으로는 절대 전송되지 않는다)
+  var submitDraft = async function() {
+    if (!aliveRef.current || busyRef.current) return;
+    var t = (draftRef.current || "").trim();
+    if (!t) return;
+    busyRef.current = true;
+    stopRec();
+    setInterim("");
+    addLine("me", t);
+    setDraftBoth("");
+    try {
       goPhase("thinking");
       var action = null;
       try {
@@ -5634,8 +5662,41 @@ function VoiceModeOverlay({ myName, onClose }) {
       }
     }
   };
-  var handleRef = useRef(handleUtterance);
-  handleRef.current = handleUtterance;
+
+  // ── 최종 인식 조각 1건 — 기본 동작은 '누적만' ───────────────────────────────
+  var onFinalTranscript = function(text) {
+    if (!aliveRef.current || busyRef.current) return;
+    var t = (text || "").trim();
+    if (!t) return;
+    resetSilence();
+    setInterim("");
+
+    // 확인 대기 중에는 네/아니오만 받는다 (오인식 사고 방지 — 이 단계는 생략 불가)
+    if (phaseRef.current === "confirm" && pendingRef.current) { answerConfirm(t); return; }
+
+    var w = voiceControlWord(t);
+    if (RE_VOICE_SEND_ONLY.test(w)) { submitDraft(); return; }          // 트리거 단어는 본문에 넣지 않음
+    if (RE_VOICE_END_ONLY.test(w)) { endMode("음성 모드를 종료합니다."); return; }
+
+    // 그 밖의 말은 전부 누적만 한다 — 숨 쉬거나 끊겨도 전송되지 않음
+    setDraftBoth(appendToDraft(draftRef.current, t));
+  };
+  var handleRef = useRef(onFinalTranscript);
+  handleRef.current = onFinalTranscript;
+  var submitRef = useRef(submitDraft);
+  submitRef.current = submitDraft;
+
+  // Enter 로 전송 (확인 대기 중에는 버튼/음성으로만 답하도록 막는다)
+  useEffect(function() {
+    var onKey = function(e) {
+      if (e.key !== "Enter" || e.shiftKey) return;
+      if (phaseRef.current === "confirm" || busyRef.current) return;
+      e.preventDefault();
+      submitRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return function() { window.removeEventListener("keydown", onKey); };
+  }, []);
 
   // 마운트: 팀원·업체 목록 로드 → 인식기 준비 → 인사말
   useEffect(function() {
@@ -5739,6 +5800,7 @@ function VoiceModeOverlay({ myName, onClose }) {
                 · "오늘 내 할일에 에이스상사 전화하기 추가해줘"<br />
                 · "법인팀 전체한테 이번주 실적 정리해달라고 전달해줘"<br />
                 · "신규 업체 등록해줘, 상호는 한빛상사, 대표는 김철수, 연락처는 010-1234-5678"<br />
+                <span style={{ color: "#9CA3AF" }}>· 말이 끊겨도 전송되지 않습니다. 다 말한 뒤 <b>"전송"</b>이라고 말하거나 전송 버튼을 누르세요.</span><br />
                 · 끝낼 때는 "그만"
               </div>
             )}
@@ -5752,10 +5814,34 @@ function VoiceModeOverlay({ myName, onClose }) {
                 </div>
               );
             })}
-            {interim && (
-              <div style={{ alignSelf: "flex-end", maxWidth: "86%", fontSize: 14, color: "#6B7280", fontStyle: "italic", padding: "2px 4px" }}>{interim}…</div>
-            )}
           </div>
+
+          {/* 인식 누적 영역 — 전송하기 전까지 여기 쌓인다 (침묵으로는 전송 안 됨) */}
+          {phase !== "confirm" && (
+            <div style={{ padding: "0 18px 10px" }}>
+              <div style={{ background: "#111827", border: "1px solid " + (draft ? "#4338CA" : "#1F2937"), borderRadius: 14, padding: "12px 14px", minHeight: 74 }}>
+                {draft || interim ? (
+                  <div style={{ fontSize: 15, lineHeight: 1.65, color: "#E5E7EB", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                    {draft}
+                    {interim && <span style={{ color: "#6B7280", fontStyle: "italic" }}>{(draft ? " " : "") + interim + "…"}</span>}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 14, color: "#4B5563" }}>말씀하시면 여기에 쌓입니다…</div>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <button onClick={function() { submitRef.current(); }} disabled={!draft.trim()}
+                  style={{ flex: 1, padding: "14px 0", borderRadius: 12, border: "none", cursor: draft.trim() ? "pointer" : "default",
+                    background: draft.trim() ? "#4338CA" : "#1F2937", color: draft.trim() ? "#fff" : "#4B5563", fontSize: 16, fontWeight: 800 }}>
+                  전송
+                </button>
+                <button onClick={function() { setDraftBoth(""); setInterim(""); }} disabled={!draft.trim()}
+                  style={{ padding: "14px 18px", borderRadius: 12, border: "1px solid #374151", background: "#111827", color: draft.trim() ? "#E5E7EB" : "#4B5563", fontSize: 14, fontWeight: 700, cursor: draft.trim() ? "pointer" : "default" }}>
+                  지우기
+                </button>
+              </div>
+            </div>
+          )}
 
           {phase === "confirm" && (
             <div style={{ padding: "0 18px 10px", display: "flex", gap: 10 }}>
@@ -5766,6 +5852,7 @@ function VoiceModeOverlay({ myName, onClose }) {
             </div>
           )}
           <div style={{ padding: "0 18px 22px", fontSize: 11.5, color: "#4B5563", textAlign: "center", lineHeight: 1.7 }}>
+            전송은 <b style={{ color: "#9CA3AF" }}>전송 버튼 · "전송"/"보내줘" · Enter</b> 로만 됩니다 (침묵으로는 전송 안 됨)<br />
             업무 요청·할일 추가·업체 등록은 <b style={{ color: "#9CA3AF" }}>"네"라고 답해야만</b> 실행됩니다 · 90초 무음이면 자동 종료
           </div>
         </>
