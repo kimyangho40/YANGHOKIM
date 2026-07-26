@@ -652,21 +652,89 @@ const LOAN_KIND_NONE = { id: "", label: "미분류", short: "미분류", color: 
 function loanKindMeta(id) { return LOAN_KINDS.find(function(k) { return k.id === id; }) || LOAN_KIND_NONE; }
 // 회사 유형별 기본 구분 — 법인이면 법인대출, 그 외(개인사업자)는 사업자대출
 function defaultLoanKind(company) { return (company && company.type === "법인") ? "corp" : "biz"; }
+// 한글 수 표기 한 덩어리를 자리값으로 해석 ("8천5백" → 8500, "5" → 5, "" → 1)
+function korNumGroup(str) {
+  if (str === "") return 1;
+  var total = 0, num = "";
+  for (var i = 0; i < str.length; i++) {
+    var ch = str[i];
+    if ((ch >= "0" && ch <= "9") || ch === ".") { num += ch; continue; }
+    var m = ch === "천" ? 1000 : ch === "백" ? 100 : ch === "십" ? 10 : 0;
+    if (!m) return null;
+    var n = num === "" ? 1 : parseFloat(num);
+    if (isNaN(n)) return null;
+    total += n * m; num = "";
+  }
+  if (num !== "") { var t = parseFloat(num); if (isNaN(t)) return null; total += t; }
+  return total;
+}
+// 기대출 금액 원문(사람이 자유롭게 적은 문자열) → 원(₩).
+//  · "20백만원"=2,000만 · "8천5백만원"=8,500만 · "4억4천만원"=4억4,000만
+//  · 단위가 안 붙은 천/백도 만원 단위로 읽는다: "5천"=5,000만 · "2천5백"=2,500만 · "1억5천"=1억5,000만
+//  · 단위 없는 작은 숫자("12,353","8")·여러 값("50+30+19")·글자는 확정하지 않고 합계에서 뺀다(note로 사유 반환).
+// 반환 { won: number|null, note: string } — won이 null이면 화면에 '확인 필요'로 표시하고 합계 제외.
+function parseLoanAmount(raw) {
+  if (raw == null) return { won: null, note: "" };
+  var s = String(raw).trim();
+  if (!s) return { won: null, note: "" };
+  if (/[+]|->|→|~/.test(s)) return { won: null, note: "여러 값·메모" };
+  var c = s.replace(/[(),\s원]/g, "");
+  if (!c) return { won: null, note: "" };
+  if (!/[억만천백십]/.test(c)) {                       // 숫자만 적힌 경우
+    var n = parseFloat(c);
+    if (isNaN(n)) return { won: null, note: "숫자 아님" };
+    if (n < 100000) return { won: null, note: "단위 확인 필요" };  // 12,353 이 1만원인지 1,235만원인지 알 수 없음
+    return { won: n, note: "" };
+  }
+  var m1 = c.match(/^([0-9.]+)백만$/); if (m1) return { won: parseFloat(m1[1]) * 1e6, note: "" };
+  var m2 = c.match(/^([0-9.]+)천만$/); if (m2) return { won: parseFloat(m2[1]) * 1e7, note: "" };
+  var rest = c, won = 0, g;
+  var ie = rest.indexOf("억");
+  if (ie >= 0) {
+    g = korNumGroup(rest.slice(0, ie));
+    if (g == null) return { won: null, note: "해석 불가" };
+    won += g * 1e8; rest = rest.slice(ie + 1);
+  }
+  var im = rest.indexOf("만");
+  if (im >= 0) {
+    g = korNumGroup(rest.slice(0, im));
+    if (g == null) return { won: null, note: "해석 불가" };
+    won += g * 1e4; rest = rest.slice(im + 1);
+  }
+  if (rest) {
+    g = korNumGroup(rest);
+    if (g == null) return { won: null, note: "해석 불가" };
+    // '만'이 안 붙은 천/백 표기는 만원 단위로 읽는다 (5천 = 5,000만원)
+    won += /[천백십]/.test(rest) ? g * 1e4 : g;
+  }
+  return { won: won, note: "" };
+}
 function loanAmountOf(ln) {
-  var n = parseInt(String((ln && ln.amount) || "").replace(/[^0-9]/g, ""), 10);
-  return isNaN(n) ? 0 : n;
+  var r = parseLoanAmount(ln && ln.amount);
+  return r.won == null ? 0 : r.won;
 }
 // 기대출 총액(원) = loans 배열 amount 합
 function totalLoanAmount(company) {
   var loans = Array.isArray(company && company.loans) ? company.loans : [];
   return loans.reduce(function(s, ln) { return s + loanAmountOf(ln); }, 0);
 }
-// 구분별 소계 — { corp, personal, biz, none, total, noneCount }
+// 금액을 확정하지 못한 대출이 하나라도 있는지 (합계·부채비율 신뢰도 판단용)
+function loanUnsureCount(company) {
+  var loans = Array.isArray(company && company.loans) ? company.loans : [];
+  return loans.filter(function(ln) {
+    var r = parseLoanAmount(ln && ln.amount);
+    return r.won == null && r.note;   // 빈칸은 제외, 해석 실패만 센다
+  }).length;
+}
+// 구분별 소계 — { corp, personal, biz, none, total, noneCount, unsureCount }
+// 금액을 확정 못 한 건은 합계에 넣지 않는다(0으로 치면 '부채 없음'으로 잘못 읽히므로 별도 표시).
 function loanTotalsByKind(company) {
   var loans = Array.isArray(company && company.loans) ? company.loans : [];
-  var out = { corp: 0, personal: 0, biz: 0, none: 0, total: 0, noneCount: 0 };
+  var out = { corp: 0, personal: 0, biz: 0, none: 0, total: 0, noneCount: 0, unsureCount: 0 };
   loans.forEach(function(ln) {
-    var amt = loanAmountOf(ln);
+    var p = parseLoanAmount(ln && ln.amount);
+    if (p.won == null && p.note) out.unsureCount++;
+    var amt = p.won == null ? 0 : p.won;
     var k = (ln && ln.kind) || "";
     if (k === "corp" || k === "personal" || k === "biz") out[k] += amt;
     else { out.none += amt; out.noneCount++; }
@@ -687,6 +755,18 @@ function wonToKor(won) {
   if (n >= 10000000) return Math.round(n / 10000000) + "천만";
   if (n >= 10000) return Math.round(n / 10000) + "만";
   return n.toLocaleString();
+}
+// 기대출 금액 표시용 — wonToKor는 천만 단위로 반올림해서 2,500만이 "3천만"으로 보인다.
+// 대출 금액은 판단 근거라 왜곡되면 안 되므로 억/만을 정확히 끊어 쓴다.
+function wonToKorExact(won) {
+  var n = Math.round(Number(won) || 0);
+  if (!n) return "0원";
+  var eok = Math.floor(n / 1e8), man = Math.floor((n % 1e8) / 1e4), rest = n % 1e4;
+  var out = [];
+  if (eok) out.push(eok.toLocaleString() + "억");
+  if (man) out.push(man.toLocaleString() + "만");
+  if (!eok && !man) out.push(rest.toLocaleString() + "원");
+  return out.join(" ");
 }
 // 담당기관 문자열에 특정 기관 포함 여부
 function agencyIncludes(company, name) {
@@ -797,7 +877,12 @@ function computeFinanceRatios(company) {
   // 3순위: 기업현황표에 부채총계가 없고 직접입력도 없을 때만 기대출 내역으로 대용.
   // 법인은 '법인대출'만 합산(대표자 개인대출·미분류 제외), 개인사업자는 전체 합계.
   if (debtSource === null && capital !== null) {
-    var loanDebt = financeDebtFromLoans(company);
+    // 금액을 확정 못 한 대출이 있으면 이 값으로 비율을 내지 않는다 — 임의로 0 처리하면 부채가 없는 것처럼 읽힌다
+    if (loanUnsureCount(company) > 0) {
+      debtText = "확인 필요";
+      debtSource = "loans_unsure";
+    }
+    var loanDebt = debtSource === null ? financeDebtFromLoans(company) : 0;
     if (loanDebt > 0) {
       if (capital <= 0) { capitalImpaired = true; debtText = "자본잠식"; debtSource = "loans"; }
       else { debtRatio = (loanDebt / capital) * 100; debtText = (Math.round(debtRatio * 10) / 10) + "%"; debtSource = "loans"; }
@@ -10559,6 +10644,8 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                         if (src === "manual") return <span style={{ marginLeft: 4, fontSize: 9, color: "#B45309", fontWeight: 700 }}>(수동입력)</span>;
                         if (src === "loans") return <span title={data.type === "법인" ? "기업현황표에 부채총계가 없어 기대출 내역으로 대용 · 법인대출만 합산(대표자 개인대출 제외)" : "기업현황표에 부채총계가 없어 기대출 내역 전체 합계로 대용"}
                           style={{ marginLeft: 4, fontSize: 9, color: "#4338CA", fontWeight: 700 }}>{data.type === "법인" ? "(기대출·법인분)" : "(기대출)"}</span>;
+                        if (src === "loans_unsure") return <span title="기대출 금액 중 확정하지 못한 값이 있어 부채비율을 계산하지 않았습니다. 금액을 확인해 입력하면 자동 계산됩니다."
+                          style={{ marginLeft: 4, fontSize: 9, color: "#DC2626", fontWeight: 800 }}>(금액 확인 필요)</span>;
                         return null;
                       };
                       return (
@@ -10647,6 +10734,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                       var cellStyle = { border: "1px solid #E8E5E0", padding: 0 };
                       var inStyle = { width: "100%", border: "none", padding: "6px 5px", fontSize: 11.5, background: "transparent", outline: "none", boxSizing: "border-box" };
                       var km = loanKindMeta(ln.kind);
+                      var amtP = parseLoanAmount(ln.amount);
                       return (
                         <tr key={li}>
                           <td style={cellStyle}><input value={ln.inst || ""} onChange={function(e) { updateLoan("inst", e.target.value); }} style={inStyle} /></td>
@@ -10658,10 +10746,19 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                               {LOAN_KINDS.map(function(k) { return <option key={k.id} value={k.id}>{k.label}</option>; })}
                             </select>
                           </td>
-                          <td style={cellStyle}><input value={ln.amount || ""} onChange={function(e) { updateLoan("amount", e.target.value); }} style={inStyle} /></td>
+                          <td style={{ border: "1px solid #E8E5E0", padding: 0, background: amtP.won == null && amtP.note ? "#FEF2F2" : "transparent" }}>
+                            <input value={ln.amount || ""} onChange={function(e) { updateLoan("amount", e.target.value); }} style={inStyle} />
+                            {amtP.won != null && (
+                              <div style={{ fontSize: 9.5, color: "#15803D", padding: "0 5px 4px", fontWeight: 700 }}>= {wonToKorExact(amtP.won)}</div>
+                            )}
+                            {amtP.won == null && amtP.note && (
+                              <div title={"원문을 그대로 두었습니다. 합계에서 제외됩니다 — " + amtP.note}
+                                style={{ fontSize: 9.5, color: "#DC2626", padding: "0 5px 4px", fontWeight: 800 }}>⚠ 금액 확인 필요</div>
+                            )}
+                          </td>
                           <td style={cellStyle}><input value={ln.bank || ""} onChange={function(e) { updateLoan("bank", e.target.value); }} style={inStyle} /></td>
-                          <td style={cellStyle}><input value={ln.start || ""} placeholder="26.01.13" onChange={function(e) { updateLoan("start", e.target.value); }} style={inStyle} /></td>
-                          <td style={cellStyle}><input value={ln.end || ""} placeholder="31.01.13" onChange={function(e) { updateLoan("end", e.target.value); }} style={inStyle} /></td>
+                          <td style={cellStyle}><input value={ln.start || ""} placeholder="" title="예: 24.03.15" onChange={function(e) { updateLoan("start", e.target.value); }} style={inStyle} /></td>
+                          <td style={cellStyle}><input value={ln.end || ""} placeholder="" title="예: 29.03.15" onChange={function(e) { updateLoan("end", e.target.value); }} style={inStyle} /></td>
                           <td style={{ border: "1px solid #E8E5E0", textAlign: "center" }}>
                             <button onClick={function() { setData(function(p) { var arr = (Array.isArray(p.loans) ? p.loans : []).slice(); arr.splice(li, 1); return Object.assign({}, p, { loans: arr }); }); }}
                               style={{ background: "none", border: "none", cursor: "pointer", color: "#888", padding: 3 }}><Icon name="x" size={11} color="#CCC" /></button>
@@ -10684,7 +10781,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   return (
                     <div key={label} style={{ flex: "1 1 150px", minWidth: 130, background: bg, border: "1px solid " + color + "33", borderRadius: 8, padding: "8px 11px" }}>
                       <div style={{ fontSize: 10.5, color: color, fontWeight: 700 }}>{label}</div>
-                      <div style={{ fontSize: 15, fontWeight: 800, color: "#1A1917", marginTop: 2 }}>{wonToKor(won)}</div>
+                      <div style={{ fontSize: 15, fontWeight: 800, color: "#1A1917", marginTop: 2 }}>{wonToKorExact(won)}</div>
                     </div>
                   );
                 };
@@ -10700,9 +10797,15 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                         cell("기대출 전체 합계", t.total, "#6B7280", "#F7F6F3"),
                       ]}
                     </div>
+                    {t.unsureCount > 0 && (
+                      <div style={{ marginTop: 6, fontSize: 11, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 7, padding: "6px 10px", lineHeight: 1.6 }}>
+                        ⚠ 금액 확인 필요 {t.unsureCount}건 — <b>위 합계에 포함되지 않았습니다.</b> 원본을 확인해 금액을 직접 입력해 주세요.
+                        (0으로 처리하지 않았습니다)
+                      </div>
+                    )}
                     {t.noneCount > 0 && (
                       <div style={{ marginTop: 6, fontSize: 11, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 10px", lineHeight: 1.6 }}>
-                        ⚠ 구분 미분류 {t.noneCount}건 ({wonToKor(t.none)})
+                        ⚠ 구분 미분류 {t.noneCount}건 ({wonToKorExact(t.none)})
                         {isCorp ? " — 법인기업은 미분류 대출이 부채비율 계산에서 제외됩니다. 하나씩 구분을 지정해 주세요." : " — 구분을 지정하면 성격별로 구분해 볼 수 있습니다."}
                       </div>
                     )}
