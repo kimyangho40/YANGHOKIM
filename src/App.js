@@ -8292,9 +8292,17 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
                 border: "1px solid " + (t.on ? t.bd : "#E8E5E0"), background: t.on ? t.bg : "#fff", color: t.disabled ? "#CCC" : (t.on ? t.c : "#888") }}>{t.label}</button>
           );
         })}
-        {reviewCount > 0 && (
-          <span title="폐지된 STEP11/12에서 옮겨온 카드 — 담당자가 단계를 확인해 주세요"
-            style={{ fontSize: 11, fontWeight: 800, color: "#B91C1C", background: "#FEE2E2", border: "1px solid #FECACA", borderRadius: 99, padding: "5px 10px" }}>⚠ 확인 필요 {reviewCount}건</span>
+        {(reviewCount + noAgencyCount) > 0 && (
+          // 확인 필요 = 단계 재배치(폐지 STEP11/12에서 옮겨온 것) + 기관 미지정. 누르면 기관 미지정만 모아 봄.
+          <span title={"확인이 필요한 카드입니다 — 단계 재배치 " + reviewCount + "건 · 기관 미지정 " + noAgencyCount + "건"
+              + (noAgencyCount ? "\n클릭하면 기관 미지정 카드만 모아 봅니다." : "")}
+            onClick={function() { if (noAgencyCount) setFAgency(fAgency === "__none__" ? "전체" : "__none__"); }}
+            style={{ fontSize: 11, fontWeight: 800, color: "#B91C1C", background: "#FEE2E2", border: "1px solid #FECACA", borderRadius: 99, padding: "5px 10px", cursor: noAgencyCount ? "pointer" : "default" }}>
+            ⚠ 확인 필요 {reviewCount + noAgencyCount}건
+            <span style={{ fontWeight: 700, opacity: 0.8 }}>
+              {" (단계 재배치 " + reviewCount + " · 기관 미지정 " + noAgencyCount + ")"}
+            </span>
+          </span>
         )}
         {filterOn && <button onClick={resetFilters}
           style={{ marginLeft: "auto", padding: "6px 11px", borderRadius: 7, fontSize: 12, border: "1px solid #E8E5E0", background: "#F7F6F3", color: "#666", cursor: "pointer", fontWeight: 600 }}>필터 초기화</button>}
@@ -8427,8 +8435,14 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
                       {/* 카드 액션 — 기관 지정 / 새 기관 추가 / 기타 사유 / 종결 처리 */}
                       <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
                         {isUnassigned ? (
-                          <button title="이 카드에 기관을 지정합니다" onClick={function(e) { e.stopPropagation(); setAgencyPick({ row: row, mode: "assign" }); }}
-                            style={{ fontSize: 9, fontWeight: 800, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 5, padding: "3px 7px", cursor: "pointer" }}>🏛 기관 지정</button>
+                          // 카드에서 바로 기관 지정 — 고르는 즉시 반영(모달 없이)
+                          <select value="" title="이 카드에 기관을 지정합니다 (고르면 즉시 반영)"
+                            onClick={function(e) { e.stopPropagation(); }} onMouseDown={function(e) { e.stopPropagation(); }}
+                            onChange={function(e) { var v = e.target.value; e.target.value = ""; if (v) assignAgency(row, v); }}
+                            style={{ fontSize: 9, fontWeight: 800, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 5, padding: "3px 7px", cursor: "pointer" }}>
+                            <option value="">🏛 기관 지정…</option>
+                            {AGENCY_GROUPS.map(function(g) { return <option key={g.id} value={g.id}>{g.label}</option>; })}
+                          </select>
                         ) : (
                           <button title="같은 회사의 다른 기관 조합 카드를 STEP1에 새로 만듭니다" onClick={function(e) { e.stopPropagation(); setAgencyPick({ row: row, mode: "add" }); }}
                             style={{ fontSize: 9, fontWeight: 700, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 5, padding: "3px 7px", cursor: "pointer" }}>＋ 새 기관 추가 신청</button>
