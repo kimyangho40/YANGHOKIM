@@ -49,6 +49,21 @@ const OTHER_REASONS = [
   { id: "etc",        label: "기타(직접입력)",                short: "기타",       color: "#0369A1", bg: "#E0F2FE" },
 ];
 function otherReasonMeta(id) { return OTHER_REASONS.find(function(r) { return r.id === id; }) || null; }
+// 🧹 일괄 정리 모드 — 보류/종결 사유. 클릭만으로 처리하려고 자유입력 없이 고정 목록으로 둔다.
+// 사유는 통계 집계 대상이라 값(id)을 바꾸면 과거 집계와 어긋난다. 추가는 가능, 변경·삭제는 금지.
+const HOLD_REASONS = [
+  { id: "too_early",   label: "시기상조",        color: "#B45309", bg: "#FEF3C7" },
+  { id: "no_need_now", label: "자금 불필요(현재)", color: "#6B7280", bg: "#F3F4F6" },
+  { id: "ceo_review",  label: "대표 검토중",      color: "#4338CA", bg: "#EEF2FF" },
+];
+const CLOSE_REASONS = [
+  { id: "shutdown",    label: "폐업",            color: "#DC2626", bg: "#FEE2E2" },
+  { id: "no_contact",  label: "연락두절",        color: "#D97706", bg: "#FEF3C7" },
+  { id: "rel_end",     label: "관계단절",        color: "#BE123C", bg: "#FFE4E6" },
+  { id: "no_need_ever",label: "자금 불필요(영구)", color: "#6B7280", bg: "#F3F4F6" },
+  { id: "not_eligible",label: "요건 미달",       color: "#0369A1", bg: "#E0F2FE" },
+];
+function reasonLabel(list, id) { var f = list.find(function(r) { return r.id === id; }); return f ? f.label : (id || ""); }
 // 폐업·연락두절로 지정된 지 이 일수를 넘기면 '장기 방치'로 흐리게 표시
 const DORMANT_DAYS = 180;
 function isDormantCard(card) {
@@ -4369,6 +4384,7 @@ function CRMApp({ profile, session }) {
     pipelineCards.forEach(card => {
       if (!card.agency_group) return;                        // 기관 미지정 카드는 제외
       if (card.closed_at) return;                            // 종결 처리한 카드는 정체 대상 아님
+      if (card.hold_reason) return;                          // 보류(시기상조 등)도 정체 알림 대상 아님
       const cfg = cfgMap[card.stage];
       if (!cfg || !cfg.enabled) return;                      // 이 단계 알림 미사용
       const days = daysSince(card.stage_changed_at);
@@ -7960,6 +7976,17 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
   const [showClosed, setShowClosed] = useState(false); // 종결(부결/반려) 카드 포함
   const [agencyPick, setAgencyPick] = useState(null); // { row, mode: "add" | "assign" }
   const [reasonEdit, setReasonEdit] = useState(null); // 기타 사유 지정 대상 row
+  const [holdOnly, setHoldOnly] = useState(false);   // ⏸ 보류 카드만 모아보기
+
+  // ── 🧹 일괄 정리 모드 ───────────────────────────────────────────────────────
+  // 타이핑 없이 클릭(또는 숫자키)만으로 미진행 업체를 정리한다. 확인창 없이 즉시 반영하고
+  // 대신 상단에 되돌리기를 항상 띄운다. 처리한 줄은 사라지지 않고 회색으로 남는다.
+  const [bulkMode, setBulkMode] = useState(false);
+  const [bulkFilter, setBulkFilter] = useState("step1etc"); // step1etc | all | hold | closed
+  const [bulkCursor, setBulkCursor] = useState(0);          // 방향키로 움직이는 현재 줄
+  const [bulkOpen, setBulkOpen] = useState(null);           // { id, kind: "hold" | "close" } 사유 고르는 중
+  const [bulkDone, setBulkDone] = useState({});             // { cardId: 처리라벨 } — 이번 세션에 처리한 것
+  const [undoStack, setUndoStack] = useState([]);           // [{ cardId, before, label }]
 
   // ── 🔍 카드 검색 (표시 전용 — DB/카드 데이터 무변경) ─────────────────────────
   const [q, setQ] = useState("");        // 입력 즉시값
@@ -8012,7 +8039,9 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
         var bizHit = dqDigits && onlyDigits(r.co.business_number).includes(dqDigits);
         if (!nameHit && !bizHit) return false;
       }
-      if (!showClosed && card.closed_at) return false;                       // 종결 카드는 기본 숨김
+      // 종결 카드는 기본 숨김 — 단, 일괄 정리의 '종결' 탭과 방금 처리한 줄(회색으로 남겨야 함)은 통과
+      if (!showClosed && card.closed_at && !(bulkMode && (bulkFilter === "closed" || bulkDone[card.id]))) return false;
+      if (holdOnly && !card.hold_reason) return false;                       // ⏸ 보류만 보기
       if (fAgency !== "전체") {
         if (fAgency === "__none__") { if (card.agency_group) return false; }
         else if (!agencyFilterMatch(fAgency, card.agency_group)) return false;
@@ -8033,16 +8062,101 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
       out = out.slice().sort(function(a, b) { return daysSince(b.card.stage_changed_at) - daysSince(a.card.stage_changed_at); });
     }
     return out;
-  }, [cardRows, showClosed, fAgency, fReason, mineOnly, myName, stagnOnly, stagnIds, sortMode, searchActive, nq, dqDigits]);
+  }, [cardRows, showClosed, fAgency, fReason, mineOnly, myName, stagnOnly, stagnIds, sortMode, searchActive, nq, dqDigits, holdOnly, bulkMode, bulkFilter, bulkDone]);
 
-  var filterOn = fAgency !== "전체" || fReason !== "전체" || mineOnly || stagnOnly || showClosed || sortMode !== "기본" || filterAssignee !== "전체" || searchActive;
+  var filterOn = fAgency !== "전체" || fReason !== "전체" || mineOnly || stagnOnly || showClosed || holdOnly || sortMode !== "기본" || filterAssignee !== "전체" || searchActive;
   var resetFilters = function() {
     setFAgency("전체"); setFReason("전체"); setMineOnly(false); setStagnOnly(false);
-    setShowClosed(false); setSortMode("기본"); setFilterAssignee("전체");
+    setShowClosed(false); setHoldOnly(false); setSortMode("기본"); setFilterAssignee("전체");
     setQ(""); setDq("");
   };
+
+  // 일괄 정리 대상 줄 — 기본은 STEP1(상담/진단완료)과 기타. 처리한 줄은 필터에서 빠져도 그대로 남긴다.
+  const bulkRows = useMemo(function() {
+    var pass = function(c) {
+      if (bulkFilter === "hold") return !!c.hold_reason && !c.closed_at;
+      if (bulkFilter === "closed") return !!c.closed_at;
+      if (bulkFilter === "all") return !c.closed_at;
+      return !c.closed_at && (c.stage === "상담/진단완료" || c.stage === "기타");
+    };
+    return (visibleRows || [])
+      .filter(function(r) { return pass(r.card) || bulkDone[r.card.id]; })
+      .slice().sort(function(a, b) { return daysSince(b.card.stage_changed_at) - daysSince(a.card.stage_changed_at); });
+  }, [visibleRows, bulkFilter, bulkDone]);
+  var bulkDoneCount = Object.keys(bulkDone).length;
+
+  // 처리 — 확인창 없이 즉시 반영. 화면부터 바꾸고 DB에 저장, 실패하면 되돌린다.
+  var applyBulk = async function(row, kind, reasonId) {
+    var card = row.card, nowIso = new Date().toISOString();
+    var before = {
+      checked_at: card.checked_at || null, checked_by: card.checked_by || null,
+      hold_reason: card.hold_reason || null, hold_at: card.hold_at || null,
+      closed_at: card.closed_at || null, closed_by: card.closed_by || null, closed_reason: card.closed_reason || null,
+    };
+    var upd, label;
+    if (kind === "go") {
+      upd = { checked_at: nowIso, checked_by: myName || null, hold_reason: null, hold_at: null, closed_at: null, closed_by: null, closed_reason: null };
+      label = "진행 중 · 확인함";
+    } else if (kind === "hold") {
+      upd = { checked_at: nowIso, checked_by: myName || null, hold_reason: reasonId, hold_at: nowIso, closed_at: null, closed_by: null, closed_reason: null };
+      label = "보류 · " + reasonLabel(HOLD_REASONS, reasonId);
+    } else {
+      upd = { checked_at: nowIso, checked_by: myName || null, hold_reason: null, hold_at: null, closed_at: nowIso, closed_by: myName || null, closed_reason: reasonId };
+      label = "종결 · " + reasonLabel(CLOSE_REASONS, reasonId);
+    }
+    upd.updated_at = nowIso;
+    setBulkOpen(null);
+    patchCard(card.id, upd);
+    setBulkDone(function(p) { var n = Object.assign({}, p); n[card.id] = label; return n; });
+    setUndoStack(function(p) { return p.concat([{ cardId: card.id, before: before, label: (row.co.name || "") + " — " + label }]); });
+    var r = await supabase.from("pipeline_cards").update(upd).eq("id", card.id);
+    if (r.error) {
+      patchCard(card.id, before);
+      setBulkDone(function(p) { var n = Object.assign({}, p); delete n[card.id]; return n; });
+      setUndoStack(function(p) { return p.filter(function(u) { return u.cardId !== card.id; }); });
+      alert("반영 실패: " + r.error.message);
+    }
+  };
+  // 되돌리기 — 마지막 처리부터 하나씩. 빠르게 처리하다 잘못 누르는 것을 전제로 항상 띄워 둔다.
+  var undoBulk = async function() {
+    var last = undoStack[undoStack.length - 1];
+    if (!last) return;
+    setUndoStack(function(p) { return p.slice(0, -1); });
+    patchCard(last.cardId, last.before);
+    setBulkDone(function(p) { var n = Object.assign({}, p); delete n[last.cardId]; return n; });
+    var r = await supabase.from("pipeline_cards").update(Object.assign({}, last.before, { updated_at: new Date().toISOString() })).eq("id", last.cardId);
+    if (r.error) alert("되돌리기 실패: " + r.error.message);
+  };
+
+  // 키보드 — 1=진행 중, 2=보류, 3=종결, ↑↓ 이동. 사유 고르는 중에는 숫자로 사유 선택, Esc 취소.
+  useEffect(function() {
+    if (!bulkMode) return;
+    function onKey(e) {
+      var tag = (e.target && e.target.tagName) || "";
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (e.target && e.target.isContentEditable)) return;
+      if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) { e.preventDefault(); undoBulk(); return; }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      var row = bulkRows[bulkCursor];
+      if (e.key === "ArrowDown") { e.preventDefault(); setBulkOpen(null); setBulkCursor(function(i) { return Math.min(i + 1, Math.max(bulkRows.length - 1, 0)); }); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setBulkOpen(null); setBulkCursor(function(i) { return Math.max(i - 1, 0); }); return; }
+      if (e.key === "Escape") { if (bulkOpen) { e.preventDefault(); setBulkOpen(null); } return; }
+      if (!row) return;
+      if (bulkOpen && bulkOpen.id === row.card.id) {                    // 사유 고르는 중
+        var list = bulkOpen.kind === "hold" ? HOLD_REASONS : CLOSE_REASONS;
+        var n = parseInt(e.key, 10);
+        if (n >= 1 && n <= list.length) { e.preventDefault(); applyBulk(row, bulkOpen.kind === "hold" ? "hold" : "close", list[n - 1].id); }
+        return;
+      }
+      if (e.key === "1") { e.preventDefault(); applyBulk(row, "go"); }
+      else if (e.key === "2") { e.preventDefault(); setBulkOpen({ id: row.card.id, kind: "hold" }); }
+      else if (e.key === "3") { e.preventDefault(); setBulkOpen({ id: row.card.id, kind: "close" }); }
+    }
+    document.addEventListener("keydown", onKey);
+    return function() { document.removeEventListener("keydown", onKey); };
+  }, [bulkMode, bulkRows, bulkCursor, bulkOpen, undoStack, myName]);
   // 보드 전체 기준 요약(필터 무관) — 관제탑 상단 배지
   var closedCount = (cardRows || []).filter(function(r) { return !!r.card.closed_at; }).length;
+  var holdCount = (cardRows || []).filter(function(r) { return !!r.card.hold_reason && !r.card.closed_at; }).length;
   var reviewCount = (cardRows || []).filter(function(r) { return r.card.needs_review && !r.card.closed_at; }).length;
   var noAgencyCount = (cardRows || []).filter(function(r) { return !r.card.agency_group && !r.card.closed_at; }).length;
   var reasonUnsetCount = (cardRows || []).filter(function(r) { return r.card.stage === "기타" && !r.card.other_reason && !r.card.closed_at; }).length;
@@ -8102,13 +8216,24 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
   };
 
   // ④ 부결/반려 종결 처리 ↔ 해제 (종결 카드는 보드에서 숨기고 기업 상세 이력으로만 남김)
+  // 보류 해제 — 카드 배지 클릭. 해제하면 다시 정체 알림 대상이 된다.
+  var clearHold = async function(e, row) {
+    e.stopPropagation();
+    var card = row.card;
+    if (!window.confirm("'" + row.co.name + "' 보류(" + reasonLabel(HOLD_REASONS, card.hold_reason) + ")를 해제할까요?")) return;
+    var upd = { hold_reason: null, hold_at: null, updated_at: new Date().toISOString() };
+    var r = await supabase.from("pipeline_cards").update(upd).eq("id", card.id);
+    if (r.error) { alert("해제 실패: " + r.error.message); return; }
+    patchCard(card.id, upd);
+  };
+
   var toggleClosed = async function(e, row) {
     e.stopPropagation();
     var card = row.card, label = row.co.name + " · " + agencyLabel(card.agency_group);
     var upd;
     if (card.closed_at) {
       if (!window.confirm("'" + label + "' 종결 처리를 해제하고 보드에 다시 표시할까요?")) return;
-      upd = { closed_at: null, closed_by: null, updated_at: new Date().toISOString() };
+      upd = { closed_at: null, closed_by: null, closed_reason: null, updated_at: new Date().toISOString() };
     } else {
       if (!window.confirm("'" + label + "'를 종결 처리할까요?\n(보드에서 숨겨지고 기업 상세의 기관진행 이력에는 계속 남습니다)")) return;
       upd = { closed_at: new Date().toISOString(), closed_by: myName || null, updated_at: new Date().toISOString() };
@@ -8284,7 +8409,9 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
         {[
           { on: mineOnly, set: setMineOnly, label: "🙋 내 담당만", title: myName ? myName + " 님 담당 카드만 표시" : "로그인 후 사용", disabled: !myName, c: "#4338CA", bg: "#EEF2FF", bd: "#C7D2FE" },
           { on: stagnOnly, set: setStagnOnly, label: "🚧 정체 카드만" + (stagnIds.size ? " (" + stagnIds.size + ")" : ""), title: "단계별 기준일수를 넘긴 카드만 모아보기", disabled: false, c: "#B45309", bg: "#FEF3C7", bd: "#FDE68A" },
-          { on: showClosed, set: setShowClosed, label: "🗄 종결 포함" + (closedCount ? " (" + closedCount + ")" : ""), title: "종결 처리한 부결/반려 카드도 보드에 표시", disabled: false, c: "#6B7280", bg: "#F3F4F6", bd: "#D1D5DB" },
+          { on: holdOnly, set: setHoldOnly, label: "⏸ 보류만" + (holdCount ? " (" + holdCount + ")" : ""), title: "보류로 정리한 카드만 모아보기 (정체 알림 대상에서 제외됩니다)", disabled: false, c: "#0369A1", bg: "#E0F2FE", bd: "#BAE6FD" },
+          { on: showClosed, set: setShowClosed, label: "🗄 종결 포함" + (closedCount ? " (" + closedCount + ")" : ""), title: "종결 처리한 카드도 보드에 표시", disabled: false, c: "#6B7280", bg: "#F3F4F6", bd: "#D1D5DB" },
+          { on: bulkMode, set: setBulkMode, label: "🧹 일괄 정리", title: "카드를 한 줄 목록으로 놓고 클릭·숫자키만으로 진행/보류/종결 처리", disabled: false, c: "#15803D", bg: "#F0FDF4", bd: "#BBF7D0" },
         ].map(function(t, i) {
           return (
             <button key={i} title={t.title} disabled={t.disabled} onClick={function() { t.set(function(p) { return !p; }); }}
@@ -8325,7 +8452,103 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
           🔍 '<b>{q.trim()}</b>' 와(과) 일치하는 카드가 없습니다. 검색어를 바꾸거나 <b>×</b>(또는 Esc)로 초기화하세요.
         </div>
       )}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8, alignItems: "start" }}>
+      {/* 🧹 일괄 정리 — 드래그 없이 한 줄씩. 확인창 없이 즉시 반영하고 되돌리기를 항상 띄운다. */}
+      {bulkMode && (
+        <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, marginBottom: 14, overflow: "hidden" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", borderBottom: "1px solid #F0EEE9", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13, fontWeight: 800, color: "#15803D" }}>🧹 일괄 정리</span>
+            {[["step1etc", "STEP1 · 기타"], ["all", "전체"], ["hold", "보류 " + holdCount], ["closed", "종결 " + closedCount]].map(function(t) {
+              var on = bulkFilter === t[0];
+              return (
+                <button key={t[0]} onClick={function() { setBulkFilter(t[0]); setBulkCursor(0); setBulkOpen(null); }}
+                  style={{ padding: "5px 10px", borderRadius: 99, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                    border: "1px solid " + (on ? "#BBF7D0" : "#E8E5E0"), background: on ? "#F0FDF4" : "#fff", color: on ? "#15803D" : "#888" }}>{t[1]}</button>
+              );
+            })}
+            <span style={{ fontSize: 12, color: "#666", marginLeft: 4 }}>
+              <b style={{ color: "#1A1917" }}>{bulkRows.length}</b>건 중 <b style={{ color: "#15803D" }}>{bulkDoneCount}</b>건 처리
+            </span>
+            <div style={{ width: 120, height: 5, background: "#E8E5E0", borderRadius: 99, overflow: "hidden" }}>
+              <div style={{ height: 5, background: "#22C55E", borderRadius: 99, transition: "width 0.2s",
+                width: (bulkRows.length ? Math.round(bulkDoneCount / bulkRows.length * 100) : 0) + "%" }} />
+            </div>
+            <button onClick={undoBulk} disabled={!undoStack.length}
+              title={undoStack.length ? "마지막 처리 되돌리기: " + undoStack[undoStack.length - 1].label + " (Ctrl+Z)" : "되돌릴 처리가 없습니다"}
+              style={{ marginLeft: "auto", padding: "5px 11px", borderRadius: 7, fontSize: 12, fontWeight: 700,
+                border: "1px solid " + (undoStack.length ? "#FDE68A" : "#E8E5E0"), background: undoStack.length ? "#FFFBEB" : "#F7F6F3",
+                color: undoStack.length ? "#92400E" : "#CCC", cursor: undoStack.length ? "pointer" : "default" }}>
+              ↩ 되돌리기{undoStack.length ? " (" + undoStack.length + ")" : ""}
+            </button>
+          </div>
+          <div style={{ padding: "6px 14px", background: "#FAFAF8", borderBottom: "1px solid #F0EEE9", fontSize: 11, color: "#888" }}>
+            키보드: <b>1</b> 진행 중 · <b>2</b> 보류 · <b>3</b> 종결 · <b>↑↓</b> 줄 이동 · <b>Ctrl+Z</b> 되돌리기 —
+            보류·종결은 사유를 고르면 바로 반영됩니다(사유도 숫자키). 처리한 줄은 사라지지 않고 회색으로 남습니다.
+          </div>
+          <div style={{ maxHeight: 620, overflowY: "auto" }}>
+            {bulkRows.map(function(r, i) {
+              var card = r.card, co = r.co;
+              var done = bulkDone[card.id];
+              var isCur = i === bulkCursor;
+              var days = daysSince(card.stage_changed_at);
+              var lastAt = (card.stage_changed_at || card.updated_at || "").slice(0, 10);
+              var open = bulkOpen && bulkOpen.id === card.id ? bulkOpen.kind : null;
+              var isUnassigned = !card.agency_group;
+              return (
+                <div key={card.id} onClick={function() { setBulkCursor(i); setBulkOpen(null); }}
+                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", borderBottom: "1px solid #F5F4F1",
+                    background: isCur ? "#F0FDF4" : "#fff", opacity: done ? 0.5 : 1, cursor: "pointer", fontSize: 12 }}>
+                  <span style={{ width: 14, color: "#22C55E", fontWeight: 800 }}>{isCur ? "▸" : ""}</span>
+                  <span title={co.name} style={{ width: 190, fontWeight: 700, color: "#1A1917", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{co.name}</span>
+                  <span style={{ width: 96, fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 99, textAlign: "center",
+                    background: isUnassigned ? "#FEF3C7" : (agencyColor(card.agency_group) + "1A"), color: isUnassigned ? "#B45309" : agencyColor(card.agency_group) }}>
+                    {agencyLabel(card.agency_group)}</span>
+                  <span style={{ width: 90, color: "#888", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{co.assignee || "담당 미지정"}</span>
+                  <span style={{ width: 140, color: "#555" }}>{card.stage}</span>
+                  <span style={{ width: 80, color: "#AAA" }}>{lastAt}</span>
+                  <span title="현재 단계에 머문 일수" style={{ width: 58, fontWeight: 700, color: days >= 30 ? "#DC2626" : days >= 14 ? "#B45309" : "#AAA" }}>{days}일</span>
+                  {card.hold_reason && !done && <span style={{ fontSize: 10, fontWeight: 800, color: "#0369A1", background: "#E0F2FE", padding: "1px 6px", borderRadius: 4 }}>⏸ {reasonLabel(HOLD_REASONS, card.hold_reason)}</span>}
+                  {card.closed_at && !done && <span style={{ fontSize: 10, fontWeight: 800, color: "#6B7280", background: "#F3F4F6", padding: "1px 6px", borderRadius: 4 }}>🗄 {reasonLabel(CLOSE_REASONS, card.closed_reason) || "종결"}</span>}
+
+                  <span style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+                    {done ? (
+                      <span style={{ fontSize: 11, fontWeight: 800, color: "#15803D", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 5, padding: "3px 8px" }}>✓ {done}</span>
+                    ) : open ? (
+                      (open === "hold" ? HOLD_REASONS : CLOSE_REASONS).map(function(rs, ri) {
+                        return (
+                          <button key={rs.id} onClick={function(e) { e.stopPropagation(); applyBulk(r, open === "hold" ? "hold" : "close", rs.id); }}
+                            style={{ fontSize: 11, fontWeight: 800, color: rs.color, background: rs.bg, border: "1px solid " + rs.color + "44", borderRadius: 5, padding: "3px 8px", cursor: "pointer" }}>
+                            {(ri + 1) + " " + rs.label}
+                          </button>
+                        );
+                      })
+                    ) : (
+                      <>
+                        {isUnassigned && (
+                          <select value="" title="기관을 지정합니다 (고르면 즉시 반영)"
+                            onClick={function(e) { e.stopPropagation(); }}
+                            onChange={function(e) { var v = e.target.value; e.target.value = ""; if (v) assignAgency(r, v); }}
+                            style={{ fontSize: 11, fontWeight: 700, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 5, padding: "2px 6px", cursor: "pointer" }}>
+                            <option value="">🏛 기관 지정…</option>
+                            {AGENCY_GROUPS.map(function(g) { return <option key={g.id} value={g.id}>{g.label}</option>; })}
+                          </select>
+                        )}
+                        <button onClick={function(e) { e.stopPropagation(); setBulkCursor(i); applyBulk(r, "go"); }} title="단계는 그대로 두고 '확인함'으로 표시 (단축키 1)"
+                          style={{ fontSize: 11, fontWeight: 700, color: "#15803D", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 5, padding: "3px 8px", cursor: "pointer" }}>1 진행 중</button>
+                        <button onClick={function(e) { e.stopPropagation(); setBulkCursor(i); setBulkOpen({ id: card.id, kind: "hold" }); }} title="보류 — 사유를 고르면 즉시 반영 (단축키 2)"
+                          style={{ fontSize: 11, fontWeight: 700, color: "#0369A1", background: "#E0F2FE", border: "1px solid #BAE6FD", borderRadius: 5, padding: "3px 8px", cursor: "pointer" }}>2 보류</button>
+                        <button onClick={function(e) { e.stopPropagation(); setBulkCursor(i); setBulkOpen({ id: card.id, kind: "close" }); }} title="종결 — 사유를 고르면 즉시 반영 (단축키 3)"
+                          style={{ fontSize: 11, fontWeight: 700, color: "#B91C1C", background: "#FEE2E2", border: "1px solid #FECACA", borderRadius: 5, padding: "3px 8px", cursor: "pointer" }}>3 종결</button>
+                      </>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+            {bulkRows.length === 0 && <div style={{ padding: "28px 0", textAlign: "center", fontSize: 13, color: "#CCC" }}>정리할 카드가 없습니다.</div>}
+          </div>
+        </div>
+      )}
+      <div style={{ display: bulkMode ? "none" : "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8, alignItems: "start" }}>
         {STAGES.map((stage, si) => {
           const c = STAGE_COLORS[stage];
           const items = visibleRows.filter(r => r.card.stage === stage);
@@ -8461,9 +8684,18 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
                         {dormant && <span title={"'" + (rMeta ? rMeta.short : "") + "' 지정 후 " + daysSince(card.other_reason_at || card.stage_changed_at) + "일 경과"}
                           style={{ fontSize: 9, fontWeight: 800, color: "#6B7280", background: "#E5E7EB", borderRadius: 5, padding: "3px 7px" }}>💤 장기 방치</span>}
 
-                        {card.stage === "부결/반려" && (isClosed ? (
-                          <button title={"종결 처리됨" + (card.closed_by ? " (" + card.closed_by + ")" : "") + " — 클릭하면 보드로 복원"} onClick={function(e) { toggleClosed(e, row); }}
-                            style={{ fontSize: 9, fontWeight: 700, color: "#6B7280", background: "#F3F4F6", border: "1px solid #D1D5DB", borderRadius: 5, padding: "3px 7px", cursor: "pointer" }}>🗄 종결됨 · 복원</button>
+                        {/* 보류 카드 — 일괄 정리에서 지정. 클릭하면 해제 (정체 알림 대상으로 복귀) */}
+                        {card.hold_reason && !isClosed && (
+                          <span title={"보류 · " + reasonLabel(HOLD_REASONS, card.hold_reason) + " — 클릭하면 보류 해제"}
+                            onClick={function(e) { clearHold(e, row); }}
+                            style={{ fontSize: 9, fontWeight: 800, color: "#0369A1", background: "#E0F2FE", border: "1px solid #BAE6FD", borderRadius: 5, padding: "3px 7px", cursor: "pointer" }}>
+                            ⏸ {reasonLabel(HOLD_REASONS, card.hold_reason)}</span>
+                        )}
+
+                        {(card.stage === "부결/반려" || isClosed) && (isClosed ? (
+                          <button title={"종결 처리됨" + (card.closed_reason ? " · " + reasonLabel(CLOSE_REASONS, card.closed_reason) : "") + (card.closed_by ? " (" + card.closed_by + ")" : "") + " — 클릭하면 보드로 복원"} onClick={function(e) { toggleClosed(e, row); }}
+                            style={{ fontSize: 9, fontWeight: 700, color: "#6B7280", background: "#F3F4F6", border: "1px solid #D1D5DB", borderRadius: 5, padding: "3px 7px", cursor: "pointer" }}>
+                            🗄 종결됨{card.closed_reason ? " · " + reasonLabel(CLOSE_REASONS, card.closed_reason) : ""} · 복원</button>
                         ) : (
                           <button title="보드에서 숨기고 기업 상세 이력으로만 남깁니다 (재도전 여지가 있으면 그대로 두세요)" onClick={function(e) { toggleClosed(e, row); }}
                             style={{ fontSize: 9, fontWeight: 700, color: "#DC2626", background: "#fff", border: "1px solid #FECACA", borderRadius: 5, padding: "3px 7px", cursor: "pointer" }}>종결 처리</button>
