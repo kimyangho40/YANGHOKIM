@@ -1437,8 +1437,39 @@ function getMergedIndustryOptions(companies) {
   }).sort(function(a, b) { return a.localeCompare(b, "ko"); });
   return INDUSTRY_OPTIONS.concat(custom);
 }
-const DB_ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일"];
-const DB_MANAGERS = ["양호","동일","관호"];
+// ── DB리스트 필터 설정 — 사람이 바뀌면 아래 세 곳만 고치면 된다. (2026-07-27) ─────────────
+//  · 전화 담당자 = 전화를 거는 사람 → 표의 '전화 담당자' 열(db_leads.assignee)
+//  · 배정        = 영업 나가는 사람 → 표의 '배정' 열(db_leads.assigned_by)
+// 예전에는 담당자별 필터에 양호·동일·관호(영업)가 붙어 있었는데 assignee 에는 그 이름이 0건이라
+// 세 버튼이 항상 0이고 실제 전화 담당자는 전부 '기타'로 몰렸다. 그래서 두 축으로 분리한다.
+const DB_CALL_STAFF = ["지혜", "유진", "인선", "정원", "미현"];
+const DB_SALES_STAFF = ["동일", "양호", "관호"];
+// 3~6월 데이터에 성+이름으로 들어간 표기를 화면에서만 같은 사람으로 묶는다. DB 값은 고치지 않는다.
+// 목록에 없는 이름(예: 현애)은 별칭으로 정리돼도 '기타'로 집계된다.
+const DB_NAME_ALIAS = {
+  "최지혜": "지혜", "하유진": "유진", "류인선": "인선", "곽미현": "미현", "김현애": "현애",
+  "김동일": "동일", "김양호": "양호", "최관호": "관호",
+};
+// 값 정규화 — 빈칸·"-"는 미배정으로 본다. 별칭이 있으면 대표 이름으로 바꾼다.
+function dbStaffName(v) {
+  var s = (v || "").trim();
+  if (!s || s === "-") return "";
+  return DB_NAME_ALIAS[s] || s;
+}
+// 편집 드롭다운 선택지 — 명단에 없는 기존 값(예: '최지혜', '탈락')은 뒤에 붙여 보존한다.
+// 그래야 명단을 정리해도 기존 행의 값이 화면에서 사라지거나 강제로 바뀌지 않는다.
+function dbStaffOptions(list, current) {
+  var c = (current || "").trim();
+  return (c && list.indexOf(c) < 0) ? list.concat([c]) : list;
+}
+// 필터 한 축의 판정: 전체 / 미배정 / 기타 / 특정 이름
+function dbStaffMatch(value, filter, list) {
+  if (filter === "전체") return true;
+  var n = dbStaffName(value);
+  if (filter === "미배정") return !n;
+  if (filter === "기타") return !!n && list.indexOf(n) < 0;
+  return n === filter;
+}
 
 // 전화번호 자동 하이픈 포맷 (01012345678 → 010-1234-5678)
 function formatPhone(v) {
@@ -19925,7 +19956,8 @@ function DBLeadsView({ canExport }) {
   const [activeMonth, setActiveMonth] = useState(new Date().getMonth() + 1);
   const [filterStatus, setFilterStatus] = useState("전체");
   const [filterWeek, setFilterWeek] = useState("전체");
-  const [filterAssignee, setFilterAssignee] = useState("전체");
+  const [filterAssignee, setFilterAssignee] = useState("전체");   // 전화 담당자 (assignee)
+  const [filterAssignedBy, setFilterAssignedBy] = useState("전체"); // 배정 (assigned_by)
   const [editingId, setEditingId] = useState(null);
   const [editData, setEditData] = useState({});
   const [showAddLead, setShowAddLead] = useState(false);
@@ -19978,66 +20010,69 @@ function DBLeadsView({ canExport }) {
     return Math.ceil(date.getDate() / 7);
   };
 
+  // 필터 판정 한 곳 — skip 에 넣은 축만 빼고 나머지를 전부 AND 로 적용한다.
+  // 버튼 옆 건수를 "다른 필터가 걸린 상태"로 세려면 자기 축만 빼고 계산해야 해서 이렇게 모았다.
+  var passLead = function(l, skip) {
+    skip = skip || {};
+    if (l.year !== 2026 || l.deleted_at) return false;
+    if (!skip.month && activeMonth !== "all" && l.month !== activeMonth) return false;
+    if (!skip.status && filterStatus !== "전체" && l.status !== filterStatus) return false;
+    if (!skip.week && filterWeek !== "전체") { var w = getWeek(l); if (w !== parseInt(filterWeek)) return false; }
+    if (!skip.staff && !dbStaffMatch(l.assignee, filterAssignee, DB_CALL_STAFF)) return false;
+    if (!skip.sales && !dbStaffMatch(l.assigned_by, filterAssignedBy, DB_SALES_STAFF)) return false;
+    if (!skip.search && dbSearch.trim()) {
+      var s = dbSearch.trim().toLowerCase();
+      if (!((l.business_name || "").toLowerCase().includes(s) || (l.contact || "").includes(s)
+            || (l.assignee || "").toLowerCase().includes(s) || (l.assigned_by || "").toLowerCase().includes(s))) return false;
+    }
+    return true;
+  };
+  var filterDeps = [leads, activeMonth, filterStatus, filterWeek, filterAssignee, filterAssignedBy, dbSearch];
+
   var filtered = useMemo(function() {
-    return leads.filter(function(l) {
-      if ((activeMonth !== "all" && l.month !== activeMonth) || l.year !== 2026 || l.deleted_at) return false;
-      if (filterStatus !== "전체" && l.status !== filterStatus) return false;
-      if (filterWeek !== "전체") {
-        var w = getWeek(l);
-        if (w !== parseInt(filterWeek)) return false;
-      }
-      if (filterAssignee !== "전체") {
-        var asg = (l.assignee || "").trim();
-        var isUnassigned = !asg || asg === "-";
-        if (filterAssignee === "미배정") {
-          if (!isUnassigned) return false;
-        } else if (filterAssignee === "기타") {
-          // 미배정도 아니고 양호/동일/관호도 아닌 담당자
-          if (isUnassigned || asg === "양호" || asg === "동일" || asg === "관호") return false;
-        } else {
-          if (asg !== filterAssignee) return false;
-        }
-      }
-      if (dbSearch.trim()) {
-        var s = dbSearch.trim().toLowerCase();
-        return (l.business_name || "").toLowerCase().includes(s) ||
-               (l.contact || "").includes(s) ||
-               (l.assignee || "").toLowerCase().includes(s);
-      }
-      return true;
+    return leads.filter(function(l) { return passLead(l); });
+  }, filterDeps);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 사람 축(전화 담당자 / 배정) 버튼 건수 — 전체·미배정·기타 + 명단
+  var countStaff = function(rows, field, list) {
+    var c = { "전체": rows.length, "미배정": 0, "기타": 0 };
+    list.forEach(function(n) { c[n] = 0; });
+    rows.forEach(function(l) {
+      var n = dbStaffName(l[field]);
+      if (!n) c["미배정"]++;
+      else if (list.indexOf(n) >= 0) c[n]++;
+      else c["기타"]++;
     });
-  }, [leads, activeMonth, filterStatus, filterWeek, filterAssignee, dbSearch]);
+    return c;
+  };
 
   var monthsWithData = useMemo(function() {
     var s = new Set();
-    leads.filter(function(l) { return l.year === 2026 && !l.deleted_at; }).forEach(function(l) { s.add(l.month); });
+    leads.filter(function(l) { return passLead(l, { month: true }); }).forEach(function(l) { s.add(l.month); });
     return s;
-  }, [leads]);
+  }, filterDeps);   // eslint-disable-line react-hooks/exhaustive-deps
 
   var weeksWithData = useMemo(function() {
     var counts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-    leads.filter(function(l) { return (activeMonth === "all" || l.month === activeMonth) && l.year === 2026 && !l.deleted_at; }).forEach(function(l) {
+    leads.filter(function(l) { return passLead(l, { week: true }); }).forEach(function(l) {
       var w = getWeek(l);
       if (w && w >= 1 && w <= 5) counts[w]++;
     });
     return counts;
-  }, [leads, activeMonth]);
+  }, filterDeps);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 담당자별 건수 (양호/동일/관호 고정 + 미배정 + 기타)
+  // 전화 담당자별 건수 (표의 '전화 담당자' 열 = assignee)
   var assigneeCounts = useMemo(function() {
-    var c = { "전체": 0, "미배정": 0, "양호": 0, "동일": 0, "관호": 0, "기타": 0 };
-    leads.filter(function(l) { return (activeMonth === "all" || l.month === activeMonth) && l.year === 2026 && !l.deleted_at; }).forEach(function(l) {
-      c["전체"]++;
-      var asg = (l.assignee || "").trim();
-      if (!asg || asg === "-") c["미배정"]++;
-      else if (asg === "양호" || asg === "동일" || asg === "관호") c[asg]++;
-      else c["기타"]++;
-    });
-    return c;
-  }, [leads, activeMonth]);
+    return countStaff(leads.filter(function(l) { return passLead(l, { staff: true }); }), "assignee", DB_CALL_STAFF);
+  }, filterDeps);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 배정별 건수 (표의 '배정' 열 = assigned_by)
+  var assignedByCounts = useMemo(function() {
+    return countStaff(leads.filter(function(l) { return passLead(l, { sales: true }); }), "assigned_by", DB_SALES_STAFF);
+  }, filterDeps);   // eslint-disable-line react-hooks/exhaustive-deps
 
   var summary = useMemo(function() {
-    var all = leads.filter(function(l) { return (activeMonth === "all" || l.month === activeMonth) && l.year === 2026 && !l.deleted_at; });
+    var all = leads.filter(function(l) { return passLead(l, { status: true }); });
     return {
       total: all.length,
       connected: all.filter(function(l) { return l.status === "연결"; }).length,
@@ -20165,7 +20200,7 @@ function DBLeadsView({ canExport }) {
       {/* 검색창 */}
       <div style={{ marginBottom: 16, position: "relative" }}>
         <input value={dbSearch} onChange={function(e) { setDbSearch(e.target.value); }}
-          placeholder="🔍 업체명, 연락처, 담당자 검색..."
+          placeholder="🔍 업체명, 연락처, 전화 담당자, 배정 검색..."
           style={{ width: "100%", padding: "10px 40px 10px 14px", border: "1px solid #E8E5E0", borderRadius: 10, fontSize: 13, boxSizing: "border-box", outline: "none", background: "#fff" }} />
         {dbSearch && <button onClick={function() { setDbSearch(""); }} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#888" }}>✕</button>}
       </div>
@@ -20191,13 +20226,28 @@ function DBLeadsView({ canExport }) {
         })}
       </div>
 
-      <div style={{ display: "flex", gap: 6, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
-        <span style={{ fontSize: 12, color: "#888", marginRight: 4 }}>담당자별:</span>
-        {["전체","미배정","양호","동일","관호","기타"].map(function(a) {
+      {/* 전화 담당자 = 전화를 거는 사람(assignee) · 배정 = 영업 나가는 사람(assigned_by). 두 필터는 AND. */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, color: "#888", marginRight: 4, minWidth: 62 }}>전화 담당자:</span>
+        {["전체"].concat(DB_CALL_STAFF).concat(["기타", "미배정"]).map(function(a) {
           var cnt = assigneeCounts[a] || 0;
-          var badge = a === "전체" ? "" : (cnt > 0 ? " (" + cnt + ")" : "");
-          return (<div key={a} onClick={function() { setFilterAssignee(a); }} style={{ padding: "4px 12px", borderRadius: 99, cursor: "pointer", fontSize: 12, background: filterAssignee === a ? "#1A1917" : "#fff", color: filterAssignee === a ? "#F7F6F3" : "#666", border: filterAssignee === a ? "none" : "1px solid #E8E5E0" }}>{a}{badge}</div>);
+          var badge = a === "전체" ? "" : " (" + cnt + ")";
+          return (<div key={a} onClick={function() { setFilterAssignee(a); }} style={{ padding: "4px 12px", borderRadius: 99, cursor: "pointer", fontSize: 12, background: filterAssignee === a ? "#1A1917" : "#fff", color: filterAssignee === a ? "#F7F6F3" : cnt === 0 && a !== "전체" ? "#BBB" : "#666", border: filterAssignee === a ? "none" : "1px solid #E8E5E0" }}>{a}{badge}</div>);
         })}
+      </div>
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, color: "#888", marginRight: 4, minWidth: 62 }}>배정:</span>
+        {/* '기타'는 명단 밖 값(탈락·중복DB 등)이 있을 때만 띄운다 — 없으면 요청받은 목록 그대로 */}
+        {["전체"].concat(DB_SALES_STAFF).concat(assignedByCounts["기타"] > 0 ? ["기타"] : []).concat(["미배정"]).map(function(a) {
+          var cnt = assignedByCounts[a] || 0;
+          var badge = a === "전체" ? "" : " (" + cnt + ")";
+          return (<div key={a} onClick={function() { setFilterAssignedBy(a); }} style={{ padding: "4px 12px", borderRadius: 99, cursor: "pointer", fontSize: 12, background: filterAssignedBy === a ? "#1A1917" : "#fff", color: filterAssignedBy === a ? "#F7F6F3" : cnt === 0 && a !== "전체" ? "#BBB" : "#666", border: filterAssignedBy === a ? "none" : "1px solid #E8E5E0" }}>{a}{badge}</div>);
+        })}
+        {(filterAssignee !== "전체" || filterAssignedBy !== "전체") && (
+          <button onClick={function() { setFilterAssignee("전체"); setFilterAssignedBy("전체"); }}
+            style={{ marginLeft: 4, padding: "4px 10px", borderRadius: 99, fontSize: 11, border: "1px solid #E8E5E0", background: "#F7F6F3", color: "#666", cursor: "pointer" }}>사람 필터 해제</button>
+        )}
       </div>
 
       <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
@@ -20208,8 +20258,8 @@ function DBLeadsView({ canExport }) {
                 <th style={{ textAlign: "center", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, width: 36 }}>#</th>
                 <th style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 120 }}>사업자명</th>
                 <th style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 100 }}>연락처</th>
-                <th style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 55 }}>담당자</th>
-                <th style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 55 }}>배정</th>
+                <th title="전화를 거는 사람 (db_leads.assignee)" style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 72 }}>전화 담당자</th>
+                <th title="영업 나가는 사람 (db_leads.assigned_by)" style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 55 }}>배정</th>
                 <th style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 70 }}>상태</th>
                 <th style={{ textAlign: "left", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, minWidth: 200 }}>최근 콜</th>
                 <th style={{ textAlign: "center", padding: "10px 8px", fontWeight: 600, color: "#888", fontSize: 11, width: 70 }}>작업</th>
@@ -20243,12 +20293,12 @@ function DBLeadsView({ canExport }) {
                       </td>
                       <td style={{ padding: "9px 8px" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
                         {isEditing
-                          ? <select value={editData.assignee || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { assignee: e.target.value }); }); }} style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12, width: "100%" }}><option value="">-</option>{DB_ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}</select>
+                          ? <select value={editData.assignee || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { assignee: e.target.value }); }); }} style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12, width: "100%" }}><option value="">-</option>{dbStaffOptions(DB_CALL_STAFF, editData.assignee).map(function(a) { return <option key={a} value={a}>{a}</option>; })}</select>
                           : <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#EEF2FF", color: "#4338CA", fontWeight: 600 }}>{row.assignee || "-"}</span>}
                       </td>
                       <td style={{ padding: "9px 8px" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
                         {isEditing
-                          ? <select value={editData.assigned_by || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { assigned_by: e.target.value }); }); }} style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12, width: "100%" }}><option value="">-</option>{DB_MANAGERS.map(function(a) { return <option key={a} value={a}>{a}</option>; })}</select>
+                          ? <select value={editData.assigned_by || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { assigned_by: e.target.value }); }); }} style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12, width: "100%" }}><option value="">-</option>{dbStaffOptions(DB_SALES_STAFF, editData.assigned_by).map(function(a) { return <option key={a} value={a}>{a}</option>; })}</select>
                           : <span style={{ fontSize: 12, color: "#888" }}>{row.assigned_by || "-"}</span>}
                       </td>
                       <td style={{ padding: "9px 8px" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
@@ -20364,7 +20414,7 @@ function DBLeadsView({ canExport }) {
           <div style={{ padding: "20px 24px" }}>
             <div style={{ marginBottom: 13 }}><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>사업자명 *</label><input value={newLead.business_name || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { business_name: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} /></div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 13 }}><div><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>연락처</label><input value={newLead.contact || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { contact: e.target.value }); }); }} placeholder="010-0000-0000" style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} /></div><div><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>상태</label><select value={newLead.status || "미연락"} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { status: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>{LEAD_STATUSES.map(function(s) { return <option key={s} value={s}>{s}</option>; })}</select></div></div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 13 }}><div><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>담당자</label><select value={newLead.assignee || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { assignee: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}><option value="">선택</option>{DB_ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}</select></div><div><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>배정 담당</label><select value={newLead.assigned_by || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { assigned_by: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}><option value="">선택</option>{DB_MANAGERS.map(function(a) { return <option key={a} value={a}>{a}</option>; })}</select></div></div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 13 }}><div><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>전화 담당자</label><select value={newLead.assignee || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { assignee: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}><option value="">선택</option>{dbStaffOptions(DB_CALL_STAFF, newLead.assignee).map(function(a) { return <option key={a} value={a}>{a}</option>; })}</select></div><div><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>배정 담당</label><select value={newLead.assigned_by || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { assigned_by: e.target.value }); }); }} style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}><option value="">선택</option>{dbStaffOptions(DB_SALES_STAFF, newLead.assigned_by).map(function(a) { return <option key={a} value={a}>{a}</option>; })}</select></div></div>
             <div style={{ marginBottom: 13 }}><label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>1차콜</label>
               <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
                 <input type="date" value={newLead.call_1_date || ""} onChange={function(e) { setNewLead(function(p) { return Object.assign({}, p, { call_1_date: e.target.value }); }); }} style={{ flex: 1, padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13 }} />
@@ -20431,7 +20481,7 @@ function DBLeadsView({ canExport }) {
                     style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>담당자</div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>전화 담당자</div>
                   <select value={selectedLead.assignee || ""}
                     onChange={async function(e) {
                       var v = e.target.value;
@@ -20443,7 +20493,7 @@ function DBLeadsView({ canExport }) {
                     }}
                     style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none", cursor: "pointer" }}>
                     <option value="">선택</option>
-                    {DB_ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
+                    {dbStaffOptions(DB_CALL_STAFF, selectedLead.assignee).map(function(a) { return <option key={a} value={a}>{a}</option>; })}
                   </select>
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
@@ -20459,7 +20509,7 @@ function DBLeadsView({ canExport }) {
                     }}
                     style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none", cursor: "pointer" }}>
                     <option value="">선택</option>
-                    {DB_MANAGERS.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
+                    {dbStaffOptions(DB_SALES_STAFF, selectedLead.assigned_by).map(function(a) { return <option key={a} value={a}>{a}</option>; })}
                   </select>
                 </div>
               </div>
