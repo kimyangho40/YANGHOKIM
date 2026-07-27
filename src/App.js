@@ -861,6 +861,31 @@ function creditReportToLoans(result) {
   return out;
 }
 
+// ── 여신정보 기준일자 신선도 ────────────────────────────────────────────────
+//  여신정보는 시점 데이터라 오래되면 현재 채무 상태와 어긋난다.
+//  기준일이 이 일수를 넘으면 '최신화 필요'로 표시한다(삭제·경고만, 값은 그대로 둔다).
+const CREDIT_STALE_DAYS = 90;
+function creditAsOfInfo(company) {
+  var raw = getCompanyInfoVal(company && company.company_info, "여신정보 기준일자");
+  if (!raw) return null;
+  var m = String(raw).match(/(\d{4})[-./년\s]*(\d{1,2})[-./월\s]*(\d{1,2})/);
+  if (!m) return { asOf: String(raw).trim(), days: null, stale: false };
+  var d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (isNaN(d.getTime())) return { asOf: String(raw).trim(), days: null, stale: false };
+  var days = Math.floor((Date.now() - d.getTime()) / 86400000);
+  var asOf = m[1] + "-" + String(m[2]).padStart(2, "0") + "-" + String(m[3]).padStart(2, "0");
+  return { asOf: asOf, days: days, stale: days >= CREDIT_STALE_DAYS };
+}
+// 여신정보로 들어왔는데 아직 구분이 지정되지 않은 행 수.
+//  법인기업은 미분류가 부채비율에서 빠지므로, 담당자에게 알려주지 않으면
+//  "왜 부채비율이 안 변하지?"가 된다.
+function creditUnclassifiedCount(company) {
+  var loans = Array.isArray(company && company.loans) ? company.loans : [];
+  return loans.filter(function(l) {
+    return l && l.src === "credit_report" && !l.kind && !isLoanRejected(l);
+  }).length;
+}
+
 // 원 → "N억/N천만/N만" 표기
 function wonToKor(won) {
   var n = Number(won) || 0;
@@ -11106,7 +11131,35 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
 
               {/* 기대출 내역 표 */}
               <ZoomSection title="💰 기대출 내역" hint="구분·금액·기간 입력" value={data.loans} onSave={function() { onSave(data); }}>
-              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+                {/* 여신정보 기준일자 — 오래되면 '최신화 필요'로 표시(값은 건드리지 않는다) */}
+                {(function() {
+                  var a = creditAsOfInfo(data);
+                  if (!a) return null;
+                  return a.stale ? (
+                    <span title={"여신정보 기준일이 " + a.days + "일 지났습니다. 그 사이 신규 대출·상환이 반영되지 않았을 수 있으니 최신 문서로 다시 첨부해주세요."}
+                      style={{ background: "#FEF2F2", color: "#B91C1C", border: "1px solid #FECACA", borderRadius: 6, padding: "3px 9px", fontSize: 10.5, fontWeight: 800 }}>
+                      ⚠ 여신정보 최신화 필요 · 기준일 {a.asOf} ({a.days}일 전)
+                    </span>
+                  ) : (
+                    <span title="이 기업의 기대출 내역에 반영된 여신정보 문서의 기준일자입니다."
+                      style={{ background: "#F3F4F6", color: "#6B7280", borderRadius: 6, padding: "3px 9px", fontSize: 10.5, fontWeight: 700 }}>
+                      여신정보 기준일 {a.asOf}{a.days != null ? " (" + a.days + "일 전)" : ""}
+                    </span>
+                  );
+                })()}
+                {/* 법인기업은 미분류가 부채비율에서 빠진다 — 모르면 '왜 안 변하지?'가 되므로 알려준다 */}
+                {(function() {
+                  var n = creditUnclassifiedCount(data);
+                  if (!n || data.type !== "법인") return null;
+                  return (
+                    <span title={"여신정보로 넣은 " + n + "건이 아직 미분류입니다. 법인기업은 '법인대출'로 지정된 건만 부채비율에 반영되므로, 구분을 지정해야 계산에 들어갑니다."}
+                      style={{ background: "#FFFBEB", color: "#B45309", border: "1px solid #FDE68A", borderRadius: 6, padding: "3px 9px", fontSize: 10.5, fontWeight: 800 }}>
+                      구분 미지정 {n}건 — 부채비율 미반영
+                    </span>
+                  );
+                })()}
+                <div style={{ marginLeft: "auto" }} />
                 <CreditReportImport
                   existingCount={Array.isArray(data.loans) ? data.loans.length : 0}
                   onApply={function(rows, applyMode, asOf) {
