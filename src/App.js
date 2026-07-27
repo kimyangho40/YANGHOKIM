@@ -7526,6 +7526,16 @@ function OtherReasonModal({ row, onClose, onSave }) {
 }
 
 // ── 파이프라인 ────────────────────────────────────────────────────────────────
+// 파이프라인 검색용 이름 정규화 — 법인격 표기·공백 무시, 소문자화.
+// "주식회사고려기술" · "(주)고려기술" · "고려기술" 이 서로 매치되도록 접두/공백을 제거한다.
+function normPipeSearchName(s) {
+  return String(s == null ? "" : s)
+    .toLowerCase()
+    .replace(/주식회사|\(주\)|（주）|㈜|\(유\)|유한회사/g, "")
+    .replace(/\s+/g, "");
+}
+function onlyDigits(s) { return String(s == null ? "" : s).replace(/[^0-9]/g, ""); }
+
 function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, onSelect, setPipelineCards, setStagnConfig, canEditMapping, myName, stagnRows }) {
   // 파이프라인 탭 진입 시 카드 최신화 (기관현황 자동동기화 결과 반영)
   useEffect(function() {
@@ -7551,6 +7561,35 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
   const [agencyPick, setAgencyPick] = useState(null); // { row, mode: "add" | "assign" }
   const [reasonEdit, setReasonEdit] = useState(null); // 기타 사유 지정 대상 row
 
+  // ── 🔍 카드 검색 (표시 전용 — DB/카드 데이터 무변경) ─────────────────────────
+  const [q, setQ] = useState("");        // 입력 즉시값
+  const [dq, setDq] = useState("");      // 디바운스된 검색어(200ms) — 실제 필터에 사용
+  const searchRef = useRef(null);
+  useEffect(function() {
+    var t = setTimeout(function() { setDq(q); }, 200);
+    return function() { clearTimeout(t); };
+  }, [q]);
+  var clearSearch = function(refocus) {
+    setQ(""); setDq("");
+    if (searchRef.current) { if (refocus) searchRef.current.focus(); else searchRef.current.blur(); }
+  };
+  // 단축키: Ctrl/⌘+F 또는 "/" → 검색창 포커스, Esc → 검색 초기화 후 포커스 해제
+  useEffect(function() {
+    function onKey(e) {
+      var tag = (e.target && e.target.tagName) || "";
+      var typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (e.target && e.target.isContentEditable);
+      if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
+        e.preventDefault(); if (searchRef.current) searchRef.current.focus();
+      } else if (e.key === "/" && !typing) {
+        e.preventDefault(); if (searchRef.current) searchRef.current.focus();
+      } else if (e.key === "Escape" && (document.activeElement === searchRef.current || q || dq)) {
+        clearSearch(false);
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return function() { document.removeEventListener("keydown", onKey); };
+  }, [q, dq]);
+
   // 정체 알림 기준(stage_stagnation_config)을 넘긴 카드 id — 알림 기능과 같은 기준을 공유
   const stagnIds = useMemo(function() {
     var s = new Set();
@@ -7558,10 +7597,21 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
     return s;
   }, [stagnRows]);
 
-  // 보드에 실제로 그릴 카드 (관제탑 필터 + 정렬 적용)
+  // 검색어 정규화 — 이름/대표/담당(법인격·공백 무시) + 사업자번호(숫자만)
+  var nq = normPipeSearchName(dq);
+  var dqDigits = onlyDigits(dq);
+  var searchActive = !!(nq || dqDigits);   // "(주)"만 입력한 경우처럼 정규화 후 빈 값이면 검색 미적용
+  // 보드에 실제로 그릴 카드 (검색 + 관제탑 필터 + 정렬 적용) — 표시만 바꾸며 데이터는 건드리지 않는다
   const visibleRows = useMemo(function() {
     var out = (cardRows || []).filter(function(r) {
       var card = r.card;
+      if (searchActive) {                                                    // 🔍 검색 (부분 일치, AND)
+        var nameHit = nq && (normPipeSearchName(r.co.name).includes(nq)
+          || normPipeSearchName(r.co.representative).includes(nq)
+          || normPipeSearchName(r.co.assignee).includes(nq));
+        var bizHit = dqDigits && onlyDigits(r.co.business_number).includes(dqDigits);
+        if (!nameHit && !bizHit) return false;
+      }
       if (!showClosed && card.closed_at) return false;                       // 종결 카드는 기본 숨김
       if (fAgency !== "전체") {
         if (fAgency === "__none__") { if (card.agency_group) return false; }
@@ -7583,12 +7633,13 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
       out = out.slice().sort(function(a, b) { return daysSince(b.card.stage_changed_at) - daysSince(a.card.stage_changed_at); });
     }
     return out;
-  }, [cardRows, showClosed, fAgency, fReason, mineOnly, myName, stagnOnly, stagnIds, sortMode]);
+  }, [cardRows, showClosed, fAgency, fReason, mineOnly, myName, stagnOnly, stagnIds, sortMode, searchActive, nq, dqDigits]);
 
-  var filterOn = fAgency !== "전체" || fReason !== "전체" || mineOnly || stagnOnly || showClosed || sortMode !== "기본" || filterAssignee !== "전체";
+  var filterOn = fAgency !== "전체" || fReason !== "전체" || mineOnly || stagnOnly || showClosed || sortMode !== "기본" || filterAssignee !== "전체" || searchActive;
   var resetFilters = function() {
     setFAgency("전체"); setFReason("전체"); setMineOnly(false); setStagnOnly(false);
     setShowClosed(false); setSortMode("기본"); setFilterAssignee("전체");
+    setQ(""); setDq("");
   };
   // 보드 전체 기준 요약(필터 무관) — 관제탑 상단 배지
   var closedCount = (cardRows || []).filter(function(r) { return !!r.card.closed_at; }).length;
@@ -7789,6 +7840,20 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
       {/* ── 🛰 관제탑: 필터 · 정렬 ─────────────────────────────────────────── */}
       <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, padding: "10px 14px", marginBottom: 14, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <span style={{ fontSize: 12, fontWeight: 800, color: "#4338CA", marginRight: 2 }}>🛰 관제탑</span>
+        <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+          <span style={{ position: "absolute", left: 9, fontSize: 12, color: "#AAA", pointerEvents: "none" }}>🔍</span>
+          <input ref={searchRef} value={q} onChange={function(e) { setQ(e.target.value); }}
+            placeholder="업체·대표자·사업자번호·담당자 검색 ( / )"
+            title="법인격 표기((주)·주식회사)와 공백은 무시하고 부분 일치로 찾습니다. 단축키: / 또는 Ctrl+F 포커스 · Esc 초기화"
+            style={{ padding: "6px 26px 6px 28px", border: "1px solid " + (searchActive ? "#C7D2FE" : "#E8E5E0"), borderRadius: 7, fontSize: 12, background: searchActive ? "#F5F3FF" : "#fff", width: 250, outline: "none" }} />
+          {q && <button onClick={function() { clearSearch(true); }} title="검색어 지우기 (Esc)"
+            style={{ position: "absolute", right: 5, background: "none", border: "none", cursor: "pointer", color: "#999", fontSize: 15, lineHeight: 1, padding: 2 }}>×</button>}
+        </div>
+        {searchActive && (
+          <span style={{ fontSize: 12, fontWeight: 700, color: visibleRows.length ? "#4338CA" : "#B91C1C", background: visibleRows.length ? "#EEF2FF" : "#FEE2E2", border: "1px solid " + (visibleRows.length ? "#C7D2FE" : "#FECACA"), borderRadius: 99, padding: "4px 10px" }}>
+            🔍 {visibleRows.length}건 검색됨
+          </span>
+        )}
         <select value={filterAssignee} onChange={e => setFilterAssignee(e.target.value)} title="담당자별 보기"
           style={{ padding: "6px 10px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 12, background: "#fff", cursor: "pointer" }}>
           {assignees.map(a => <option key={a} value={a}>{a === "전체" ? "담당자 전체" : a}</option>)}
@@ -7834,6 +7899,11 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
         onPick={function(agId) { return agencyPick.mode === "add" ? addAgencyCard(agencyPick.row, agId) : assignAgency(agencyPick.row, agId); }} />}
       {reasonEdit && <OtherReasonModal row={reasonEdit} onClose={function() { setReasonEdit(null); }}
         onSave={function(rid, note) { return saveOtherReason(reasonEdit, rid, note); }} />}
+      {searchActive && visibleRows.length === 0 && (
+        <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 12, padding: "14px 16px", marginBottom: 14, fontSize: 13, color: "#B91C1C", fontWeight: 600 }}>
+          🔍 '<b>{q.trim()}</b>' 와(과) 일치하는 카드가 없습니다. 검색어를 바꾸거나 <b>×</b>(또는 Esc)로 초기화하세요.
+        </div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8, alignItems: "start" }}>
         {STAGES.map((stage, si) => {
           const c = STAGE_COLORS[stage];
