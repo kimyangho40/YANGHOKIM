@@ -5,6 +5,8 @@
 // 보안: API 키는 이 서버 함수에만 존재하며 프런트엔드로 절대 노출되지 않습니다.
 //       프런트는 비밀번호/인증서 등 민감 필드를 제외한 업체 스냅샷만 전달합니다.
 
+import { denyUnauthorized } from "./_auth.mjs";
+
 const MODEL = "claude-sonnet-5";
 
 export default async function handler(req, res) {
@@ -12,6 +14,7 @@ export default async function handler(req, res) {
     res.status(405).json({ error: "POST 요청만 허용됩니다." });
     return;
   }
+  if (await denyUnauthorized(req, res)) return;
 
   try {
     const { question, companyContext, history } = req.body || {};

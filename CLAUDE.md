@@ -38,6 +38,30 @@
   - 한셀/한컴오피스로 만든 xlsx (네임스페이스 접두사 + `hs:` 확장 → 정규화 폴백)
 - 확인 방법: `node`로 `node_modules/xlsx`를 직접 로드해 실제 파일을 파싱, 추출 행/필드 수를 눈으로 확인.
 
+## 2-2. DB 테이블을 새로 만들면 — RLS를 같은 커밋에서 켠다
+Supabase는 테이블 기본값이 **"열림"**이라, RLS를 켜지 않으면 비로그인 anon key로 전건이 조회된다.
+과거 `보안_RLS_승인제_SETUP.sql`이 테이블을 **이름으로 나열**하는 방식이라, 그 뒤에 만든 테이블마다
+구멍이 생겼다(2026-07-27 사고: 10,801건 노출). 목록 방식에 기대지 말고 **테이블을 만든 그 커밋에서** 처리한다.
+
+- [ ] `alter table public.<t> enable row level security;`
+- [ ] `is_approved()` 기반 정책 부여(승인된 로그인 사용자만). **`to public` / `to anon` 정책은 만들지 않는다.**
+- [ ] anon 권한 회수: `revoke all on public.<t> from anon;`
+- [ ] 옛 정책이 남아 있지 않은지 확인 — PERMISSIVE 정책은 **OR로 합쳐져서**,
+      `{anon} USING(true)` 하나만 남아도 새 정책이 무력화된다.
+- [ ] 배포 전 점검(결과가 **0행**이어야 정상):
+      ```sql
+      select c.relname from pg_class c
+       where c.relnamespace='public'::regnamespace and c.relkind='r' and c.relrowsecurity = false;
+      ```
+- Storage 버킷도 같다: `public=false` + 정책은 `to authenticated`.
+  공개 버킷이 아니므로 **`getPublicUrl()`을 쓰면 안 된다** → `createSignedUrl()`(App.js `StorageAudio`).
+- `/api/*` 서버리스 함수를 새로 만들면 **첫 줄에 `denyUnauthorized(req, res)`**(`api/_auth.js`).
+  검사가 없으면 누구나 호출해 `ANTHROPIC_API_KEY` 요금을 태울 수 있다.
+  프런트는 반드시 `callApi()`(App.js)로 호출한다 — 토큰·anon key 헤더를 붙여준다.
+- ⚠️ 판정 함정: RLS는 "거부"가 아니라 "필터링"이라 **`200 OK` + 0건이 정상 차단 상태**다.
+  또 PostgREST는 RLS가 막았을 때와 0행 매칭일 때 **둘 다 204**를 준다 →
+  "없는 id로 UPDATE 찔러보기"로는 쓰기 권한을 판정할 수 없다. 카탈로그(`pg_policies`·GRANT)로 확인할 것.
+
 ## 3. 완료 보고 시 — "회귀 확인 완료" 여부 명시
 매 기능 추가/수정 완료 보고에 **반드시 "회귀 확인 완료" 여부와 점검한 항목**을 같이 적는다.
 깨진 게 있으면 목록으로 보고하고 "고칠 것 vs 이번엔 보고만 할 것"을 구분한다.

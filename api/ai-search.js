@@ -5,6 +5,8 @@
 // 예시 질문: "이번달 부결 정리해줘", "만기임박 업체는?", "이번주 신규 등록 업체"
 // 보안: API 키는 이 서버 함수에만 존재. 프런트가 조립한 경량 스냅샷(민감정보 제외)만 전달.
 
+import { denyUnauthorized } from "./_auth.mjs";
+
 const MODEL = "claude-sonnet-5";
 
 export default async function handler(req, res) {
@@ -12,6 +14,7 @@ export default async function handler(req, res) {
     res.status(405).json({ error: "POST 요청만 허용됩니다." });
     return;
   }
+  if (await denyUnauthorized(req, res)) return;
 
   try {
     const { question, snapshot, today, history } = req.body || {};

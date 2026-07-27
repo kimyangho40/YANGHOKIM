@@ -4,18 +4,17 @@
 //
 // 형제 엔드포인트(ai-search/ai-company/summarize-kakao/voice-command)와 동일하게 raw fetch를 쓴다.
 //
-// ⚠️ 이 함수만 인증을 검사한다.
-//    형제 엔드포인트들은 세션 검사가 없어 누구나 호출할 수 있다(2026-07-27 보안 진단 9번 항목).
-//    여신정보는 민감도가 높아, 전체 조치 전에 이 엔드포인트만 선제적으로 잠근다.
-//    검사: Supabase JWT 유효성 + profiles.status='approved'
+// 인증 검사는 api/_auth.mjs로 옮겼다(2026-07-28 보안조치 8) — 5개 엔드포인트가 같은 검사를 쓴다.
+//   검사 내용은 그대로: Supabase JWT 유효성 + profiles.status='approved'
 //
 // 설계 원칙 (2026-07-27 1단계 설계안 승인분):
 //   · 이 함수는 "추출"만 한다. 단위 환산·소계 제거·금액 확정은 프런트(App.js)가 코드로 재검증한다.
 //     모델 판단을 그대로 신뢰하지 않기 위한 이중 방어.
 //   · 실행일은 문서에 없으므로 스키마에 아예 두지 않는다(추측 여지 제거).
 //   · 만기구조는 구간 표현이라 만기일이 아니다. 원문 문자열로만 돌려준다.
+import { denyUnauthorized } from "./_auth.mjs";
+
 const MODEL = "claude-opus-5";
-const SUPABASE_URL = "https://ujdrjvnihxjvbkezjvwc.supabase.co";
 
 // 추출 스키마 — 말하지 않은 값은 빈 문자열로 채우게 해 파싱 실패 여지를 없앤다.
 const SCHEMA = {
@@ -86,51 +85,12 @@ const SYSTEM = [
   "7. 읽을 수 없는 값은 빈 문자열로 두세요. 추측해서 채우지 마세요.",
 ].join("\n");
 
-// Supabase JWT 검증 + 승인 상태 확인. 통과하면 null, 실패하면 {status, error} 반환.
-async function checkAuth(req) {
-  const auth = req.headers.authorization || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  if (!token) return { status: 401, error: "로그인이 필요합니다." };
-  const anonKey = req.headers["x-supabase-anon"] || "";
-  if (!anonKey) return { status: 401, error: "인증 정보가 없습니다." };
-
-  // 1) 토큰이 유효한 사용자 것인지
-  let userRes;
-  try {
-    userRes = await fetch(SUPABASE_URL + "/auth/v1/user", {
-      headers: { apikey: anonKey, Authorization: "Bearer " + token },
-    });
-  } catch (e) {
-    return { status: 503, error: "인증 서버에 연결할 수 없습니다." };
-  }
-  if (!userRes.ok) return { status: 401, error: "로그인이 만료되었습니다. 새로고침 후 다시 시도해주세요." };
-  const user = await userRes.json();
-  if (!user || !user.id) return { status: 401, error: "로그인이 필요합니다." };
-
-  // 2) 승인된 계정인지 (RLS가 걸려 있으므로 본인 토큰으로 조회)
-  const profRes = await fetch(
-    SUPABASE_URL + "/rest/v1/profiles?select=status&id=eq." + encodeURIComponent(user.id),
-    { headers: { apikey: anonKey, Authorization: "Bearer " + token } }
-  );
-  if (!profRes.ok) return { status: 403, error: "권한을 확인할 수 없습니다." };
-  const rows = await profRes.json();
-  if (!Array.isArray(rows) || !rows[0] || rows[0].status !== "approved") {
-    return { status: 403, error: "관리자 승인 후 이용할 수 있습니다." };
-  }
-  return null;
-}
-
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "POST 요청만 허용됩니다." });
     return;
   }
-
-  const denied = await checkAuth(req);
-  if (denied) {
-    res.status(denied.status).json({ error: denied.error });
-    return;
-  }
+  if (await denyUnauthorized(req, res)) return;
 
   try {
     const { fileBase64, mediaType } = req.body || {};

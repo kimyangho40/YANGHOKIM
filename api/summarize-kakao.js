@@ -2,11 +2,14 @@
 // 위치: 프로젝트 루트의 api/summarize-kakao.js
 // 환경변수 ANTHROPIC_API_KEY 필요 (Vercel에 등록됨)
 
+import { denyUnauthorized } from "./_auth.mjs";
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "POST 요청만 허용됩니다." });
     return;
   }
+  if (await denyUnauthorized(req, res)) return;
 
   try {
     const { imageBase64, mediaType } = req.body || {};

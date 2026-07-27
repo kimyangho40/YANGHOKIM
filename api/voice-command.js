@@ -8,6 +8,8 @@
 //
 // 형제 엔드포인트(ai-search/ai-company/summarize-kakao)와 동일하게 raw fetch를 쓴다.
 // 모델: 지시 이해 정확도가 안전과 직결되므로 Opus. 응답 지연이 문제되면 claude-sonnet-5로 교체 가능.
+import { denyUnauthorized } from "./_auth.mjs";
+
 const MODEL = "claude-opus-5";
 
 // 음성 명령 해석 결과 스키마.
@@ -85,6 +87,7 @@ export default async function handler(req, res) {
     res.status(405).json({ error: "POST 요청만 허용됩니다." });
     return;
   }
+  if (await denyUnauthorized(req, res)) return;
 
   try {
     const { transcript, me, members, teams, companies, today } = req.body || {};

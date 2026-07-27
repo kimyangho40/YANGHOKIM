@@ -17,6 +17,66 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   },
 });
 
+// ── /api/* 호출 공통 ─────────────────────────────────────────────────────────
+// 서버리스 함수(api/_auth.mjs)가 세션을 검사하므로 토큰과 anon key를 항상 함께 보낸다.
+// 이 헤더가 빠지면 401/403이 난다. (2026-07-28 보안조치 8 — 비로그인 호출로 API 요금이 새는 것 차단)
+async function callApi(path, body) {
+  var sess = await supabase.auth.getSession();
+  var token = sess && sess.data && sess.data.session ? sess.data.session.access_token : "";
+  return fetch(path, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      Authorization: "Bearer " + token,
+      "x-supabase-anon": SUPABASE_ANON_KEY,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+// ── 비공개 Storage 버킷 오디오 ───────────────────────────────────────────────
+// voice-memos / call-recordings 버킷은 2026-07-27 보안조치로 비공개가 됐다.
+// 그 전에 저장된 소통내역에는 공개 URL(/object/public/...)이 그대로 남아 있는데 이제 열리지 않는다.
+// → 저장은 참조용 주소로만 하고, 재생할 때마다 서명 URL을 그 자리에서 발급한다.
+const PRIVATE_BUCKETS = ["voice-memos", "call-recordings"];
+const SIGNED_URL_TTL = 60 * 60; // 1시간
+
+// 소통내역 본문의 URL → {bucket, path}. 우리 버킷이 아니면 null(외부 오디오 링크는 그대로 재생).
+function parseStorageRef(url) {
+  var m = String(url || "").match(/\/storage\/v1\/object\/(?:public\/|sign\/)?([^/?#]+)\/([^?#\s]+)/);
+  if (!m || PRIVATE_BUCKETS.indexOf(m[1]) < 0) return null;
+  return { bucket: m[1], path: decodeURIComponent(m[2]) };
+}
+
+// 업로드 시 소통내역에 남길 참조 주소. 공개 URL과 형태가 같아 기존 표시 로직(버킷명 판별)이 그대로 동작한다.
+function storageRefUrl(bucket, path) {
+  return SUPABASE_URL + "/storage/v1/object/" + bucket + "/" +
+    path.split("/").map(encodeURIComponent).join("/");
+}
+
+// 비공개 버킷 오디오 플레이어 — 마운트 시 서명 URL을 발급해 재생한다.
+function StorageAudio({ url, style }) {
+  const [src, setSrc] = useState("");
+  const [err, setErr] = useState("");
+  useEffect(function() {
+    var alive = true;
+    var ref = parseStorageRef(url);
+    if (!ref) { setSrc(url); return; }  // 우리 버킷이 아니면 원본 주소 그대로
+    setSrc(""); setErr("");
+    supabase.storage.from(ref.bucket).createSignedUrl(ref.path, SIGNED_URL_TTL)
+      .then(function(r) {
+        if (!alive) return;
+        if (r.error) setErr(r.error.message || "재생 주소 발급 실패");
+        else setSrc(r.data.signedUrl);
+      })
+      .catch(function(e) { if (alive) setErr(e && e.message ? e.message : "재생 주소 발급 실패"); });
+    return function() { alive = false; };
+  }, [url]);
+  if (err) return <div style={{ fontSize: 11, color: "#B91C1C", marginTop: 6 }}>🔇 재생할 수 없습니다 ({err})</div>;
+  if (!src) return <div style={{ fontSize: 11, color: "#6B7280", marginTop: 6 }}>재생 준비 중…</div>;
+  return <audio controls preload="none" src={src} style={style} />;
+}
+
 // ── 상수 ─────────────────────────────────────────────────────────────────────
 // 파이프라인 보드 단계(12). "추가 진행 예정/중"은 2026-07-26 폐지 → 카드의 '새 기관 추가 신청' 버튼으로 대체.
 const STAGES = ["상담/진단완료", "필수서류 및 인증서요청", "기관신청대기/방문예정", "스크립트 전달 완료", "기관신청완료/방문완료", "심사중/실태조사대기", "실태조사완료/약정완료", "자금집행완료", "수수료대기 및 입금요청", "입금완료/사후관리", "부결/반려", "기타"];
@@ -5766,11 +5826,7 @@ function AiSearchModal({ companies, myName, onClose, onSelectCompany }) {
     setLoading(true);
     var finalMsgs = base;
     try {
-      var resp = await fetch("/api/ai-search", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ question: q, snapshot: snapshot, today: today, history: history }),
-      });
+      var resp = await callApi("/api/ai-search", { question: q, snapshot: snapshot, today: today, history: history });
       var d = await resp.json();
       if (!resp.ok) throw new Error(d.error || "요청 실패");
       finalMsgs = base.concat([{ role: "assistant", content: d.answer || "(빈 응답)" }]);
@@ -6214,17 +6270,13 @@ function VoiceModeOverlay({ myName, onClose }) {
       goPhase("thinking");
       var action = null;
       try {
-        var res = await fetch("/api/voice-command", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            transcript: t,
-            me: myName,
-            members: ctxRef.current.members,
-            teams: ctxRef.current.teams,
-            companies: ctxRef.current.companyRows.map(function(c) { return c.name; }),
-            today: kstDate(),
-          }),
+        var res = await callApi("/api/voice-command", {
+          transcript: t,
+          me: myName,
+          members: ctxRef.current.members,
+          teams: ctxRef.current.teams,
+          companies: ctxRef.current.companyRows.map(function(c) { return c.name; }),
+          today: kstDate(),
         });
         var d = await res.json();
         if (!res.ok) throw new Error(d && d.error ? d.error : "해석 실패");
@@ -10267,11 +10319,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
         reader.onerror = function() { reject(new Error("이미지 읽기 실패")); };
         reader.readAsDataURL(file);
       });
-      var resp = await fetch("/api/summarize-kakao", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ imageBase64: base64, mediaType: file.type }),
-      });
+      var resp = await callApi("/api/summarize-kakao", { imageBase64: base64, mediaType: file.type });
       var data = await resp.json();
       if (!resp.ok) throw new Error(data.error || "요약 요청 실패");
       if (!data.summary) throw new Error("요약 내용이 비어 있습니다.");
@@ -10506,11 +10554,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
     setAiInput("");
     setAiLoading(true);
     try {
-      var resp = await fetch("/api/ai-company", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ question: q, companyContext: buildCompanyContext(), history: history }),
-      });
+      var resp = await callApi("/api/ai-company", { question: q, companyContext: buildCompanyContext(), history: history });
       var d = await resp.json();
       if (!resp.ok) throw new Error(d.error || "요청 실패");
       setAiMsgs(function(p) { return p.concat([{ role: "assistant", content: d.answer || "(빈 응답)" }]); });
@@ -10610,15 +10654,16 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
     }
     return "";
   };
-  // Storage 업로드 공통 함수 → 공개 URL 반환. 경로: {company_id}/{timestamp}_{filename}
+  // Storage 업로드 공통 함수 → 참조 URL 반환. 경로: {company_id}/{timestamp}_{filename}
+  // 버킷이 비공개라 공개 URL은 열리지 않는다(2026-07-27 보안조치).
+  // 소통내역에는 참조 주소만 남기고, 재생은 StorageAudio가 그때그때 서명 URL을 발급한다.
   var uploadToStorage = async function(bucket, file) {
     var ts = Date.now();
     var base = (file.name || "audio").replace(/[^\w.\-]+/g, "_");
     var path = company.id + "/" + ts + "_" + base;
     var up = await supabase.storage.from(bucket).upload(path, file, { contentType: file.type || undefined, upsert: false });
     if (up.error) throw up.error;
-    var pub = supabase.storage.from(bucket).getPublicUrl(path);
-    return pub.data.publicUrl;
+    return storageRefUrl(bucket, path);
   };
   // 녹음 완료된 blob 업로드 → 소통내역 자동 기록
   var handleVoiceUpload = async function(blob, seconds) {
@@ -10801,7 +10846,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           display && <span>{display}</span>
         )}
         {audioUrls.map(function(u, idx) {
-          return <audio key={idx} controls preload="none" src={u} style={{ display: "block", width: "100%", marginTop: 6, height: 36 }} />;
+          return <StorageAudio key={idx} url={u} style={{ display: "block", width: "100%", marginTop: 6, height: 36 }} />;
         })}
       </>
     );
@@ -13822,17 +13867,7 @@ function CreditReportImport({ existingCount, onApply }) {
         bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
       }
       var b64 = btoa(bin);
-      var sess = await supabase.auth.getSession();
-      var token = sess && sess.data && sess.data.session ? sess.data.session.access_token : "";
-      var r = await fetch("/api/parse-credit", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer " + token,
-          "x-supabase-anon": SUPABASE_ANON_KEY,
-        },
-        body: JSON.stringify({ fileBase64: b64, mediaType: mt }),
-      });
+      var r = await callApi("/api/parse-credit", { fileBase64: b64, mediaType: mt });
       var data = await r.json();
       if (!r.ok) { setErr(data && data.error ? data.error : "분석에 실패했습니다."); return; }
       var conv = creditReportToLoans(data.result);
