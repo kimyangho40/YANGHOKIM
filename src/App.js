@@ -1762,6 +1762,208 @@ function parseSheetGeneric(rows) {
   return { updates: updates, auto: auto, commText: leftover.join("\n") };
 }
 
+// ── 신규 통합 기업현황표(시트명 "정보시트") 파서 ──────────────────────────────
+//  구 양식(기업개요 시트)은 parseHyeonhwangpyo가 담당한다. 이 함수는 건드리지 않는다.
+//
+//  왜 별도 파서인가: 신규 양식은 시트명이 "기업개요"가 아니라 라벨 기반 범용 파서로 넘어가
+//  4개 항목만 인식되고 값까지 오염됐다(2026-07-27 진단). 구 양식과 레이아웃이 완전히 다르다.
+//
+//  왜 행 번호를 고정하지 않는가: 이번 장애의 원인이 바로 고정 좌표였다.
+//  라벨 텍스트로 위치를 찾아 값 셀을 읽으므로, 행이 추가/삭제돼도 깨지지 않는다.
+//
+//  병합 구조(실측): 한 행에 좌·우 두 쌍. 라벨 c0 → 값 c3 / 라벨 c6 → 값 c9.
+function parseHyeonhwangpyoV2(rows) {
+  var cellStr = function(v) {
+    if (v === null || v === undefined) return "";
+    if (v instanceof Date) { return v.getFullYear() + "-" + String(v.getMonth() + 1).padStart(2, "0") + "-" + String(v.getDate()).padStart(2, "0"); }
+    return String(v).trim();
+  };
+  // 라벨 정규화 — 공백/구두점/★ 제거. 양식이 "부채총계 (원)"처럼 단위를 붙여도 같은 키가 되게 한다.
+  var norm = function(s) { return String(s || "").replace(/\s/g, "").replace(/[:：\-()（）·.,/★]/g, "").toLowerCase(); };
+
+  // 라벨 인덱스: 정규화라벨 → { r: 행, c: 값이 있는 열 }
+  var idx = {};
+  var LABEL_COLS = [[0, 3], [6, 9]];
+  rows.forEach(function(row, r) {
+    if (!row) return;
+    LABEL_COLS.forEach(function(pair) {
+      var lab = norm(row[pair[0]]);
+      if (lab && !Object.prototype.hasOwnProperty.call(idx, lab)) idx[lab] = { r: r, c: pair[1] };
+    });
+  });
+  var get = function(label) {
+    var k = idx[norm(label)];
+    if (!k || !rows[k.r]) return "";
+    return cellStr(rows[k.r][k.c]);
+  };
+
+  var updates = {}, auto = {};
+  var setF = function(field, val) { if (val !== "" && val != null) { updates[field] = val; auto[field] = true; } };
+
+  // ── 1. 기업 기본 ──────────────────────────────────────────────────────
+  setF("name", get("기업체명"));
+  setF("business_number", get("사업자등록번호"));
+  setF("representative", String(get("대표자명")).replace(/대표(이사)?$/, "").trim());
+  var phone = String(get("대표자 연락처")).replace(/[^0-9-]/g, "");
+  setF("phone", phone);
+  var addr = get("사업장 주소");
+  if (addr) {
+    var doMap = { "서울특별시": "서울", "부산광역시": "부산", "대구광역시": "대구", "인천광역시": "인천", "광주광역시": "광주", "대전광역시": "대전", "울산광역시": "울산", "세종특별자치시": "세종", "경기도": "경기", "강원도": "강원", "강원특별자치도": "강원", "충청북도": "충북", "충청남도": "충남", "전라북도": "전북", "전북특별자치도": "전북", "전라남도": "전남", "경상북도": "경북", "경상남도": "경남", "제주특별자치도": "제주", "제주도": "제주" };
+    var w = String(addr).split(/\s+/);
+    var doName = doMap[w[0]] || w[0];
+    var siGuGun = (w[1] || "").replace(/시$|군$|구$/, "");
+    setF("region", doName + (siGuGun ? "_" + siGuGun : ""));
+  }
+  setF("industry", get("업태 / 종목"));
+  var empDigits = String(get("상시근로자 (현재)")).replace(/[^0-9]/g, "");
+  setF("employee_count", empDigits);
+  var fd = String(get("설립일자")).match(/(\d{4})[-/.년\s]*(\d{1,2})?/);
+  if (fd) { setF("founded_year", fd[1]); if (fd[2]) setF("founded_month", parseInt(fd[2], 10)); }
+  setF("credit_score_kcb", String(get("신용 KCB (점)")).replace(/[^0-9]/g, ""));
+  setF("credit_score_nice", String(get("신용 NICE (점)")).replace(/[^0-9]/g, ""));
+
+  // ── 3. 매출 추이 — 연도칸은 매년 수정되므로 '읽어서' 매핑한다(고정 가정 금지) ──
+  var yearRow = idx[norm("연도")];
+  if (yearRow) {
+    for (var r = yearRow.r + 1; r < rows.length; r++) {
+      var row = rows[r];
+      if (!row) continue;
+      var head = cellStr(row[0]);
+      if (!head) continue;
+      if (/^\d+\s*\./.test(head)) break;              // 다음 섹션 헤더 만나면 종료
+      var amt = cellStr(row[3]);
+      if (!amt) continue;
+      var ym = head.match(/(\d{4})/);
+      if (!ym) continue;
+      var yr = ym[1];
+      if (/상반기/.test(head)) { setF("revenue_2026_h1", amt); continue; }
+      if (/예상/.test(head)) continue;                 // 예상 매출은 실적 컬럼에 넣지 않는다
+      if (yr === "2025") setF("revenue_2025", amt);
+      else if (yr === "2024") setF("revenue_2024", amt);
+      else if (yr === "2023") setF("revenue_2023", amt);
+    }
+  }
+
+  // ── 7. 기대출 현황 → loans 배열 ───────────────────────────────────────
+  //  열: c0 구분 / c2 기관·상품 / c5 금액(원) / c7 은행 / c8 실행일 / c9 만기일 / c10 잔액(원)
+  var loanHdr = null;
+  rows.forEach(function(row, r) {
+    if (loanHdr || !row) return;
+    if (norm(row[0]) === norm("구분") && norm(row[2]) === norm("기관 / 상품")) loanHdr = r;
+  });
+  if (loanHdr != null) {
+    var loans = [];
+    for (var lr = loanHdr + 1; lr < rows.length; lr++) {
+      var lrow = rows[lr];
+      if (!lrow) continue;
+      var c0 = cellStr(lrow[0]);
+      if (/^\d+\s*\./.test(c0)) break;                            // 다음 섹션
+      if (/신규\s*융자|카드론|현금서비스|합계/.test(c0)) break;      // 합계·부가 항목 구간 시작
+      var inst = cellStr(lrow[2]), amount = cellStr(lrow[5]), bank = cellStr(lrow[7]);
+      var start = cellStr(lrow[8]), end = cellStr(lrow[9]), balance = cellStr(lrow[10]);
+      if (!inst && !amount && !bank && !start && !end && !balance) continue;   // 빈 행
+      // 구분(c0): 담당자가 명시적으로 적은 값만 인정한다. 애매하면 미분류로 두고 추측하지 않는다.
+      var kind = "";
+      var k0 = norm(c0);
+      if (k0) {
+        LOAN_KINDS.forEach(function(K) { if (!kind && (k0 === norm(K.label) || k0 === norm(K.short))) kind = K.id; });
+      }
+      loans.push({ inst: inst, amount: amount, bank: bank, start: start, end: end, kind: kind, balance: balance });
+    }
+    if (loans.length > 0) { updates.loans = loans; auto.loans = true; }
+  }
+
+  // ── 나머지 항목 → company_info ────────────────────────────────────────
+  //  ⚠️ 부채총계/자본총계/영업이익/이자비용은 computeFinanceRatios()가 이 라벨로 찾아
+  //     부채비율·이자보상배율을 자동 계산한다. 라벨 문자열을 바꾸지 말 것.
+  var infoItems = [];
+  var addInfo = function(label, val) { if (val && String(val).trim()) infoItems.push({ label: label, value: String(val).trim() }); };
+  addInfo("부채총계", get("부채총계 (원)"));
+  addInfo("자본총계", get("자본총계 (원)"));
+  addInfo("영업이익", get("영업이익 (원)"));
+  addInfo("이자비용", get("이자비용 (원)"));
+  addInfo("재무제표 기준연도", get("재무제표 기준연도"));
+  addInfo("최근 정책자금 수령", get("최근 정책자금 수령 기관 / 일자"));
+  addInfo("기관 요건 판정", get("기관 요건 판정"));
+  addInfo("대표자 생년월일", get("생년월일"));
+  addInfo("지역 구분", get("지역 (수도권 / 비수도권)"));
+  addInfo("주요취급품목", get("주요 취급품목"));
+  addInfo("업력", get("업력 (년)"));
+  addInfo("4대보험 가입인원", get("★ 4대보험 가입인원 (직전연도 기준)"));
+  addInfo("세무사 연락처", get("세무사 연락처"));
+  addInfo("법인 자본금", get("법인 자본금 (원)"));
+  addInfo("신용 조회일", get("신용 조회일"));
+  addInfo("추가 사업자 여부", get("추가 사업자 여부"));
+  addInfo("회생 및 파산 이력", get("회생 / 파산 이력"));
+  addInfo("재창업 조건 (폐업이력)", get("폐업 이력 (재창업)"));
+  addInfo("세금/금융 연체", get("세금·4대보험·금융 연체"));
+  addInfo("기업인증", get("노란우산 · 제로페이 · 내일채움"));
+  addInfo("사업장 부동산 유무", get("사업장 부동산 (자가/임차)"));
+  addInfo("보증금/월세", get("보증금 / 월세 (원)"));
+  addInfo("대표자 거주지 부동산", get("대표자 거주지 부동산"));
+  addInfo("대표이사 자산현황", get("대표이사 자산 (부동산 / 자동차)"));
+  addInfo("대표 결혼 유/무", get("대표 결혼 유 / 무"));
+  addInfo("신청 희망 기관", get("신청 희망 기관"));
+  addInfo("신청 희망 금액", get("신청 희망 금액"));
+  addInfo("필요자금 사용용도", get("자금 사용 용도 (구체적으로)"));
+  addInfo("수출실적", get("수출 실적"));
+  addInfo("기업인증(벤처·이노비즈·메인비즈)", get("기업 인증 (벤처·이노비즈·메인비즈)"));
+  addInfo("연구소", get("연구소 / 전담부서"));
+  addInfo("특허 및 상표권", get("특허 · 상표 · 디자인"));
+  addInfo("주요 거래처", get("주요 거래처 (대기업·장기거래)"));
+  addInfo("2026 신규 융자", get("★ 2026년 신규 융자 (올해 새로 받은 것)"));
+  addInfo("카드론·현금서비스", get("카드론 · 현금서비스"));
+  if (infoItems.length > 0) { updates.company_info = infoItems; auto.company_info = true; }
+
+  // ── 9. 대표자만 아는 것 → 비고 메모 ──────────────────────────────────
+  var memoParts = [];
+  var weak = get("정책자금 신청에 가장 불리한 약점 (솔직하게)");
+  var good = get("최근 호재 · 특이사항 (신규계약·수주·설비)");
+  if (weak) memoParts.push("[약점] " + weak);
+  if (good) memoParts.push("[호재] " + good);
+  if (memoParts.length) { updates.company_info_memo = memoParts.join("\n"); auto.company_info_memo = true; }
+
+  // ── 10. 거절 이력 → 소통내역 텍스트로만 (기대출 행으로 자동 생성하지 않는다) ──
+  var rejHdr = null;
+  rows.forEach(function(row, r) {
+    if (rejHdr || !row) return;
+    if (norm(row[0]) === norm("기관") && norm(row[3]) === norm("일자") && norm(row[5]) === norm("거절 사유")) rejHdr = r;
+  });
+  var commParts = [];
+  if (rejHdr != null) {
+    for (var rr = rejHdr + 1; rr < rows.length; rr++) {
+      var rrow = rows[rr];
+      if (!rrow) continue;
+      var ri = cellStr(rrow[0]), rd = cellStr(rrow[3]), rs = cellStr(rrow[5]);
+      if (!ri && !rd && !rs) continue;
+      commParts.push("거절 이력: " + [ri, rd, rs].filter(Boolean).join(" / "));
+    }
+  }
+
+  // 법인/개인 유형 추정 (구 파서와 동일 규칙)
+  if (updates.name && (/^\(주\)|^㈜|주식회사/.test(updates.name))) { updates.business_type = "법인사업자"; updates.type = "법인"; }
+  else if (updates.name) { updates.business_type = "개인사업자"; updates.type = "개인"; }
+
+  return { updates: updates, auto: auto, commText: commParts.join("\n") };
+}
+
+// 신규 통합 양식인지 판정 — 시트명에 의존하지 않고 고유 라벨이 몇 개 잡히는지로 본다.
+//  (시트명만 보면 이름을 바꿨을 때 또 같은 장애가 난다)
+function looksLikeHyeonhwangpyoV2(rows) {
+  var norm = function(s) { return String(s || "").replace(/\s/g, "").replace(/[:：\-()（）·.,/★]/g, ""); };
+  var MARKERS = ["기업체명", "재무제표 기준연도", "부채총계", "자본총계", "상시근로자", "신청 희망 기관", "기관 요건 판정"];
+  var found = {};
+  (rows || []).forEach(function(row) {
+    if (!row) return;
+    [0, 6].forEach(function(c) {
+      var v = norm(row[c]);
+      if (!v) return;
+      MARKERS.forEach(function(m) { if (v.indexOf(norm(m)) >= 0) found[m] = true; });
+    });
+  });
+  return Object.keys(found).length >= 3;
+}
+
 // 업로드 파일 디스패처 - 표준 기업현황표면 기존 파서, 아니면 범용 시트지 파서
 //  공통 반환: { updates, auto, commText, kind }
 async function parseUploadedSheet(file) {
@@ -1775,6 +1977,17 @@ async function parseUploadedSheet(file) {
     var commParts = [];
     if (res.updates.company_info_memo) commParts.push(res.updates.company_info_memo);
     return { updates: res.updates, auto: res.auto, commText: commParts.join("\n"), kind: "기업현황표" };
+  }
+  // 신규 통합 양식(시트명 "정보시트" 등) — 구 양식과 레이아웃이 완전히 달라 전용 파서 사용.
+  //  범용 파서로 넘어가면 4개 항목만 인식되고 값까지 오염된다(2026-07-27 진단).
+  var wsV2 = wb.Sheets[wb.SheetNames.find(function(n) { return n.indexOf("정보시트") >= 0; }) || wb.SheetNames[0]];
+  var rowsV2 = XLSX.utils.sheet_to_json(wsV2, { header: 1, defval: null });
+  if (looksLikeHyeonhwangpyoV2(rowsV2)) {
+    var v2 = parseHyeonhwangpyoV2(rowsV2);
+    var v2Comm = [];
+    if (v2.commText) v2Comm.push(v2.commText);
+    if (v2.updates.company_info_memo) v2Comm.push(v2.updates.company_info_memo);
+    return { updates: v2.updates, auto: v2.auto, commText: v2Comm.join("\n"), kind: "기업현황표(신규양식)" };
   }
   // 그 외: 첫 시트를 범용 파싱
   var ws = wb.Sheets[wb.SheetNames[0]];
