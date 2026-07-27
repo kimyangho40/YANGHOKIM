@@ -754,6 +754,113 @@ function financeDebtFromLoans(company) {
   var t = loanTotalsByKind(company);
   return (company && company.type === "법인") ? t.corp : t.total;
 }
+// ── 여신정보 문서(세부신용공여) → 기대출 행 변환 ────────────────────────────
+//  api/parse-credit.js 는 "추출"만 한다. 단위 환산·소계 제거·금액 확정은 여기서 코드로 재검증한다.
+//  모델 판단(is_subtotal)을 그대로 믿지 않기 위한 이중 방어.
+
+// 단위 표기 원문 → 원 환산 배수. 표기가 없거나 못 읽으면 null (환산 금지).
+const CREDIT_UNITS = [
+  { re: /억\s*원/, mult: 1e8, label: "억원" },
+  { re: /백\s*만\s*원/, mult: 1e6, label: "백만원" },
+  { re: /천\s*원/, mult: 1e3, label: "천원" },
+  { re: /만\s*원/, mult: 1e4, label: "만원" },
+  { re: /원/, mult: 1, label: "원" },
+];
+function parseCreditUnit(raw) {
+  var s = String(raw || "").replace(/\s/g, "");
+  if (!s) return { mult: null, label: "" };
+  for (var i = 0; i < CREDIT_UNITS.length; i++) {
+    if (CREDIT_UNITS[i].re.test(s)) return { mult: CREDIT_UNITS[i].mult, label: CREDIT_UNITS[i].label };
+  }
+  return { mult: null, label: "" };
+}
+// 소계/합계 행 판별 — 모델이 is_subtotal을 놓쳐도 코드가 한 번 더 거른다.
+function isCreditSubtotalRow(row) {
+  if (!row) return true;
+  if (row.is_subtotal) return true;
+  var name = String(row.institution || "").replace(/\s/g, "");
+  if (/신용공여합계|합계|소계|총계|누계/.test(name)) return true;
+  // 대과목·소과목이 둘 다 비었는데 금잔만 있는 행 → 소계로 의심
+  if (!String(row.major_category || "").trim() && !String(row.minor_category || "").trim()
+      && String(row.balance_raw || "").trim()) return true;
+  return false;
+}
+// 추출 결과 → { loans, dropped, checksum } 로 변환.
+//  loans: 기대출 표에 넣을 행 배열 (실행일·만기일은 반드시 빈칸)
+//  dropped: 소계로 걸러낸 행 수
+//  checksum: 개별 합 vs 합계 행 대조 결과 (불일치면 누락 의심 경고)
+function creditReportToLoans(result) {
+  var out = { loans: [], dropped: 0, checksum: null, unitLabel: "", asOf: "" };
+  if (!result) return out;
+  var unit = parseCreditUnit(result.unit_raw);
+  out.unitLabel = unit.label;
+  var asOf = String(result.as_of || "").trim();
+  out.asOf = asOf;
+  var rows = Array.isArray(result.rows) ? result.rows : [];
+  var sumRaw = 0, sumCounted = 0;
+
+  rows.forEach(function(row) {
+    if (isCreditSubtotalRow(row)) { out.dropped++; return; }
+    var inst = String(row.institution || "").trim();
+    var minor = String(row.minor_category || "").trim();
+    var label = inst + (minor ? " " + minor : "");
+    var balRaw = String(row.balance_raw || "").replace(/[,\s]/g, "");
+    var amount = "", needsReview = false, reason = "";
+
+    if (!balRaw || isNaN(parseFloat(balRaw))) {
+      // 금액을 못 읽음 → 0으로 채우지 않고 비워둔다
+      needsReview = true; reason = "금액을 읽지 못함";
+    } else if (unit.mult == null) {
+      // 단위 표기가 없음 → 환산하지 않고 원문 그대로. 담당자가 직접 수정.
+      amount = balRaw;
+      needsReview = true; reason = "단위 확인 필요 (문서에 단위 표기 없음)";
+      sumRaw += parseFloat(balRaw);
+    } else {
+      var won = Math.round(parseFloat(balRaw) * unit.mult);
+      var str = String(won);
+      // 왕복 검증: 오늘 고친 parseLoanAmount로 되읽어 값이 일치할 때만 확정한다.
+      var back = parseLoanAmount(str);
+      if (back.won === won) {
+        amount = str;
+        sumCounted += won;
+      } else {
+        // 되읽기 실패(예: 10만원 미만이라 '단위 확인 필요'로 빠지는 값) → 비우고 표시
+        needsReview = true; reason = "금액 확인 필요 (" + balRaw + " " + unit.label + ")";
+      }
+      sumRaw += parseFloat(balRaw);
+    }
+
+    out.loans.push({
+      inst: label,
+      amount: amount,
+      bank: "",              // 기관명과 중복이므로 비워둠
+      start: "",             // 문서에 없음 — 절대 추측하지 않는다
+      end: "",               // 만기구조는 구간일 뿐 만기일이 아니다
+      kind: "",              // 전건 미분류 — 담당자가 직접 지정
+      as_of: asOf,
+      maturity_bucket: String(row.maturity_bucket || "").trim(),
+      major_category: String(row.major_category || "").trim(),
+      src: "credit_report",
+      needs_review: needsReview,
+      review_reason: reason,
+    });
+  });
+
+  // 검산: 개별 행 합 == 합계 행 금잔? 불일치면 행을 놓쳤을 수 있다는 신호.
+  var subtotal = String(result.subtotal_raw || "").replace(/[,\s]/g, "");
+  if (subtotal && !isNaN(parseFloat(subtotal)) && rows.length > 0) {
+    var expect = parseFloat(subtotal);
+    var diff = Math.abs(sumRaw - expect);
+    out.checksum = {
+      expect: expect, actual: sumRaw,
+      ok: diff < Math.max(1, expect * 0.005),   // 반올림 오차 허용
+      unitLabel: unit.label,
+    };
+  }
+  out.countedWon = sumCounted;
+  return out;
+}
+
 // 원 → "N억/N천만/N만" 표기
 function wonToKor(won) {
   var n = Number(won) || 0;
@@ -10999,6 +11106,25 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
 
               {/* 기대출 내역 표 */}
               <ZoomSection title="💰 기대출 내역" hint="구분·금액·기간 입력" value={data.loans} onSave={function() { onSave(data); }}>
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
+                <CreditReportImport
+                  existingCount={Array.isArray(data.loans) ? data.loans.length : 0}
+                  onApply={function(rows, applyMode, asOf) {
+                    setData(function(p) {
+                      var prev = Array.isArray(p.loans) ? p.loans : [];
+                      var next = applyMode === "replace" ? rows.slice() : prev.concat(rows);
+                      // 기준일자는 company_info에 함께 남긴다(3단계 '최신화 필요' 판정에 쓰임)
+                      var info = Array.isArray(p.company_info) ? p.company_info.slice() : [];
+                      if (asOf) {
+                        var idx = info.findIndex(function(it) { return it && it.label === "여신정보 기준일자"; });
+                        if (idx >= 0) info[idx] = { label: "여신정보 기준일자", value: asOf };
+                        else info.push({ label: "여신정보 기준일자", value: asOf });
+                      }
+                      return Object.assign({}, p, { loans: next, company_info: info });
+                    });
+                  }}
+                />
+              </div>
               <div style={{ overflowX: "auto", marginBottom: 8 }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
                   <thead>
@@ -11063,11 +11189,22 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                             ) : amtP.note ? (
                               <div title={"원문을 그대로 두었습니다. 합계에서 제외됩니다 — " + amtP.note}
                                 style={{ fontSize: 9.5, color: "#DC2626", padding: "0 5px 4px", fontWeight: 800 }}>⚠ 금액 확인 필요</div>
+                            ) : ln.needs_review ? (
+                              // 여신정보 문서에서 넣은 행 중 금액을 확정하지 못한 건 — 0으로 채우지 않고 비워둔 상태
+                              <div title={ln.review_reason || "확인이 필요합니다"}
+                                style={{ fontSize: 9.5, color: "#B45309", padding: "0 5px 4px", fontWeight: 800 }}>⚠ 확인 필요</div>
                             ) : null}
                           </td>
                           <td style={cellStyle}><input value={ln.bank || ""} onChange={function(e) { updateLoan("bank", e.target.value); }} style={rejected ? Object.assign({}, inStyle, { color: "#6B7280" }) : inStyle} /></td>
                           <td style={cellStyle}><input value={ln.start || ""} placeholder="" title="예: 24.03.15" onChange={function(e) { updateLoan("start", e.target.value); }} style={mutedIn} /></td>
-                          <td style={cellStyle}><input value={ln.end || ""} placeholder="" title="예: 29.03.15" onChange={function(e) { updateLoan("end", e.target.value); }} style={mutedIn} /></td>
+                          <td style={cellStyle}>
+                            <input value={ln.end || ""} placeholder="" title="예: 29.03.15" onChange={function(e) { updateLoan("end", e.target.value); }} style={mutedIn} />
+                            {!ln.end && ln.maturity_bucket && (
+                              // 만기구조는 구간(예: 3개월 이하)일 뿐 만기일이 아니다 → 참고 표시만 하고 입력칸엔 넣지 않는다
+                              <div title="여신정보 문서의 만기구조입니다. 정확한 만기일이 아니라 구간이라 만기일 칸에는 넣지 않았습니다."
+                                style={{ fontSize: 9.5, color: "#9CA3AF", padding: "0 5px 4px" }}>만기구조: {ln.maturity_bucket}</div>
+                            )}
+                          </td>
                           <td style={{ border: "1px solid #E8E5E0", textAlign: "center", whiteSpace: "nowrap" }}>
                             <button onClick={toggleRejected} title={rejected ? "거절 해제 — 실행된 대출로 되돌립니다" : "신청 거절로 표시 — 금액을 비우고 합계에서 제외합니다"}
                               style={{ background: "none", border: "none", cursor: "pointer", padding: 3, fontSize: 12, opacity: rejected ? 1 : 0.55 }}>{rejected ? "↩" : "🚫"}</button>
@@ -13256,6 +13393,195 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
 }
 
 // ── 업무노트 카드 (독립 컴포넌트 - 입력버그 방지) ──────────────────────────────
+// ── 여신정보 첨부 → 기대출 내역 자동 입력 ────────────────────────────────────
+//  자동 저장하지 않는다. 파싱 결과를 표로 보여주고 담당자가 확인·선택한 뒤에만 반영한다.
+function CreditReportImport({ existingCount, onApply }) {
+  var [open, setOpen] = useState(false);
+  var [busy, setBusy] = useState(false);
+  var [err, setErr] = useState("");
+  var [parsed, setParsed] = useState(null);     // creditReportToLoans() 결과
+  var [picked, setPicked] = useState([]);       // 행별 선택 상태
+  var [mode, setMode] = useState("append");     // append | replace | pick
+  var fileRef = useRef(null);
+
+  var reset = function() { setParsed(null); setPicked([]); setErr(""); setMode("append"); };
+  var close = function() { setOpen(false); reset(); };
+
+  var handleFile = async function(file) {
+    if (!file) return;
+    var mt = file.type || "";
+    if (mt !== "application/pdf" && !/^image\/(png|jpeg|jpg|gif|webp)$/.test(mt)) {
+      setErr("PDF 또는 이미지(PNG/JPG) 파일만 첨부할 수 있어요."); return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      setErr("파일 크기는 25MB 이하만 가능해요. (현재 " + (file.size / 1024 / 1024).toFixed(1) + "MB)"); return;
+    }
+    setBusy(true); setErr(""); setParsed(null);
+    try {
+      var buf = await file.arrayBuffer();
+      var bytes = new Uint8Array(buf), bin = "";
+      for (var i = 0; i < bytes.length; i += 8192) {
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+      }
+      var b64 = btoa(bin);
+      var sess = await supabase.auth.getSession();
+      var token = sess && sess.data && sess.data.session ? sess.data.session.access_token : "";
+      var r = await fetch("/api/parse-credit", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer " + token,
+          "x-supabase-anon": SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({ fileBase64: b64, mediaType: mt }),
+      });
+      var data = await r.json();
+      if (!r.ok) { setErr(data && data.error ? data.error : "분석에 실패했습니다."); return; }
+      var conv = creditReportToLoans(data.result);
+      if (!conv.loans.length) { setErr("표에서 대출 행을 찾지 못했습니다. 다른 페이지를 첨부해보세요."); return; }
+      setParsed(conv);
+      setPicked(conv.loans.map(function() { return true; }));
+    } catch (e) {
+      setErr("분석 실패: " + (e && e.message ? e.message : e));
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  var apply = function() {
+    if (!parsed) return;
+    var rows = mode === "pick" ? parsed.loans.filter(function(_, i) { return picked[i]; }) : parsed.loans;
+    if (!rows.length) { setErr("반영할 행을 하나 이상 선택해주세요."); return; }
+    if (mode === "replace" && existingCount > 0) {
+      if (!window.confirm("기존 기대출 " + existingCount + "건을 모두 지우고 " + rows.length + "건으로 교체합니다.\n되돌릴 수 없습니다. 계속할까요?")) return;
+    }
+    onApply(rows, mode === "replace" ? "replace" : "append", parsed.asOf);
+    close();
+  };
+
+  var btn = { padding: "5px 10px", fontSize: 11, fontWeight: 700, borderRadius: 6, cursor: "pointer" };
+  if (!open) {
+    return (
+      <button onClick={function() { setOpen(true); }} title="기업 여신정보 문서(PDF·이미지)를 첨부하면 세부신용공여 표를 읽어 기대출 내역에 넣어줍니다"
+        style={Object.assign({}, btn, { background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE" })}>
+        📄 여신정보 첨부
+      </button>
+    );
+  }
+
+  var reviewCount = parsed ? parsed.loans.filter(function(l) { return l.needs_review; }).length : 0;
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+      onClick={function(e) { if (e.target === e.currentTarget) close(); }}>
+      <div style={{ background: "#fff", borderRadius: 14, width: 860, maxWidth: "100%", maxHeight: "88vh", overflow: "auto", padding: 22 }}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>📄 여신정보 첨부</h3>
+          <button onClick={close} style={{ marginLeft: "auto", background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#888" }}>×</button>
+        </div>
+
+        {!parsed && (
+          <div>
+            <p style={{ fontSize: 12.5, color: "#666", lineHeight: 1.7, margin: "0 0 12px" }}>
+              '기업 여신정보' 문서의 <b>세부신용공여</b> 표를 읽어 기대출 내역에 넣습니다. PDF·이미지(캡처) 모두 됩니다.<br />
+              <span style={{ color: "#B45309", fontWeight: 700 }}>바로 저장되지 않습니다.</span> 읽은 내용을 표로 보여드리고, 확인하신 뒤에 반영합니다.
+            </p>
+            <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "10px 13px", fontSize: 11.5, color: "#92400E", lineHeight: 1.7, marginBottom: 14 }}>
+              문서 내용이 AI 분석 서버로 전송됩니다. 실행일은 문서에 없으므로 항상 비워두고, 구분(법인/개인)은 문서로 알 수 없어 전건 <b>미분류</b>로 넣습니다.
+            </div>
+            <input ref={fileRef} type="file" accept="application/pdf,image/png,image/jpeg,image/webp"
+              disabled={busy} onChange={function(e) { handleFile(e.target.files && e.target.files[0]); }}
+              style={{ fontSize: 12.5 }} />
+            {busy && <div style={{ marginTop: 12, fontSize: 12.5, color: "#4338CA", fontWeight: 700 }}>문서를 읽는 중이에요… (10~30초)</div>}
+          </div>
+        )}
+
+        {err && <div style={{ marginTop: 12, background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "9px 12px", fontSize: 12, color: "#B91C1C", fontWeight: 600 }}>{err}</div>}
+
+        {parsed && (
+          <div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 11.5, marginBottom: 10 }}>
+              <span style={{ background: "#F3F4F6", borderRadius: 6, padding: "3px 9px", fontWeight: 700 }}>읽은 행 {parsed.loans.length}건</span>
+              {parsed.dropped > 0 && <span style={{ background: "#ECFDF5", color: "#047857", borderRadius: 6, padding: "3px 9px", fontWeight: 700 }}>소계 행 {parsed.dropped}건 제외</span>}
+              <span style={{ background: parsed.unitLabel ? "#EEF2FF" : "#FEF2F2", color: parsed.unitLabel ? "#4338CA" : "#B91C1C", borderRadius: 6, padding: "3px 9px", fontWeight: 700 }}>
+                단위 {parsed.unitLabel || "표기 없음 → 환산 안 함"}
+              </span>
+              {parsed.asOf && <span style={{ background: "#F3F4F6", borderRadius: 6, padding: "3px 9px", fontWeight: 700 }}>기준일 {parsed.asOf}</span>}
+              {reviewCount > 0 && <span style={{ background: "#FEF2F2", color: "#B91C1C", borderRadius: 6, padding: "3px 9px", fontWeight: 800 }}>확인 필요 {reviewCount}건</span>}
+            </div>
+
+            {parsed.checksum && !parsed.checksum.ok && (
+              <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "9px 12px", fontSize: 11.5, color: "#B91C1C", fontWeight: 700, marginBottom: 10 }}>
+                ⚠ 합계 불일치 — 문서의 신용공여합계는 {parsed.checksum.expect.toLocaleString()}인데 개별 행 합은 {parsed.checksum.actual.toLocaleString()}입니다. 읽지 못한 행이 있을 수 있으니 원본과 대조해주세요.
+              </div>
+            )}
+
+            <div style={{ overflowX: "auto", border: "1px solid #E8E5E0", borderRadius: 8, marginBottom: 12 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+                <thead><tr style={{ background: "#F4F4F8" }}>
+                  {mode === "pick" && <th style={{ padding: "6px 5px", width: 34 }}></th>}
+                  {["기관", "금액", "만기구조", "상태"].map(function(h) {
+                    return <th key={h} style={{ padding: "6px 7px", textAlign: "left", fontWeight: 700, borderBottom: "1px solid #E8E5E0" }}>{h}</th>;
+                  })}
+                </tr></thead>
+                <tbody>
+                  {parsed.loans.map(function(l, i) {
+                    var p = parseLoanAmount(l.amount);
+                    return (
+                      <tr key={i} style={{ background: l.needs_review ? "#FFFBEB" : "transparent" }}>
+                        {mode === "pick" && (
+                          <td style={{ padding: "5px", textAlign: "center", borderBottom: "1px solid #F0EEEA" }}>
+                            <input type="checkbox" checked={!!picked[i]} onChange={function() {
+                              setPicked(function(prev) { var a = prev.slice(); a[i] = !a[i]; return a; });
+                            }} />
+                          </td>
+                        )}
+                        <td style={{ padding: "5px 7px", borderBottom: "1px solid #F0EEEA" }}>{l.inst}</td>
+                        <td style={{ padding: "5px 7px", borderBottom: "1px solid #F0EEEA" }}>
+                          {l.amount ? <span>{l.amount}{p.won != null && <span style={{ color: "#15803D", fontWeight: 700 }}> = {wonToKorExact(p.won)}</span>}</span>
+                                    : <span style={{ color: "#B91C1C", fontWeight: 700 }}>비움</span>}
+                        </td>
+                        <td style={{ padding: "5px 7px", borderBottom: "1px solid #F0EEEA", color: "#888" }}>{l.maturity_bucket || "-"}</td>
+                        <td style={{ padding: "5px 7px", borderBottom: "1px solid #F0EEEA", fontSize: 10.5 }}>
+                          {l.needs_review ? <span style={{ color: "#B45309", fontWeight: 800 }}>⚠ {l.review_reason}</span>
+                                          : <span style={{ color: "#047857", fontWeight: 700 }}>정상</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{ fontSize: 11.5, color: "#666", marginBottom: 8, lineHeight: 1.7 }}>
+              실행일·만기일은 문서에 없어 <b>비워둡니다</b>. 구분은 전건 <b>미분류</b>이며, 법인기업은 담당자가 구분을 지정해야 부채비율에 반영됩니다.
+            </div>
+
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 14, fontSize: 12 }}>
+              {[["append", "기존에 추가 (" + existingCount + "건 유지)"], ["replace", "전부 교체 (기존 삭제)"], ["pick", "행별 선택"]].map(function(m) {
+                return (
+                  <label key={m[0]} style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", fontWeight: mode === m[0] ? 800 : 500 }}>
+                    <input type="radio" name="creditMode" checked={mode === m[0]} onChange={function() { setMode(m[0]); }} />
+                    {m[1]}
+                  </label>
+                );
+              })}
+            </div>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={apply} style={Object.assign({}, btn, { background: "#0F6E56", color: "#fff", border: "none", padding: "9px 18px", fontSize: 12.5 })}>
+                기대출 내역에 반영
+              </button>
+              <button onClick={reset} style={Object.assign({}, btn, { background: "#F7F6F3", color: "#555", border: "1px solid #E8E5E0", padding: "9px 14px", fontSize: 12.5 })}>다시 첨부</button>
+              <button onClick={close} style={Object.assign({}, btn, { background: "none", color: "#888", border: "none", padding: "9px 14px", fontSize: 12.5 })}>취소</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditingId, toggleDone, togglePin, deleteNote, fmtDate, currentUserName, onChecklistChange, moveNoteDate, setWaitReason, editable, getRequestForItem, onAddRequestReply }) {
   var isEditing = editingId === note.id;
   var isMyNote = editable !== false; // 본인 노트만 수정/체크 가능 (공유그룹으로 보이는 남의 노트는 읽기 전용)
