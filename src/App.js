@@ -498,9 +498,35 @@ const PIPELINE_AGENCY_LABEL = {
   "구조혁신&사업전환": "구조혁신", "경정청구": "경정청구", "기타": "기타",
 };
 function agencyLabel(g) { return g ? (PIPELINE_AGENCY_LABEL[g] || g) : "기관 미지정"; }
+// 파이프라인 기관 필터 묶음 — 기업목록 필터(AGENCY_FILTER_MAP)와 같은 규칙을 쓴다. (2026-07-27)
+// 예전에는 파이프라인만 정확 일치라, 중진공을 골라도 구조혁신&사업전환 카드가 안 보여
+// "기관현황에는 있는데 파이프라인에 없다"로 보였다(아이디어스푼 구조혁신 건).
+const PIPELINE_AGENCY_INCLUDE = {
+  "중소벤처기업진흥공단": ["중소벤처기업진흥공단", "구조혁신&사업전환"],
+  "신용보증재단": ["신용보증재단", "서민금융진흥원"],
+};
+function agencyFilterMatch(filter, g) {
+  var inc = PIPELINE_AGENCY_INCLUDE[filter];
+  return inc ? inc.indexOf(g) >= 0 : g === filter;
+}
 function agencyColor(g) { var f = AGENCY_GROUPS.find(function(x) { return x.id === g; }); return f ? f.color : "#9CA3AF"; }
 // 특정 시각 이후 경과 일수 (정체 일수 계산)
 function daysSince(iso) { if (!iso) return 0; var ms = Date.now() - new Date(iso).getTime(); return ms > 0 ? Math.floor(ms / 86400000) : 0; }
+
+// 현황 행 "최신" 판별 기준 — 년 → 월 → 마지막 수정(updated_at) → 등록(created_at) → id.
+// (2026-07-27 확정) 같은 회사×기관×같은 월에 행이 여러 개인 "동점"이 137그룹 있고, 그중 25그룹은
+// 상태까지 서로 다르다. 예전에는 정렬 없이 먼저 도착한 행을 최신으로 쳤는데, PostgREST는 order를
+// 지정하지 않으면 순서를 보장하지 않아 현황 행을 수정만 해도 카드 단계가 뒤집혔다(불일치 14건 발생).
+function caseTs(v) { var t = v ? Date.parse(v) : NaN; return isNaN(t) ? 0 : t; }
+function isNewerCase(a, b) {
+  if (!b) return true;
+  if (!a) return false;
+  var ay = a.year || 0, by = b.year || 0; if (ay !== by) return ay > by;
+  var am = a.month || 0, bm = b.month || 0; if (am !== bm) return am > bm;
+  var au = caseTs(a.updated_at), bu = caseTs(b.updated_at); if (au !== bu) return au > bu;
+  var ac = caseTs(a.created_at), bc = caseTs(b.created_at); if (ac !== bc) return ac > bc;
+  return String(a.id || "") > String(b.id || "");
+}
 
 // 기관현황 → 파이프라인 단방향 자동동기화.
 // (기관, 상태) → status_stage_map 조회(기관별 우선, 없으면 공통 '*') → 해당 회사×기관 카드 stage 갱신.
@@ -509,11 +535,28 @@ async function syncPipelineFromCase(c) {
   try {
     if (!c || (!c.company_id && !c.business_name)) return;
     var ag = c.agency_group || null;
+    // 0) 같은 (회사×기관)에 "더 뒤의 월" 행이 있으면 그 행을 기준으로 삼는다.
+    //    과거 월 행을 고쳤다고 카드가 과거 단계로 되돌아가지 않게 하기 위함. (2026-07-27)
+    //    같은 월 안에서는 방금 사람이 손댄 c 가 이긴다 — 그게 곧 updated_at 최신이고,
+    //    DB 저장 직후 호출이라 다시 읽으면 옛 값을 볼 수 있어(경합) 재조회 결과를 쓰지 않는다.
+    var eff = c;
+    try {
+      var cYm = (c.year || 0) * 100 + (c.month || 0);
+      var sq = supabase.from("agency_cases").select("id,status,year,month,created_at,updated_at").is("deleted_at", null);
+      sq = c.company_id ? sq.eq("company_id", c.company_id) : sq.eq("business_name", c.business_name);
+      sq = ag ? sq.eq("agency_group", ag) : sq.is("agency_group", null);
+      var sr = await sq;
+      var newest = null;
+      (sr.data || []).forEach(function(s) {
+        if ((s.year || 0) * 100 + (s.month || 0) > cYm && isNewerCase(s, newest)) newest = s;
+      });
+      if (newest) eff = newest;
+    } catch (e1) { /* 조회 실패 시 방금 저장한 행 기준으로 진행 */ }
     // 1) 매핑 조회
     var stage = null;
-    if (c.status) {
+    if (eff.status) {
       var mr = await supabase.from("status_stage_map").select("agency_group,stage")
-        .eq("status_value", c.status).in("agency_group", [ag || "__none__", "*"]);
+        .eq("status_value", eff.status).in("agency_group", [ag || "__none__", "*"]);
       var maps = mr.data || [];
       if (maps.length) {
         var specific = maps.find(function(m) { return m.agency_group === ag; });
@@ -531,12 +574,12 @@ async function syncPipelineFromCase(c) {
       if (card.sync_mode === "manual") return; // 수동 고정 → 자동 덮어쓰기 안 함
       if (stage) {
         var changed = card.stage !== stage;
-        var upd = { stage: stage, synced_status: c.status, synced_month: c.month || null, needs_mapping: false, updated_at: new Date().toISOString() };
+        var upd = { stage: stage, synced_status: eff.status, synced_month: eff.month || null, needs_mapping: false, updated_at: new Date().toISOString() };
         // 단계가 실제로 바뀔 때만 정체 타이머 리셋 + 이번 구간 알림 해제
         if (changed) { upd.stage_changed_at = new Date().toISOString(); upd.alerted_at = null; }
         await supabase.from("pipeline_cards").update(upd).eq("id", card.id);
         if (changed && card.alert_note_id) { try { await supabase.from("work_notes").update({ is_done: true }).eq("id", card.alert_note_id); } catch (e2) {} }
-      } else if (c.status) {
+      } else if (eff.status) {
         await supabase.from("pipeline_cards").update({ needs_mapping: true, updated_at: new Date().toISOString() }).eq("id", card.id);
       }
     } else if (ag) {
@@ -544,8 +587,8 @@ async function syncPipelineFromCase(c) {
       await supabase.from("pipeline_cards").insert({
         company_id: c.company_id || null, business_name: c.business_name || "", agency_group: ag,
         stage: stage || "상담/진단완료", sync_mode: "auto",
-        synced_status: stage ? c.status : null, synced_month: stage ? (c.month || null) : null,
-        needs_mapping: !stage && !!c.status,
+        synced_status: stage ? eff.status : null, synced_month: stage ? (eff.month || null) : null,
+        needs_mapping: !stage && !!eff.status,
       });
     }
   } catch (e) { console.warn("파이프라인 자동동기화 실패:", e && e.message); }
@@ -556,7 +599,7 @@ async function syncPipelineFromCase(c) {
 async function resyncAutoCards() {
   var res = await Promise.all([
     supabase.from("pipeline_cards").select("*").eq("sync_mode", "auto"),
-    supabase.from("agency_cases").select("company_id,business_name,agency_group,status,year,month,deleted_at"),
+    supabase.from("agency_cases").select("id,company_id,business_name,agency_group,status,year,month,created_at,updated_at,deleted_at"),
     supabase.from("status_stage_map").select("agency_group,status_value,stage"),
   ]);
   var cards = res[0].data || [], cases = res[1].data || [], maps = res[2].data || [];
@@ -564,13 +607,13 @@ async function resyncAutoCards() {
   var mapKey = {};
   maps.forEach(function(m) { mapKey[m.agency_group + "||" + m.status_value] = m.stage; });
   var lookup = function(ag, st) { if (!st) return null; return mapKey[ag + "||" + st] || mapKey["*||" + st] || null; };
-  // 회사×기관 최신월 상태
+  // 회사×기관 최신 행 — isNewerCase(년→월→수정→등록→id) 기준. 동점이어도 결과가 항상 같다.
   var latest = {};
   cases.forEach(function(c) {
     if (c.deleted_at) return;
-    var key = (c.company_id || "") + "||" + (c.agency_group || "");
-    var cur = latest[key]; var yr = c.year || 0, mo = c.month || 0;
-    if (!cur || yr > cur.year || (yr === cur.year && mo > cur.month)) latest[key] = { status: c.status, year: yr, month: mo };
+    if (!c.company_id) return;   // 회사 미연결 현황은 카드와 매칭할 수 없음(빈 키로 뭉치는 것 방지)
+    var key = c.company_id + "||" + (c.agency_group || "");
+    if (isNewerCase(c, latest[key])) latest[key] = c;
   });
   var updated = 0;
   for (var i = 0; i < cards.length; i++) {
@@ -4438,31 +4481,43 @@ function CRMApp({ profile, session }) {
     (companies || []).forEach(c => m.set(c.id, c));
     return m;
   }, [companies]);
-  const pipelineCardRows = useMemo(() => {
+  // 파이프라인 카드 목록 — 기업목록 화면의 필터(검색·단계·유형·기관·팀·신용점수)를 그대로 공유한다.
+  // 그 필터는 파이프라인 화면에 표시되지 않아 "카드가 사라졌다"로 보이므로, 담당자 필터를 뺀
+  // 나머지 목록 필터 때문에 숨겨진 장수를 따로 세어 파이프라인 상단에 안내한다. (2026-07-27)
+  const pipelineCardData = useMemo(() => {
     const s = search.toLowerCase();
     const sDigits = s.replace(/[^0-9]/g, "");
-    return (pipelineCards || [])
+    const all = (pipelineCards || [])
       .map(card => { const co = companyById.get(card.company_id); return co ? { card, co } : null; })
-      .filter(Boolean)
-      .filter(({ card, co }) => {
-        const matchSearch = !s || co.name?.toLowerCase().includes(s) || co.representative?.toLowerCase().includes(s)
-          || co.region?.toLowerCase().includes(s) || co.industry?.toLowerCase().includes(s)
-          || (!!sDigits && (co.phone || "").replace(/[^0-9]/g, "").includes(sDigits));
-        const matchStage = filterStage === "전체" || card.stage === filterStage;
-        const matchAssignee = filterAssignee === "전체" || (co.assignee || "").split(",").map(x => x.trim()).includes(filterAssignee);
-        const matchType = filterType === "전체" || co.type === filterType;
-        const matchAgency = filterAgency === "전체" || (AGENCY_FILTER_MAP[filterAgency] || []).includes(card.agency_group);
-        const matchTeam = filterTeam === "전체" || teamOf(co) === filterTeam;
-        let matchCredit = true;
-        if (creditFilter !== "" && !isNaN(parseInt(creditFilter))) {
-          const n = parseInt(creditFilter);
-          const kcb = (co.credit_score_kcb == null || co.credit_score_kcb === "") ? null : parseInt(co.credit_score_kcb);
-          if (kcb == null) matchCredit = false;
-          else matchCredit = creditMode === "below" ? kcb < n : kcb >= n;
-        }
-        return matchSearch && matchStage && matchAssignee && matchType && matchAgency && matchTeam && matchCredit;
-      });
+      .filter(Boolean);
+    const passList = ({ card, co }) => {
+      const matchSearch = !s || co.name?.toLowerCase().includes(s) || co.representative?.toLowerCase().includes(s)
+        || co.region?.toLowerCase().includes(s) || co.industry?.toLowerCase().includes(s)
+        || (!!sDigits && (co.phone || "").replace(/[^0-9]/g, "").includes(sDigits));
+      const matchStage = filterStage === "전체" || card.stage === filterStage;
+      const matchType = filterType === "전체" || co.type === filterType;
+      const matchAgency = filterAgency === "전체" || (AGENCY_FILTER_MAP[filterAgency] || []).includes(card.agency_group);
+      const matchTeam = filterTeam === "전체" || teamOf(co) === filterTeam;
+      let matchCredit = true;
+      if (creditFilter !== "" && !isNaN(parseInt(creditFilter))) {
+        const n = parseInt(creditFilter);
+        const kcb = (co.credit_score_kcb == null || co.credit_score_kcb === "") ? null : parseInt(co.credit_score_kcb);
+        if (kcb == null) matchCredit = false;
+        else matchCredit = creditMode === "below" ? kcb < n : kcb >= n;
+      }
+      return matchSearch && matchStage && matchType && matchAgency && matchTeam && matchCredit;
+    };
+    const listed = all.filter(passList);
+    const rows = listed.filter(({ co }) =>
+      filterAssignee === "전체" || (co.assignee || "").split(",").map(x => x.trim()).includes(filterAssignee));
+    return { rows: rows, hiddenByList: all.length - listed.length };
   }, [pipelineCards, companyById, search, filterStage, filterAssignee, filterType, filterAgency, filterTeam, creditFilter, creditMode]);
+  const pipelineCardRows = pipelineCardData.rows;
+  // 파이프라인 화면에서 목록 필터를 한 번에 해제
+  const clearListFilters = () => {
+    setSearch(""); setFilterStage("전체"); setFilterType("전체");
+    setFilterAgency("전체"); setFilterTeam("전체"); setCreditFilter("");
+  };
 
   const logout = () => supabase.auth.signOut();
 
@@ -5509,7 +5564,7 @@ function CRMApp({ profile, session }) {
             {view === "calendar" && <CalendarView companies={companies} onSelectCompany={setSelectedCompany} profile={profile} />}
             {view === "manual" && <ManualView />}
             {view === "quicklinks" && <QuickLinksView />}
-            {view === "pipeline" && <PipelineView cardRows={pipelineCardRows} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setPipelineCards={setPipelineCards} setStagnConfig={setStagnConfig} canEditMapping={profile?.name === "양호"} myName={profile?.name} stagnRows={stagnRows} />}
+            {view === "pipeline" && <PipelineView cardRows={pipelineCardRows} hiddenByList={pipelineCardData.hiddenByList} onClearListFilters={clearListFilters} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setPipelineCards={setPipelineCards} setStagnConfig={setStagnConfig} canEditMapping={profile?.name === "양호"} myName={profile?.name} stagnRows={stagnRows} />}
             {view === "cases" && <ApprovalCasesView profile={profile} />}
             {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={profile?.role === "admin" || profile?.name === "양호"} onSelectCompany={setSelectedCompany} setView={setView} companies={companies} />}
             {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} filterAgency={filterAgency} setFilterAgency={setFilterAgency} filterTeam={filterTeam} setFilterTeam={setFilterTeam} creditFilter={creditFilter} setCreditFilter={setCreditFilter} creditMode={creditMode} setCreditMode={setCreditMode} assignees={assignees} onSelect={openCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
@@ -7881,7 +7936,7 @@ function normPipeSearchName(s) {
 }
 function onlyDigits(s) { return String(s == null ? "" : s).replace(/[^0-9]/g, ""); }
 
-function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, onSelect, setPipelineCards, setStagnConfig, canEditMapping, myName, stagnRows }) {
+function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssignee, setFilterAssignee, assignees, onSelect, setPipelineCards, setStagnConfig, canEditMapping, myName, stagnRows }) {
   // 파이프라인 탭 진입 시 카드 최신화 (기관현황 자동동기화 결과 반영)
   useEffect(function() {
     var alive = true;
@@ -7960,7 +8015,7 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
       if (!showClosed && card.closed_at) return false;                       // 종결 카드는 기본 숨김
       if (fAgency !== "전체") {
         if (fAgency === "__none__") { if (card.agency_group) return false; }
-        else if (card.agency_group !== fAgency) return false;
+        else if (!agencyFilterMatch(fAgency, card.agency_group)) return false;
       }
       if (fReason !== "전체") {
         if (card.stage !== "기타") return false;
@@ -8157,11 +8212,13 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
       // 수동 → 자동: 최신 기관 상태로 재동기화
       if (!confirm("'" + row.co.name + " · " + agencyLabel(card.agency_group) + "'를 자동 동기화로 전환할까요?\n(현재 기관현황 최신 상태로 단계가 재조정됩니다)")) return;
       await supabase.from("pipeline_cards").update({ sync_mode: "auto", updated_at: new Date().toISOString() }).eq("id", card.id);
-      var cq = supabase.from("agency_cases").select("status,year,month").is("deleted_at", null);
+      // 최신 행 판별은 isNewerCase(년→월→수정→등록→id)로 통일 — 같은 월에 행이 여러 개(동점)여도 결과가 항상 같다.
+      var cq = supabase.from("agency_cases").select("id,status,year,month,created_at,updated_at").is("deleted_at", null);
       cq = card.company_id ? cq.eq("company_id", card.company_id) : cq.eq("business_name", card.business_name);
-      cq = cq.eq("agency_group", card.agency_group).order("year", { ascending: false }).order("month", { ascending: false }).limit(1);
+      cq = cq.eq("agency_group", card.agency_group);
       var lc = await cq;
-      var latest = (lc.data || [])[0];
+      var latest = null;
+      (lc.data || []).forEach(function(s) { if (isNewerCase(s, latest)) latest = s; });
       if (latest) await syncPipelineFromCase({ company_id: card.company_id, business_name: card.business_name, agency_group: card.agency_group, status: latest.status, year: latest.year, month: latest.month });
       var fresh = await supabase.from("pipeline_cards").select("*");
       if (fresh.data && setPipelineCards) setPipelineCards(fresh.data);
@@ -8206,7 +8263,11 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
         <select value={fAgency} onChange={e => setFAgency(e.target.value)} title="기관별 보기"
           style={{ padding: "6px 10px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 12, background: "#fff", cursor: "pointer" }}>
           <option value="전체">기관 전체</option>
-          {AGENCY_GROUPS.map(function(g) { return <option key={g.id} value={g.id}>{g.label}</option>; })}
+          {AGENCY_GROUPS.map(function(g) {
+            var inc = PIPELINE_AGENCY_INCLUDE[g.id];
+            var extra = inc ? inc.filter(function(x) { return x !== g.id; }).map(agencyLabel).join("·") : "";
+            return <option key={g.id} value={g.id}>{g.label + (extra ? " (" + extra + " 포함)" : "")}</option>;
+          })}
           <option value="__none__">기관 미지정{noAgencyCount ? " (" + noAgencyCount + ")" : ""}</option>
         </select>
         <select value={fReason} onChange={e => setFReason(e.target.value)} title="기타 사유별 보기 (재접촉 대상 파악)"
@@ -8239,6 +8300,13 @@ function PipelineView({ cardRows, filterAssignee, setFilterAssignee, assignees, 
           style={{ marginLeft: "auto", padding: "6px 11px", borderRadius: 7, fontSize: 12, border: "1px solid #E8E5E0", background: "#F7F6F3", color: "#666", cursor: "pointer", fontWeight: 600 }}>필터 초기화</button>}
       </div>
 
+      {hiddenByList > 0 && (
+        <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 12, padding: "10px 14px", marginBottom: 14, display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "#92400E", fontWeight: 600 }}>
+          <span>🔎 기업목록 화면의 필터(검색·단계·유형·기관·팀·신용점수)가 켜져 있어 카드 <b>{hiddenByList}장</b>이 이 보드에서 빠져 있습니다.</span>
+          <button onClick={function() { if (onClearListFilters) onClearListFilters(); }}
+            style={{ marginLeft: "auto", padding: "5px 11px", borderRadius: 7, fontSize: 12, fontWeight: 700, border: "1px solid #FCD34D", background: "#fff", color: "#92400E", cursor: "pointer" }}>목록 필터 해제</button>
+        </div>
+      )}
       {showMapping && <MappingModal onClose={function() { setShowMapping(false); }} setPipelineCards={setPipelineCards} setStagnConfig={setStagnConfig} canEdit={!!canEditMapping} />}
       {agencyPick && <AgencyPickModal row={agencyPick.row} mode={agencyPick.mode} onClose={function() { setAgencyPick(null); }}
         onPick={function(agId) { return agencyPick.mode === "add" ? addAgencyCard(agencyPick.row, agId) : assignAgency(agencyPick.row, agId); }} />}
