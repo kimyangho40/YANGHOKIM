@@ -713,15 +713,20 @@ function loanAmountOf(ln) {
   var r = parseLoanAmount(ln && ln.amount);
   return r.won == null ? 0 : r.won;
 }
-// 기대출 총액(원) = loans 배열 amount 합
+// 신청했으나 부결/탈락한 건 — 실행된 대출이 아니므로 합계·부채비율·미분류·확인필요 어디에도 넣지 않는다.
+// 금액은 NULL(빈칸)로 두고 status="rejected"로만 구분한다. (0으로 두면 '0원 대출을 받았다'로 오독되어 평균·합계를 오염시킴)
+// note에 원문(예: "넣었으나 탈락")과 기관명을 남겨 거절 이력으로 보존한다.
+function isLoanRejected(ln) { return !!(ln && ln.status === "rejected"); }
+// 기대출 총액(원) = loans 배열 amount 합 (거절건 제외)
 function totalLoanAmount(company) {
   var loans = Array.isArray(company && company.loans) ? company.loans : [];
-  return loans.reduce(function(s, ln) { return s + loanAmountOf(ln); }, 0);
+  return loans.reduce(function(s, ln) { return isLoanRejected(ln) ? s : s + loanAmountOf(ln); }, 0);
 }
 // 금액을 확정하지 못한 대출이 하나라도 있는지 (합계·부채비율 신뢰도 판단용)
 function loanUnsureCount(company) {
   var loans = Array.isArray(company && company.loans) ? company.loans : [];
   return loans.filter(function(ln) {
+    if (isLoanRejected(ln)) return false;   // 부결건은 확인 필요 대상 아님
     var r = parseLoanAmount(ln && ln.amount);
     return r.won == null && r.note;   // 빈칸은 제외, 해석 실패만 센다
   }).length;
@@ -730,8 +735,9 @@ function loanUnsureCount(company) {
 // 금액을 확정 못 한 건은 합계에 넣지 않는다(0으로 치면 '부채 없음'으로 잘못 읽히므로 별도 표시).
 function loanTotalsByKind(company) {
   var loans = Array.isArray(company && company.loans) ? company.loans : [];
-  var out = { corp: 0, personal: 0, biz: 0, none: 0, total: 0, noneCount: 0, unsureCount: 0 };
+  var out = { corp: 0, personal: 0, biz: 0, none: 0, total: 0, noneCount: 0, unsureCount: 0, rejectedCount: 0 };
   loans.forEach(function(ln) {
+    if (isLoanRejected(ln)) { out.rejectedCount++; return; }   // 부결건은 실행된 대출이 아니라 어떤 집계에도 넣지 않는다
     var p = parseLoanAmount(ln && ln.amount);
     if (p.won == null && p.note) out.unsureCount++;
     var amt = p.won == null ? 0 : p.won;
@@ -1149,6 +1155,7 @@ function JunginggongCalc() {
 function sinboLoanBalance(company) {
   var loans = Array.isArray(company && company.loans) ? company.loans : [];
   return loans.reduce(function(s, ln) {
+    if (isLoanRejected(ln)) return s; // 부결건 제외
     var who = (((ln && ln.inst) || "") + " " + ((ln && ln.bank) || ""));
     if (!/신보|신용보증기금/.test(who)) return s; // 신보 관련 대출만 합산
     var n = parseInt(String((ln && ln.amount) || "").replace(/[^0-9]/g, ""), 10);
@@ -10735,31 +10742,52 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                       var inStyle = { width: "100%", border: "none", padding: "6px 5px", fontSize: 11.5, background: "transparent", outline: "none", boxSizing: "border-box" };
                       var km = loanKindMeta(ln.kind);
                       var amtP = parseLoanAmount(ln.amount);
+                      var rejected = isLoanRejected(ln);
+                      var rowBg = rejected ? "#F3F4F6" : "transparent";
+                      var mutedIn = rejected ? Object.assign({}, inStyle, { color: "#9CA3AF", textDecoration: "line-through" }) : inStyle;
+                      var toggleRejected = function() {
+                        setData(function(p) {
+                          var arr = (Array.isArray(p.loans) ? p.loans : []).slice();
+                          var cur = arr[li] || {};
+                          arr[li] = isLoanRejected(cur)
+                            ? Object.assign({}, cur, { status: "" })                       // 거절 해제 → 실행 대출로 복귀
+                            : Object.assign({}, cur, { status: "rejected", amount: "" });   // 거절로 이동 → 금액 비움(NULL)
+                          return Object.assign({}, p, { loans: arr });
+                        });
+                      };
                       return (
-                        <tr key={li}>
-                          <td style={cellStyle}><input value={ln.inst || ""} onChange={function(e) { updateLoan("inst", e.target.value); }} style={inStyle} /></td>
-                          <td style={{ border: "1px solid #E8E5E0", padding: 0, background: ln.kind ? km.bg : "#FFFBEB" }}>
+                        <tr key={li} style={{ background: rowBg }}>
+                          <td style={cellStyle}><input value={ln.inst || ""} onChange={function(e) { updateLoan("inst", e.target.value); }} style={rejected ? Object.assign({}, inStyle, { color: "#6B7280" }) : inStyle} /></td>
+                          <td style={{ border: "1px solid #E8E5E0", padding: 0, background: rejected ? "#F3F4F6" : (ln.kind ? km.bg : "#FFFBEB") }}>
+                            {rejected ? (
+                              <div style={{ padding: "6px 3px", fontSize: 10.5, color: "#6B7280", fontWeight: 700, textAlign: "center" }}>—</div>
+                            ) : (
                             <select value={ln.kind || ""} onChange={function(e) { updateLoan("kind", e.target.value); }}
                               title={ln.kind ? km.label : "구분이 지정되지 않았습니다 — 법인기업은 미분류 대출이 부채비율 계산에서 빠집니다"}
                               style={{ width: "100%", border: "none", padding: "6px 3px", fontSize: 11, background: "transparent", outline: "none", boxSizing: "border-box", cursor: "pointer", fontWeight: 700, color: ln.kind ? km.color : "#B45309" }}>
                               <option value="">미분류</option>
                               {LOAN_KINDS.map(function(k) { return <option key={k.id} value={k.id}>{k.label}</option>; })}
                             </select>
-                          </td>
-                          <td style={{ border: "1px solid #E8E5E0", padding: 0, background: amtP.won == null && amtP.note ? "#FEF2F2" : "transparent" }}>
-                            <input value={ln.amount || ""} onChange={function(e) { updateLoan("amount", e.target.value); }} style={inStyle} />
-                            {amtP.won != null && (
-                              <div style={{ fontSize: 9.5, color: "#15803D", padding: "0 5px 4px", fontWeight: 700 }}>= {wonToKorExact(amtP.won)}</div>
                             )}
-                            {amtP.won == null && amtP.note && (
+                          </td>
+                          <td style={{ border: "1px solid #E8E5E0", padding: 0, background: rejected ? "#F3F4F6" : (amtP.won == null && amtP.note ? "#FEF2F2" : "transparent") }}>
+                            <input value={ln.amount || ""} onChange={function(e) { updateLoan("amount", e.target.value); }} style={mutedIn} placeholder={rejected ? "실행 안 됨" : ""} />
+                            {rejected ? (
+                              <div title={ln.note ? "원문: " + ln.note : "신청했으나 부결/탈락 — 실행된 대출이 아니므로 합계·부채비율에서 제외됩니다."}
+                                style={{ fontSize: 9.5, color: "#6B7280", padding: "0 5px 4px", fontWeight: 800 }}>🚫 신청 거절{ln.note ? " · " + ln.note : ""}</div>
+                            ) : amtP.won != null ? (
+                              <div style={{ fontSize: 9.5, color: "#15803D", padding: "0 5px 4px", fontWeight: 700 }}>= {wonToKorExact(amtP.won)}</div>
+                            ) : amtP.note ? (
                               <div title={"원문을 그대로 두었습니다. 합계에서 제외됩니다 — " + amtP.note}
                                 style={{ fontSize: 9.5, color: "#DC2626", padding: "0 5px 4px", fontWeight: 800 }}>⚠ 금액 확인 필요</div>
-                            )}
+                            ) : null}
                           </td>
-                          <td style={cellStyle}><input value={ln.bank || ""} onChange={function(e) { updateLoan("bank", e.target.value); }} style={inStyle} /></td>
-                          <td style={cellStyle}><input value={ln.start || ""} placeholder="" title="예: 24.03.15" onChange={function(e) { updateLoan("start", e.target.value); }} style={inStyle} /></td>
-                          <td style={cellStyle}><input value={ln.end || ""} placeholder="" title="예: 29.03.15" onChange={function(e) { updateLoan("end", e.target.value); }} style={inStyle} /></td>
-                          <td style={{ border: "1px solid #E8E5E0", textAlign: "center" }}>
+                          <td style={cellStyle}><input value={ln.bank || ""} onChange={function(e) { updateLoan("bank", e.target.value); }} style={rejected ? Object.assign({}, inStyle, { color: "#6B7280" }) : inStyle} /></td>
+                          <td style={cellStyle}><input value={ln.start || ""} placeholder="" title="예: 24.03.15" onChange={function(e) { updateLoan("start", e.target.value); }} style={mutedIn} /></td>
+                          <td style={cellStyle}><input value={ln.end || ""} placeholder="" title="예: 29.03.15" onChange={function(e) { updateLoan("end", e.target.value); }} style={mutedIn} /></td>
+                          <td style={{ border: "1px solid #E8E5E0", textAlign: "center", whiteSpace: "nowrap" }}>
+                            <button onClick={toggleRejected} title={rejected ? "거절 해제 — 실행된 대출로 되돌립니다" : "신청 거절로 표시 — 금액을 비우고 합계에서 제외합니다"}
+                              style={{ background: "none", border: "none", cursor: "pointer", padding: 3, fontSize: 12, opacity: rejected ? 1 : 0.55 }}>{rejected ? "↩" : "🚫"}</button>
                             <button onClick={function() { setData(function(p) { var arr = (Array.isArray(p.loans) ? p.loans : []).slice(); arr.splice(li, 1); return Object.assign({}, p, { loans: arr }); }); }}
                               style={{ background: "none", border: "none", cursor: "pointer", color: "#888", padding: 3 }}><Icon name="x" size={11} color="#CCC" /></button>
                           </td>
@@ -10809,6 +10837,15 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                         {isCorp ? " — 법인기업은 미분류 대출이 부채비율 계산에서 제외됩니다. 하나씩 구분을 지정해 주세요." : " — 구분을 지정하면 성격별로 구분해 볼 수 있습니다."}
                       </div>
                     )}
+                    {t.rejectedCount > 0 && (function() {
+                      var rej = (Array.isArray(data.loans) ? data.loans : []).filter(isLoanRejected);
+                      return (
+                        <div style={{ marginTop: 6, fontSize: 11, color: "#4B5563", background: "#F3F4F6", border: "1px solid #E5E7EB", borderRadius: 7, padding: "6px 10px", lineHeight: 1.6 }}>
+                          🚫 신청 거절 이력 {t.rejectedCount}건 — <b>실행되지 않아 합계·부채비율에서 제외</b>했습니다.
+                          <span style={{ color: "#6B7280" }}> ({rej.map(function(r) { return (r.inst || r.bank || "기관미상") + (r.note ? "(" + r.note + ")" : ""); }).join(", ")})</span>
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })()}
