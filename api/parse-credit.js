@@ -4,15 +4,58 @@
 //
 // 형제 엔드포인트(ai-search/ai-company/summarize-kakao/voice-command)와 동일하게 raw fetch를 쓴다.
 //
-// 인증 검사는 api/_auth.mjs로 옮겼다(2026-07-28 보안조치 8) — 5개 엔드포인트가 같은 검사를 쓴다.
-//   검사 내용은 그대로: Supabase JWT 유효성 + profiles.status='approved'
-//
 // 설계 원칙 (2026-07-27 1단계 설계안 승인분):
 //   · 이 함수는 "추출"만 한다. 단위 환산·소계 제거·금액 확정은 프런트(App.js)가 코드로 재검증한다.
 //     모델 판단을 그대로 신뢰하지 않기 위한 이중 방어.
 //   · 실행일은 문서에 없으므로 스키마에 아예 두지 않는다(추측 여지 제거).
 //   · 만기구조는 구간 표현이라 만기일이 아니다. 원문 문자열로만 돌려준다.
-import { denyUnauthorized } from "./_auth.mjs";
+// ── 인증 검사 (2026-07-28 보안조치 8) ────────────────────────────────────────
+// ⚠️ 5개 엔드포인트(ai-search·ai-company·summarize-kakao·voice-command·parse-credit)에
+//    똑같은 블록이 들어 있다. 고칠 때는 5개를 함께 고칠 것.
+//    공유 모듈(api/_auth.mjs)로 뺐다가 되돌렸다 — Vercel이 api/ 안의 `_` 시작 파일을
+//    배포 번들에 넣지 않아 함수가 아예 뜨지 못했다(FUNCTION_INVOCATION_FAILED 500).
+//    서버리스 함수는 "파일 하나로 완결"이어야 안전하다.
+//
+// 검사: Supabase JWT 유효성 + profiles.status === 'approved' (DB RLS의 is_approved()와 같은 기준)
+// 프런트(App.js callApi)가 Authorization / x-supabase-anon 두 헤더를 붙여 보낸다.
+// anon key는 원래 브라우저에 공개되는 값이라 헤더로 받아도 문제없다.
+const SUPABASE_URL = "https://ujdrjvnihxjvbkezjvwc.supabase.co";
+
+// 통과하면 false, 막혔으면 응답까지 보내고 true를 돌려준다.
+async function denyUnauthorized(req, res) {
+  const deny = (status, error) => { res.status(status).json({ error: error }); return true; };
+
+  const auth = req.headers.authorization || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!token) return deny(401, "로그인이 필요합니다.");
+  const anonKey = req.headers["x-supabase-anon"] || "";
+  if (!anonKey) return deny(401, "인증 정보가 없습니다.");
+
+  // 1) 토큰이 유효한 사용자 것인지
+  let userRes;
+  try {
+    userRes = await fetch(SUPABASE_URL + "/auth/v1/user", {
+      headers: { apikey: anonKey, Authorization: "Bearer " + token },
+    });
+  } catch (e) {
+    return deny(503, "인증 서버에 연결할 수 없습니다.");
+  }
+  if (!userRes.ok) return deny(401, "로그인이 만료되었습니다. 새로고침 후 다시 시도해주세요.");
+  const user = await userRes.json();
+  if (!user || !user.id) return deny(401, "로그인이 필요합니다.");
+
+  // 2) 승인된 계정인지 (RLS가 걸려 있으므로 본인 토큰으로 조회)
+  const profRes = await fetch(
+    SUPABASE_URL + "/rest/v1/profiles?select=status&id=eq." + encodeURIComponent(user.id),
+    { headers: { apikey: anonKey, Authorization: "Bearer " + token } }
+  );
+  if (!profRes.ok) return deny(403, "권한을 확인할 수 없습니다.");
+  const rows = await profRes.json();
+  if (!Array.isArray(rows) || !rows[0] || rows[0].status !== "approved") {
+    return deny(403, "관리자 승인 후 이용할 수 있습니다.");
+  }
+  return false;
+}
 
 const MODEL = "claude-opus-5";
 

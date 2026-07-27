@@ -34,6 +34,34 @@ async function callApi(path, body) {
   });
 }
 
+// /api 응답을 안전하게 읽는다. 실패하면 **원인이 보이는** 메시지로 throw한다.
+// 서버가 JSON이 아닌 것을 뱉는 경우가 실제로 있었다(2026-07-28 배포 사고:
+// 함수가 뜨지 못해 Vercel이 "A server error has occurred" 평문을 반환 → resp.json()이 먼저 터져
+// "Unexpected token 'A'"라는 엉뚱한 메시지만 보였다). 그래서 text로 먼저 받는다.
+async function callApiJson(path, body) {
+  var resp = await callApi(path, body);
+  var text = await resp.text();
+  var data = null;
+  try { data = JSON.parse(text); } catch (e) { data = null; }
+  if (!resp.ok) throw new Error((data && data.error) || apiErrorText(path, resp.status, text));
+  if (!data) throw new Error(apiErrorText(path, resp.status, text));
+  return data;
+}
+
+// 상태코드별 사람이 읽을 수 있는 설명. 어느 기능이 왜 막혔는지 화면에서 바로 보이게 한다.
+function apiErrorText(path, status, text) {
+  var where = String(path).replace("/api/", "");
+  if (status === 401) return "로그인이 풀렸습니다. 새로고침 후 다시 로그인해주세요. (401 " + where + ")";
+  if (status === 403) return "이 기능을 쓸 권한이 없습니다. 관리자 승인이 필요합니다. (403 " + where + ")";
+  if (status === 404) return "서버 기능을 찾을 수 없습니다. 배포 상태를 확인해주세요. (404 " + where + ")";
+  if (status === 429) return "요청이 많아 잠시 막혔습니다. 잠시 후 다시 시도해주세요. (429 " + where + ")";
+  if (status >= 500) {
+    return "서버 기능이 실행되지 못했습니다. (" + status + " " + where + ") " +
+      String(text || "").trim().slice(0, 120);
+  }
+  return "요청 실패 (" + status + " " + where + ") " + String(text || "").trim().slice(0, 120);
+}
+
 // ── 비공개 Storage 버킷 오디오 ───────────────────────────────────────────────
 // voice-memos / call-recordings 버킷은 2026-07-27 보안조치로 비공개가 됐다.
 // 그 전에 저장된 소통내역에는 공개 URL(/object/public/...)이 그대로 남아 있는데 이제 열리지 않는다.
@@ -5826,9 +5854,7 @@ function AiSearchModal({ companies, myName, onClose, onSelectCompany }) {
     setLoading(true);
     var finalMsgs = base;
     try {
-      var resp = await callApi("/api/ai-search", { question: q, snapshot: snapshot, today: today, history: history });
-      var d = await resp.json();
-      if (!resp.ok) throw new Error(d.error || "요청 실패");
+      var d = await callApiJson("/api/ai-search", { question: q, snapshot: snapshot, today: today, history: history });
       finalMsgs = base.concat([{ role: "assistant", content: d.answer || "(빈 응답)" }]);
       setMsgs(finalMsgs);
     } catch (e) {
@@ -6270,7 +6296,7 @@ function VoiceModeOverlay({ myName, onClose }) {
       goPhase("thinking");
       var action = null;
       try {
-        var res = await callApi("/api/voice-command", {
+        var d = await callApiJson("/api/voice-command", {
           transcript: t,
           me: myName,
           members: ctxRef.current.members,
@@ -6278,12 +6304,18 @@ function VoiceModeOverlay({ myName, onClose }) {
           companies: ctxRef.current.companyRows.map(function(c) { return c.name; }),
           today: kstDate(),
         });
-        var d = await res.json();
-        if (!res.ok) throw new Error(d && d.error ? d.error : "해석 실패");
         action = d.action;
       } catch (e) {
+        // 인증 실패·서버 오류를 "잘 못 알아들었어요"로 뭉뚱그리지 않는다.
+        // 말은 짧게(운전 중), 자세한 원인은 화면 줄로 남긴다.
+        var em = e && e.message ? e.message : String(e);
+        addLine("ai", "❌ " + em);
         goPhase("listening");
-        await speak("잘 못 알아들었어요. 다시 말씀해 주세요.");
+        await speak(
+          /401|로그인/.test(em) ? "로그인이 풀렸습니다. 새로고침 후 다시 로그인해 주세요." :
+          /403|권한|승인/.test(em) ? "이 기능을 쓸 권한이 없습니다. 관리자 승인이 필요합니다." :
+          "말은 알아들었지만 서버에서 해석하지 못했습니다. 화면에 원인을 적어두었습니다."
+        );
         return;
       }
       if (!action) { goPhase("listening"); await speak("다시 말씀해 주세요."); return; }
@@ -10319,13 +10351,11 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
         reader.onerror = function() { reject(new Error("이미지 읽기 실패")); };
         reader.readAsDataURL(file);
       });
-      var resp = await callApi("/api/summarize-kakao", { imageBase64: base64, mediaType: file.type });
-      var data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || "요약 요청 실패");
+      var data = await callApiJson("/api/summarize-kakao", { imageBase64: base64, mediaType: file.type });
       if (!data.summary) throw new Error("요약 내용이 비어 있습니다.");
       setCommInput(function(prev) { return prev && prev.trim() ? (prev.trimEnd() + "\n" + data.summary) : data.summary; });
     } catch (err) {
-      alert("❌ 카톡 요약 실패: " + (err && err.message ? err.message : err) + "\n\n(API 키 설정 또는 네트워크를 확인해주세요)");
+      alert("❌ 카톡 요약 실패\n\n" + (err && err.message ? err.message : err));
     } finally {
       setKakaoLoading(false);
     }
@@ -10554,9 +10584,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
     setAiInput("");
     setAiLoading(true);
     try {
-      var resp = await callApi("/api/ai-company", { question: q, companyContext: buildCompanyContext(), history: history });
-      var d = await resp.json();
-      if (!resp.ok) throw new Error(d.error || "요청 실패");
+      var d = await callApiJson("/api/ai-company", { question: q, companyContext: buildCompanyContext(), history: history });
       setAiMsgs(function(p) { return p.concat([{ role: "assistant", content: d.answer || "(빈 응답)" }]); });
     } catch (e) {
       setAiMsgs(function(p) { return p.concat([{ role: "assistant", content: "❌ 오류: " + (e && e.message ? e.message : e) }]); });
@@ -13867,9 +13895,7 @@ function CreditReportImport({ existingCount, onApply }) {
         bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
       }
       var b64 = btoa(bin);
-      var r = await callApi("/api/parse-credit", { fileBase64: b64, mediaType: mt });
-      var data = await r.json();
-      if (!r.ok) { setErr(data && data.error ? data.error : "분석에 실패했습니다."); return; }
+      var data = await callApiJson("/api/parse-credit", { fileBase64: b64, mediaType: mt });
       var conv = creditReportToLoans(data.result);
       if (!conv.loans.length) { setErr("표에서 대출 행을 찾지 못했습니다. 다른 페이지를 첨부해보세요."); return; }
       setParsed(conv);
