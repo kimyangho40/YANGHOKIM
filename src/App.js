@@ -18863,19 +18863,46 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     return dupKeys[grp + "||" + bn + "|" + rep + "||" + mon] || 0;
   }
 
+  // 집계 분류표. 기관마다 상태 이름이 달라 한 표에 모아 둔다(값이 기관 간에 겹치지 않아 평면 표로 충분).
+  // ⚠️ 이 표는 화면 집계 전용이다 — DB의 status 값 자체는 건드리지 않는다.
+  // 2026-07-28 전면 갱신: 마이그레이션으로 들어온 주력 상태값(상담/진단완료·자금집행완료·
+  // 기관신청대기/방문예정·기관신청완료/방문완료·구조혁신 전용 상태)이 표에 없어 '기타'로 새고 있었다.
   var STATUS_GROUPS = {
-    approved: ["승인","약정"],
-    completed: ["완료"],
-    waiting: ["기관 방문 전","기관 방문 후 대기","온라인 신청 후 대기","심사대기"],
+    // 상담·진단은 끝났지만 아직 기관 접수 전. 심사가 도는 건(inProgress)과 섞지 않고 따로 센다.
+    consulted: ["상담/진단완료"],
+    // 기관에서 심사가 실제로 굴러가고 있는 건 (진행 중 ~ 실태조사완료)
+    inProgress: [
+      "진행 중","심사중","최종제출","임시저장","우선도 평가","우선도 평가 예비",
+      "실태 조사 예정","실태 조사 완료","기관신청완료/방문완료","필수서류 및 인증서요청",
+      "심사중/실태조사대기","실태조사완료/약정완료",
+      // 구조혁신&사업전환 전용
+      "컨설팅 진행중","컨설턴트 신청 완료","전문 위원 배정","전문 위원 실사 완료",
+      "승인 신청서 제출 완료","08 승인신청서 제출완료","서류 제출 완료",
+    ],
+    waiting: ["기관 방문 전","기관 방문 후 대기","온라인 신청 후 대기","심사대기","기관신청대기/방문예정","자가진단 완료"],
+    approved: ["승인","약정","사업전환 승인"],
+    completed: ["완료","자금집행완료","컨설팅 최종 완료","수수료대기 및 입금요청","입금완료/사후관리"],
     returned: ["반려"],
-    rejected: ["부결","진행불가","신청취소","신청못함","중단"],
-    inProgress: ["진행 중","심사중","최종제출","임시저장","우선도 평가","우선도 평가 예비","실태 조사 예정","실태 조사 완료"],
+    rejected: ["부결","진행불가","신청취소","신청못함","중단","마감 진행 불가","부결/반려"],
   };
-  // 위 그룹에 안 속하면 '기타'(보류/시작 전 등) — 5개 칩 어디에도 안 잡히고 '전체'에서만 보임
+  // 위 그룹에 안 속하면 '기타'(시작 전·보류·예산소진 보류 등).
+  // 예전엔 '기타'를 화면에 아예 안 그려서 합계가 총계와 안 맞았다 → 지금은 칸으로 보여준다.
   var groupOf = function(status) {
     for (var k in STATUS_GROUPS) { if (STATUS_GROUPS[k].indexOf(status) >= 0) return k; }
     return "other";
   };
+  // 상단 보드와 '상태별 모아보기'가 항상 같은 칸 구성을 쓰도록 한 곳에서 정의한다(둘이 갈리면 안 됨).
+  // 여기 있는 그룹의 합 = 총 진행 건수가 되도록 '전 그룹 + 기타'를 빠짐없이 넣는다.
+  var STATUS_VIEW_GROUPS = [
+    { key: "inProgress", label: "진행중",      color: "#4338CA", bg: "#EEF2FF" },
+    { key: "waiting",    label: "대기",        color: "#B45309", bg: "#FEF3C7" },
+    { key: "consulted",  label: "상담완료",    color: "#0369A1", bg: "#E0F2FE" },
+    { key: "approved",   label: "승인/약정",   color: "#047857", bg: "#DCFCE7" },
+    { key: "completed",  label: "완료",        color: "#0F766E", bg: "#D1FAE5" },
+    { key: "returned",   label: "반려",        color: "#B45309", bg: "#FEF0D9" },
+    { key: "rejected",   label: "부결",        color: "#DC2626", bg: "#FEE2E2" },
+    { key: "other",      label: "기타",        color: "#6B7280", bg: "#F3F4F6" },
+  ];
 
   var filtered = useMemo(function() {
     var q = (searchQ || "").trim().toLowerCase();
@@ -18953,14 +18980,14 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       return c.agency_group === activeGroup && matchMonth && Number(c.year) === currentYear && !c.deleted_at
         && (filterAssignee.length === 0 || filterAssignee.some(function(n) { return (c.assignee || "").split(",").map(function(x) { return x.trim(); }).includes(n); }));
     });
-    var approved = baseList.filter(function(c) { return groupOf(c.status) === "approved"; }).length;
-    var completed = baseList.filter(function(c) { return groupOf(c.status) === "completed"; }).length;
-    var waiting = baseList.filter(function(c) { return groupOf(c.status) === "waiting"; }).length;
-    var inProgress = baseList.filter(function(c) { return groupOf(c.status) === "inProgress"; }).length;
-    var rejected = baseList.filter(function(c) { return groupOf(c.status) === "rejected"; }).length;
-    var returned = baseList.filter(function(c) { return groupOf(c.status) === "returned"; }).length;
-    var total = baseList.length;
-    return { total: total, approved: approved, completed: completed, waiting: waiting, inProgress: inProgress, rejected: rejected, returned: returned };
+    // 그룹별 건수를 한 번에 센다. 그룹 목록(STATUS_VIEW_GROUPS)이 늘어도 여기 고칠 필요 없다.
+    var byGroup = {};
+    STATUS_VIEW_GROUPS.forEach(function(g) { byGroup[g.key] = 0; });
+    baseList.forEach(function(c) {
+      var k = groupOf(c.status);
+      byGroup[k] = (byGroup[k] || 0) + 1;
+    });
+    return Object.assign({ total: baseList.length }, byGroup);
   }, [cases, activeGroup, activeMonth, filterAssignee, currentYear]);
 
   var activeGroupObj = AGENCY_GROUPS.find(function(g) { return g.id === activeGroup; });
@@ -19428,15 +19455,18 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         </div>
       </div>
 
-      {/* 요약 카드 (클릭으로 필터링) */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
-        {[
-          { label: "총 진행", value: summary.total, color: "#1A1917", key: "all" },
-          { label: "승인/약정", value: summary.approved, color: "#047857", key: "approved" },
-          { label: "진행중", value: summary.inProgress, color: "#4338CA", key: "inProgress" },
-          { label: "반려 (기한주의)", value: summary.returned, color: "#B45309", key: "returned" },
-          { label: "부결", value: summary.rejected, color: "#DC2626", key: "rejected" },
-        ].map(function(s) {
+      {/* 요약 카드 (클릭으로 필터링) — '총 진행' + 전 그룹. 카드 합 = 총 진행이 되도록 빠짐없이 그린다. */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(148px, 1fr))", gap: 12, marginBottom: 12 }}>
+        {[{ label: "총 진행", value: summary.total, color: "#1A1917", key: "all" }].concat(
+          STATUS_VIEW_GROUPS.map(function(g) {
+            return {
+              label: g.key === "returned" ? "반려 (기한주의)" : g.key === "other" ? "기타 (시작 전·보류)" : g.label,
+              value: summary[g.key] || 0,
+              color: g.color,
+              key: g.key,
+            };
+          })
+        ).map(function(s) {
           var isActive = statusFilter === s.key;
           return (
             <div key={s.label} onClick={function() { setStatusFilter(function(prev) { return prev === s.key ? "all" : s.key; }); }}
@@ -19456,48 +19486,39 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
         })}
       </div>
 
-      {/* 상태별 모아보기 (5그룹: 진행중·대기·승인·완료·부결 → 재신청 후보 종합용) */}
-      {(function() {
-        var base = cases.filter(function(c) {
-          if (c.agency_group !== activeGroup) return false;
-          if (activeMonth !== "all" && Number(c.month) !== Number(activeMonth)) return false;
-          if (Number(c.year) !== currentYear) return false;
-          if (c.deleted_at) return false;
-          if (filterAssignee.length > 0 && !filterAssignee.some(function(n) { return (c.assignee || "").split(",").map(function(x) { return x.trim(); }).includes(n); })) return false;
-          return true;
-        });
-        if (base.length === 0) return null;
-        var counts = { inProgress: 0, waiting: 0, approved: 0, completed: 0, returned: 0, rejected: 0, other: 0 };
-        base.forEach(function(c) { counts[groupOf(c.status)] = (counts[groupOf(c.status)] || 0) + 1; });
-        var groups = [
-          { key: "inProgress", label: "진행중", bg: "#EEF2FF", text: "#4338CA" },
-          { key: "waiting", label: "대기", bg: "#FEF3C7", text: "#B45309" },
-          { key: "approved", label: "승인", bg: "#DCFCE7", text: "#15803D" },
-          { key: "completed", label: "완료", bg: "#D1FAE5", text: "#047857" },
-          { key: "returned", label: "반려", bg: "#FEF0D9", text: "#B45309" },
-          { key: "rejected", label: "부결", bg: "#FEE2E2", text: "#DC2626" },
-        ];
+      {/* 합계 검증 — 카드 합이 총 진행과 다르면 그 자리에서 드러나게 (예전엔 조용히 어긋났다) */}
+      {summary.total > 0 && (function() {
+        var sum = STATUS_VIEW_GROUPS.reduce(function(a, g) { return a + (summary[g.key] || 0); }, 0);
         return (
-          <div style={{ display: "flex", gap: 5, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
-            <span style={{ fontSize: 11, color: "#888", marginRight: 2, fontWeight: 600 }}>상태별 모아보기:</span>
-            {groups.map(function(g) {
-              var active = statusFilter === g.key;
-              return <div key={g.key} onClick={function() { setStatusFilter(function(p) { return p === g.key ? "all" : g.key; }); }}
-                style={{ padding: "5px 13px", borderRadius: 99, cursor: "pointer", fontSize: 12, fontWeight: 600,
-                  background: active ? g.text : g.bg, color: active ? "#fff" : g.text,
-                  border: "1px solid " + (active ? g.text : "transparent") }}>
-                {g.label} {counts[g.key] || 0}
-              </div>;
-            })}
-            {statusFilter !== "all" && (
-              <div onClick={function() { setStatusFilter("all"); }}
-                style={{ padding: "5px 11px", borderRadius: 99, cursor: "pointer", fontSize: 12, color: "#888", border: "1px solid #E8E5E0" }}>
-                ✕ 전체
-              </div>
-            )}
+          <div style={{ fontSize: 11, color: sum === summary.total ? "#888" : "#B91C1C", marginBottom: 16, fontWeight: sum === summary.total ? 400 : 700 }}>
+            {sum === summary.total
+              ? "✓ 상태별 합계 " + sum + "건 = 총 진행 " + summary.total + "건"
+              : "⚠️ 상태별 합계 " + sum + "건 ≠ 총 진행 " + summary.total + "건 — 분류표에 없는 상태값이 있어요. 담당자에게 알려주세요."}
           </div>
         );
       })()}
+
+      {/* 상태별 모아보기 — 상단 카드와 똑같은 그룹·똑같은 숫자(summary)를 쓴다. 둘이 갈리지 않게 한 소스만 본다. */}
+      {summary.total > 0 && (
+        <div style={{ display: "flex", gap: 5, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: 11, color: "#888", marginRight: 2, fontWeight: 600 }}>상태별 모아보기:</span>
+          {STATUS_VIEW_GROUPS.map(function(g) {
+            var active = statusFilter === g.key;
+            return <div key={g.key} onClick={function() { setStatusFilter(function(p) { return p === g.key ? "all" : g.key; }); }}
+              style={{ padding: "5px 13px", borderRadius: 99, cursor: "pointer", fontSize: 12, fontWeight: 600,
+                background: active ? g.color : g.bg, color: active ? "#fff" : g.color,
+                border: "1px solid " + (active ? g.color : "transparent") }}>
+              {g.label} {summary[g.key] || 0}
+            </div>;
+          })}
+          {statusFilter !== "all" && (
+            <div onClick={function() { setStatusFilter("all"); }}
+              style={{ padding: "5px 11px", borderRadius: 99, cursor: "pointer", fontSize: 12, color: "#888", border: "1px solid #E8E5E0" }}>
+              ✕ 전체
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 담당자 필터 (다중 선택 - 여러 명 중 한 명이라도 담당이면 표시) */}
       {assigneesInGroup.length > 0 && (
