@@ -62,6 +62,410 @@ function apiErrorText(path, status, text) {
   return "요청 실패 (" + status + " " + where + ") " + String(text || "").trim().slice(0, 120);
 }
 
+// ── 저장 유실 방지 ───────────────────────────────────────────────────────────
+// 2026-07-28 사고: 노트북에서 업무노트를 쓰고 저장을 눌렀는데 조용히 실패했다.
+// 실패가 안 보였던 이유가 두 갈래인데, 둘 다 화면에 아무 표시가 없었다.
+//  ① 세션이 끊기면 롤이 anon으로 내려간다. RLS에 걸린 UPDATE는 "거부"가 아니라 "0행 갱신"이라
+//     PostgREST가 204를 준다 → r.error가 null이어서 앱이 성공으로 착각하고 편집창을 닫았다.
+//  ② JWT 만료(401)면 r.error는 오지만, 호출부가 `if (!r.error)`만 있고 else가 없었다.
+// → writeGuarded()는 UPDATE/INSERT에 .select()를 붙여 "몇 행이 바뀌었는지"로 판정하고,
+//   실패는 반드시 화면 알림 + 재시도 큐로 흘려보낸다. 조용히 넘어갈 수 없게 만드는 게 목적이다.
+//
+// ⚠️ 임시보관·실패큐는 전부 **그 브라우저(기기)의 localStorage**에만 남는다.
+//    노트북에서 쓰던 내용을 아이패드에서 복구할 수는 없다. 화면에도 그렇게 안내한다.
+// ⚠️ 임시보관은 서버로 보내지 않는다(자동저장이 서버 부하를 만들면 안 된다는 요구).
+//    실제 서버 저장은 사용자가 저장을 누를 때만 일어난다.
+const DRAFT_PREFIX = "crm_draft_v1:";
+const FAILQ_KEY = "crm_failq_v1";
+const DRAFT_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 2주 지난 임시보관은 스스로 지운다
+const DRAFT_STALE_MS = 10 * 60 * 1000;         // 10분 넘게 방치된 것만 "복구 안내" 대상
+
+function lsGet(k) { try { return window.localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet(k, v) { try { window.localStorage.setItem(k, v); return true; } catch (e) { return false; } }
+function lsDel(k) { try { window.localStorage.removeItem(k); } catch (e) {} }
+
+function draftKey(kind, id) { return DRAFT_PREFIX + kind + ":" + (id == null || id === "" ? "new" : id); }
+
+function saveDraft(kind, id, text, label) {
+  if (!String(text || "").trim()) { lsDel(draftKey(kind, id)); return; }
+  lsSet(draftKey(kind, id), JSON.stringify({ v: String(text), at: Date.now(), label: label || "", kind: kind }));
+}
+function readDraft(kind, id) {
+  var raw = lsGet(draftKey(kind, id));
+  if (!raw) return null;
+  try {
+    var o = JSON.parse(raw);
+    if (!o || typeof o.v !== "string") return null;
+    if (Date.now() - (o.at || 0) > DRAFT_TTL_MS) { lsDel(draftKey(kind, id)); return null; }
+    return o;
+  } catch (e) { return null; }
+}
+function clearDraft(kind, id) { lsDel(draftKey(kind, id)); }
+
+// 남아 있는 임시보관 목록(오래된 건 청소하면서). 다음 접속 때 "저장 안 된 내용이 있습니다" 안내에 쓴다.
+function listStaleDrafts() {
+  var out = [];
+  try {
+    for (var i = window.localStorage.length - 1; i >= 0; i--) {
+      var k = window.localStorage.key(i);
+      if (!k || k.indexOf(DRAFT_PREFIX) !== 0) continue;
+      var o = null;
+      try { o = JSON.parse(window.localStorage.getItem(k)); } catch (e) { o = null; }
+      if (!o || !String(o.v || "").trim() || Date.now() - (o.at || 0) > DRAFT_TTL_MS) { lsDel(k); continue; }
+      if (Date.now() - (o.at || 0) < DRAFT_STALE_MS) continue; // 지금 쓰고 있는 건 안내하지 않는다
+      out.push({ key: k, kind: o.kind || "", label: o.label || "", at: o.at, text: o.v });
+    }
+  } catch (e) {}
+  return out.sort(function(a, b) { return b.at - a.at; });
+}
+
+// ── 저장 실패 큐 (브라우저 보관 → 연결 회복 시 자동 재시도) ──
+function readFailQ() {
+  try { var a = JSON.parse(lsGet(FAILQ_KEY) || "[]"); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+}
+function writeFailQ(a) { lsSet(FAILQ_KEY, JSON.stringify(a.slice(-50))); notifySaveState(); }
+// 재시도해봐야 절대 성공할 수 없는 항목(예: 컬럼이 없어 실패 → 그 칸 빼고 다시 저장 성공)은 큐에서 뺀다.
+// 안 그러면 영영 실패하는 항목이 남아 경고 띠가 계속 떠 있게 된다.
+function dropFailedSave(id) {
+  if (!id) return;
+  writeFailQ(readFailQ().filter(function(x) { return x.id !== id; }));
+  dismissSaveAlert(id);
+}
+
+// ── 화면 알림 버스 (모듈 함수에서 React로 알리기) ──
+var saveAlerts = [];
+var saveListeners = [];
+function onSaveState(fn) {
+  saveListeners.push(fn);
+  return function() { saveListeners = saveListeners.filter(function(x) { return x !== fn; }); };
+}
+function notifySaveState() { saveListeners.slice().forEach(function(f) { try { f(); } catch (e) {} }); }
+function pushSaveAlert(a) {
+  saveAlerts = saveAlerts.filter(function(x) { return x.id !== a.id; }).concat([a]).slice(-6);
+  notifySaveState();
+}
+function dismissSaveAlert(id) {
+  saveAlerts = saveAlerts.filter(function(x) { return x.id !== id; });
+  notifySaveState();
+}
+function getSaveAlerts() { return saveAlerts; }
+
+// 활동 로그에 쓸 작성자 이름 — CRMApp/MobileApp이 로그인 후 채워준다.
+var currentActorName = "";
+function setCurrentActor(n) { currentActorName = n || ""; }
+
+// 저장 안 된 입력이 있는지(페이지 이탈 경고용)
+var dirtyMarks = {};
+function markDirty(key, on) { if (on) dirtyMarks[key] = 1; else delete dirtyMarks[key]; }
+function hasDirtyInput() { return Object.keys(dirtyMarks).length > 0; }
+
+// 실패 사유 구분: 네트워크 / 권한(로그인) / 서버
+function classifyWriteFail(err, rowCount) {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    return { kind: "network", text: "인터넷 연결이 끊겨 저장되지 않았습니다" };
+  }
+  var msg = (err && (err.message || err.msg)) || "";
+  var code = (err && err.code) || "";
+  if (/Failed to fetch|NetworkError|network|ERR_INTERNET|timeout/i.test(msg)) {
+    return { kind: "network", text: "연결이 불안정해 저장되지 않았습니다" };
+  }
+  if (/JWT|token|expired|not authenticated/i.test(msg) || code === "PGRST301") {
+    return { kind: "auth", text: "로그인이 풀려 저장되지 않았습니다. 새로고침 후 다시 로그인해주세요" };
+  }
+  if (/row-level security|permission denied/i.test(msg) || code === "42501") {
+    return { kind: "permission", text: "저장 권한이 없습니다. 관리자 승인이 필요합니다" };
+  }
+  if (!err && rowCount === 0) {
+    // ⚠️ 이번 사고의 그 경로 — 에러가 아니라 "0행 갱신"으로 온다
+    return { kind: "auth", text: "저장되지 않았습니다. 로그인이 풀렸거나 대상 항목이 사라졌을 수 있습니다" };
+  }
+  return { kind: "server", text: msg ? ("서버 오류: " + msg) : "서버 오류로 저장되지 않았습니다" };
+}
+
+// 저장 1건. 성공 {ok:true, data}, 실패 {ok:false, fail} — 실패는 화면 알림 + 재시도 큐로 반드시 남는다.
+// spec: { table, op:"update"|"insert", id, payload, label, retry }
+async function writeGuarded(spec) {
+  try {
+    var r = spec.op === "insert"
+      ? await supabase.from(spec.table).insert(spec.payload).select("id")
+      : await supabase.from(spec.table).update(spec.payload).eq("id", spec.id).select("id");
+    if (!r.error && r.data && r.data.length > 0) return { ok: true, data: r.data };
+    return failWrite(spec, classifyWriteFail(r.error, r.data ? r.data.length : 0), r.error);
+  } catch (e) {
+    return failWrite(spec, classifyWriteFail(e, null), e);
+  }
+}
+
+function failWrite(spec, info, rawErr) {
+  var entry = {
+    id: "f" + Date.now() + Math.random().toString(36).slice(2, 7),
+    at: Date.now(),
+    table: spec.table, op: spec.op || "update", rowId: spec.id || null,
+    payload: spec.payload, label: spec.label || spec.table,
+    kind: info.kind, text: info.text, tries: 0,
+    retry: spec.retry !== false,
+  };
+  if (entry.retry) writeFailQ(readFailQ().concat([entry]));
+  pushSaveAlert({ id: entry.id, level: "error", label: entry.label, text: info.text, kind: info.kind, retryable: entry.retry });
+  logSaveEvent("저장실패", entry, rawErr);
+  return { ok: false, fail: entry };
+}
+
+// 5단계 — 활동 로그에 남겨 나중에 집계할 수 있게. 네트워크가 끊긴 경우엔 어차피 못 남기므로
+// 그때는 재시도가 성공한 시점에 "저장복구"로 함께 남긴다.
+var lastLoggedAt = {};
+async function logSaveEvent(kind, entry, rawErr) {
+  if (kind === "저장실패" && entry.kind === "network") return;
+  // 같은 종류가 연달아 터질 때(자동저장이 반복 실패) 로그가 폭주하지 않게 60초에 1건으로 묶는다
+  var slot = kind + ":" + entry.table + ":" + entry.kind;
+  if (Date.now() - (lastLoggedAt[slot] || 0) < 60000) return;
+  lastLoggedAt[slot] = Date.now();
+  try {
+    await supabase.from("activity_logs").insert({
+      case_type: "system",
+      log_type: kind,
+      business_name: entry.label || entry.table,
+      logged_by: currentActorName || "(알수없음)",
+      memo: "[" + kind + "] " + (entry.label || entry.table) + " · " + entry.table + "/" + entry.op +
+        " · 사유:" + entry.kind + " · " + entry.text +
+        (rawErr && rawErr.message ? " · " + String(rawErr.message).slice(0, 200) : ""),
+    });
+  } catch (e) { /* 로그 실패까지 사용자에게 보여줄 필요는 없다 */ }
+}
+
+// 큐에 쌓인 실패분 재시도. online 이벤트·화면 복귀·주기 타이머·수동 버튼이 모두 이걸 부른다.
+var retryBusy = false;
+async function retryFailedSaves() {
+  if (retryBusy) return;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+  var q = readFailQ();
+  if (!q.length) return;
+  retryBusy = true;
+  try {
+    var left = [];
+    for (var i = 0; i < q.length; i++) {
+      var e = q[i];
+      var ok = false;
+      try {
+        var r = e.op === "insert"
+          ? await supabase.from(e.table).insert(e.payload).select("id")
+          : await supabase.from(e.table).update(e.payload).eq("id", e.rowId).select("id");
+        ok = !r.error && r.data && r.data.length > 0;
+      } catch (err) { ok = false; }
+      if (ok) {
+        dismissSaveAlert(e.id);
+        pushSaveAlert({ id: "ok" + e.id, level: "ok", label: e.label, text: "보관해 둔 내용이 저장됐어요", kind: "ok" });
+        logSaveEvent("저장복구", e, null);
+      } else {
+        e.tries = (e.tries || 0) + 1;
+        left.push(e);
+      }
+    }
+    writeFailQ(left);
+  } finally {
+    retryBusy = false;
+  }
+}
+
+// ── 임시저장 훅 (전 화면 공통) ────────────────────────────────────────────────
+// 입력 중인 내용을 3초마다 브라우저에 보관하고, 화면을 벗어날 때는 즉시 보관한다.
+// iOS(아이패드)는 브라우저를 백그라운드로 보내면 탭이 정리돼 입력 내용이 날아가므로
+// visibilitychange/pagehide에서 반드시 한 번 더 저장한다.
+function useDraft(kind, id, text, opts) {
+  opts = opts || {};
+  var enabled = opts.enabled !== false;
+  var label = opts.label || "";
+  var key = kind + ":" + (id == null || id === "" ? "new" : id);
+  var str = text == null ? "" : String(text);
+  var [pending, setPending] = useState(function() { return enabled ? readDraft(kind, id) : null; });
+  var latest = useRef(str);
+  var cleared = useRef(false);
+  latest.current = str;
+
+  useEffect(function() {
+    if (!enabled) return;
+    cleared.current = false;
+    if (!str.trim()) { clearDraft(kind, id); markDirty(key, false); return; }
+    markDirty(key, true);
+    var t = setTimeout(function() { if (!cleared.current) saveDraft(kind, id, str, label); }, 3000);
+    return function() { clearTimeout(t); };
+  }, [str, enabled, key]);
+
+  // 대상이 바뀌면(다른 노트를 열거나 채팅 채널을 옮기면) 그 대상의 보관분을 다시 읽는다.
+  // useState 초기값만 쓰면 첫 대상 것만 보여 "이어서 쓰기"가 안 뜬다.
+  useEffect(function() {
+    setPending(enabled ? readDraft(kind, id) : null);
+  }, [key, enabled]);
+
+  useEffect(function() {
+    if (!enabled) return;
+    var flush = function() {
+      if (cleared.current) return;
+      if (String(latest.current || "").trim()) saveDraft(kind, id, latest.current, label);
+    };
+    var onVis = function() { if (document.visibilityState === "hidden") flush(); };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("pagehide", flush);
+    return function() {
+      flush(); // 컴포넌트가 사라질 때(다른 화면으로 이동)도 보관
+      // 보관을 마쳤으니 이탈 경고 대상에서 뺀다 — 내용은 이미 이 기기에 남아 있다
+      markDirty(key, false);
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, [enabled, key]);
+
+  return {
+    // 지금 입력값과 다를 때만 "이어서 쓰시겠습니까?"를 띄운다
+    pending: pending && pending.v !== str ? pending : null,
+    dismiss: function() { cleared.current = true; clearDraft(kind, id); setPending(null); markDirty(key, false); },
+    // 서버 저장이 성공했을 때 호출 — 보관분을 지우고 이탈 경고도 푼다
+    done: function() { cleared.current = true; clearDraft(kind, id); setPending(null); markDirty(key, false); },
+  };
+}
+
+// "작성 중이던 내용이 있습니다" 안내 줄 — 화면마다 따로 만들지 않도록 공용 컴포넌트로 둔다.
+function DraftNotice({ draft, onRestore, compact }) {
+  if (!draft || !draft.pending) return null;
+  var d = draft.pending;
+  var when = new Date(d.at);
+  var hh = String(when.getHours()).padStart(2, "0") + ":" + String(when.getMinutes()).padStart(2, "0");
+  return (
+    <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8,
+      padding: compact ? "7px 10px" : "9px 12px", marginBottom: 8, fontSize: compact ? 11 : 12, color: "#92400E" }}>
+      <div style={{ fontWeight: 700, marginBottom: 4 }}>✏️ 작성 중이던 내용이 있습니다 ({hh} · {d.v.length}자)</div>
+      <div style={{ color: "#B45309", fontSize: compact ? 10 : 11, whiteSpace: "pre-wrap", maxHeight: 54, overflow: "hidden", marginBottom: 6 }}>
+        {d.v.slice(0, 120)}{d.v.length > 120 ? "…" : ""}
+      </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <button onClick={function() { onRestore(d.v); draft.dismiss(); }}
+          style={{ background: "#B45309", color: "#fff", border: "none", borderRadius: 6, padding: "4px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>이어서 쓰기</button>
+        <button onClick={function() { draft.dismiss(); }}
+          style={{ background: "#fff", color: "#92400E", border: "1px solid #FDE68A", borderRadius: 6, padding: "4px 12px", fontSize: 11, cursor: "pointer" }}>버리기</button>
+      </div>
+      <div style={{ fontSize: 9.5, color: "#B45309", marginTop: 5 }}>이 기기에만 보관돼요 — 다른 기기에서는 복구되지 않습니다.</div>
+    </div>
+  );
+}
+
+// 연결 상태 · 저장 실패 · 복구 안내를 한 자리에서 보여주는 공용 띠.
+// 데스크톱(CRMApp)과 모바일(MobileApp) 양쪽에 하나씩 놓는다.
+function SaveGuardBar() {
+  var [, bump] = useState(0);
+  var [online, setOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine !== false);
+  var [stale, setStale] = useState([]);
+  var [staleHidden, setStaleHidden] = useState(false);
+
+  useEffect(function() {
+    var off = onSaveState(function() { bump(function(n) { return n + 1; }); });
+    var goOnline = function() { setOnline(true); retryFailedSaves(); };
+    var goOffline = function() { setOnline(false); };
+    var onVis = function() { if (document.visibilityState === "visible") retryFailedSaves(); };
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    document.addEventListener("visibilitychange", onVis);
+    // 큐가 남아 있으면 30초마다 조용히 재시도
+    var timer = setInterval(function() { if (readFailQ().length) retryFailedSaves(); }, 30000);
+    // 접속 직후: 남은 실패분 재시도 + 방치된 임시보관 안내
+    retryFailedSaves();
+    setStale(listStaleDrafts());
+    return function() {
+      off();
+      window.removeEventListener("online", goOnline);
+      window.removeEventListener("offline", goOffline);
+      document.removeEventListener("visibilitychange", onVis);
+      clearInterval(timer);
+    };
+  }, []);
+
+  // 저장 안 된 게 있으면 페이지를 벗어날 때 경고
+  useEffect(function() {
+    var onBeforeUnload = function(e) {
+      if (!hasDirtyInput() && readFailQ().length === 0) return;
+      e.preventDefault();
+      e.returnValue = "";
+      return "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return function() { window.removeEventListener("beforeunload", onBeforeUnload); };
+  }, []);
+
+  var alerts = getSaveAlerts();
+  var queued = readFailQ();
+  var showStale = !staleHidden && stale.length > 0;
+  if (online && alerts.length === 0 && queued.length === 0 && !showStale) return null;
+
+  var box = { borderRadius: 10, padding: "10px 14px", marginBottom: 8, boxShadow: "0 4px 14px rgba(0,0,0,0.10)" };
+  return (
+    <div style={{ position: "fixed", right: 16, bottom: 16, zIndex: 3000, width: 340, maxWidth: "92vw" }}>
+      {!online && (
+        <div style={Object.assign({}, box, { background: "#1A1917", color: "#fff" })}>
+          <div style={{ fontSize: 13, fontWeight: 800 }}>📴 오프라인입니다</div>
+          <div style={{ fontSize: 11, marginTop: 3, opacity: 0.85 }}>지금 저장을 누르면 이 기기에 보관했다가 연결되면 자동으로 저장됩니다.</div>
+        </div>
+      )}
+      {alerts.map(function(a) {
+        var err = a.level === "error";
+        return (
+          <div key={a.id} style={Object.assign({}, box, {
+            background: err ? "#FEF2F2" : "#F0FDF4",
+            border: "1px solid " + (err ? "#FCA5A5" : "#BBF7D0"),
+          })}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+              <span style={{ fontSize: 15 }}>{err ? "⚠️" : "✅"}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: err ? "#B91C1C" : "#15803D" }}>
+                  {err ? "저장되지 않았습니다" : "저장 완료"}
+                </div>
+                <div style={{ fontSize: 11.5, color: err ? "#7F1D1D" : "#166534", marginTop: 3, lineHeight: 1.5 }}>
+                  {a.label ? a.label + " — " : ""}{a.text}
+                </div>
+                {err && a.retryable && (
+                  <div style={{ fontSize: 10.5, color: "#991B1B", marginTop: 4 }}>
+                    내용은 이 기기에 보관해 뒀어요. 연결되면 자동으로 다시 저장합니다.
+                  </div>
+                )}
+              </div>
+              <span onClick={function() { dismissSaveAlert(a.id); }}
+                style={{ cursor: "pointer", color: err ? "#B91C1C" : "#15803D", fontSize: 15, lineHeight: 1 }}>×</span>
+            </div>
+          </div>
+        );
+      })}
+      {queued.length > 0 && (
+        <div style={Object.assign({}, box, { background: "#FFFBEB", border: "1px solid #FDE68A" })}>
+          <div style={{ fontSize: 12.5, fontWeight: 800, color: "#92400E" }}>💾 아직 저장 못 한 내용 {queued.length}건</div>
+          <div style={{ fontSize: 11, color: "#B45309", marginTop: 3, lineHeight: 1.5 }}>
+            {queued.slice(-3).map(function(q) { return q.label; }).join(" · ")}
+          </div>
+          <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
+            <button onClick={function() { retryFailedSaves(); }}
+              style={{ background: "#B45309", color: "#fff", border: "none", borderRadius: 6, padding: "4px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>지금 다시 시도</button>
+            <span style={{ fontSize: 9.5, color: "#B45309" }}>이 기기에만 보관돼요</span>
+          </div>
+        </div>
+      )}
+      {showStale && (
+        <div style={Object.assign({}, box, { background: "#EEF2FF", border: "1px solid #C7D2FE" })}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 800, color: "#3730A3" }}>✏️ 저장 안 된 내용이 있습니다 ({stale.length}건)</div>
+              <div style={{ fontSize: 11, color: "#4338CA", marginTop: 3, lineHeight: 1.5 }}>
+                {stale.slice(0, 3).map(function(s) { return (s.label || s.kind) + " (" + s.text.length + "자)"; }).join(" · ")}
+              </div>
+              <div style={{ fontSize: 10.5, color: "#4338CA", marginTop: 4 }}>
+                해당 화면을 열면 “이어서 쓰기”가 뜹니다. 이 기기에만 보관돼요.
+              </div>
+            </div>
+            <span onClick={function() { setStaleHidden(true); }}
+              style={{ cursor: "pointer", color: "#3730A3", fontSize: 15, lineHeight: 1 }}>×</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── 비공개 Storage 버킷 오디오 ───────────────────────────────────────────────
 // voice-memos / call-recordings 버킷은 2026-07-27 보안조치로 비공개가 됐다.
 // 그 전에 저장된 소통내역에는 공개 URL(/object/public/...)이 그대로 남아 있는데 이제 열리지 않는다.
@@ -2855,6 +3259,10 @@ function MobileApp({ profile, session }) {
   const [composing, setComposing] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newItems, setNewItems] = useState([]);
+  // 아이패드/폰은 브라우저를 백그라운드로 보내면 탭이 정리돼 입력이 날아간다 → 이 기기에 임시보관.
+  const mNoteDraft = useDraft("모바일노트", "new",
+    (newTitle ? newTitle + "\n" : "") + (newItems || []).map(function(i) { return i.text || ""; }).join("\n"),
+    { enabled: composing, label: "모바일 새 노트" });
   const [newCompanyId, setNewCompanyId] = useState(null);
   const [newAssignee, setNewAssignee] = useState(""); // 대표(관리자)가 다른 직원에게 업무 배정 시 담당자
 
@@ -2936,7 +3344,10 @@ function MobileApp({ profile, session }) {
   var toggleItem = async function(note, lineIdx) {
     var nc = toggleLineChecked(note.content, lineIdx);
     setNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { content: nc }) : n; }); });
-    await supabase.from("work_notes").update({ content: nc, updated_at: new Date().toISOString() }).eq("id", note.id);
+    var r = await writeGuarded({ table: "work_notes", op: "update", id: note.id,
+      payload: { content: nc, updated_at: new Date().toISOString() }, label: "노트 항목 체크" });
+    // 실패하면 화면도 되돌린다 — 저장 안 된 것이 저장된 것처럼 보이면 안 된다
+    if (!r.ok) setNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { content: note.content }) : n; }); });
   };
 
   var saveNote = async function() {
@@ -2950,6 +3361,7 @@ function MobileApp({ profile, session }) {
     if (r.error && /company_id/.test(r.error.message || "")) { delete ins.company_id; r = await supabase.from("work_notes").insert(ins).select().single(); }
     if (!r.error && r.data) {
       // 내 노트일 때만 목록에 추가 (남에게 배정한 노트는 내 목록에 안 뜸)
+      mNoteDraft.done();
       if (asg === myName) setNotes(function(prev) { return [r.data].concat(prev); });
       else alert("📩 " + asg + " 님에게 업무를 배정했어요.");
       setNewTitle(""); setNewItems([]); setNewCompanyId(null); setNewAssignee(""); setComposing(false);
@@ -3088,6 +3500,11 @@ function MobileApp({ profile, session }) {
                 ) : (
                   <div style={Object.assign({}, card, { border: "2px solid #86EFAC", background: "#F0FDF4" })}>
                     <div style={{ fontSize: 14, fontWeight: 700, color: "#15803D", marginBottom: 10 }}>✏️ 새 노트</div>
+                    <DraftNotice draft={mNoteDraft} compact onRestore={function(t) {
+                      var lines = String(t).split("\n");
+                      setNewTitle(lines[0] || "");
+                      setNewItems(lines.slice(1).filter(function(x) { return x.trim(); }).map(function(x) { return { text: x }; }));
+                    }} />
                     {wnIsAdmin(myName) && (
                       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
                         <span style={{ fontSize: 13, fontWeight: 600, color: "#15803D", whiteSpace: "nowrap" }}>👤 담당자</span>
@@ -3289,6 +3706,8 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
   const [channel, setChannel] = useState(function() { return pendingChannel || "general"; });
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
+  // 채널별로 쓰다 만 메시지를 이 기기에 보관 — 채널을 옮기거나 창을 닫아도 남는다.
+  const chatDraft = useDraft("채팅", channel, input, { label: "채팅(" + channel + ")" });
   const [sending, setSending] = useState(false);
   const [companiesList, setCompaniesList] = useState([]);
   const [mentionMatches, setMentionMatches] = useState([]);
@@ -3463,13 +3882,16 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
     var payload = { sender: me, message: text, channel: channel, read_by: [me], saved_to_activity: [] };
     var r = await supabase.from("chat_messages").insert(payload).select().single();
     if (!r.error && r.data) {
+      chatDraft.done();
       var row = r.data;
       setMessages(function(prev) {
         if (prev.find(function(m) { return m.id === row.id; })) return prev;
         return prev.concat(row);
       });
-    } else if (r.error) {
-      alert("메시지 전송 실패: " + r.error.message);
+    } else {
+      // 실패하면 쓴 내용을 되돌려 놓는다. 에러가 없는데 행도 없으면(세션 끊김) 그것도 실패로 본다.
+      var info = classifyWriteFail(r.error, r.data ? 1 : 0);
+      alert("메시지 전송 실패: " + info.text);
       setInput(text);
     }
     setSending(false);
@@ -3630,6 +4052,7 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
               })}
             </div>
           )}
+          <DraftNotice draft={chatDraft} onRestore={function(t) { setInput(t); }} compact />
           <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
             <input ref={inputRef} value={input} onChange={handleInputChange} onKeyDown={onKeyDown}
               placeholder="메시지 입력 (@업체 태그 가능, Enter로 전송)"
@@ -3667,6 +4090,7 @@ export default function App() {
   const fetchProfile = async (uid) => {
     const { data } = await supabase.from("profiles").select("*").eq("id", uid).single();
     setProfile(data);
+    setCurrentActor(data && data.name); // 저장 실패 로그에 남길 작성자
     setLoading(false);
   };
 
@@ -3681,8 +4105,9 @@ export default function App() {
   // 📱 모바일 전용 경로 /m — 기존 PC(CRMApp)는 그대로 두고 모바일 최적화 화면만 렌더
   var path = (typeof window !== "undefined" && window.location) ? window.location.pathname : "";
   var isMobileRoute = /^\/m(\/|$)/.test(path) || (typeof window !== "undefined" && /[?&]m=1\b/.test(window.location.search));
-  if (isMobileRoute) return <MobileApp profile={profile} session={session} />;
-  return <CRMApp profile={profile} session={session} />;
+  // 저장 실패·오프라인·복구 안내 띠는 데스크톱/모바일 공통으로 항상 떠 있게 한다.
+  if (isMobileRoute) return <Fragment><MobileApp profile={profile} session={session} /><SaveGuardBar /></Fragment>;
+  return <Fragment><CRMApp profile={profile} session={session} /><SaveGuardBar /></Fragment>;
 }
 
 // ── 승인 대기 화면 ─────────────────────────────────────────────────────────────
@@ -4085,6 +4510,9 @@ function CRMApp({ profile, session }) {
   const [quickTaskSaved, setQuickTaskSaved] = useState(0);
   const [quickTaskTarget, setQuickTaskTarget] = useState("나"); // "나" | 팀원 이름 → 다른 사람이면 업무 요청 처리
   const [quickTaskUrgent, setQuickTaskUrgent] = useState(false);
+  // 임시보관 — 창을 닫거나 이동해도 내용이 남고, 다시 열면 "이어서 쓰기"가 뜬다(그 기기에만 보관).
+  const quickMemoDraft = useDraft("빠른메모", "new", quickMemoText, { enabled: quickMemo, label: "빠른 메모" });
+  const quickTaskDraft = useDraft("빠른업무", "new", quickTaskText, { enabled: showQuickTask, label: "빠른 업무" });
   const [menuExpanded, setMenuExpanded] = useState(false);
   const [agencyRefreshKey, setAgencyRefreshKey] = useState(0);
   const [notifications, setNotifications] = useState([]);
@@ -5458,6 +5886,7 @@ function CRMApp({ profile, session }) {
           var r = await supabase.from("activity_logs").insert(payload);
           if (r.error && /company_id/.test(r.error.message || "")) { delete payload.company_id; r = await supabase.from("activity_logs").insert(payload); }
           if (r.error) { alert("저장 실패: " + r.error.message); return; }
+          quickMemoDraft.done();                   // 서버 저장 성공 → 임시보관 해제
           setQuickMemoText("");                    // 입력칸만 초기화 (연속 입력 가능 · 업체는 유지)
           setQuickMemoSaved(function(n) { return n + 1; });
           showToast("📝 '" + quickMemoCompany.name + "' 소통내역에 기록했어요!");
@@ -5508,6 +5937,7 @@ function CRMApp({ profile, session }) {
               </div>
             )}
 
+            <DraftNotice draft={quickMemoDraft} onRestore={function(t) { setQuickMemoText(t); }} compact />
             <textarea value={quickMemoText} onChange={function(e) { var v = e.target.value; setQuickMemoText(v); }}
               placeholder={quickMemoCompany ? "메모 내용을 입력하세요…" : "먼저 업체를 선택하세요"}
               rows={5} disabled={!quickMemoCompany}
@@ -5564,6 +5994,7 @@ function CRMApp({ profile, session }) {
             }
             if (to !== me) sendPushToUser(to, { title: (quickTaskUrgent ? "🚨 긴급 " : "📩 ") + "업무 요청", body: me + ": " + qtItems[0] + (qtItems.length > 1 ? " 외 " + (qtItems.length - 1) + "건" : ""), url: window.location.origin + "?view=worknotes" });
           }
+          quickTaskDraft.done();                   // 서버 저장 성공 → 임시보관 해제
           setQuickTaskText("");
           setQuickTaskSaved(function(n) { return n + 1; });
           fetchWorkNotesBadge(me);
@@ -5605,6 +6036,7 @@ function CRMApp({ profile, session }) {
                 style={{ padding: "6px 10px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 12, outline: "none", marginLeft: 4 }} />
             </div>
             {/* 내용 (문단=빈 줄 기준으로 1개 체크리스트 항목 · @업체 자동완성) */}
+            <DraftNotice draft={quickTaskDraft} onRestore={function(t) { setQuickTaskText(t); }} compact />
             <MentionField multiline={true} companiesList={companies}
               value={quickTaskText} rows={6}
               placeholder={"업무 내용 · 빈 줄로 문단을 나누면 각 문단이 1개 항목" + (isMe ? "" : " → " + to + "에게 요청") + " · @업체명 연결"}
@@ -10578,6 +11010,9 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
     });
   }, []);
   const [commInput, setCommInput] = useState("");
+  // 소통내역은 길게 쓰는 칸이라 임시보관 대상. 업체별로 따로 보관한다(그 기기에만).
+  const commDraft = useDraft("소통내역", company && company.id, commInput,
+    { label: "소통내역 " + ((company && company.name) || "") });
   // 🎙️ 음성 메모 녹음 / 📁 녹음 파일 업로드 상태
   const [recording, setRecording] = useState(false);      // 녹음 중 여부
   const [recSeconds, setRecSeconds] = useState(0);         // 경과 시간(초)
@@ -10924,6 +11359,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
       alert("저장 실패: " + r.error.message + "\n\n관리자에게 이 메시지를 알려주세요.");
       return;
     }
+    commDraft.done();
     setCommInput("");
     await refreshCommLogs();
   };
@@ -12232,6 +12668,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 {speechMsg && <div style={{ fontSize: 11, color: "#92400E", marginBottom: 6, padding: "6px 10px", background: "#FEF9EC", borderRadius: 6 }}>ℹ️ {speechMsg}</div>}
                 {callUploading && <div style={{ fontSize: 11, color: "#4338CA", marginBottom: 6, padding: "6px 10px", background: "#EEF2FF", borderRadius: 6 }}>📁 녹음 파일을 업로드하는 중입니다...</div>}
                 {kakaoLoading && <div style={{ fontSize: 11, color: "#B45309", marginBottom: 6, padding: "6px 10px", background: "#FEF9EC", borderRadius: 6 }}>🤖 카톡 대화를 읽고 요약하는 중입니다... (몇 초 걸려요)</div>}
+                <DraftNotice draft={commDraft} onRestore={function(t) { setCommInput(t); }} compact />
                 <textarea value={commInput}
                   onChange={function(e) { var v = e.target.value; setCommInput(v); }}
                   onPaste={function(e) {
@@ -12568,6 +13005,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                     <button onClick={openCommTrash} title="삭제된 소통 내역 (휴지통)" style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 11, padding: "0 2px" }}>🗑️ 휴지통</button>
                   </div>
                 </div>
+                <DraftNotice draft={commDraft} onRestore={function(t) { setCommInput(t); }} compact />
                 <textarea value={commInput} onChange={function(e) { var v = e.target.value; setCommInput(v); }}
                   placeholder={"예시:\n- 10:30 통화 - 대표 부재중\n- 11:15 다시 통화\n- 다음 주 월요일 방문 예약"}
                   rows={12} style={{ width: "100%", padding: "12px 14px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, resize: "vertical", boxSizing: "border-box", outline: "none", lineHeight: 1.8, minHeight: 260, fontFamily: "inherit", whiteSpace: "pre-wrap" }} />
@@ -13769,6 +14207,18 @@ function buildItemLine(i) {
   if (i.waitReason && i.waitReason !== "일반") line += " {" + i.waitReason + (i.waitSince ? ":" + i.waitSince : "") + "}";
   return line;
 }
+// 임시보관용 본문 한 덩어리 — 지금 화면에 보이는 내용을 그대로 문자열로 만든다.
+// (저장 경로에는 쓰지 않는다. 저장은 기존 로직 그대로.)
+function composeNoteDraftText(n) {
+  if (!n) return "";
+  if (n.checkItems === undefined) return String(n.content || "");
+  var lines = (n.checkItems || []).filter(function(i) { return (i.text || "").trim(); }).map(buildItemLine);
+  var free = String(n.freeContent === undefined ? (n.content || "") : n.freeContent).trim();
+  var parts = [];
+  if (lines.length) parts.push(lines.join("\n"));
+  if (free) parts.push(free);
+  return parts.join("\n");
+}
 // 노트 자동 제목: "M월D일 이름 업무" (예: "7월19일 양호 업무")
 function noteAutoTitle(name, dateStr) {
   var d = dateStr || kstDate();
@@ -14009,7 +14459,7 @@ function MentionField(props) {
 }
 
 // ── 업무노트 수정 카드 (독립 컴포넌트 - 입력버그 방지) ─────────────────────────
-function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, companiesList }) {
+function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, companiesList, draft }) {
   // @업체 태그 자동완성: { type:'title'|'freeContent'|'item', idx, query }
   var [mention, setMention] = useState(null);
   // content가 변경되면 checkItems와 freeText로 분리
@@ -14076,7 +14526,10 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
       if (items.length > 0) parts.push(items.join("\n"));
       if (ft) parts.push(ft);
       var newContent = parts.join("\n");
-      supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", p.id);
+      // 예전엔 await도 error 확인도 없어 실패가 완전히 묻혔다. 이제 실패는 화면 알림 + 재시도 큐로 간다.
+      writeGuarded({ table: "work_notes", op: "update", id: p.id,
+        payload: { content: newContent, updated_at: new Date().toISOString() },
+        label: "업무노트 자동저장" });
       return p;
     });
   };
@@ -14129,6 +14582,11 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
 
   return (
     <div style={{ background: "#F0FDF4", border: "2px solid #86EFAC", borderRadius: 12, padding: "18px 20px" }}>
+      {/* 저장 안 누르고 나갔던 내용이 남아 있으면 이어서 쓸 수 있게 */}
+      <DraftNotice draft={draft} onRestore={function(text) {
+        var p2 = parseContent(text);
+        setEditNote(function(p) { return Object.assign({}, p, { checkItems: p2.items, freeContent: p2.freeText }); });
+      }} />
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D" }}>✏️ 노트 수정</div>
         <span style={{ fontSize: 11, color: "#888" }}>· 제목·항목·내용에 <b>@</b> 입력 시 업체 연결</span>
@@ -14183,7 +14641,8 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
                   if (lines.length > 0) parts.push(lines.join("\n"));
                   if (ft) parts.push(ft);
                   var newContent = parts.join("\n");
-                  supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", editNote.id);
+                  writeGuarded({ table: "work_notes", op: "update", id: editNote.id,
+                    payload: { content: newContent, updated_at: new Date().toISOString() }, label: "업무노트 체크" });
                 }} style={{ width: 15, height: 15, flexShrink: 0, cursor: "pointer", marginTop: 6 }} />
                 <div style={{ flex: 1, position: "relative" }}>
                   <MentionField multiline={true} companiesList={companiesList}
@@ -14779,6 +15238,11 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   const [editingId, setEditingId] = useState(null);
   const [newNote, setNewNote] = useState({ title: "", content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "", note_date: "" });
   const [editNote, setEditNote] = useState({});
+  // 임시보관 — 저장을 안 눌러도 브라우저에 남는다(서버로는 안 보낸다). 다시 들어오면 "이어서 쓰기"가 뜬다.
+  const editDraft = useDraft("업무노트", editingId, editingId ? composeNoteDraftText(editNote) : "",
+    { enabled: !!editingId, label: "업무노트 " + (editNote.title || "") });
+  const newDraft = useDraft("업무노트", "새글", showAdd ? composeNoteDraftText(newNote) : "",
+    { enabled: !!showAdd, label: "새 업무노트" });
   const [filterType, setFilterType] = useState("전체"); // 전체 / 메모 / 할일
   const [replyId, setReplyId] = useState(null);
   const [replyText, setReplyText] = useState("");
@@ -15188,7 +15652,8 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       if (cur) { snapshots.push({ id: nid, content: cur.content }); updates.push({ id: nid, content: markLinesCarried(cur.content, set, md) }); } // 원본 스냅샷 = 되돌리기용
     });
     for (var i = 0; i < updates.length; i++) {
-      await supabase.from("work_notes").update({ content: updates[i].content, updated_at: new Date().toISOString() }).eq("id", updates[i].id);
+      await writeGuarded({ table: "work_notes", op: "update", id: updates[i].id,
+        payload: { content: updates[i].content, updated_at: new Date().toISOString() }, label: "이월 표시" });
     }
     setNotes(function(prev) { return prev.map(function(n) { var u = updates.find(function(x) { return x.id === n.id; }); return u ? Object.assign({}, n, { content: u.content }) : n; }); });
     setShowCarry(false);
@@ -15213,7 +15678,8 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     // 2) 원본 노트 content를 가져오기 이전으로 복원 (이월 표시 제거)
     for (var i = 0; i < (u.snapshots || []).length; i++) {
       var s = u.snapshots[i];
-      await supabase.from("work_notes").update({ content: s.content, updated_at: new Date().toISOString() }).eq("id", s.id);
+      await writeGuarded({ table: "work_notes", op: "update", id: s.id,
+        payload: { content: s.content, updated_at: new Date().toISOString() }, label: "이월 되돌리기" });
     }
     setNotes(function(prev) { return prev.map(function(n) { var s = (u.snapshots || []).find(function(x) { return x.id === n.id; }); return s ? Object.assign({}, n, { content: s.content }) : n; }); });
   };
@@ -15327,7 +15793,8 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       }
     }
     for (var i = 0; i < updates.length; i++) {
-      await supabase.from("work_notes").update({ content: updates[i].content, updated_at: new Date().toISOString() }).eq("id", updates[i].id);
+      await writeGuarded({ table: "work_notes", op: "update", id: updates[i].id,
+        payload: { content: updates[i].content, updated_at: new Date().toISOString() }, label: "주간 이월" });
     }
     setNotes(function(prev) {
       var next = prev.map(function(n) { var u = updates.find(function(x) { return x.id === n.id; }); return u ? Object.assign({}, n, { content: u.content }) : n; });
@@ -15485,6 +15952,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       r = await supabase.from("work_notes").insert(insMin).select().single();
     }
     if (!r.error && r.data) {
+      newDraft.done();
       setNotes(function(prev) { return [r.data].concat(prev); });
       setShowAdd(false);
       // 담당자에게 브라우저 푸시 알림 전송
@@ -15516,7 +15984,9 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     var replies = [];
     try { replies = JSON.parse(note.replies || "[]"); } catch(e) { replies = []; }
     replies.push({ by: profile?.name || "", text: replyText.trim(), at: new Date().toISOString() });
-    await supabase.from("work_notes").update({ replies: JSON.stringify(replies) }).eq("id", noteId);
+    var rp = await writeGuarded({ table: "work_notes", op: "update", id: noteId,
+      payload: { replies: JSON.stringify(replies) }, label: "노트 답장" });
+    if (!rp.ok) return; // 실패하면 입력창을 비우지 않는다 — 쓴 내용이 남아 있어야 다시 보낼 수 있다
     setNotes(function(prev) { return prev.map(function(n) { return n.id === noteId ? Object.assign({}, n, { replies: JSON.stringify(replies) }) : n; }); });
     setReplyId(null);
     setReplyText("");
@@ -15536,8 +16006,9 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
 
   var onChecklistChange = async function(noteId, newContent) {
     var prevNoteForReq = notes.find(function(n) { return n.id === noteId; });
-    var r = await supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", noteId);
-    if (!r.error) {
+    var r = await writeGuarded({ table: "work_notes", op: "update", id: noteId,
+      payload: { content: newContent, updated_at: new Date().toISOString() }, label: "업무노트 체크리스트" });
+    if (r.ok) {
       setNotes(function(prev) { return prev.map(function(n) { return n.id === noteId ? Object.assign({}, n, { content: newContent }) : n; }); });
       // 📩 받은 요청 항목 완료 시 보낸 사람 쪽에 반영
       if (prevNoteForReq) syncRequestDone(prevNoteForReq.content, newContent);
@@ -15603,21 +16074,28 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       company_id: editNote.company_id || null, // @태그로 연결/해제된 기업
       updated_at: new Date().toISOString(),
     };
-    var r = await supabase.from("work_notes").update(upd).eq("id", editNote.id);
-    if (r.error && /company_id/.test(r.error.message || "")) {
-      delete upd.company_id;
-      r = await supabase.from("work_notes").update(upd).eq("id", editNote.id);
+    // 2026-07-28 사고 수정: 예전엔 `if (!r.error)`만 있고 else가 없어 실패해도 아무 표시가 없었다.
+    // writeGuarded가 0행 갱신(세션 끊김)까지 실패로 잡고 화면 알림 + 재시도 큐에 넣는다.
+    var res = await writeGuarded({ table: "work_notes", op: "update", id: editNote.id, payload: upd, label: "업무노트 저장" });
+    if (!res.ok && /company_id/.test((res.fail && res.fail.text) || "")) {
+      // company_id 컬럼이 없는 환경 — 그 칸만 빼고 재시도하고, 못 고칠 첫 실패는 큐에서 뺀다
+      dropFailedSave(res.fail && res.fail.id);
+      var upd2 = Object.assign({}, upd); delete upd2.company_id;
+      res = await writeGuarded({ table: "work_notes", op: "update", id: editNote.id, payload: upd2, label: "업무노트 저장" });
     }
-    if (!r.error) {
+    if (res.ok) {
+      editDraft.done();
       setNotes(function(prev) { return prev.map(function(n) { return n.id === editNote.id ? Object.assign({}, n, editNote, { content: finalContent }) : n; }); });
       setEditingId(null); setEditNote({});
       if (onBadgeUpdate) onBadgeUpdate();
     }
+    // 실패하면 편집창을 닫지 않는다 — 내용이 화면에 그대로 남아 있어야 다시 시도할 수 있다.
   };
 
   var toggleDone = async function(note) {
-    var r = await supabase.from("work_notes").update({ is_done: !note.is_done, updated_at: new Date().toISOString() }).eq("id", note.id);
-    if (!r.error) {
+    var r = await writeGuarded({ table: "work_notes", op: "update", id: note.id,
+      payload: { is_done: !note.is_done, updated_at: new Date().toISOString() }, label: "노트 완료 체크" });
+    if (r.ok) {
       setNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { is_done: !note.is_done }) : n; }); });
       // 사이드바 뱃지 업데이트
       if (onBadgeUpdate) onBadgeUpdate();
@@ -15625,8 +16103,9 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   };
 
   var togglePin = async function(note) {
-    var r = await supabase.from("work_notes").update({ pinned: !note.pinned, updated_at: new Date().toISOString() }).eq("id", note.id);
-    if (!r.error) setNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { pinned: !note.pinned }) : n; }); });
+    var r = await writeGuarded({ table: "work_notes", op: "update", id: note.id,
+      payload: { pinned: !note.pinned, updated_at: new Date().toISOString() }, label: "노트 고정" });
+    if (r.ok) setNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { pinned: !note.pinned }) : n; }); });
   };
 
   // 노트를 원하는 날짜로 이동 (못 한 업무를 다른 날로 넘기기)
@@ -15763,6 +16242,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             setEditNote={setEditNote}
             saveEdit={saveEdit}
             companiesList={companiesList}
+            draft={editDraft}
             onCancel={function() { setEditingId(null); setEditNote({}); }}
           />
         </div>
@@ -15771,6 +16251,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       {/* 새 노트 작성 폼 */}
       {showAdd && (
         <div className="wn-addform" style={{ background: "#F0FDF4", border: "2px solid #86EFAC", borderRadius: 12, padding: "18px 20px", marginBottom: 20 }}>
+          <DraftNotice draft={newDraft} onRestore={function(t) { setNewNote(function(p) { return Object.assign({}, p, { content: t, checkItems: [] }); }); }} />
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D" }}>✏️ 새 노트 작성</div>
             <span style={{ fontSize: 11, color: "#888" }}>· 제목·항목·내용에 <b>@</b> 입력 시 업체 연결</span>
