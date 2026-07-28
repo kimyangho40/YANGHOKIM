@@ -2254,10 +2254,16 @@ function parseHyeonhwangpyoV2(rows) {
       if (!lrow) continue;
       var c0 = cellStr(lrow[0]);
       if (/^\d+\s*\./.test(c0)) break;                            // 다음 섹션
-      if (/신규\s*융자|카드론|현금서비스|합계/.test(c0)) break;      // 합계·부가 항목 구간 시작
+      if (/신규\s*융자|카드론|현금서비스/.test(c0)) break;           // 부가 항목 구간 시작(위에서 company_info로 따로 담는다)
       var inst = cellStr(lrow[2]), amount = cellStr(lrow[5]), bank = cellStr(lrow[7]);
       var start = cellStr(lrow[8]), end = cellStr(lrow[9]), balance = cellStr(lrow[10]);
       if (!inst && !amount && !bank && !start && !end && !balance) continue;   // 빈 행
+      // "합계"가 들어간 행이 전부 소계는 아니다.
+      //  · 순수 소계 행: 기관·상품(c2)이 비어 있고 금액만 있다 → 개별 행과 이중계상되므로 버린다
+      //  · "캐피탈·리스·보증 6건 합계"처럼 여러 건을 한 줄로 묶어 적은 행: 기관·상품이 채워져 있다
+      //    → 실제 대출이므로 담는다(예전엔 이 행이 통째로 빠져 부채가 누락됐다)
+      //  ※ 여신정보 문서 파서의 소계 제외(isSubtotalRow)는 별개 로직이라 건드리지 않는다.
+      if (/합계|소계|총계|누계/.test(c0) && !inst) continue;
       // 구분(c0): 담당자가 명시적으로 적은 값만 인정한다. 애매하면 미분류로 두고 추측하지 않는다.
       var kind = "";
       var k0 = norm(c0);
