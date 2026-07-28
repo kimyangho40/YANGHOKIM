@@ -63,27 +63,40 @@ const MODEL = "claude-opus-5";
 const SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["doc_type", "doc_type_reason", "as_of", "queried_at", "unit_raw", "rows", "bank_rows", "subtotal_raw", "notes"],
+  required: ["doc_type", "doc_type_reason", "issuer", "section_title", "as_of", "queried_at", "unit_raw", "rows", "bank_rows", "subtotal_raw", "notes"],
   properties: {
     doc_type: {
       type: "string",
       enum: ["credit_report", "bank_certificate", "unknown"],
       description:
-        "문서 종류. " +
-        "credit_report = '기업 여신정보'·'세부신용공여' 표가 있는 신용조회 문서. " +
-        "bank_certificate = 은행이 발급한 '금융거래확인서'(대출과목·대출금액·대출잔액·대출일자·만기일자가 적힌 확인서). " +
+        "문서 종류. 문서 제목으로 판단한다. " +
+        "bank_certificate = 제목에 '금융거래확인서'가 있는 문서. " +
+        "credit_report = '기업 여신정보' 또는 '세부신용공여' 표가 있는 신용조회 문서. " +
         "둘 중 어느 쪽인지 확신할 수 없으면 반드시 unknown. 추측해서 고르지 말 것.",
     },
     doc_type_reason: {
       type: "string",
       description: "그렇게 판단한 근거를 한 문장으로. 문서에서 본 제목·표 머리글을 인용할 것.",
     },
+    issuer: {
+      type: "string",
+      description:
+        "문서를 발행한 금융기관명 (예: 신한은행, 농협은행, 기업은행, 중소벤처기업진흥공단). " +
+        "제목·머리말·직인 어디든 적혀 있으면 담는다. 없으면 빈 문자열.",
+    },
+    section_title: {
+      type: "string",
+      description:
+        "bank_certificate에서 실제로 읽은 표의 섹션 제목 원문 (예: '1. 대출금 거래상황'). " +
+        "허용된 섹션이 문서에 없으면 빈 문자열로 두고 bank_rows도 빈 배열로 둔다.",
+    },
     as_of: { type: "string", description: "기준일자(금융거래확인서는 발급일·조회기준일). YYYY-MM-DD 로 정규화. 문서에 없으면 빈 문자열." },
     queried_at: { type: "string", description: "조회일시 원문. 없으면 빈 문자열." },
     unit_raw: {
       type: "string",
       description:
-        "금액 단위 표기 원문 (예: '단위 : 백만원'). 헤더·표 제목·각주 어디든 적혀 있으면 그대로. " +
+        "금액 단위 표기 원문 (예: '(단위: 천원)', '(단위: 원)', '(단위: 천원, 천미불 등)'). " +
+        "문서 상단·표 머리·각주 어디든 적혀 있으면 그대로 담는다. 금융거래확인서는 '천원'이 가장 흔하다. " +
         "문서 어디에도 단위 표기가 없으면 반드시 빈 문자열. 추측 금지.",
     },
     rows: {
@@ -121,31 +134,46 @@ const SCHEMA = {
       type: "array",
       description:
         "doc_type=bank_certificate 일 때만 채운다(아니면 빈 배열). " +
-        "금융거래확인서의 대출 명세 각 행을 문서 순서 그대로 1:1로 담는다. " +
+        "아래 '허용 섹션' 표의 각 행만 문서 순서 그대로 1:1로 담는다. " +
+        "허용 섹션: '1. 대출금 거래상황' / '1. 여신현황' / '1. 대출금 거래현황' / '2. 금융상품 거래현황'. " +
+        "담보내용·담보현황·당좌 결제내용·카드결제현황·당좌부도·연체 여부·연체명세 섹션은 절대 담지 않는다. " +
         "같은 은행에 여러 건이면 각각 별도 행으로 담고 절대 합치지 않는다. " +
-        "여러 페이지면 모든 페이지의 행을 이어서 담는다.",
+        "여러 페이지(1/3, 2/3 …)면 모든 페이지의 행을 이어서 담는다.",
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["institution", "product", "amount_raw", "balance_raw", "start_date", "end_date", "is_subtotal"],
+        required: ["institution", "product", "amount_raw", "balance_raw", "start_date", "end_date", "rate_raw", "is_subtotal"],
         properties: {
-          institution: { type: "string", description: "금융기관명 (예: 국민은행, 농협은행). 지점명이 함께 적혀 있으면 같이." },
-          product: { type: "string", description: "대출과목·여신과목 (예: 기업운전일반자금대출). 없으면 빈 문자열." },
+          institution: {
+            type: "string",
+            description: "행에 금융기관명이 따로 적혀 있으면 담는다. 발행기관 한 곳뿐이라 열이 없으면 빈 문자열(issuer를 쓴다).",
+          },
+          product: {
+            type: "string",
+            description:
+              "상품·종별. 열 이름은 기관마다 '종별'·'대출종류'·'지원사업'·'대출명' 등으로 다르다. " +
+              "예: 기업일반운전자금대출, 농식품기업운전자금대출, 중소기업자금대출, 햇살론-근로자. 없으면 빈 문자열.",
+          },
           amount_raw: {
             type: "string",
             description:
-              "대출금액(약정금액·한도) 열의 숫자를 원문 그대로 (쉼표 제거, 숫자와 소수점만). " +
+              "'당초차입금액'·'차입금액'·'한도금액' 열의 숫자를 원문 그대로 (쉼표 제거, 숫자와 소수점만). " +
               "단위 환산하지 말 것. 열이 없거나 읽을 수 없으면 빈 문자열.",
           },
           balance_raw: {
             type: "string",
-            description: "대출잔액 열의 숫자를 원문 그대로 (쉼표 제거). 단위 환산 금지. 없으면 빈 문자열.",
+            description:
+              "'잔액'·'대출잔액'·'대출원화잔액'·'환산잔액' 열의 숫자를 원문 그대로 (쉼표 제거). 단위 환산 금지. " +
+              "잔액이 0이면 '0' 을 담는다(빈 문자열로 두지 말 것). 열 자체가 없으면 빈 문자열.",
           },
-          start_date: { type: "string", description: "대출일자·실행일. YYYY-MM-DD 로 정규화. 없으면 빈 문자열. 추측 금지." },
-          end_date: { type: "string", description: "만기일자. YYYY-MM-DD 로 정규화. 없으면 빈 문자열. 추측 금지." },
+          start_date: { type: "string", description: "'대출일자'·'당초차입일자'·'차입일자'·'실행일자'. YYYY-MM-DD 로 정규화. 없으면 빈 문자열. 추측 금지." },
+          end_date: { type: "string", description: "'대출기한'·'상환기일'·'대출한도기한'. YYYY-MM-DD 로 정규화. 없으면 빈 문자열. 추측 금지." },
+          rate_raw: { type: "string", description: "'이율'·'금리' 열 원문 (예: '연 4.53%'). 없으면 빈 문자열." },
           is_subtotal: {
             type: "boolean",
-            description: "개별 대출이 아니라 소계/합계 행이면 true ('합계', '소계', '총계', '대출금계' 등). 개별 대출이면 false.",
+            description:
+              "개별 대출이 아니라 소계/합계 행이면 true. " +
+              "'합계', '계', '계 (원화환산금액)', '소계', '총계', '대출금계' 등이 해당. 개별 대출이면 false.",
           },
         },
       },
@@ -165,10 +193,9 @@ const SYSTEM = [
   "당신은 금융 문서에서 대출 명세 표를 정확히 옮겨 적는 추출기입니다.",
   "해석하거나 계산하지 말고, 문서에 적힌 것을 그대로 옮기는 것이 임무입니다.",
   "",
-  "먼저 문서 종류를 판별하세요.",
+  "먼저 문서 제목으로 종류를 판별하세요.",
+  "· bank_certificate — 제목에 '금융거래확인서'가 있는 문서.",
   "· credit_report — '기업 여신정보' 조회 문서. '세부신용공여' 표, '금잔', '만기구조' 같은 머리글이 있습니다.",
-  "· bank_certificate — 은행이 발급한 '금융거래확인서'. '대출과목·여신과목', '대출금액', '대출잔액',",
-  "  '대출일자', '만기일자' 같은 머리글과 발급 은행명·직인이 있습니다.",
   "· 둘 중 무엇인지 확신할 수 없으면 doc_type=unknown 으로 두고 rows·bank_rows를 모두 빈 배열로 두세요.",
   "  이때는 사용자가 직접 문서 종류를 고르게 됩니다. 애매한데 하나를 골라버리면 잘못된 값이 저장됩니다.",
   "",
@@ -187,7 +214,18 @@ const SYSTEM = [
   "  실행일·만기일은 이 문서에 없으므로 스키마에도 없습니다.",
   "· bank_certificate → bank_rows 에만 담습니다. rows 는 빈 배열.",
   "  대출일자·만기일자는 문서에 적혀 있을 때만 YYYY-MM-DD 로 담고, 없으면 빈 문자열입니다.",
-  "  대출금액과 대출잔액은 서로 다른 열입니다. 한 쪽만 있으면 있는 쪽만 담고 다른 쪽은 빈 문자열로 두세요.",
+  "  차입금액(한도)과 잔액은 서로 다른 열입니다. 한 쪽만 있으면 있는 쪽만 담고 다른 쪽은 빈 문자열로 두세요.",
+  "",
+  "★★ 금융거래확인서에서 읽을 섹션 (이것만 읽습니다) ★★",
+  "  '1. 대출금 거래상황' / '1. 여신현황' / '1. 대출금 거래현황' / '2. 금융상품 거래현황'",
+  "  이 중 문서에 있는 섹션의 표만 bank_rows에 담고, 그 섹션 제목 원문을 section_title에 적으세요.",
+  "  넷 중 어느 것도 없으면 section_title을 빈 문자열, bank_rows를 빈 배열로 두세요.",
+  "",
+  "★★ 절대 담으면 안 되는 섹션 ★★",
+  "  · '2. 담보내용' / '2. 담보현황' — 여기의 설정금액을 대출로 담으면 부채가 두 배가 됩니다. 가장 위험합니다.",
+  "  · '3. 최근 당좌 결제내용' / '카드결제현황'",
+  "  · '4~6. 당좌부도 / 연체 여부 / 연체명세'",
+  "  이 섹션들의 행은 단 한 줄도 bank_rows에 넣지 마세요.",
 ].join("\n");
 
 export default async function handler(req, res) {
@@ -224,7 +262,7 @@ export default async function handler(req, res) {
         ? "이 문서는 '기업 여신정보'입니다. doc_type=credit_report 로 두고 '세부신용공여' 표를 rows에 그대로 옮겨 적어주세요."
         : hint === "bank_certificate"
           ? "이 문서는 '금융거래확인서'입니다. doc_type=bank_certificate 로 두고 대출 명세를 bank_rows에 그대로 옮겨 적어주세요."
-          : "먼저 이 문서가 '기업 여신정보'인지 '금융거래확인서'인지 판별하고, 해당 표를 스키마에 맞춰 그대로 옮겨 적어주세요. 확신할 수 없으면 doc_type=unknown 으로 두세요.";
+          : "먼저 이 문서가 '기업 여신정보'인지 '금융거래확인서'인지 판별하고, 해당 표를 스키마에 맞춰 그대로 옮겨 적어주세요. 확신할 수 없으면 doc_type=unknown 으로 두세요. 금융거래확인서라면 허용된 1번 섹션만 읽고 담보내용 섹션은 절대 읽지 마세요.";
 
     // PDF는 document 블록, 이미지는 image 블록. 둘 다 텍스트 블록보다 앞에 둔다.
     const docBlock = isPdf
