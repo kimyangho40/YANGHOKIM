@@ -3877,22 +3877,26 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
     var text = input.trim();
     if (!text || sending || !me) return;
     setSending(true);
-    setInput("");
     setMentionMatches([]);
+    // ⚠️ 입력칸을 먼저 비우면 안 된다. 값이 ""가 되는 순간 useDraft가 임시보관분을 지워버려서,
+    //    서버 응답을 기다리는 동안 메시지가 지역변수에만 남는다. 그때 탭이 정리되면(iOS 백그라운드)
+    //    글이 어디에도 없다 — 이번에 막으려던 바로 그 상황이다.
+    //    그래서 빠른메모·소통내역과 같은 순서로: 서버 저장이 성공한 뒤에만 비운다.
     var payload = { sender: me, message: text, channel: channel, read_by: [me], saved_to_activity: [] };
     var r = await supabase.from("chat_messages").insert(payload).select().single();
     if (!r.error && r.data) {
-      chatDraft.done();
+      chatDraft.done();   // 보관분 해제는 성공 확인 후
+      setInput("");
       var row = r.data;
       setMessages(function(prev) {
         if (prev.find(function(m) { return m.id === row.id; })) return prev;
         return prev.concat(row);
       });
     } else {
-      // 실패하면 쓴 내용을 되돌려 놓는다. 에러가 없는데 행도 없으면(세션 끊김) 그것도 실패로 본다.
+      // 실패하면 쓴 내용을 그대로 둔다(이미 입력칸에 남아 있다). 임시보관도 유지된다.
+      // 에러가 없는데 행도 없으면(세션 끊김) 그것도 실패로 본다.
       var info = classifyWriteFail(r.error, r.data ? 1 : 0);
       alert("메시지 전송 실패: " + info.text);
-      setInput(text);
     }
     setSending(false);
   }
