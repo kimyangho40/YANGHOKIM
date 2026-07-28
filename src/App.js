@@ -1099,35 +1099,82 @@ function detectWeaknesses(company) {
   return out;
 }
 
+// ── 숫자 셀 파서 (기업현황표·시트지 공용) ────────────────────────────────────
+// 담당자가 숫자 옆에 맥락을 함께 적는 것은 정상 사용이다. 막지 말고 파서가 처리한다.
+//   예) 부채총계 "6,652백만원 (2025결산) *2026-07-25 크레탑 여신조회 총액은 8,136백만원(신규분 반영)"
+//       상시근로자 "34명(2026.1 기준)/36명(2026.5 KODATA조회)"
+// 규칙: ① 맨 앞 숫자만 값으로 쓴다  ② 원문은 호출 측에서 메모에 그대로 보존한다(절대 버리지 않는다)
+//       ③ 단위 표기가 없으면 추측해서 환산하지 않는다 → "단위 확인 필요"로 돌려주고 칸은 비워둔다
+var AMOUNT_UNITS = [["억", 1e8], ["천만", 1e7], ["백만", 1e6], ["만", 1e4], ["천", 1e3]];
+
+// 맨 앞 숫자만 뽑는다(단위 환산 없음). 인원·점수·비율처럼 환산이 필요 없는 칸에 쓴다.
+//  반환: { ok, num, raw, reason }
+function extractLeadingNumber(raw) {
+  var s = String(raw === null || raw === undefined ? "" : raw).trim();
+  if (!s) return { ok: false, raw: s, reason: "값 없음" };
+  var m = s.match(/-?[0-9][0-9,]*(?:\.[0-9]+)?/);
+  if (!m) return { ok: false, raw: s, reason: "숫자를 찾지 못함" };
+  var n = parseFloat(m[0].replace(/,/g, ""));
+  if (isNaN(n)) return { ok: false, raw: s, reason: "숫자를 찾지 못함" };
+  return { ok: true, num: n, raw: s };
+}
+
+// 금액 셀 → 원 단위 숫자.
+//  · "6,652백만원" → 6,652,000,000 / "5백만원" → 5,000,000 / "52천원" → 52,000 / "400,000,000원" → 400,000,000
+//  · 기존 372개 파일은 표기가 제각각이라 억/천만/만/천도 함께 읽는다("7천만원" → 70,000,000).
+//  · unitHint="원"은 이미 저장된 값(순수 숫자)을 계속 계산해야 하는 parseFinanceNum 전용이다.
+//    업로드 파싱에는 쓰지 않는다 — 라벨이 "매출액 (원)"이어도 담당자는 그 칸에 "28,886백만원"을 적기 때문.
+//  반환: { ok, value, raw, unit, num, reason }
+function extractLeadingAmount(raw, unitHint) {
+  var s = String(raw === null || raw === undefined ? "" : raw).trim();
+  if (!s) return { ok: false, raw: s, reason: "값 없음" };
+  var at = s.search(/[0-9]/);
+  if (at < 0) return { ok: false, raw: s, reason: "숫자를 찾지 못함" };
+  var head = s.slice(0, at);
+  var neg = /[(△▲\-]\s*$/.test(head);
+  var rest = s.slice(at), total = 0, lastMult = Infinity, matched = 0;
+  // 단위가 붙은 숫자만 이어 붙인다. 내림차순일 때만("1억5천만원") 합산 → 뒤 문장의 숫자 유입을 막는다.
+  while (true) {
+    var m = /^\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*(억|천만|백만|만|천)/.exec(rest);
+    if (!m) break;
+    var n = parseFloat(m[1].replace(/,/g, ""));
+    if (isNaN(n)) break;
+    var mult = 1;
+    for (var i = 0; i < AMOUNT_UNITS.length; i++) if (AMOUNT_UNITS[i][0] === m[2]) mult = AMOUNT_UNITS[i][1];
+    if (mult >= lastMult) break;
+    total += n * mult; lastMult = mult; matched++;
+    rest = rest.slice(m[0].length);
+    if (/^\s*원/.test(rest)) break;   // "…원"으로 닫혔으면 금액 표현이 끝난 것
+  }
+  if (matched > 0) return { ok: true, value: neg ? -total : total, raw: s, unit: "환산" };
+  // 한글 단위가 없는 경우: "123원"이거나, 라벨에 (원)이 적힌 칸의 순수 숫자일 때만 원 단위로 인정
+  var p = /^([0-9][0-9,]*(?:\.[0-9]+)?)\s*(원)?/.exec(rest);
+  if (!p) return { ok: false, raw: s, reason: "숫자를 찾지 못함" };
+  var pn = parseFloat(p[1].replace(/,/g, ""));
+  if (isNaN(pn)) return { ok: false, raw: s, reason: "숫자를 찾지 못함" };
+  if (p[2]) return { ok: true, value: neg ? -pn : pn, raw: s, unit: "원" };
+  // 회계 음수표기 "(1,000)"도 순수 숫자로 본다 → 부호문자·괄호만 있는 앞뒤는 무시
+  var headClean = head.replace(/[(△▲\-\s]/g, "");
+  var tailClean = rest.slice(p[0].length).replace(/[)\s]/g, "");
+  if (unitHint === "원" && headClean === "" && tailClean === "") {
+    return { ok: true, value: neg ? -pn : pn, raw: s, unit: "원(양식 표기)" };
+  }
+  return { ok: false, raw: s, num: neg ? -pn : pn, reason: "단위 확인 필요" };
+}
+
+// 셀에 숫자 말고 담당자가 적은 맥락이 섞여 있는지 — 원문을 메모에 보존할지 판단용
+function cellHasContext(raw) { return /[^0-9,.\s]/.test(String(raw === null || raw === undefined ? "" : raw)); }
+
 // ── 재무 문자열 → 숫자 파싱 (억/천만/백만/만/천 단위 및 회계 음수표기 지원) ─────
-// 부채비율·이자보상배율은 비율이라 두 값의 단위 스케일이 일치해야 정확 → 한글 단위까지 해석
+// 부채비율·이자보상배율은 비율이라 두 값의 단위 스케일이 일치해야 정확 → 한글 단위까지 해석.
+// 문장이 섞인 값("6,652백만원 (2025결산) *…8,136백만원")도 맨 앞 금액만 쓴다.
+// 단위가 없는 값은 이미 저장된 데이터(순수 숫자)가 계속 계산되도록 그대로 숫자로 본다 — 비율은 단위가 상쇄되므로 안전.
 function parseFinanceNum(raw) {
   if (raw === null || raw === undefined) return null;
-  var s = String(raw).trim();
-  if (!s) return null;
-  var neg = /^\(.*\)$/.test(s) || s.indexOf("△") >= 0 || s.indexOf("▲") >= 0 || s.trim().indexOf("-") === 0;
-  s = s.replace(/[(),\s원△▲\-]/g, "");
-  if (!s) return null;
-  var units = [["억", 1e8], ["천만", 1e7], ["백만", 1e6], ["만", 1e4], ["천", 1e3]];
-  var total = 0, hasUnit = false, remaining = s;
-  for (var u = 0; u < units.length; u++) {
-    var name = units[u][0], mult = units[u][1];
-    var idx = remaining.indexOf(name);
-    if (idx >= 0) {
-      var numPart = remaining.slice(0, idx);
-      var n = parseFloat(numPart);
-      if (isNaN(n)) n = numPart === "" ? 1 : NaN;
-      if (!isNaN(n)) { total += n * mult; hasUnit = true; }
-      remaining = remaining.slice(idx + name.length);
-    }
-  }
-  if (hasUnit) {
-    if (remaining) { var r = parseFloat(remaining); if (!isNaN(r)) total += r; }
-    return neg ? -total : total;
-  }
-  var plain = parseFloat(s);
-  if (isNaN(plain)) return null;
-  return neg ? -Math.abs(plain) : plain;
+  var r = extractLeadingAmount(raw, "원");
+  if (r.ok) return r.value;
+  if (typeof r.num === "number" && !isNaN(r.num)) return r.num;
+  return null;
 }
 // company_info 배열에서 라벨(공백 무시, 부분일치)로 값 조회
 function getCompanyInfoVal(infoArr, label) {
@@ -1868,19 +1915,19 @@ async function parseHyeonhwangpyo(file) {
     if (v instanceof Date) { return v.getFullYear() + "-" + String(v.getMonth() + 1).padStart(2, "0") + "-" + String(v.getDate()).padStart(2, "0"); }
     return String(v).trim();
   };
-  var parseRevenue = function(s) {
+  // 숫자 못 뽑은 칸 목록 + 숫자 칸 원문 보존 (신규 양식 파서와 같은 규칙)
+  var issues = [];
+  var addIssue = function(label, r) { issues.push({ label: label, raw: (r && r.raw) || "", reason: (r && r.reason) || "확인 필요" }); };
+  var rawNotes = [];
+  var keepRaw = function(label, raw) { if (cellHasContext(raw)) rawNotes.push(label + ": " + String(raw).trim()); };
+  // 구 양식은 매출칸에 단위가 명시돼 있지 않다(라벨이 "매출 (2025년)") → 단위 없는 숫자는 환산하지 않는다
+  var parseRevenue = function(s, label) {
     if (!s) return "";
-    var str = String(s).replace(/\s/g, "");
-    var match = str.match(/([0-9.,]+)(억|천만|백만|만)?/);
-    if (!match) return "";
-    var num = parseFloat(match[1].replace(/,/g, ""));
-    if (isNaN(num)) return "";
-    var unit = match[2] || "";
-    if (unit === "억") return Math.round(num * 100000000);
-    if (unit === "천만") return Math.round(num * 10000000);
-    if (unit === "백만") return Math.round(num * 1000000);
-    if (unit === "만") return Math.round(num * 10000);
-    return Math.round(num);
+    var r = extractLeadingAmount(s, "");
+    keepRaw(label, s);
+    if (r.ok) return Math.round(r.value);
+    addIssue(label, r);
+    return "";
   };
   var parseCredit = function(s) {
     if (!s) return { kcb: "", nice: "" };
@@ -1906,7 +1953,7 @@ async function parseHyeonhwangpyo(file) {
   };
   var parseRegion = function(addr) {
     if (!addr) return "";
-    var s = String(addr);
+    var s = String(addr).replace(/^\s*[([]?\s*\d{5}\s*[)\]]?\s*/, "");   // 앞에 붙은 우편번호 제거
     var doMap = { "서울특별시": "서울", "서울": "서울", "부산광역시": "부산", "부산": "부산", "대구광역시": "대구", "대구": "대구", "인천광역시": "인천", "인천": "인천", "광주광역시": "광주", "광주": "광주", "대전광역시": "대전", "대전": "대전", "울산광역시": "울산", "울산": "울산", "세종특별자치시": "세종", "세종": "세종", "경기도": "경기", "강원도": "강원", "강원특별자치도": "강원", "충청북도": "충북", "충북": "충북", "충청남도": "충남", "충남": "충남", "전라북도": "전북", "전북": "전북", "전북특별자치도": "전북", "전라남도": "전남", "전남": "전남", "경상북도": "경북", "경북": "경북", "경상남도": "경남", "경남": "경남", "제주특별자치도": "제주", "제주도": "제주", "제주": "제주" };
     var firstWord = s.split(/\s+/)[0];
     var doName = doMap[firstWord] || firstWord;
@@ -1930,18 +1977,21 @@ async function parseHyeonhwangpyo(file) {
   if (industry) { updates.industry = industry; auto.industry = true; }
   var emp = getCell(5, 8);
   if (emp && emp !== "없음" && emp !== "추후") {
-    var empNum = String(emp).replace(/[^0-9]/g, "");
-    if (empNum) { updates.employee_count = empNum; auto.employee_count = true; }
-  } else if (emp === "없음") { updates.employee_count = "0"; auto.employee_count = true; }
+    // "2명" · "1명/2명(현재)"처럼 값이 여럿이면 첫 번째만 쓰고 원문은 메모에 보존
+    var empR = extractLeadingNumber(emp);
+    if (empR.ok) { updates.employee_count = Math.round(empR.num); auto.employee_count = true; }
+    else addIssue("직원현황", empR);
+    keepRaw("직원현황", emp);
+  } else if (emp === "없음") { updates.employee_count = 0; auto.employee_count = true; }
   var credit = parseCredit(getCell(6, 2));
   if (credit.kcb) { updates.credit_score_kcb = credit.kcb; auto.credit_score_kcb = true; }
   if (credit.nice) { updates.credit_score_nice = credit.nice; auto.credit_score_nice = true; }
   var founded = parseFoundedDate(getCell(6, 8));
   if (founded.year) { updates.founded_year = founded.year; auto.founded_year = true; }
   if (founded.month) { updates.founded_month = founded.month; auto.founded_month = true; }
-  var rev2025 = parseRevenue(getCell(12, 2));
-  var rev2024 = parseRevenue(getCell(12, 6));
-  var rev2023 = parseRevenue(getCell(12, 10));
+  var rev2025 = parseRevenue(getCell(12, 2), "2025년 매출");
+  var rev2024 = parseRevenue(getCell(12, 6), "2024년 매출");
+  var rev2023 = parseRevenue(getCell(12, 10), "2023년 매출");
   if (rev2025) { updates.revenue_2025 = rev2025; auto.revenue_2025 = true; }
   if (rev2024) { updates.revenue_2024 = rev2024; auto.revenue_2024 = true; }
   if (rev2023) { updates.revenue_2023 = rev2023; auto.revenue_2023 = true; }
@@ -1979,8 +2029,11 @@ async function parseHyeonhwangpyo(file) {
   addInfo("필요자금 사용용도", getCell(26, 2));
   if (infoItems.length > 0) { updates.company_info = infoItems; auto.company_info = true; }
   var bigoMemo = getCell(28, 2) || getCell(29, 2) || getCell(30, 2);
-  if (bigoMemo) { updates.company_info_memo = bigoMemo; auto.company_info_memo = true; }
-  return { updates: updates, auto: auto };
+  var memoParts = [];
+  if (bigoMemo) memoParts.push(bigoMemo);
+  if (rawNotes.length) memoParts.push("[원문 보존]\n" + rawNotes.join("\n"));
+  if (memoParts.length) { updates.company_info_memo = memoParts.join("\n\n"); auto.company_info_memo = true; }
+  return { updates: updates, auto: auto, issues: issues };
 }
 
 // SheetJS(XLSX) 라이브러리 로더 - 여러 파서에서 공용.
@@ -2001,10 +2054,11 @@ function parseSheetGeneric(rows) {
     return String(v).trim();
   };
   var norm = function(s) { return String(s || "").replace(/\s/g, "").replace(/[:：\-()（）]/g, ""); };
-  var digitsOnly = function(s) { return String(s).replace(/[^0-9]/g, ""); };
+  // 맨 앞 숫자만 — "34명(2026.1 기준)/36명"처럼 맥락이 붙어도 첫 값만 쓴다(전부 이어붙이면 엉뚱한 숫자가 된다)
+  var digitsOnly = function(s) { var r = extractLeadingNumber(s); return r.ok ? String(Math.round(r.num)) : ""; };
   var parseRegionG = function(addr) {
     if (!addr) return "";
-    var s = String(addr);
+    var s = String(addr).replace(/^\s*[([]?\s*\d{5}\s*[)\]]?\s*/, "");   // 앞에 붙은 우편번호 제거
     var doMap = { "서울특별시": "서울", "서울": "서울", "부산광역시": "부산", "부산": "부산", "대구광역시": "대구", "대구": "대구", "인천광역시": "인천", "인천": "인천", "광주광역시": "광주", "광주": "광주", "대전광역시": "대전", "대전": "대전", "울산광역시": "울산", "울산": "울산", "세종특별자치시": "세종", "세종": "세종", "경기도": "경기", "경기": "경기", "강원도": "강원", "강원특별자치도": "강원", "강원": "강원", "충청북도": "충북", "충북": "충북", "충청남도": "충남", "충남": "충남", "전라북도": "전북", "전북": "전북", "전북특별자치도": "전북", "전라남도": "전남", "전남": "전남", "경상북도": "경북", "경북": "경북", "경상남도": "경남", "경남": "경남", "제주특별자치도": "제주", "제주도": "제주", "제주": "제주" };
     var firstWord = s.split(/\s+/)[0];
     var doName = doMap[firstWord] || firstWord;
@@ -2109,6 +2163,13 @@ function parseHyeonhwangpyoV2(rows) {
   var updates = {}, auto = {};
   var setF = function(field, val) { if (val !== "" && val != null) { updates[field] = val; auto[field] = true; } };
 
+  // 숫자 못 뽑은 칸 목록 — 0으로 채우지 않고 비워둔 뒤 화면에 그대로 보여준다(콘솔 안 열어도 보이게)
+  var issues = [];
+  var addIssue = function(label, r) { issues.push({ label: label, raw: (r && r.raw) || "", reason: (r && r.reason) || "확인 필요" }); };
+  // 숫자 칸의 원문 보존 — 숫자 컬럼에 들어가면서 사라질 맥락을 메모에 남긴다(스크립트 작성 재료)
+  var rawNotes = [];
+  var keepRaw = function(label, raw) { if (cellHasContext(raw)) rawNotes.push(label + ": " + String(raw).trim()); };
+
   // ── 1. 기업 기본 ──────────────────────────────────────────────────────
   setF("name", get("기업체명"));
   setF("business_number", get("사업자등록번호"));
@@ -2118,22 +2179,38 @@ function parseHyeonhwangpyoV2(rows) {
   var addr = get("사업장 주소");
   if (addr) {
     var doMap = { "서울특별시": "서울", "부산광역시": "부산", "대구광역시": "대구", "인천광역시": "인천", "광주광역시": "광주", "대전광역시": "대전", "울산광역시": "울산", "세종특별자치시": "세종", "경기도": "경기", "강원도": "강원", "강원특별자치도": "강원", "충청북도": "충북", "충청남도": "충남", "전라북도": "전북", "전북특별자치도": "전북", "전라남도": "전남", "경상북도": "경북", "경상남도": "경남", "제주특별자치도": "제주", "제주도": "제주" };
-    var w = String(addr).split(/\s+/);
+    // 작성본에 우편번호가 앞에 붙는다("(50315) 경상남도 창녕군 …") → 떼고 시·도부터 읽는다
+    var w = String(addr).replace(/^\s*[([]?\s*\d{5}\s*[)\]]?\s*/, "").split(/\s+/);
     var doName = doMap[w[0]] || w[0];
     var siGuGun = (w[1] || "").replace(/시$|군$|구$/, "");
     setF("region", doName + (siGuGun ? "_" + siGuGun : ""));
   }
   setF("industry", get("업태 / 종목"));
-  var empDigits = String(get("상시근로자 (현재)")).replace(/[^0-9]/g, "");
-  setF("employee_count", empDigits);
-  var fd = String(get("설립일자")).match(/(\d{4})[-/.년\s]*(\d{1,2})?/);
+  // 상시근로자: "34명(2026.1 기준)/36명(2026.5 KODATA조회)" → 첫 번째 값 34, 원문은 메모에 보존
+  var empRaw = get("상시근로자 (현재)");
+  if (String(empRaw).trim()) {
+    var empR = extractLeadingNumber(empRaw);
+    if (empR.ok) setF("employee_count", Math.round(empR.num));
+    else addIssue("상시근로자", empR);
+    keepRaw("상시근로자", empRaw);
+  }
+  var fdRaw = get("설립일자");
+  var fd = String(fdRaw).match(/(\d{4})[-/.년\s]*(\d{1,2})?/);
   if (fd) { setF("founded_year", fd[1]); if (fd[2]) setF("founded_month", parseInt(fd[2], 10)); }
-  setF("credit_score_kcb", String(get("신용 KCB (점)")).replace(/[^0-9]/g, ""));
-  setF("credit_score_nice", String(get("신용 NICE (점)")).replace(/[^0-9]/g, ""));
+  else if (String(fdRaw).trim()) addIssue("설립일자", { raw: fdRaw, reason: "연도를 찾지 못함" });
+  [["credit_score_kcb", "신용 KCB (점)", "신용 KCB"], ["credit_score_nice", "신용 NICE (점)", "신용 NICE"]].forEach(function(c) {
+    var raw = get(c[1]);
+    if (!String(raw).trim()) return;
+    var r = extractLeadingNumber(raw);
+    if (r.ok) { setF(c[0], Math.round(r.num)); keepRaw(c[2], raw); }
+    else addIssue(c[2], r);
+  });
 
   // ── 3. 매출 추이 — 연도칸은 매년 수정되므로 '읽어서' 매핑한다(고정 가정 금지) ──
   var yearRow = idx[norm("연도")];
   if (yearRow) {
+    // 라벨이 "매출액 (원)"이어도 담당자는 그 칸에 "28,886백만원"이라고 적는다 → 라벨의 단위를 믿으면 안 된다.
+    // 단위 없는 숫자는 환산하지 않고 "단위 확인 필요"로 넘긴다(6,652를 6,652원으로 저장하는 사고 방지).
     for (var r = yearRow.r + 1; r < rows.length; r++) {
       var row = rows[r];
       if (!row) continue;
@@ -2141,15 +2218,25 @@ function parseHyeonhwangpyoV2(rows) {
       if (!head) continue;
       if (/^\d+\s*\./.test(head)) break;              // 다음 섹션 헤더 만나면 종료
       var amt = cellStr(row[3]);
+      var profit = cellStr(row[6]), bigo = cellStr(row[9]);
+      // 금액 말고 담당자가 적은 순이익·비고도 버리지 않는다(스크립트 재료)
+      if (amt || profit || bigo) {
+        var line = head + " 매출액: " + (amt || "-")
+          + (profit ? " / 당기순이익: " + profit : "")
+          + (bigo ? " / 비고: " + bigo : "");
+        if (cellHasContext(amt) || profit || bigo) rawNotes.push(line);
+      }
       if (!amt) continue;
       var ym = head.match(/(\d{4})/);
       if (!ym) continue;
       var yr = ym[1];
-      if (/상반기/.test(head)) { setF("revenue_2026_h1", amt); continue; }
       if (/예상/.test(head)) continue;                 // 예상 매출은 실적 컬럼에 넣지 않는다
-      if (yr === "2025") setF("revenue_2025", amt);
-      else if (yr === "2024") setF("revenue_2024", amt);
-      else if (yr === "2023") setF("revenue_2023", amt);
+      var field = /상반기/.test(head) ? "revenue_2026_h1"
+        : (yr === "2025" ? "revenue_2025" : (yr === "2024" ? "revenue_2024" : (yr === "2023" ? "revenue_2023" : "")));
+      if (!field) continue;
+      var amtR = extractLeadingAmount(amt, "");
+      if (amtR.ok) setF(field, Math.round(amtR.value));
+      else addIssue(head + " 매출액", amtR);            // 실패해도 이 칸만 비우고 나머지는 정상 저장
     }
   }
 
@@ -2224,26 +2311,55 @@ function parseHyeonhwangpyoV2(rows) {
   addInfo("카드론·현금서비스", get("카드론 · 현금서비스"));
   if (infoItems.length > 0) { updates.company_info = infoItems; auto.company_info = true; }
 
+  // ── 11. 자유 메모 → 비고 메모 (스크립트 재료가 여기 다 들어 있다) ─────
+  var freeStart = null;
+  rows.forEach(function(row, r) {
+    if (freeStart != null || !row) return;
+    if (/자유\s*메모/.test(cellStr(row[0]))) freeStart = r;
+  });
+  var freeLines = [];
+  if (freeStart != null) {
+    for (var fr = freeStart + 1; fr < rows.length; fr++) {
+      var frow = rows[fr];
+      if (!frow) continue;
+      if (/^\d+\s*\./.test(cellStr(frow[0]))) break;   // 다음 섹션 헤더
+      var joined = frow.map(cellStr).filter(Boolean).join(" ").trim();
+      if (joined) freeLines.push(joined);
+    }
+  }
+
   // ── 9. 대표자만 아는 것 → 비고 메모 ──────────────────────────────────
   var memoParts = [];
   var weak = get("정책자금 신청에 가장 불리한 약점 (솔직하게)");
   var good = get("최근 호재 · 특이사항 (신규계약·수주·설비)");
   if (weak) memoParts.push("[약점] " + weak);
   if (good) memoParts.push("[호재] " + good);
-  if (memoParts.length) { updates.company_info_memo = memoParts.join("\n"); auto.company_info_memo = true; }
+  if (freeLines.length) memoParts.push("[자유 메모]\n" + freeLines.join("\n"));
+  if (rawNotes.length) memoParts.push("[원문 보존]\n" + rawNotes.join("\n"));
+  if (memoParts.length) { updates.company_info_memo = memoParts.join("\n\n"); auto.company_info_memo = true; }
 
   // ── 10. 거절 이력 → 소통내역 텍스트로만 (기대출 행으로 자동 생성하지 않는다) ──
+  //  실제 작성본에는 "기관/일자/거절 사유" 머리행 없이 섹션 제목 바로 아래에 내용을 적는 경우가 있어
+  //  머리행이 없으면 섹션 제목으로 찾는다(예전엔 이 경우 거절 이력이 통째로 유실됐다).
   var rejHdr = null;
   rows.forEach(function(row, r) {
-    if (rejHdr || !row) return;
+    if (rejHdr != null || !row) return;
     if (norm(row[0]) === norm("기관") && norm(row[3]) === norm("일자") && norm(row[5]) === norm("거절 사유")) rejHdr = r;
   });
+  if (rejHdr == null) {
+    rows.forEach(function(row, r) {
+      if (rejHdr != null || !row) return;
+      if (/거절\s*이력/.test(cellStr(row[0]))) rejHdr = r;
+    });
+  }
   var commParts = [];
   if (rejHdr != null) {
     for (var rr = rejHdr + 1; rr < rows.length; rr++) {
       var rrow = rows[rr];
       if (!rrow) continue;
       var ri = cellStr(rrow[0]), rd = cellStr(rrow[3]), rs = cellStr(rrow[5]);
+      if (/^\d+\s*\./.test(ri)) break;                                  // 다음 섹션(자유 메모 등)까지 먹지 않도록
+      if (norm(ri) === norm("기관") && norm(rd) === norm("일자")) continue; // 머리행은 건너뜀
       if (!ri && !rd && !rs) continue;
       commParts.push("거절 이력: " + [ri, rd, rs].filter(Boolean).join(" / "));
     }
@@ -2253,7 +2369,7 @@ function parseHyeonhwangpyoV2(rows) {
   if (updates.name && (/^\(주\)|^㈜|주식회사/.test(updates.name))) { updates.business_type = "법인사업자"; updates.type = "법인"; }
   else if (updates.name) { updates.business_type = "개인사업자"; updates.type = "개인"; }
 
-  return { updates: updates, auto: auto, commText: commParts.join("\n") };
+  return { updates: updates, auto: auto, commText: commParts.join("\n"), issues: issues };
 }
 
 // 신규 통합 양식인지 판정 — 시트명에 의존하지 않고 고유 라벨이 몇 개 잡히는지로 본다.
@@ -2285,7 +2401,7 @@ async function parseUploadedSheet(file) {
     var res = await parseHyeonhwangpyo(file);
     var commParts = [];
     if (res.updates.company_info_memo) commParts.push(res.updates.company_info_memo);
-    return { updates: res.updates, auto: res.auto, commText: commParts.join("\n"), kind: "기업현황표" };
+    return { updates: res.updates, auto: res.auto, commText: commParts.join("\n"), kind: "기업현황표", issues: res.issues || [] };
   }
   // 신규 통합 양식(시트명 "정보시트" 등) — 구 양식과 레이아웃이 완전히 달라 전용 파서 사용.
   //  범용 파서로 넘어가면 4개 항목만 인식되고 값까지 오염된다(2026-07-27 진단).
@@ -2296,13 +2412,13 @@ async function parseUploadedSheet(file) {
     var v2Comm = [];
     if (v2.commText) v2Comm.push(v2.commText);
     if (v2.updates.company_info_memo) v2Comm.push(v2.updates.company_info_memo);
-    return { updates: v2.updates, auto: v2.auto, commText: v2Comm.join("\n"), kind: "기업현황표(신규양식)" };
+    return { updates: v2.updates, auto: v2.auto, commText: v2Comm.join("\n"), kind: "기업현황표(신규양식)", issues: v2.issues || [] };
   }
   // 그 외: 첫 시트를 범용 파싱
   var ws = wb.Sheets[wb.SheetNames[0]];
   var rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
   var g = parseSheetGeneric(rows);
-  return { updates: g.updates, auto: g.auto, commText: g.commText, kind: "시트지" };
+  return { updates: g.updates, auto: g.auto, commText: g.commText, kind: "시트지", issues: [] };
 }
 
 const Icon = ({ name, size = 16, color = "currentColor" }) => {
@@ -4690,6 +4806,14 @@ function CRMApp({ profile, session }) {
   // 회사 저장
   const saveCompany = async (data, prevData) => {
     const { documents, ...rest } = data;
+    // 숫자 컬럼 안전장치 — 숫자로 못 읽는 값은 그 칸만 빼고 보낸다.
+    // (문자열이 numeric 컬럼에 그대로 가면 400이 나면서 저장 전체가 실패했다)
+    const numCol = function(v) {
+      if (v === "" || v === null || v === undefined) return null;
+      if (typeof v === "number") return isFinite(v) ? Math.round(v) : null;
+      var m = String(v).replace(/,/g, "").match(/^-?[0-9]+(\.[0-9]+)?$/);
+      return m ? Math.round(parseFloat(m[0])) : null;
+    };
     // 모든 필드를 모으되, 빈값(빈문자열/null/undefined)은 저장에서 제외 → 기존 DB값 유지(실수로 비워지는 손실 방지)
     const allFields = {
       name: rest.name, type: rest.type, representative: rest.representative,
@@ -4697,9 +4821,9 @@ function CRMApp({ profile, session }) {
       agency: rest.agency, received_docs: rest.received_docs, requested_docs: rest.requested_docs, last_contact: rest.last_contact,
       next_contact: rest.next_contact, call_count: rest.call_count,
       fee: rest.fee, fee_status: rest.fee_status,
-      revenue_2023: rest.revenue_2023, revenue_2024: rest.revenue_2024, revenue_2025: rest.revenue_2025, revenue_2026_h1: rest.revenue_2026_h1,
+      revenue_2023: numCol(rest.revenue_2023), revenue_2024: numCol(rest.revenue_2024), revenue_2025: numCol(rest.revenue_2025), revenue_2026_h1: numCol(rest.revenue_2026_h1),
       issue: rest.issue, next_action: rest.next_action,
-      employee_count: rest.employee_count,
+      employee_count: numCol(rest.employee_count),
       credit_score: rest.credit_score,
       credit_score_kcb: rest.credit_score_kcb ? (parseInt(rest.credit_score_kcb) || null) : null,
       credit_score_nice: rest.credit_score_nice ? (parseInt(rest.credit_score_nice) || null) : null,
@@ -10495,6 +10619,12 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           u.company_info.forEach(function(ni) { if (idx[ni.label] !== undefined) ex[idx[ni.label]] = ni; else ex.push(ni); });
           merged.company_info = ex;
         } else if (k === "loans") { merged.loans = u.loans; }
+        else if (k === "company_info_memo") {
+          // 담당자가 적어둔 기존 메모를 덮어쓰지 않는다 — 원문은 절대 버리지 않는다
+          var prevMemo = (p.company_info_memo || "").trim();
+          var addMemo = String(u.company_info_memo || "").trim();
+          merged.company_info_memo = (prevMemo && addMemo && prevMemo.indexOf(addMemo) < 0) ? (prevMemo + "\n\n" + addMemo) : (addMemo || prevMemo);
+        }
         else { merged[k] = u[k]; }
       });
       return merged;
@@ -12401,6 +12531,21 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   </div>
                 );
               })()}
+              {/* ⚠️ 숫자를 못 뽑은 칸 — 콘솔 안 열어도 화면에서 바로 보이게 */}
+              {Array.isArray(xlsxPreview.issues) && xlsxPreview.issues.length > 0 && (
+                <div style={{ marginTop: 12, padding: "10px 12px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#B91C1C", marginBottom: 6 }}>⚠️ 확인 필요 {xlsxPreview.issues.length}건 — 이 칸만 비워둔 채 나머지는 적용됩니다</div>
+                  {xlsxPreview.issues.map(function(it, i) {
+                    return (
+                      <div key={i} style={{ fontSize: 11.5, color: "#7F1D1D", lineHeight: 1.6, paddingTop: 3 }}>
+                        · <b>{it.label}</b> — {it.reason}
+                        {it.raw ? <span style={{ color: "#991B1B" }}> · 원문 “{String(it.raw).length > 60 ? String(it.raw).slice(0, 60) + "…" : it.raw}”</span> : null}
+                      </div>
+                    );
+                  })}
+                  <div style={{ fontSize: 10.5, color: "#991B1B", marginTop: 6 }}>원문은 비고 메모에 그대로 보존됩니다. 값은 직접 입력하면 됩니다.</div>
+                </div>
+              )}
               {/* 📨 소통내역에 자동 기록될 내용 (수정 가능, 비우면 기록 안 함) */}
               <div style={{ marginTop: 14 }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: "#075985", marginBottom: 5 }}>📨 소통내역에 기록될 내용 <span style={{ fontSize: 10.5, color: "#888", fontWeight: 500 }}>(수정 가능 · 비우면 기록 안 함)</span></div>
@@ -12615,6 +12760,8 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
   const [autoFilled, setAutoFilled] = useState({});
   // 첨부 파일명 표시용
   const [attachedFile, setAttachedFile] = useState(null);
+  // 첨부 파싱에서 숫자를 못 뽑은 칸 목록 (화면 표시용)
+  const [sheetIssues, setSheetIssues] = useState([]);
   // 팀을 사용자가 직접 골랐는지 여부 (true면 업체명 변경해도 자동 갱신 안 함)
   const [teamTouched, setTeamTouched] = useState(false);
 
@@ -12693,17 +12840,35 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
                     setMulti(upd);
                   }
                   setAutoFilled(function(p) { return Object.assign({}, p, res.auto); });
+                  setSheetIssues(res.issues || []);
                   var msg = "📄 자동 입력 " + Object.keys(res.auto).length + "개 완료!";
                   if (extra) msg += "\n📝 인식 안 된 나머지 내용은 '비고'에 담았어요.";
+                  if (res.issues && res.issues.length) msg += "\n⚠️ 숫자를 못 읽은 칸 " + res.issues.length + "건은 아래 빨간 목록에 있어요.";
                   alert(msg + "\n확인 후 빈 칸 보완해서 등록하세요.");
                 } catch (err) {
                   console.error("시트 파싱 오류:", err);
                   alert("❌ 엑셀 읽기 실패: " + err.message + "\n\n엑셀(.xlsx) 파일이 맞는지 확인해주세요.");
                   setAttachedFile(null);
+                  setSheetIssues([]);
                 }
               }} />
           </label>
           <div style={{ fontSize: 10, color: "#888", marginTop: 5, lineHeight: 1.5 }}>기업현황표·시트지 첨부하면 회사명·대표자·매출·신용점수 등이 자동 채워지고, 나머지 내용은 비고에 담깁니다. 첨부 안 해도 직접 입력 가능.</div>
+          {/* ⚠️ 숫자를 못 뽑은 칸 — 콘솔 안 열어도 화면에서 바로 보이게 */}
+          {sheetIssues.length > 0 && (
+            <div style={{ marginTop: 8, padding: "9px 11px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 7 }}>
+              <div style={{ fontSize: 11.5, fontWeight: 700, color: "#B91C1C", marginBottom: 5 }}>⚠️ 확인 필요 {sheetIssues.length}건 — 이 칸만 비어 있고 나머지는 채워졌어요</div>
+              {sheetIssues.map(function(it, i) {
+                return (
+                  <div key={i} style={{ fontSize: 11, color: "#7F1D1D", lineHeight: 1.6 }}>
+                    · <b>{it.label}</b> — {it.reason}
+                    {it.raw ? <span style={{ color: "#991B1B" }}> · 원문 “{String(it.raw).length > 50 ? String(it.raw).slice(0, 50) + "…" : it.raw}”</span> : null}
+                  </div>
+                );
+              })}
+              <div style={{ fontSize: 10, color: "#991B1B", marginTop: 5 }}>원문은 비고에 그대로 보존됩니다.</div>
+            </div>
+          )}
         </div>
 
         <div style={{ padding: "18px 24px" }}>
