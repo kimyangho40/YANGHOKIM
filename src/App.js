@@ -798,6 +798,21 @@ const LOAN_KIND_NONE = { id: "", label: "미분류", short: "미분류", color: 
 function loanKindMeta(id) { return LOAN_KINDS.find(function(k) { return k.id === id; }) || LOAN_KIND_NONE; }
 // 회사 유형별 기본 구분 — 법인이면 법인대출, 그 외(개인사업자)는 사업자대출
 function defaultLoanKind(company) { return (company && company.type === "법인") ? "corp" : "biz"; }
+// 법인/개인 판정 — 사업자등록번호 가운데 2자리가 가장 확실한 신호(81~88 = 법인, 01~79 = 개인)이고
+// 상호는 보조로 본다. "농업회사법인(주)조선제일한우"처럼 (주)가 중간에 오는 상호가 많아
+// 앞자리 고정 매칭(^\(주\))만으로는 법인을 개인사업자로 잘못 잡는다.
+function inferBusinessType(name, bizNum) {
+  var digits = String(bizNum || "").replace(/[^0-9]/g, "");
+  if (digits.length >= 5) {
+    var code = parseInt(digits.slice(3, 5), 10);
+    if (code >= 81 && code <= 88) return { business_type: "법인사업자", type: "법인" };
+    if (code >= 1 && code <= 79) return { business_type: "개인사업자", type: "개인" };
+  }
+  var n = String(name || "");
+  if (!n) return null;
+  if (/\(주\)|㈜|\(유\)|주식회사|유한회사|유한책임회사|합자회사|합명회사|법인/.test(n)) return { business_type: "법인사업자", type: "법인" };
+  return { business_type: "개인사업자", type: "개인" };
+}
 // 한글 수 표기 한 덩어리를 자리값으로 해석 ("8천5백" → 8500, "5" → 5, "" → 1)
 function korNumGroup(str) {
   if (str === "") return 1;
@@ -1995,8 +2010,8 @@ async function parseHyeonhwangpyo(file) {
   if (rev2025) { updates.revenue_2025 = rev2025; auto.revenue_2025 = true; }
   if (rev2024) { updates.revenue_2024 = rev2024; auto.revenue_2024 = true; }
   if (rev2023) { updates.revenue_2023 = rev2023; auto.revenue_2023 = true; }
-  if (name && (/^\(주\)|^㈜|주식회사/.test(name))) { updates.business_type = "법인사업자"; updates.type = "법인"; }
-  else if (name) { updates.business_type = "개인사업자"; updates.type = "개인"; }
+  var bizTypeOld = inferBusinessType(name, bizNum);
+  if (bizTypeOld) { updates.business_type = bizTypeOld.business_type; updates.type = bizTypeOld.type; }
   var loans = [];
   // 구분 기본값: 법인이면 법인대출, 개인사업자면 사업자대출 (담당자가 화면에서 수정 가능)
   var loanKindDefault = defaultLoanKind({ type: updates.type });
@@ -2119,8 +2134,8 @@ function parseSheetGeneric(rows) {
   });
 
   // 법인/개인 유형 추정
-  if (updates.name && (/^\(주\)|^㈜|주식회사/.test(updates.name))) { updates.business_type = "법인사업자"; updates.type = "법인"; }
-  else if (updates.name) { updates.business_type = "개인사업자"; updates.type = "개인"; }
+  var bizTypeG = inferBusinessType(updates.name, updates.business_number);
+  if (bizTypeG) { updates.business_type = bizTypeG.business_type; updates.type = bizTypeG.type; }
 
   return { updates: updates, auto: auto, commText: leftover.join("\n") };
 }
@@ -2173,6 +2188,9 @@ function parseHyeonhwangpyoV2(rows) {
   // ── 1. 기업 기본 ──────────────────────────────────────────────────────
   setF("name", get("기업체명"));
   setF("business_number", get("사업자등록번호"));
+  // 법인/개인 판정은 여기서 먼저 한다 — 아래 기대출 구분 자동지정이 이 값을 쓴다
+  var bizType = inferBusinessType(updates.name, updates.business_number);
+  if (bizType) { updates.business_type = bizType.business_type; updates.type = bizType.type; }
   setF("representative", String(get("대표자명")).replace(/대표(이사)?$/, "").trim());
   var phone = String(get("대표자 연락처")).replace(/[^0-9-]/g, "");
   setF("phone", phone);
@@ -2249,6 +2267,8 @@ function parseHyeonhwangpyoV2(rows) {
   });
   if (loanHdr != null) {
     var loans = [];
+    // 회사 유형을 판정하지 못했으면(상호·사업자번호 둘 다 없음) 미분류로 둔다 — 없는 근거로 지정하지 않는다
+    var loanKindDefaultV2 = updates.type ? defaultLoanKind({ type: updates.type }) : "";
     for (var lr = loanHdr + 1; lr < rows.length; lr++) {
       var lrow = rows[lr];
       if (!lrow) continue;
@@ -2264,12 +2284,17 @@ function parseHyeonhwangpyoV2(rows) {
       //    → 실제 대출이므로 담는다(예전엔 이 행이 통째로 빠져 부채가 누락됐다)
       //  ※ 여신정보 문서 파서의 소계 제외(isSubtotalRow)는 별개 로직이라 건드리지 않는다.
       if (/합계|소계|총계|누계/.test(c0) && !inst) continue;
-      // 구분(c0): 담당자가 명시적으로 적은 값만 인정한다. 애매하면 미분류로 두고 추측하지 않는다.
+      // 구분(c0) → 대출 성격.
+      //  이 칸은 "정책자금(보증부)·일반은행·캐피탈"처럼 상품 종류를 적는 칸이라 법인/개인 축과 다르다.
+      //  ① 담당자가 성격(법인대출·대표자 개인대출·사업자대출)을 명시했으면 그대로 쓰고
+      //  ② 아니면 회사 유형으로 지정한다(법인 → 법인대출 / 개인사업자 → 사업자대출) — 구 양식 파서와 같은 규칙.
+      //  자동 지정이라 화면에서 언제든 바꿀 수 있다. 대표자 개인 채무가 섞여 있으면 담당자가 고쳐야 한다.
       var kind = "";
       var k0 = norm(c0);
       if (k0) {
-        LOAN_KINDS.forEach(function(K) { if (!kind && (k0 === norm(K.label) || k0 === norm(K.short))) kind = K.id; });
+        LOAN_KINDS.forEach(function(K) { if (!kind && (k0.indexOf(norm(K.label)) >= 0 || k0.indexOf(norm(K.short)) >= 0)) kind = K.id; });
       }
+      if (!kind) kind = loanKindDefaultV2;
       loans.push({ inst: inst, amount: amount, bank: bank, start: start, end: end, kind: kind, balance: balance });
     }
     if (loans.length > 0) { updates.loans = loans; auto.loans = true; }
@@ -2371,9 +2396,7 @@ function parseHyeonhwangpyoV2(rows) {
     }
   }
 
-  // 법인/개인 유형 추정 (구 파서와 동일 규칙)
-  if (updates.name && (/^\(주\)|^㈜|주식회사/.test(updates.name))) { updates.business_type = "법인사업자"; updates.type = "법인"; }
-  else if (updates.name) { updates.business_type = "개인사업자"; updates.type = "개인"; }
+  // 법인/개인 유형은 위(기업체명·사업자등록번호 직후)에서 이미 판정했다.
 
   return { updates: updates, auto: auto, commText: commParts.join("\n"), issues: issues };
 }
@@ -12531,7 +12554,10 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                         </div>
                       );
                     })}
-                    {u.loans && <div style={{ fontSize: 12.5, padding: "6px 10px", background: "#EEF2FF", borderRadius: 6, color: "#4338CA", fontWeight: 600 }}>💰 기대출 내역 {u.loans.length}건 {Array.isArray(data.loans) && data.loans.length > 0 ? "(기존 " + data.loans.length + "건 교체)" : ""}</div>}
+                    {u.loans && <div style={{ fontSize: 12.5, padding: "6px 10px", background: "#EEF2FF", borderRadius: 6, color: "#4338CA", fontWeight: 600 }}>
+                      💰 기대출 내역 {u.loans.length}건 {Array.isArray(data.loans) && data.loans.length > 0 ? "(기존 " + data.loans.length + "건 교체)" : ""}
+                      <div style={{ fontSize: 10.5, fontWeight: 500, color: "#4338CA", marginTop: 3 }}>구분은 회사 유형({u.type || data.type || "-"})으로 자동 지정됩니다 · 대표자 개인대출이 섞여 있으면 적용 후 수정해주세요</div>
+                    </div>}
                     {u.company_info && <div style={{ fontSize: 12.5, padding: "6px 10px", background: "#EEF2FF", borderRadius: 6, color: "#4338CA", fontWeight: 600 }}>📋 기업정보 {u.company_info.length}개 항목</div>}
                     {u.company_info_memo && <div style={{ fontSize: 12.5, padding: "6px 10px", background: "#EEF2FF", borderRadius: 6, color: "#4338CA", fontWeight: 600 }}>📝 비고 메모</div>}
                   </div>
