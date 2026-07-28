@@ -12903,6 +12903,10 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
   const [attachedFile, setAttachedFile] = useState(null);
   // 첨부 파싱에서 숫자를 못 뽑은 칸 목록 (화면 표시용)
   const [sheetIssues, setSheetIssues] = useState([]);
+  // 끌어다 놓기 강조 / 파싱 중 / 실패 사유 (실패를 alert 하나로만 알리면 놓치므로 화면에도 남긴다)
+  const [dragOver, setDragOver] = useState(false);
+  const [sheetBusy, setSheetBusy] = useState(false);
+  const [sheetError, setSheetError] = useState(null);
   // 팀을 사용자가 직접 골랐는지 여부 (true면 업체명 변경해도 자동 갱신 안 함)
   const [teamTouched, setTeamTouched] = useState(false);
 
@@ -12928,6 +12932,58 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
     });
   };
 
+  // 📄 첨부 파일 1건 처리 — 파일 선택·끌어다 놓기·붙여넣기가 모두 이 함수를 쓴다(동작이 갈리지 않게).
+  const SHEET_EXTS = ["xlsx", "xls", "xlsm"];
+  const handleSheetFile = async function(file) {
+    if (!file) return;
+    var ext = (file.name || "").split(".").pop().toLowerCase();
+    if (SHEET_EXTS.indexOf(ext) < 0) {
+      setSheetError({
+        title: "지원하지 않는 형식이에요",
+        detail: "‘" + file.name + "’은(는) 읽을 수 없어요. 엑셀 파일(" + SHEET_EXTS.map(function(x) { return "." + x; }).join(" · ") + ")만 첨부할 수 있어요.",
+      });
+      setAttachedFile(null);
+      setSheetIssues([]);
+      return;
+    }
+    setSheetBusy(true);
+    setSheetError(null);
+    setAttachedFile(file.name);
+    try {
+      var res = await parseUploadedSheet(file);
+      var upd = Object.assign({}, res.updates);
+      var extra = (res.commText || "").trim();
+      if (extra) {
+        // 신규등록엔 아직 소통내역이 없으므로 나머지 내용을 비고 메모에 보존 (등록 후 소통내역에서 이어쓰기 가능)
+        setForm(function(p) {
+          var prev = (p.company_info_memo || "").trim();
+          var addition = "📄 " + res.kind + " 업로드 내용\n" + extra;
+          return Object.assign({}, p, upd, { company_info_memo: prev ? prev + "\n\n" + addition : addition });
+        });
+      } else {
+        setMulti(upd);
+      }
+      setAutoFilled(function(p) { return Object.assign({}, p, res.auto); });
+      setSheetIssues(res.issues || []);
+      var msg = "📄 자동 입력 " + Object.keys(res.auto).length + "개 완료!";
+      if (extra) msg += "\n📝 인식 안 된 나머지 내용은 '비고'에 담았어요.";
+      if (res.issues && res.issues.length) msg += "\n⚠️ 숫자를 못 읽은 칸 " + res.issues.length + "건은 아래 빨간 목록에 있어요.";
+      alert(msg + "\n확인 후 빈 칸 보완해서 등록하세요.");
+    } catch (err) {
+      console.error("시트 파싱 오류:", err);
+      // alert은 닫으면 사라지므로 화면에도 남긴다
+      setSheetError({
+        title: "엑셀을 읽지 못했어요",
+        detail: (err && err.message ? err.message : "알 수 없는 오류") + " — 엑셀(.xlsx) 파일이 맞는지, 파일이 손상되지 않았는지 확인해주세요.",
+        file: file.name,
+      });
+      setAttachedFile(null);
+      setSheetIssues([]);
+    } finally {
+      setSheetBusy(false);
+    }
+  };
+
   // 자동 입력된 필드 스타일
   const autoStyle = function(k) {
     if (autoFilled[k]) {
@@ -12939,7 +12995,18 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}
       >
-      <div style={{ background: "#fff", borderRadius: 14, width: 480, maxHeight: "92vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+      <div
+        // 모달 안 아무 데나 Ctrl+V 로 붙여넣어도 첨부되게. 파일이 없는 붙여넣기(글자)는 그대로 통과시킨다.
+        onPaste={function(e) {
+          var f = e.clipboardData && e.clipboardData.files && e.clipboardData.files[0];
+          if (!f) return;
+          e.preventDefault();
+          handleSheetFile(f);
+        }}
+        // 첨부 영역 밖에 파일을 떨어뜨리면 브라우저가 그 파일로 이동해 입력하던 내용이 날아간다 → 막는다.
+        onDragOver={function(e) { e.preventDefault(); }}
+        onDrop={function(e) { e.preventDefault(); }}
+        style={{ background: "#fff", borderRadius: 14, width: 480, maxHeight: "92vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ padding: "20px 24px 14px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
           <div>
             <div style={{ display: "inline-block", padding: "2px 8px", background: "#EEF2FF", color: "#4338CA", borderRadius: 4, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>신규 등록</div>
@@ -12957,44 +13024,50 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
               <span style={{ fontSize: 10, color: "#15803D", fontWeight: 700, marginLeft: "auto" }}>✓ {attachedFile}</span>
             )}
           </div>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", background: "#fff", border: "1px dashed #FDE68A", borderRadius: 7, cursor: "pointer" }}>
-            <span style={{ fontSize: 14, color: "#B45309" }}>📎</span>
-            <span style={{ fontSize: 11, color: "#888", flex: 1 }}>{attachedFile || "기업현황표.xlsx 또는 시트지 파일 선택"}</span>
+          {/* 파일 선택 · 끌어다 놓기 · 붙여넣기 모두 지원 — 셋 다 handleSheetFile 하나로 처리 */}
+          <label
+            onDragEnter={function(e) { e.preventDefault(); e.stopPropagation(); setDragOver(true); }}
+            onDragOver={function(e) { e.preventDefault(); e.stopPropagation(); setDragOver(true); }}
+            onDragLeave={function(e) {
+              e.preventDefault(); e.stopPropagation();
+              // 자식 요소로 옮겨가는 중이면 강조를 풀지 않는다
+              if (e.currentTarget.contains(e.relatedTarget)) return;
+              setDragOver(false);
+            }}
+            onDrop={function(e) {
+              e.preventDefault(); e.stopPropagation();
+              setDragOver(false);
+              var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+              if (f) handleSheetFile(f);
+            }}
+            style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px",
+              background: dragOver ? "#FEF3C7" : "#fff",
+              border: "1px dashed " + (dragOver ? "#B45309" : "#FDE68A"),
+              borderRadius: 7, cursor: "pointer", transition: "background 0.12s, border-color 0.12s" }}>
+            <span style={{ fontSize: 14, color: "#B45309" }}>{sheetBusy ? "⏳" : "📎"}</span>
+            <span style={{ fontSize: 11, color: dragOver ? "#B45309" : "#888", flex: 1, fontWeight: dragOver ? 700 : 400 }}>
+              {sheetBusy ? "읽는 중…" : dragOver ? "여기에 놓으면 바로 읽어요" : (attachedFile || "파일을 끌어다 놓거나 붙여넣기(Ctrl+V) · 클릭해서 선택")}
+            </span>
             <span style={{ fontSize: 10, padding: "3px 10px", background: "#B45309", color: "#fff", borderRadius: 4, fontWeight: 700 }}>파일 선택</span>
-            <input type="file" accept=".xlsx,.xls" style={{ display: "none" }}
-              onChange={async function(e) {
+            <input type="file" accept=".xlsx,.xls,.xlsm" style={{ display: "none" }}
+              onChange={function(e) {
                 var file = e.target.files && e.target.files[0];
-                if (!file) return;
-                setAttachedFile(file.name);
-                try {
-                  var res = await parseUploadedSheet(file);
-                  var upd = Object.assign({}, res.updates);
-                  var extra = (res.commText || "").trim();
-                  if (extra) {
-                    // 신규등록엔 아직 소통내역이 없으므로 나머지 내용을 비고 메모에 보존 (등록 후 소통내역에서 이어쓰기 가능)
-                    setForm(function(p) {
-                      var prev = (p.company_info_memo || "").trim();
-                      var addition = "📄 " + res.kind + " 업로드 내용\n" + extra;
-                      return Object.assign({}, p, upd, { company_info_memo: prev ? prev + "\n\n" + addition : addition });
-                    });
-                  } else {
-                    setMulti(upd);
-                  }
-                  setAutoFilled(function(p) { return Object.assign({}, p, res.auto); });
-                  setSheetIssues(res.issues || []);
-                  var msg = "📄 자동 입력 " + Object.keys(res.auto).length + "개 완료!";
-                  if (extra) msg += "\n📝 인식 안 된 나머지 내용은 '비고'에 담았어요.";
-                  if (res.issues && res.issues.length) msg += "\n⚠️ 숫자를 못 읽은 칸 " + res.issues.length + "건은 아래 빨간 목록에 있어요.";
-                  alert(msg + "\n확인 후 빈 칸 보완해서 등록하세요.");
-                } catch (err) {
-                  console.error("시트 파싱 오류:", err);
-                  alert("❌ 엑셀 읽기 실패: " + err.message + "\n\n엑셀(.xlsx) 파일이 맞는지 확인해주세요.");
-                  setAttachedFile(null);
-                  setSheetIssues([]);
-                }
+                e.target.value = ""; // 같은 파일을 다시 골라도 onChange가 뜨게
+                handleSheetFile(file);
               }} />
           </label>
           <div style={{ fontSize: 10, color: "#888", marginTop: 5, lineHeight: 1.5 }}>기업현황표·시트지 첨부하면 회사명·대표자·매출·신용점수 등이 자동 채워지고, 나머지 내용은 비고에 담깁니다. 첨부 안 해도 직접 입력 가능.</div>
+          {/* ❌ 첨부 실패 — alert은 닫으면 사라지므로 화면에 계속 남긴다 */}
+          {sheetError && (
+            <div style={{ marginTop: 8, padding: "9px 11px", background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 7 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 11.5, fontWeight: 800, color: "#B91C1C", flex: 1 }}>❌ {sheetError.title}</span>
+                <span onClick={function() { setSheetError(null); }} style={{ cursor: "pointer", color: "#B91C1C", fontSize: 14, lineHeight: 1 }}>×</span>
+              </div>
+              <div style={{ fontSize: 11, color: "#7F1D1D", marginTop: 4, lineHeight: 1.6 }}>{sheetError.detail}</div>
+              <div style={{ fontSize: 10, color: "#991B1B", marginTop: 5 }}>첨부 없이 직접 입력해서 등록할 수 있어요.</div>
+            </div>
+          )}
           {/* ⚠️ 숫자를 못 뽑은 칸 — 콘솔 안 열어도 화면에서 바로 보이게 */}
           {sheetIssues.length > 0 && (
             <div style={{ marginTop: 8, padding: "9px 11px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 7 }}>
