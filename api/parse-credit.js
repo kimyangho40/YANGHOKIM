@@ -63,9 +63,22 @@ const MODEL = "claude-opus-5";
 const SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["as_of", "queried_at", "unit_raw", "rows", "subtotal_raw", "notes"],
+  required: ["doc_type", "doc_type_reason", "as_of", "queried_at", "unit_raw", "rows", "bank_rows", "subtotal_raw", "notes"],
   properties: {
-    as_of: { type: "string", description: "기준일자. YYYY-MM-DD 로 정규화. 문서에 없으면 빈 문자열." },
+    doc_type: {
+      type: "string",
+      enum: ["credit_report", "bank_certificate", "unknown"],
+      description:
+        "문서 종류. " +
+        "credit_report = '기업 여신정보'·'세부신용공여' 표가 있는 신용조회 문서. " +
+        "bank_certificate = 은행이 발급한 '금융거래확인서'(대출과목·대출금액·대출잔액·대출일자·만기일자가 적힌 확인서). " +
+        "둘 중 어느 쪽인지 확신할 수 없으면 반드시 unknown. 추측해서 고르지 말 것.",
+    },
+    doc_type_reason: {
+      type: "string",
+      description: "그렇게 판단한 근거를 한 문장으로. 문서에서 본 제목·표 머리글을 인용할 것.",
+    },
+    as_of: { type: "string", description: "기준일자(금융거래확인서는 발급일·조회기준일). YYYY-MM-DD 로 정규화. 문서에 없으면 빈 문자열." },
     queried_at: { type: "string", description: "조회일시 원문. 없으면 빈 문자열." },
     unit_raw: {
       type: "string",
@@ -76,6 +89,7 @@ const SCHEMA = {
     rows: {
       type: "array",
       description:
+        "doc_type=credit_report 일 때만 채운다(아니면 빈 배열). " +
         "세부신용공여 표의 각 행. 문서에 적힌 순서 그대로 1:1로 담는다. " +
         "같은 금융기관에 여러 건이면 각각 별도 행으로 담고 절대 합치지 않는다. " +
         "여러 페이지로 나뉘어 있으면 모든 페이지의 행을 이어서 담는다.",
@@ -103,9 +117,42 @@ const SCHEMA = {
         },
       },
     },
+    bank_rows: {
+      type: "array",
+      description:
+        "doc_type=bank_certificate 일 때만 채운다(아니면 빈 배열). " +
+        "금융거래확인서의 대출 명세 각 행을 문서 순서 그대로 1:1로 담는다. " +
+        "같은 은행에 여러 건이면 각각 별도 행으로 담고 절대 합치지 않는다. " +
+        "여러 페이지면 모든 페이지의 행을 이어서 담는다.",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["institution", "product", "amount_raw", "balance_raw", "start_date", "end_date", "is_subtotal"],
+        properties: {
+          institution: { type: "string", description: "금융기관명 (예: 국민은행, 농협은행). 지점명이 함께 적혀 있으면 같이." },
+          product: { type: "string", description: "대출과목·여신과목 (예: 기업운전일반자금대출). 없으면 빈 문자열." },
+          amount_raw: {
+            type: "string",
+            description:
+              "대출금액(약정금액·한도) 열의 숫자를 원문 그대로 (쉼표 제거, 숫자와 소수점만). " +
+              "단위 환산하지 말 것. 열이 없거나 읽을 수 없으면 빈 문자열.",
+          },
+          balance_raw: {
+            type: "string",
+            description: "대출잔액 열의 숫자를 원문 그대로 (쉼표 제거). 단위 환산 금지. 없으면 빈 문자열.",
+          },
+          start_date: { type: "string", description: "대출일자·실행일. YYYY-MM-DD 로 정규화. 없으면 빈 문자열. 추측 금지." },
+          end_date: { type: "string", description: "만기일자. YYYY-MM-DD 로 정규화. 없으면 빈 문자열. 추측 금지." },
+          is_subtotal: {
+            type: "boolean",
+            description: "개별 대출이 아니라 소계/합계 행이면 true ('합계', '소계', '총계', '대출금계' 등). 개별 대출이면 false.",
+          },
+        },
+      },
+    },
     subtotal_raw: {
       type: "string",
-      description: "'신용공여합계' 행의 금잔 숫자 (쉼표 제거). 검산용. 없으면 빈 문자열.",
+      description: "합계 행의 금액 숫자 (쉼표 제거). 여신정보는 '신용공여합계', 금융거래확인서는 대출잔액 합계. 검산용. 없으면 빈 문자열.",
     },
     notes: {
       type: "string",
@@ -115,17 +162,32 @@ const SCHEMA = {
 };
 
 const SYSTEM = [
-  "당신은 '기업 여신정보' 문서에서 '세부신용공여' 표를 정확히 옮겨 적는 추출기입니다.",
+  "당신은 금융 문서에서 대출 명세 표를 정확히 옮겨 적는 추출기입니다.",
   "해석하거나 계산하지 말고, 문서에 적힌 것을 그대로 옮기는 것이 임무입니다.",
   "",
-  "규칙:",
+  "먼저 문서 종류를 판별하세요.",
+  "· credit_report — '기업 여신정보' 조회 문서. '세부신용공여' 표, '금잔', '만기구조' 같은 머리글이 있습니다.",
+  "· bank_certificate — 은행이 발급한 '금융거래확인서'. '대출과목·여신과목', '대출금액', '대출잔액',",
+  "  '대출일자', '만기일자' 같은 머리글과 발급 은행명·직인이 있습니다.",
+  "· 둘 중 무엇인지 확신할 수 없으면 doc_type=unknown 으로 두고 rows·bank_rows를 모두 빈 배열로 두세요.",
+  "  이때는 사용자가 직접 문서 종류를 고르게 됩니다. 애매한데 하나를 골라버리면 잘못된 값이 저장됩니다.",
+  "",
+  "공통 규칙:",
   "1. 표의 각 행을 문서 순서 그대로 1:1로 담습니다. 합치거나 정렬하지 마세요.",
   "2. 같은 금융기관에 여러 건이 있으면 각각 별도 행입니다. 절대 합산하지 마세요.",
-  "3. '신용공여합계' 같은 소계 행도 rows에 담되 is_subtotal=true로 표시하세요. 빠뜨리지 마세요.",
-  "4. 금잔은 단위를 환산하지 말고 문서에 적힌 숫자 그대로 담으세요(쉼표만 제거).",
-  "5. 단위 표기(예: '단위 : 백만원')는 문서에 실제로 적혀 있을 때만 담으세요. 없으면 빈 문자열입니다. 절대 추측하지 마세요.",
+  "3. 소계·합계 행도 빠뜨리지 말고 담되 is_subtotal=true로 표시하세요.",
+  "4. 금액은 단위를 환산하지 말고 문서에 적힌 숫자 그대로 담으세요(쉼표만 제거).",
+  "5. 단위 표기(예: '단위 : 백만원', '단위 : 원')는 문서에 실제로 적혀 있을 때만 담으세요.",
+  "   없으면 빈 문자열입니다. 절대 추측하지 마세요.",
   "6. 여러 페이지에 걸쳐 있으면 모든 페이지의 행을 빠짐없이 담으세요.",
   "7. 읽을 수 없는 값은 빈 문자열로 두세요. 추측해서 채우지 마세요.",
+  "",
+  "문서 종류별:",
+  "· credit_report → rows 에만 담습니다. bank_rows 는 빈 배열.",
+  "  실행일·만기일은 이 문서에 없으므로 스키마에도 없습니다.",
+  "· bank_certificate → bank_rows 에만 담습니다. rows 는 빈 배열.",
+  "  대출일자·만기일자는 문서에 적혀 있을 때만 YYYY-MM-DD 로 담고, 없으면 빈 문자열입니다.",
+  "  대출금액과 대출잔액은 서로 다른 열입니다. 한 쪽만 있으면 있는 쪽만 담고 다른 쪽은 빈 문자열로 두세요.",
 ].join("\n");
 
 export default async function handler(req, res) {
@@ -136,7 +198,7 @@ export default async function handler(req, res) {
   if (await denyUnauthorized(req, res)) return;
 
   try {
-    const { fileBase64, mediaType } = req.body || {};
+    const { fileBase64, mediaType, docTypeHint } = req.body || {};
     if (!fileBase64) {
       res.status(400).json({ error: "파일 데이터가 없습니다." });
       return;
@@ -154,6 +216,15 @@ export default async function handler(req, res) {
       res.status(500).json({ error: "서버에 API 키가 설정되지 않았습니다." });
       return;
     }
+
+    // 사용자가 문서 종류를 직접 골라 다시 보낸 경우에만 종류를 고정한다(1차에는 모델이 판별).
+    const hint = String(docTypeHint || "");
+    const askText =
+      hint === "credit_report"
+        ? "이 문서는 '기업 여신정보'입니다. doc_type=credit_report 로 두고 '세부신용공여' 표를 rows에 그대로 옮겨 적어주세요."
+        : hint === "bank_certificate"
+          ? "이 문서는 '금융거래확인서'입니다. doc_type=bank_certificate 로 두고 대출 명세를 bank_rows에 그대로 옮겨 적어주세요."
+          : "먼저 이 문서가 '기업 여신정보'인지 '금융거래확인서'인지 판별하고, 해당 표를 스키마에 맞춰 그대로 옮겨 적어주세요. 확신할 수 없으면 doc_type=unknown 으로 두세요.";
 
     // PDF는 document 블록, 이미지는 image 블록. 둘 다 텍스트 블록보다 앞에 둔다.
     const docBlock = isPdf
@@ -177,7 +248,7 @@ export default async function handler(req, res) {
             role: "user",
             content: [
               docBlock,
-              { type: "text", text: "이 문서의 '세부신용공여' 표를 스키마에 맞춰 그대로 옮겨 적어주세요." },
+              { type: "text", text: askText },
             ],
           },
         ],

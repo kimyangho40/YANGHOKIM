@@ -1022,6 +1022,83 @@ function creditReportToLoans(result) {
   return out;
 }
 
+// ── 금융거래확인서 → 기대출 행 변환 ─────────────────────────────────────────
+//  여신정보와 문서 구조가 달라 별도 변환기를 쓴다(여신정보 변환기는 건드리지 않는다).
+//  · 금액 열이 둘(대출금액·대출잔액)이고, 여신정보와 달리 실행일·만기일이 문서에 적혀 있다.
+//  · 단위 환산·소계 제거는 여기서 코드로 재검증한다(모델 판단을 그대로 믿지 않는다).
+function isBankCertSubtotalRow(row) {
+  if (!row) return true;
+  if (row.is_subtotal) return true;
+  var name = String(row.institution || "").replace(/\s/g, "");
+  var prod = String(row.product || "").replace(/\s/g, "");
+  if (/합계|소계|총계|누계|대출금계/.test(name) || /합계|소계|총계|누계|대출금계/.test(prod)) return true;
+  // 기관·과목이 둘 다 비었는데 금액만 있는 행 → 소계로 의심
+  if (!name && !prod && (String(row.amount_raw || "").trim() || String(row.balance_raw || "").trim())) return true;
+  return false;
+}
+// 문서에 적힌 단위로 환산한다. 단위 표기가 없으면 환산하지 않고 '단위 확인 필요'로 넘긴다.
+function bankCertAmount(raw, unit) {
+  var s = String(raw || "").replace(/[,\s]/g, "");
+  if (!s || isNaN(parseFloat(s))) return { text: "", review: true, reason: "금액을 읽지 못함" };
+  if (unit.mult == null) return { text: s, review: true, reason: "단위 확인 필요 (문서에 단위 표기 없음)" };
+  var won = Math.round(parseFloat(s) * unit.mult);
+  var str = String(won);
+  // 왕복 검증 — 되읽어 값이 일치할 때만 확정한다
+  var back = parseLoanAmount(str);
+  if (back.won !== won) return { text: "", review: true, reason: "금액 확인 필요 (" + s + " " + unit.label + ")" };
+  return { text: str, review: false, reason: "", won: won };
+}
+function bankCertToLoans(result) {
+  var out = { loans: [], dropped: 0, checksum: null, unitLabel: "", asOf: "", countedWon: 0 };
+  if (!result) return out;
+  var unit = parseCreditUnit(result.unit_raw);
+  out.unitLabel = unit.label;
+  out.asOf = String(result.as_of || "").trim();
+  var rows = Array.isArray(result.bank_rows) ? result.bank_rows : [];
+  var sumBal = 0, kept = 0, withBal = 0;
+
+  rows.forEach(function(row) {
+    if (isBankCertSubtotalRow(row)) { out.dropped++; return; }
+    var inst = String(row.institution || "").trim();
+    var prod = String(row.product || "").trim();
+    // 금액 칸에는 잔액을 우선 쓴다(현재 남은 채무). 잔액이 없으면 대출금액을 쓴다.
+    var balRaw = String(row.balance_raw || "").trim();
+    var amtRaw = String(row.amount_raw || "").trim();
+    var pick = balRaw || amtRaw;
+    var a = bankCertAmount(pick, unit);
+    if (a.won != null) { out.countedWon += a.won; }
+    kept++;
+    // 검산은 잔액끼리만 더한다 — 잔액 없는 행의 대출금액을 섞으면 문서 합계와 안 맞아 헛경고가 뜬다
+    var balNum = parseFloat(balRaw.replace(/[,\s]/g, ""));
+    if (balRaw && !isNaN(balNum)) { sumBal += balNum; withBal++; }
+    var reason = a.reason;
+    if (!reason && !balRaw && amtRaw) reason = "";   // 잔액 없이 대출금액만 있는 건 정상 처리
+    out.loans.push({
+      inst: inst + (prod ? " " + prod : ""),
+      amount: a.text,
+      bank: inst,
+      start: String(row.start_date || "").trim(),   // 문서에 적혀 있을 때만 채워진다
+      end: String(row.end_date || "").trim(),
+      kind: "",                                     // 전건 미분류 — 자동 추정하지 않는다
+      as_of: out.asOf,
+      amount_src: balRaw ? "잔액" : (amtRaw ? "대출금액" : ""),
+      loan_amount_raw: amtRaw,
+      balance_raw: balRaw,
+      src: "bank_certificate",
+      needs_review: a.review,
+      review_reason: reason,
+    });
+  });
+
+  // 잔액이 빠진 행이 하나라도 있으면 합계와 비교 대상이 달라진다 → 검산 자체를 하지 않는다(틀린 경고 금지)
+  var subtotal = String(result.subtotal_raw || "").replace(/[,\s]/g, "");
+  if (subtotal && !isNaN(parseFloat(subtotal)) && kept > 0 && withBal === kept) {
+    var expect = parseFloat(subtotal);
+    out.checksum = { expect: expect, actual: sumBal, ok: Math.abs(sumBal - expect) < Math.max(1, expect * 0.005), unitLabel: unit.label };
+  }
+  return out;
+}
+
 // ── 여신정보 기준일자 신선도 ────────────────────────────────────────────────
 //  여신정보는 시점 데이터라 오래되면 현재 채무 상태와 어긋난다.
 //  기준일이 이 일수를 넘으면 '최신화 필요'로 표시한다(삭제·경고만, 값은 그대로 둔다).
@@ -1040,10 +1117,12 @@ function creditAsOfInfo(company) {
 // 여신정보로 들어왔는데 아직 구분이 지정되지 않은 행 수.
 //  법인기업은 미분류가 부채비율에서 빠지므로, 담당자에게 알려주지 않으면
 //  "왜 부채비율이 안 변하지?"가 된다.
+// 구분(법인/대표자개인/사업자)이 아직 지정되지 않은 대출 건수.
+// 문서에서 읽어온 행은 출처와 무관하게 전부 미분류로 들어오므로(추정 금지) 전체를 센다.
 function creditUnclassifiedCount(company) {
   var loans = Array.isArray(company && company.loans) ? company.loans : [];
   return loans.filter(function(l) {
-    return l && l.src === "credit_report" && !l.kind && !isLoanRejected(l);
+    return l && !l.kind && !isLoanRejected(l);
   }).length;
 }
 
@@ -2013,11 +2092,11 @@ async function parseHyeonhwangpyo(file) {
   var bizTypeOld = inferBusinessType(name, bizNum);
   if (bizTypeOld) { updates.business_type = bizTypeOld.business_type; updates.type = bizTypeOld.type; }
   var loans = [];
-  // 구분 기본값: 법인이면 법인대출, 개인사업자면 사업자대출 (담당자가 화면에서 수정 가능)
-  var loanKindDefault = defaultLoanKind({ type: updates.type });
+  // 구분은 미분류로 넣는다 — 현황표에는 채무자가 누구인지 적는 칸이 없어 회사 유형으로 추정하면
+  // 대표자 개인 채무가 법인 부채비율에 섞여 들어간다. 담당자가 화면에서 지정한다(미분류 건수 배지로 안내).
   for (var lr = 17; lr <= 23; lr++) {
     var inst = getCell(lr, 2), amt = getCell(lr, 5), bank = getCell(lr, 7), sdate = getCell(lr, 8), edate = getCell(lr, 10);
-    if (inst || amt || bank || sdate || edate) { loans.push({ inst: inst, amount: amt, bank: bank, start: sdate, end: edate, kind: loanKindDefault }); }
+    if (inst || amt || bank || sdate || edate) { loans.push({ inst: inst, amount: amt, bank: bank, start: sdate, end: edate, kind: "" }); }
   }
   if (loans.length > 0) { updates.loans = loans; auto.loans = true; }
   var infoItems = [];
@@ -2267,8 +2346,6 @@ function parseHyeonhwangpyoV2(rows) {
   });
   if (loanHdr != null) {
     var loans = [];
-    // 회사 유형을 판정하지 못했으면(상호·사업자번호 둘 다 없음) 미분류로 둔다 — 없는 근거로 지정하지 않는다
-    var loanKindDefaultV2 = updates.type ? defaultLoanKind({ type: updates.type }) : "";
     for (var lr = loanHdr + 1; lr < rows.length; lr++) {
       var lrow = rows[lr];
       if (!lrow) continue;
@@ -2286,15 +2363,14 @@ function parseHyeonhwangpyoV2(rows) {
       if (/합계|소계|총계|누계/.test(c0) && !inst) continue;
       // 구분(c0) → 대출 성격.
       //  이 칸은 "정책자금(보증부)·일반은행·캐피탈"처럼 상품 종류를 적는 칸이라 법인/개인 축과 다르다.
-      //  ① 담당자가 성격(법인대출·대표자 개인대출·사업자대출)을 명시했으면 그대로 쓰고
-      //  ② 아니면 회사 유형으로 지정한다(법인 → 법인대출 / 개인사업자 → 사업자대출) — 구 양식 파서와 같은 규칙.
-      //  자동 지정이라 화면에서 언제든 바꿀 수 있다. 대표자 개인 채무가 섞여 있으면 담당자가 고쳐야 한다.
+      //  담당자가 성격(법인대출·대표자 개인대출·사업자대출)을 명시했을 때만 인정하고,
+      //  아니면 미분류로 둔다. 현황표에는 채무자가 누구인지 적는 칸이 없어 회사 유형으로 추정하면
+      //  대표자 개인 채무가 법인 부채비율에 섞여 들어간다.
       var kind = "";
       var k0 = norm(c0);
       if (k0) {
         LOAN_KINDS.forEach(function(K) { if (!kind && (k0.indexOf(norm(K.label)) >= 0 || k0.indexOf(norm(K.short)) >= 0)) kind = K.id; });
       }
-      if (!kind) kind = loanKindDefaultV2;
       loans.push({ inst: inst, amount: amount, bank: bank, start: start, end: end, kind: kind, balance: balance });
     }
     if (loans.length > 0) { updates.loans = loans; auto.loans = true; }
@@ -11695,11 +11771,29 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               </ZoomSection>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 8, flexWrap: "wrap" }}>
                 <div style={{ fontSize: 11, color: "#888" }}>기업현황표에서 자동 추출 · 직접 수정 가능</div>
-                <div style={{ display: "flex", gap: 6 }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   <label style={{ display: "flex", alignItems: "center", gap: 4, background: "#FEF3C7", color: "#B45309", border: "none", borderRadius: 7, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
                     📎 현황표 첨부
                     <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={function(e) { var f = e.target.files && e.target.files[0]; e.target.value = ""; handleXlsxAttach(f); }} />
                   </label>
+                  {/* 여신정보·금융거래확인서 첨부 — 현황표 첨부 바로 옆에 둔다(예전엔 기대출 표 위에 따로 떨어져 있었다) */}
+                  <CreditReportImport
+                    existingCount={Array.isArray(data.loans) ? data.loans.length : 0}
+                    onApply={function(rows, applyMode, asOf) {
+                      setData(function(p) {
+                        var prev = Array.isArray(p.loans) ? p.loans : [];
+                        var next = applyMode === "replace" ? rows.slice() : prev.concat(rows);
+                        // 기준일자는 company_info에 함께 남긴다(3단계 '최신화 필요' 판정에 쓰임)
+                        var info = Array.isArray(p.company_info) ? p.company_info.slice() : [];
+                        if (asOf) {
+                          var idx = info.findIndex(function(it) { return it && it.label === "여신정보 기준일자"; });
+                          if (idx >= 0) info[idx] = { label: "여신정보 기준일자", value: asOf };
+                          else info.push({ label: "여신정보 기준일자", value: asOf });
+                        }
+                        return Object.assign({}, p, { loans: next, company_info: info });
+                      });
+                    }}
+                  />
                   <button onClick={function() { onSave(data); }} style={{ display: "flex", alignItems: "center", gap: 5, background: "#15803D", color: "#fff", border: "none", borderRadius: 7, padding: "8px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
                     <Icon name="save" size={13} color="#fff" /> 기업정보 저장
                   </button>
@@ -11725,35 +11819,20 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                     </span>
                   );
                 })()}
-                {/* 법인기업은 미분류가 부채비율에서 빠진다 — 모르면 '왜 안 변하지?'가 되므로 알려준다 */}
+                {/* 문서에서 읽어온 대출은 전건 미분류다 — 지정을 놓치면 부채비율이 비어 보이므로 항상 알려준다 */}
                 {(function() {
                   var n = creditUnclassifiedCount(data);
-                  if (!n || data.type !== "법인") return null;
+                  if (!n) return null;
+                  var isCorp = data.type === "법인";
                   return (
-                    <span title={"여신정보로 넣은 " + n + "건이 아직 미분류입니다. 법인기업은 '법인대출'로 지정된 건만 부채비율에 반영되므로, 구분을 지정해야 계산에 들어갑니다."}
+                    <span title={n + "건이 아직 미분류입니다. 문서에는 채무자가 법인인지 대표자 개인인지 적혀 있지 않아 추정하지 않습니다."
+                      + (isCorp ? " 법인기업은 '법인대출'로 지정된 건만 부채비율에 반영되므로, 지정해야 계산에 들어갑니다." : " 아래 표의 구분을 지정해주세요.")}
                       style={{ background: "#FFFBEB", color: "#B45309", border: "1px solid #FDE68A", borderRadius: 6, padding: "3px 9px", fontSize: 10.5, fontWeight: 800 }}>
-                      구분 미지정 {n}건 — 부채비율 미반영
+                      구분 미지정 {n}건{isCorp ? " — 부채비율 미반영" : ""}
                     </span>
                   );
                 })()}
                 <div style={{ marginLeft: "auto" }} />
-                <CreditReportImport
-                  existingCount={Array.isArray(data.loans) ? data.loans.length : 0}
-                  onApply={function(rows, applyMode, asOf) {
-                    setData(function(p) {
-                      var prev = Array.isArray(p.loans) ? p.loans : [];
-                      var next = applyMode === "replace" ? rows.slice() : prev.concat(rows);
-                      // 기준일자는 company_info에 함께 남긴다(3단계 '최신화 필요' 판정에 쓰임)
-                      var info = Array.isArray(p.company_info) ? p.company_info.slice() : [];
-                      if (asOf) {
-                        var idx = info.findIndex(function(it) { return it && it.label === "여신정보 기준일자"; });
-                        if (idx >= 0) info[idx] = { label: "여신정보 기준일자", value: asOf };
-                        else info.push({ label: "여신정보 기준일자", value: asOf });
-                      }
-                      return Object.assign({}, p, { loans: next, company_info: info });
-                    });
-                  }}
-                />
               </div>
               <div style={{ overflowX: "auto", marginBottom: 8 }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
@@ -12556,7 +12635,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                     })}
                     {u.loans && <div style={{ fontSize: 12.5, padding: "6px 10px", background: "#EEF2FF", borderRadius: 6, color: "#4338CA", fontWeight: 600 }}>
                       💰 기대출 내역 {u.loans.length}건 {Array.isArray(data.loans) && data.loans.length > 0 ? "(기존 " + data.loans.length + "건 교체)" : ""}
-                      <div style={{ fontSize: 10.5, fontWeight: 500, color: "#4338CA", marginTop: 3 }}>구분은 회사 유형({u.type || data.type || "-"})으로 자동 지정됩니다 · 대표자 개인대출이 섞여 있으면 적용 후 수정해주세요</div>
+                      <div style={{ fontSize: 10.5, fontWeight: 500, color: "#B45309", marginTop: 3 }}>구분(법인/대표자개인/사업자)은 <b>미분류</b>로 들어갑니다 — 문서에 채무자가 적혀 있지 않아 추정하지 않습니다. 적용 후 지정해주세요</div>
                     </div>}
                     {u.company_info && <div style={{ fontSize: 12.5, padding: "6px 10px", background: "#EEF2FF", borderRadius: 6, color: "#4338CA", fontWeight: 600 }}>📋 기업정보 {u.company_info.length}개 항목</div>}
                     {u.company_info_memo && <div style={{ fontSize: 12.5, padding: "6px 10px", background: "#EEF2FF", borderRadius: 6, color: "#4338CA", fontWeight: 600 }}>📝 비고 메모</div>}
@@ -14061,21 +14140,29 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
 }
 
 // ── 업무노트 카드 (독립 컴포넌트 - 입력버그 방지) ──────────────────────────────
-// ── 여신정보 첨부 → 기대출 내역 자동 입력 ────────────────────────────────────
+// ── 여신정보 · 금융거래확인서 첨부 → 기대출 내역 자동 입력 ───────────────────
 //  자동 저장하지 않는다. 파싱 결과를 표로 보여주고 담당자가 확인·선택한 뒤에만 반영한다.
+//  문서 종류는 모델이 판별하되, 확신하지 못하면(unknown) 추측하지 않고 담당자에게 직접 묻는다.
+var DOC_TYPES = {
+  credit_report: { label: "기업 여신정보", desc: "'세부신용공여' 표가 있는 신용조회 문서" },
+  bank_certificate: { label: "금융거래확인서", desc: "은행이 발급한 대출 명세 확인서" },
+};
 function CreditReportImport({ existingCount, onApply }) {
   var [open, setOpen] = useState(false);
   var [busy, setBusy] = useState(false);
   var [err, setErr] = useState("");
-  var [parsed, setParsed] = useState(null);     // creditReportToLoans() 결과
+  var [parsed, setParsed] = useState(null);     // creditReportToLoans()/bankCertToLoans() 결과
+  var [docType, setDocType] = useState("");     // credit_report | bank_certificate
+  var [askType, setAskType] = useState(null);   // 판별 실패 시 { reason } — 담당자에게 물어본다
+  var [pendingFile, setPendingFile] = useState(null);  // 종류를 고른 뒤 다시 보낼 파일
   var [picked, setPicked] = useState([]);       // 행별 선택 상태
   var [mode, setMode] = useState("append");     // append | replace | pick
   var fileRef = useRef(null);
 
-  var reset = function() { setParsed(null); setPicked([]); setErr(""); setMode("append"); };
+  var reset = function() { setParsed(null); setPicked([]); setErr(""); setMode("append"); setDocType(""); setAskType(null); setPendingFile(null); };
   var close = function() { setOpen(false); reset(); };
 
-  var handleFile = async function(file) {
+  var handleFile = async function(file, hint) {
     if (!file) return;
     var mt = file.type || "";
     if (mt !== "application/pdf" && !/^image\/(png|jpeg|jpg|gif|webp)$/.test(mt)) {
@@ -14084,7 +14171,7 @@ function CreditReportImport({ existingCount, onApply }) {
     if (file.size > 25 * 1024 * 1024) {
       setErr("파일 크기는 25MB 이하만 가능해요. (현재 " + (file.size / 1024 / 1024).toFixed(1) + "MB)"); return;
     }
-    setBusy(true); setErr(""); setParsed(null);
+    setBusy(true); setErr(""); setParsed(null); setAskType(null);
     try {
       var buf = await file.arrayBuffer();
       var bytes = new Uint8Array(buf), bin = "";
@@ -14092,9 +14179,25 @@ function CreditReportImport({ existingCount, onApply }) {
         bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
       }
       var b64 = btoa(bin);
-      var data = await callApiJson("/api/parse-credit", { fileBase64: b64, mediaType: mt });
-      var conv = creditReportToLoans(data.result);
-      if (!conv.loans.length) { setErr("표에서 대출 행을 찾지 못했습니다. 다른 페이지를 첨부해보세요."); return; }
+      var body = { fileBase64: b64, mediaType: mt };
+      if (hint) body.docTypeHint = hint;
+      var data = await callApiJson("/api/parse-credit", body);
+      var res = data.result || {};
+      var kind = hint || String(res.doc_type || "");
+      if (kind !== "credit_report" && kind !== "bank_certificate") {
+        // 판별 실패 — 추측하지 않고 담당자에게 묻는다
+        setPendingFile(file);
+        setAskType({ reason: String(res.doc_type_reason || "").trim() });
+        return;
+      }
+      var conv = kind === "bank_certificate" ? bankCertToLoans(res) : creditReportToLoans(res);
+      if (!conv.loans.length) {
+        setPendingFile(file);
+        setErr(DOC_TYPES[kind].label + "으로 읽었지만 대출 행을 찾지 못했습니다. 문서 종류가 맞는지 아래에서 다시 골라주세요.");
+        setAskType({ reason: String(res.doc_type_reason || "").trim() });
+        return;
+      }
+      setDocType(kind);
       setParsed(conv);
       setPicked(conv.loans.map(function() { return true; }));
     } catch (e) {
@@ -14119,9 +14222,9 @@ function CreditReportImport({ existingCount, onApply }) {
   var btn = { padding: "5px 10px", fontSize: 11, fontWeight: 700, borderRadius: 6, cursor: "pointer" };
   if (!open) {
     return (
-      <button onClick={function() { setOpen(true); }} title="기업 여신정보 문서(PDF·이미지)를 첨부하면 세부신용공여 표를 읽어 기대출 내역에 넣어줍니다"
-        style={Object.assign({}, btn, { background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE" })}>
-        📄 여신정보 첨부
+      <button onClick={function() { setOpen(true); }} title="기업 여신정보 · 금융거래확인서(PDF·이미지)를 첨부하면 대출 명세를 읽어 기대출 내역에 넣어줍니다"
+        style={Object.assign({}, btn, { background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE", padding: "8px 14px", fontSize: 12 })}>
+        📄 여신정보·확인서 첨부
       </button>
     );
   }
@@ -14132,18 +14235,20 @@ function CreditReportImport({ existingCount, onApply }) {
       onClick={function(e) { if (e.target === e.currentTarget) close(); }}>
       <div style={{ background: "#fff", borderRadius: 14, width: 860, maxWidth: "100%", maxHeight: "88vh", overflow: "auto", padding: 22 }}>
         <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>📄 여신정보 첨부</h3>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>📄 여신정보 · 금융거래확인서 첨부</h3>
           <button onClick={close} style={{ marginLeft: "auto", background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#888" }}>×</button>
         </div>
 
-        {!parsed && (
+        {!parsed && !askType && (
           <div>
             <p style={{ fontSize: 12.5, color: "#666", lineHeight: 1.7, margin: "0 0 12px" }}>
-              '기업 여신정보' 문서의 <b>세부신용공여</b> 표를 읽어 기대출 내역에 넣습니다. PDF·이미지(캡처) 모두 됩니다.<br />
+              <b>기업 여신정보</b>(세부신용공여 표) 또는 <b>금융거래확인서</b>를 읽어 기대출 내역에 넣습니다. PDF·이미지(캡처) 모두 됩니다.<br />
+              문서 종류는 자동으로 판별하고, <b>확실하지 않으면 어느 문서인지 여쭤봅니다.</b><br />
               <span style={{ color: "#B45309", fontWeight: 700 }}>바로 저장되지 않습니다.</span> 읽은 내용을 표로 보여드리고, 확인하신 뒤에 반영합니다.
             </p>
             <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "10px 13px", fontSize: 11.5, color: "#92400E", lineHeight: 1.7, marginBottom: 14 }}>
-              문서 내용이 AI 분석 서버로 전송됩니다. 실행일은 문서에 없으므로 항상 비워두고, 구분(법인/개인)은 문서로 알 수 없어 전건 <b>미분류</b>로 넣습니다.
+              문서 내용이 AI 분석 서버로 전송됩니다. 금액 단위는 문서에 적힌 표기를 그대로 따르고, <b>표기가 없으면 환산하지 않습니다</b>.
+              구분(법인/개인)은 문서로 알 수 없어 전건 <b>미분류</b>로 넣습니다.
             </div>
             <input ref={fileRef} type="file" accept="application/pdf,image/png,image/jpeg,image/webp"
               disabled={busy} onChange={function(e) { handleFile(e.target.files && e.target.files[0]); }}
@@ -14152,11 +14257,35 @@ function CreditReportImport({ existingCount, onApply }) {
           </div>
         )}
 
+        {/* 문서 종류 판별 실패 — 추측하지 않고 직접 물어본다 */}
+        {askType && !parsed && (
+          <div>
+            <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "11px 13px", fontSize: 12.5, color: "#92400E", lineHeight: 1.7, marginBottom: 14 }}>
+              <b>어느 문서인지 확실하지 않습니다.</b> 잘못 고르면 엉뚱한 값이 들어가므로 추측하지 않았습니다. 직접 골라주세요.
+              {askType.reason ? <div style={{ fontSize: 11, marginTop: 5, color: "#B45309" }}>판독 메모: {askType.reason}</div> : null}
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+              {Object.keys(DOC_TYPES).map(function(k) {
+                return (
+                  <button key={k} disabled={busy} onClick={function() { handleFile(pendingFile, k); }}
+                    style={{ flex: "1 1 220px", textAlign: "left", background: "#fff", border: "1px solid #C7D2FE", borderRadius: 9, padding: "12px 14px", cursor: busy ? "default" : "pointer" }}>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: "#4338CA" }}>{DOC_TYPES[k].label}</div>
+                    <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>{DOC_TYPES[k].desc}</div>
+                  </button>
+                );
+              })}
+            </div>
+            {busy && <div style={{ fontSize: 12.5, color: "#4338CA", fontWeight: 700, marginBottom: 10 }}>고르신 종류로 다시 읽는 중이에요… (10~30초)</div>}
+            <button onClick={reset} style={Object.assign({}, btn, { background: "#F7F6F3", color: "#555", border: "1px solid #E8E5E0", padding: "9px 14px", fontSize: 12.5 })}>다른 파일 첨부</button>
+          </div>
+        )}
+
         {err && <div style={{ marginTop: 12, background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "9px 12px", fontSize: 12, color: "#B91C1C", fontWeight: 600 }}>{err}</div>}
 
         {parsed && (
           <div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 11.5, marginBottom: 10 }}>
+              <span style={{ background: "#EEF2FF", color: "#4338CA", borderRadius: 6, padding: "3px 9px", fontWeight: 800 }}>{(DOC_TYPES[docType] || {}).label || "문서"}</span>
               <span style={{ background: "#F3F4F6", borderRadius: 6, padding: "3px 9px", fontWeight: 700 }}>읽은 행 {parsed.loans.length}건</span>
               {parsed.dropped > 0 && <span style={{ background: "#ECFDF5", color: "#047857", borderRadius: 6, padding: "3px 9px", fontWeight: 700 }}>소계 행 {parsed.dropped}건 제외</span>}
               <span style={{ background: parsed.unitLabel ? "#EEF2FF" : "#FEF2F2", color: parsed.unitLabel ? "#4338CA" : "#B91C1C", borderRadius: 6, padding: "3px 9px", fontWeight: 700 }}>
@@ -14168,7 +14297,7 @@ function CreditReportImport({ existingCount, onApply }) {
 
             {parsed.checksum && !parsed.checksum.ok && (
               <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "9px 12px", fontSize: 11.5, color: "#B91C1C", fontWeight: 700, marginBottom: 10 }}>
-                ⚠ 합계 불일치 — 문서의 신용공여합계는 {parsed.checksum.expect.toLocaleString()}인데 개별 행 합은 {parsed.checksum.actual.toLocaleString()}입니다. 읽지 못한 행이 있을 수 있으니 원본과 대조해주세요.
+                ⚠ 합계 불일치 — 문서의 {docType === "bank_certificate" ? "합계" : "신용공여합계"}는 {parsed.checksum.expect.toLocaleString()}인데 개별 행 합은 {parsed.checksum.actual.toLocaleString()}입니다. 읽지 못한 행이 있을 수 있으니 원본과 대조해주세요.
               </div>
             )}
 
@@ -14176,7 +14305,9 @@ function CreditReportImport({ existingCount, onApply }) {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
                 <thead><tr style={{ background: "#F4F4F8" }}>
                   {mode === "pick" && <th style={{ padding: "6px 5px", width: 34 }}></th>}
-                  {["기관", "금액", "만기구조", "상태"].map(function(h) {
+                  {(docType === "bank_certificate"
+                    ? ["기관 · 대출과목", "금액", "실행일", "만기일", "상태"]
+                    : ["기관", "금액", "만기구조", "상태"]).map(function(h) {
                     return <th key={h} style={{ padding: "6px 7px", textAlign: "left", fontWeight: 700, borderBottom: "1px solid #E8E5E0" }}>{h}</th>;
                   })}
                 </tr></thead>
@@ -14196,8 +14327,16 @@ function CreditReportImport({ existingCount, onApply }) {
                         <td style={{ padding: "5px 7px", borderBottom: "1px solid #F0EEEA" }}>
                           {l.amount ? <span>{l.amount}{p.won != null && <span style={{ color: "#15803D", fontWeight: 700 }}> = {wonToKorExact(p.won)}</span>}</span>
                                     : <span style={{ color: "#B91C1C", fontWeight: 700 }}>비움</span>}
+                          {l.amount_src ? <span style={{ color: "#94A3B8", fontSize: 10 }}> ({l.amount_src})</span> : null}
                         </td>
-                        <td style={{ padding: "5px 7px", borderBottom: "1px solid #F0EEEA", color: "#888" }}>{l.maturity_bucket || "-"}</td>
+                        {docType === "bank_certificate" ? (
+                          <>
+                            <td style={{ padding: "5px 7px", borderBottom: "1px solid #F0EEEA", color: l.start ? "#333" : "#B91C1C" }}>{l.start || "없음"}</td>
+                            <td style={{ padding: "5px 7px", borderBottom: "1px solid #F0EEEA", color: l.end ? "#333" : "#B91C1C" }}>{l.end || "없음"}</td>
+                          </>
+                        ) : (
+                          <td style={{ padding: "5px 7px", borderBottom: "1px solid #F0EEEA", color: "#888" }}>{l.maturity_bucket || "-"}</td>
+                        )}
                         <td style={{ padding: "5px 7px", borderBottom: "1px solid #F0EEEA", fontSize: 10.5 }}>
                           {l.needs_review ? <span style={{ color: "#B45309", fontWeight: 800 }}>⚠ {l.review_reason}</span>
                                           : <span style={{ color: "#047857", fontWeight: 700 }}>정상</span>}
@@ -14210,7 +14349,10 @@ function CreditReportImport({ existingCount, onApply }) {
             </div>
 
             <div style={{ fontSize: 11.5, color: "#666", marginBottom: 8, lineHeight: 1.7 }}>
-              실행일·만기일은 문서에 없어 <b>비워둡니다</b>. 구분은 전건 <b>미분류</b>이며, 법인기업은 담당자가 구분을 지정해야 부채비율에 반영됩니다.
+              {docType === "bank_certificate"
+                ? <>실행일·만기일은 <b>문서에 적혀 있을 때만</b> 채웁니다(없으면 비움). 금액은 대출잔액을 우선 쓰고, 잔액 열이 없으면 대출금액을 씁니다.</>
+                : <>실행일·만기일은 문서에 없어 <b>비워둡니다</b>.</>}
+              {" "}구분은 전건 <b>미분류</b>이며, 법인기업은 담당자가 구분을 지정해야 부채비율에 반영됩니다.
             </div>
 
             <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 14, fontSize: 12 }}>
