@@ -1031,18 +1031,28 @@ function daysSince(iso) { if (!iso) return 0; var ms = Date.now() - new Date(iso
 // ⚠️ fee_status(미수령·계약금수령·수수료수령완료)와는 축이 다르다.
 //    fee_status = 돈이 들어왔는가(정산) / contract_status = 서명 절차가 어디까지 갔는가.
 //    둘을 자동 연동하지 않는다 — 정산 집계를 조용히 바꾸면 안 된다.
-const CONTRACT_STATUSES = ["보류", "안내", "서명중", "서명완료", "입금완료"];
-const CONTRACT_WARN_DAYS = 3;    // 이 일수 이상 같은 상태면 노랑
-const CONTRACT_DANGER_DAYS = 7;  // 이 일수 이상이면 빨강
+const CONTRACT_STATUSES = ["계약서전달", "서명완료", "계약금입금완료"];  // "미정"은 값 없음(null)
+const CONTRACT_WARN_DAYS = 3;    // 이 일수 이상 같은 상태면 노랑 테두리
+const CONTRACT_DANGER_DAYS = 7;  // 이 일수 이상이면 빨강 테두리
+// 기업목록 칸이 좁아 2글자만 쓴다. 배경색 = 어느 단계인가 / 테두리색 = 며칠 멈춰 있나.
+const CONTRACT_BADGE = {
+  "계약서전달":     { short: "전달", bg: "#F3F4F6", text: "#555555" },
+  "서명완료":       { short: "서명", bg: "#EEF2FF", text: "#4338CA" },
+  "계약금입금완료": { short: "입금", bg: "#F0FDF4", text: "#15803D" },
+};
 function contractBadge(co) {
   var st = co && co.contract_status;
-  if (!st) return null;                                    // "없음" → 뱃지를 그리지 않는다
+  if (!st) return null;                                    // 미정(null) → 뱃지를 그리지 않는다
+  var meta = CONTRACT_BADGE[st];
+  // 모르는 값 방어 — 4단계로 바꾸기 전(보류·안내·서명중)에 저장된 행이 있어도 깨지지 않게 한다
+  if (!meta) meta = { short: String(st).slice(0, 2), bg: "#F3F4F6", text: "#888888" };
   var days = daysSince(co.contract_status_at);
-  // 입금완료는 끝난 건이라 정체로 보지 않는다(며칠이 지나도 초록)
-  if (st === "입금완료") return { label: st, days: days, level: "done", bg: "#F0FDF4", text: "#15803D", border: "#86EFAC" };
-  if (days >= CONTRACT_DANGER_DAYS) return { label: st, days: days, level: "danger", bg: "#FEE2E2", text: "#DC2626", border: "#FCA5A5" };
-  if (days >= CONTRACT_WARN_DAYS) return { label: st, days: days, level: "warn", bg: "#FEF3C7", text: "#B45309", border: "#FDE68A" };
-  return { label: st, days: days, level: "ok", bg: "#F3F4F6", text: "#666", border: "#E5E7EB" };
+  // 계약금입금완료는 끝난 건이라 방치로 보지 않는다(며칠이 지나도 테두리를 씌우지 않는다)
+  var level = (st === "계약금입금완료") ? "done"
+    : (days >= CONTRACT_DANGER_DAYS ? "danger" : (days >= CONTRACT_WARN_DAYS ? "warn" : "ok"));
+  var border = level === "danger" ? "#DC2626" : level === "warn" ? "#F59E0B"
+    : level === "done" ? "#86EFAC" : "#E5E7EB";
+  return { label: meta.short, full: st, days: days, level: level, bg: meta.bg, text: meta.text, border: border };
 }
 
 // 현황 행 "최신" 판별 기준 — 년 → 월 → 마지막 수정(updated_at) → 등록(created_at) → id.
@@ -10326,12 +10336,13 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
     return listDupKeys[bn + "|" + rep] || 0;
   }
 
-  // 태블릿(768~1024px)에서 숨길 부가 컬럼 — 핵심(업체명·지역·대표자·담당·진행단계·정체일수·신청기관·작업)만 남김
-  const LIST_TABLET_HIDE = ["유형", "지역", "업종", "규모/기관", "중복", "정체일수", "신청기관", "계약일", "진행기관", "23년~25년 매출", "26년 상반기 매출", "신용점수", "기타"];
+  // 태블릿(768~1024px)에서 숨길 부가 컬럼 — 핵심(업체명·지역·대표자·담당·진행단계·계약·신청기관·작업)만 남김
+  //  "계약"은 일부러 숨기지 않는다 — 방치된 계약을 한눈에 보는 게 이 칸의 목적이라 태블릿에서도 보여야 한다.
+  const LIST_TABLET_HIDE = ["유형", "지역", "업종", "규모/기관", "중복", "신청기관", "계약일", "진행기관", "23년~25년 매출", "26년 상반기 매출", "신용점수", "기타"];
   // 컬럼 너비 수동 조절 (헤더 경계 드래그) - 브라우저(localStorage)에 자동 저장
   const DEFAULT_LIST_COL_WIDTHS = {
     "업체명": 200, "유형": 80, "지역": 90, "업종": 120, "규모/기관": 130, "대표자": 80, "담당": 60,
-    "진행단계": 175, "중복": 56, "정체일수": 70, "신청기관": 150, "계약일": 90, "진행기관": 140,
+    "진행단계": 175, "중복": 56, "계약": 46, "신청기관": 150, "계약일": 90, "진행기관": 140,
     "23년~25년 매출": 160, "26년 상반기 매출": 120, "신용점수": 90, "기타": 140, "작업": 110
   };
   const [listColWidths, setListColWidths] = useState(function() {
@@ -10556,7 +10567,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
         <table className="lst-table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 1200, tableLayout: "fixed" }}>
           <thead>
             <tr style={{ background: "#F7F6F3", borderBottom: "1px solid #E8E5E0", position: "sticky", top: 0, zIndex: 2 }}>
-              {["업체명","유형","지역","업종","규모/기관","대표자","담당","진행단계","중복","정체일수","신청기관","계약일","진행기관","23년~25년 매출","26년 상반기 매출","신용점수","기타","작업"].map(h => {
+              {["업체명","유형","지역","업종","규모/기관","대표자","담당","진행단계","중복","계약","신청기관","계약일","진행기관","23년~25년 매출","26년 상반기 매출","신용점수","기타","작업"].map(h => {
                 var hideTablet = LIST_TABLET_HIDE.indexOf(h) >= 0;
                 var w = h === "업체명" ? Math.max(180, listColWidths[h] || 180) : listColWidths[h];
                 return (
@@ -10664,15 +10675,18 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                       : (co.representative || "-")}
                   </td>
                   <td style={{ padding: "11px 13px", fontSize: 12, whiteSpace: "nowrap" }}>{co.assignee || "-"}</td>
-                  <td style={{ padding: "11px 13px", whiteSpace: "nowrap" }}><span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, fontWeight: 600 }}>{co.stage}</span>{(function(){ var ms = masterStatus(co.name); return ms ? <span style={{ display: "inline-block", marginLeft: 4, fontSize: 9, padding: "3px 7px", borderRadius: 99, background: ms.bg, color: ms.text, fontWeight: 700 }} title="여러 기관 종합 상태">{ms.label}</span> : null; })()}{(function(){
-                    // 📝 계약 상태 뱃지 — 같은 상태로 3일↑ 노랑 / 7일↑ 빨강 (입금완료는 초록 고정)
-                    var cb = contractBadge(co); if (!cb) return null;
-                    return <span title={"계약 " + cb.label + " · " + cb.days + "일 경과" + (cb.level === "danger" ? " (7일 이상 방치 — 전화 확인 필요)" : cb.level === "warn" ? " (3일 이상 멈춤)" : "")}
-                      style={{ display: "inline-block", marginLeft: 4, fontSize: 9, padding: "3px 7px", borderRadius: 99, background: cb.bg, color: cb.text, border: "1px solid " + cb.border, fontWeight: 700, whiteSpace: "nowrap" }}>
-                      📝 {cb.label}{cb.level === "warn" || cb.level === "danger" ? " " + cb.days + "일" : ""}</span>;
-                  })()}</td>
+                  <td style={{ padding: "11px 13px", whiteSpace: "nowrap" }}><span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, fontWeight: 600 }}>{co.stage}</span>{(function(){ var ms = masterStatus(co.name); return ms ? <span style={{ display: "inline-block", marginLeft: 4, fontSize: 9, padding: "3px 7px", borderRadius: 99, background: ms.bg, color: ms.text, fontWeight: 700 }} title="여러 기관 종합 상태">{ms.label}</span> : null; })()}</td>
                   <td className="lst-hide-tablet" style={{ padding: "11px 13px", textAlign: "center" }}>{(function() { var cnt = isListDup(co); return cnt ? <span title={"같은 사업장이 총 " + cnt + "건 등록됨"} style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", whiteSpace: "nowrap" }}>중복</span> : null; })()}</td>
-                  <td className="lst-hide-tablet" style={{ padding: "11px 13px", whiteSpace: "nowrap", textAlign: "center" }}>{(function() { var d = co.stagnant_days || 0; if (d >= 14) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", fontWeight: 700 }}>⚠ {d}일</span>; if (d >= 7) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEF3C7", color: "#B45309", fontWeight: 700 }}>{d}일</span>; return <span style={{ fontSize: 11, color: "#AAA" }}>{d}일</span>; })()}</td>
+                  {/* 📝 계약 — 2글자 뱃지. 배경색=단계, 테두리색=방치 정도(3일↑ 노랑 / 7일↑ 빨강). 미정이면 빈 칸. */}
+                  <td style={{ padding: "11px 6px", whiteSpace: "nowrap", textAlign: "center" }}>{(function() {
+                    var cb = contractBadge(co); if (!cb) return null;
+                    return <span title={"계약 " + cb.full + " · " + cb.days + "일 경과"
+                        + (cb.level === "danger" ? " (7일 이상 방치 — 전화 확인 필요)" : cb.level === "warn" ? " (3일 이상 멈춤)" : "")}
+                      style={{ fontSize: 10, fontWeight: 700, padding: "3px 6px", borderRadius: 99,
+                        background: cb.bg, color: cb.text,
+                        border: (cb.level === "danger" || cb.level === "warn" ? "2px solid " : "1px solid ") + cb.border }}>
+                      {cb.label}</span>;
+                  })()}</td>
                   <td className="lst-hide-tablet" style={{ padding: "8px 8px", fontSize: 11, verticalAlign: "middle" }}>
                     {(function() {
                       var cs = agencyByName[co.name] || [];
@@ -12228,8 +12242,8 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   {contractSaving && <span style={{ fontSize: 10, color: "#888" }}>저장 중…</span>}
                 </div>
                 <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                  {["없음"].concat(CONTRACT_STATUSES).map(function(s) {
-                    var isNone = s === "없음";
+                  {["미정"].concat(CONTRACT_STATUSES).map(function(s) {
+                    var isNone = s === "미정";
                     var on = isNone ? !data.contract_status : data.contract_status === s;
                     return (
                       <button key={s} disabled={contractSaving}
