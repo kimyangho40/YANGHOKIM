@@ -22905,6 +22905,23 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showDone, setShowDone] = useState(false); // 가져간/완료된 것도 볼지
   const [newNote, setNewNote] = useState({ title: "", content: "", priority: "normal", due_date: "", tags: [], checklist: [], is_announcement: false });
+  // 📝 체크리스트 항목 편집 모달 — 카드 그리드가 minmax(280px)라 칸 안에서는 길게 못 쓴다.
+  //    항목을 누르면 넓은 모달에서 편집하고, 저장할 때만 원래 배열에 반영한다.
+  //    { where: "new"|"edit", idx: 번호, text: 편집중 텍스트 }
+  const [clEdit, setClEdit] = useState(null);
+  var openClEdit = function(where, idx, text) { setClEdit({ where: where, idx: idx, text: text || "" }); };
+  var saveClEdit = function() {
+    if (!clEdit) return;
+    var v = clEdit.text;
+    var apply = function(p) {
+      var arr = (p.checklist || []).slice();
+      if (!arr[clEdit.idx]) return p;
+      arr[clEdit.idx] = Object.assign({}, arr[clEdit.idx], { text: v });
+      return Object.assign({}, p, { checklist: arr });
+    };
+    if (clEdit.where === "new") setNewNote(apply); else setEditingDraft(apply);
+    setClEdit(null);
+  };
   const [newNoteTeam, setNewNoteTeam] = useState("corporate"); // 새 업무 대상 팀: "corporate" | "individual" | "all"(전체·공통)
   const [collapsed, setCollapsed] = useState(false); // 섹션 전체 접기
   const [editingNoteId, setEditingNoteId] = useState(null); // 수정 중인 팀 노트 ID
@@ -23453,19 +23470,11 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                                       title={item.taken_by + "님이 가져간 항목은 수정 불가"}
                                       style={{ flex: 1, padding: "4px 8px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, boxSizing: "border-box", outline: "none", background: "#F0EDE8", color: "#888", textDecoration: "line-through", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, overflow: "hidden" }} />
                                   ) : (
-                                    <div style={{ flex: 1 }}>
-                                      <MentionField multiline={true} companiesList={companiesList}
-                                        value={item.text || ""}
-                                        rows={Math.max(1, (item.text || "").split("\n").length)}
-                                        placeholder="예: @업체명 사업자등록증 받기 (Enter로 줄바꿈)"
-                                        onChange={function(v) {
-                                          setEditingDraft(function(p) {
-                                            var arr = (p.checklist || []).slice();
-                                            arr[idx] = Object.assign({}, arr[idx], { text: v });
-                                            return Object.assign({}, p, { checklist: arr });
-                                          });
-                                        }}
-                                        style={{ width: "100%", padding: "4px 8px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, boxSizing: "border-box", outline: "none", background: "#fff", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, overflow: "hidden" }} />
+                                    // 누르면 넓은 모달에서 편집 (칸이 좁아 길게 쓰기 어려웠다)
+                                    <div onClick={function() { openClEdit("edit", idx, item.text); }}
+                                      title="눌러서 크게 편집"
+                                      style={{ flex: 1, minHeight: 26, padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, background: "#fff", cursor: "text", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", color: (item.text || "").trim() ? "#1A1917" : "#AAA" }}>
+                                      {(item.text || "").trim() || "눌러서 입력"}
                                     </div>
                                   )}
                                   {locked ? (
@@ -23534,10 +23543,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                       </span>
                     </div>
                     {note.title && <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, lineHeight: 1.4 }}>{note.title}</div>}
-                    {note.content && (
-                      <div style={{ fontSize: 12, color: "#444", lineHeight: 1.5, whiteSpace: "pre-wrap", marginBottom: 8, maxHeight: 100, overflowY: "auto" }}>{note.content}</div>
-                    )}
-                    {/* 체크리스트 (있을 때만) */}
+                    {/* 체크리스트 (있을 때만) — 체크리스트가 주업무라 업무 내용보다 위에 둔다 */}
                     {(function() {
                       var cl = note.checklist || [];
                       if (cl.length === 0) return null;
@@ -23590,6 +23596,10 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                         </div>
                       );
                     })()}
+                    {/* 업무 내용 — 체크리스트 아래로 내렸다(보조 설명 성격) */}
+                    {note.content && (
+                      <div style={{ fontSize: 12, color: "#444", lineHeight: 1.5, whiteSpace: "pre-wrap", marginBottom: 8, maxHeight: 100, overflowY: "auto" }}>{note.content}</div>
+                    )}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 10, color: "#888", paddingTop: 6, borderTop: "1px solid " + (isOpen ? "#FEF3C7" : "#E8E5E0") }}>
                       <div>
                         <span>등록: {note.posted_by || "-"}</span>
@@ -23719,19 +23729,11 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                     return (
                       <div key={item.id} style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
                         <span style={{ color: "#888", fontSize: 12, marginTop: 6 }}>☐</span>
-                        <div style={{ flex: 1 }}>
-                          <MentionField multiline={true} companiesList={companiesList}
-                            value={item.text}
-                            rows={Math.max(1, (item.text || "").split("\n").length)}
-                            placeholder="예: @업체명 사업자등록증 받기 (Enter로 줄바꿈 · 새 항목은 + 버튼)"
-                            onChange={function(v) {
-                              setNewNote(function(p) {
-                                var arr = (p.checklist || []).slice();
-                                arr[idx] = Object.assign({}, arr[idx], { text: v });
-                                return Object.assign({}, p, { checklist: arr });
-                              });
-                            }}
-                            style={{ width: "100%", padding: "5px 10px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 12, boxSizing: "border-box", outline: "none", background: "#fff", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5, overflow: "hidden" }} />
+                        {/* 누르면 넓은 모달에서 편집 (칸이 좁아 길게 쓰기 어려웠다) */}
+                        <div onClick={function() { openClEdit("new", idx, item.text); }}
+                          title="눌러서 크게 편집"
+                          style={{ flex: 1, minHeight: 30, padding: "6px 10px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 12, background: "#fff", cursor: "text", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", color: (item.text || "").trim() ? "#1A1917" : "#AAA" }}>
+                          {(item.text || "").trim() || "예: @업체명 사업자등록증 받기 — 눌러서 입력"}
                         </div>
                         <button onClick={function() {
                           setNewNote(function(p) {
@@ -23769,6 +23771,37 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                 style={{ padding: "10px 18px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>취소</button>
               <button onClick={addTeamNote}
                 style={{ padding: "10px 18px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>등록</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 📝 체크리스트 항목 편집 모달 — 등록/수정 모달(9998)보다 위에 떠야 하므로 9999 */}
+      {clEdit && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+          onClick={function() { setClEdit(null); }}>
+          <div onClick={function(e) { e.stopPropagation(); }}
+            style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 560, padding: 18, boxShadow: "0 10px 40px rgba(0,0,0,0.2)" }}>
+            <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>📋 체크리스트 항목</div>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>
+              @업체명을 쓰면 업체가 연결됩니다 · Enter는 줄바꿈 · Ctrl+Enter로 저장
+            </div>
+            {/* MentionField는 props.onKeyDown을 전달하지 않는다(자체 @자동완성 핸들러가 덮어씀).
+                감싸는 div에서 버블링된 키 이벤트를 받아 Ctrl+Enter 저장을 처리한다. */}
+            <div onKeyDown={function(e) { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); saveClEdit(); } }}>
+              <MentionField multiline={true} companiesList={companiesList}
+                value={clEdit.text}
+                rows={10}
+                autoFocus={true}
+                placeholder={"예: @메이크올 사업자등록증·최근 3개년 재무제표 받기\n담당자 연락처 확인 후 메일 발송"}
+                onChange={function(v) { setClEdit(function(p) { return p ? Object.assign({}, p, { text: v }) : p; }); }}
+                style={{ width: "100%", minHeight: 220, padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none", background: "#fff", resize: "vertical", fontFamily: "inherit", lineHeight: 1.7 }} />
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+              <button onClick={function() { setClEdit(null); }}
+                style={{ padding: "9px 16px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>취소</button>
+              <button onClick={saveClEdit}
+                style={{ padding: "9px 18px", background: "#4338CA", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>확인</button>
             </div>
           </div>
         </div>
