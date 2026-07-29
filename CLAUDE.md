@@ -48,6 +48,15 @@ Supabase는 테이블 기본값이 **"열림"**이라, RLS를 켜지 않으면 �
 - [ ] anon 권한 회수: `revoke all on public.<t> from anon;`
 - [ ] 옛 정책이 남아 있지 않은지 확인 — PERMISSIVE 정책은 **OR로 합쳐져서**,
       `{anon} USING(true)` 하나만 남아도 새 정책이 무력화된다.
+      **같은 역할(`authenticated`)끼리도 마찬가지다.** 정책을 "추가"하면 조이는 게 아니라 **푸는** 결과가 된다.
+      새 정책을 만들 때는 **반드시 옛 정책을 `drop`하고** 만들 것.
+      (2026-07-29 사고: `profiles`에 INSERT 정책이 2개 — 엄격한 `p_profiles_insert`
+      (`role='member' AND status='pending'`)와 느슨한 `profiles insert own`(`auth.uid()=id`)이 OR로 합쳐져
+      실효 조건이 `auth.uid()=id` 하나뿐이었다. 신규 가입자가 자기 프로필을
+      `role='admin', status='approved'`로 INSERT하면 **승인 절차를 건너뛰고 관리자**가 됐다.
+      트리거 `trg_protect_profile`은 `BEFORE UPDATE` 전용이라 INSERT 경로를 막지 못했다.
+      → 구 정책 3개 제거 + `BEFORE INSERT` 트리거(`protect_profile_insert`) 추가로 봉쇄.
+      **정책은 언제든 다시 느슨해질 수 있으니, 값 강제는 트리거로 이중 방어할 것.**)
 - [ ] 배포 전 점검(결과가 **0행**이어야 정상):
       ```sql
       select c.relname from pg_class c
@@ -61,6 +70,18 @@ Supabase는 테이블 기본값이 **"열림"**이라, RLS를 켜지 않으면 �
 - ⚠️ 판정 함정: RLS는 "거부"가 아니라 "필터링"이라 **`200 OK` + 0건이 정상 차단 상태**다.
   또 PostgREST는 RLS가 막았을 때와 0행 매칭일 때 **둘 다 204**를 준다 →
   "없는 id로 UPDATE 찔러보기"로는 쓰기 권한을 판정할 수 없다. 카탈로그(`pg_policies`·GRANT)로 확인할 것.
+- ⚠️ `revoke`는 **grantor가 다르면 에러 없이 아무것도 안 한다.** 권한을 부여한 롤과 회수하는 롤이
+  다르면(예: `supabase_admin`이 준 것을 `postgres`로 회수) 조용히 통과하고 권한은 그대로 남는다.
+  **"성공했으니 회수됐다"고 믿지 말 것** — 실행 후 반드시 카탈로그로 재확인한다:
+  ```sql
+  select table_name, privilege_type, grantor from information_schema.role_table_grants
+   where table_schema='public' and grantee='anon';   -- 0행이어야 정상
+  ```
+- ⚠️ `scripts/run-sql.js`는 여러 SELECT가 든 파일을 실행해도 **결과를 하나만** 출력하고,
+  그게 **파일 마지막 검증 쿼리가 아닐 수 있다.**
+  (2026-07-29: `anon_GRANT_회수_16개테이블.sql` 실행 후 파일 **상단의 사전 스냅샷**(회수 전 112행)이 찍혀
+  회수가 실패한 것처럼 보였다. 실제로는 정상 회수된 상태였다.)
+  → **검증은 조치 파일에 딸린 SELECT를 믿지 말고, 실행 후 별도 조회로 다시 확인할 것.**
 
 ## 3. 완료 보고 시 — "회귀 확인 완료" 여부 명시
 매 기능 추가/수정 완료 보고에 **반드시 "회귀 확인 완료" 여부와 점검한 항목**을 같이 적는다.
