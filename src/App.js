@@ -1020,6 +1020,31 @@ function agencyColor(g) { var f = AGENCY_GROUPS.find(function(x) { return x.id =
 // 특정 시각 이후 경과 일수 (정체 일수 계산)
 function daysSince(iso) { if (!iso) return 0; var ms = Date.now() - new Date(iso).getTime(); return ms > 0 ? Math.floor(ms / 86400000) : 0; }
 
+// ── 계약 단계 방치 방지 ──────────────────────────────────────────────────────
+// 계약서 서명 전후로 멈춰 있는 건(서명 안 함·고민 중·서명완료 후 입금 지연)을
+// 기업목록에서 바로 보이게 한다. 오래 멈춘 건은 전화로 챙기는 게 목적.
+//
+// ⚠️ 정체일수를 컬럼에 저장하지 않는다. 볼 때 daysSince로 계산한다.
+//    companies.stagnant_days가 정확히 그 방식인데 갱신하는 코드가 없어 전 건 0이다.
+//    pipeline_cards 쪽 정체 판정(stagnRows)이 쓰는 계산 방식을 그대로 따른다.
+//
+// ⚠️ fee_status(미수령·계약금수령·수수료수령완료)와는 축이 다르다.
+//    fee_status = 돈이 들어왔는가(정산) / contract_status = 서명 절차가 어디까지 갔는가.
+//    둘을 자동 연동하지 않는다 — 정산 집계를 조용히 바꾸면 안 된다.
+const CONTRACT_STATUSES = ["보류", "안내", "서명중", "서명완료", "입금완료"];
+const CONTRACT_WARN_DAYS = 3;    // 이 일수 이상 같은 상태면 노랑
+const CONTRACT_DANGER_DAYS = 7;  // 이 일수 이상이면 빨강
+function contractBadge(co) {
+  var st = co && co.contract_status;
+  if (!st) return null;                                    // "없음" → 뱃지를 그리지 않는다
+  var days = daysSince(co.contract_status_at);
+  // 입금완료는 끝난 건이라 정체로 보지 않는다(며칠이 지나도 초록)
+  if (st === "입금완료") return { label: st, days: days, level: "done", bg: "#F0FDF4", text: "#15803D", border: "#86EFAC" };
+  if (days >= CONTRACT_DANGER_DAYS) return { label: st, days: days, level: "danger", bg: "#FEE2E2", text: "#DC2626", border: "#FCA5A5" };
+  if (days >= CONTRACT_WARN_DAYS) return { label: st, days: days, level: "warn", bg: "#FEF3C7", text: "#B45309", border: "#FDE68A" };
+  return { label: st, days: days, level: "ok", bg: "#F3F4F6", text: "#666", border: "#E5E7EB" };
+}
+
 // 현황 행 "최신" 판별 기준 — 년 → 월 → 마지막 수정(updated_at) → 등록(created_at) → id.
 // (2026-07-27 확정) 같은 회사×기관×같은 월에 행이 여러 개인 "동점"이 137그룹 있고, 그중 25그룹은
 // 상태까지 서로 다르다. 예전에는 정렬 없이 먼저 도착한 행을 최신으로 쳤는데, PostgREST는 order를
@@ -5399,6 +5424,10 @@ function CRMApp({ profile, session }) {
       region: rest.region,
       contract_date: rest.contract_date,
       referrer: rest.referrer,
+      // 계약 상태 — 버튼은 즉시 저장되지만, 패널 저장으로도 값이 어긋나지 않게 같이 보낸다.
+      //  · contract_status    는 keepEvenIfEmpty 대상 → "없음"(null)으로 되돌리는 조작이 반영된다
+      //  · contract_status_at 는 일부러 제외 → 값이 비어 있을 때 기존 시각을 지우지 않는다
+      contract_status: rest.contract_status,
       // 신규 기능용 컬럼
       approved_amount: rest.approved_amount ? (parseInt(String(rest.approved_amount).replace(/[^0-9]/g, "")) || null) : null,
       import_ratio: (rest.import_ratio === "" || rest.import_ratio === null || rest.import_ratio === undefined) ? null : (parseFloat(rest.import_ratio) || 0),
@@ -5407,7 +5436,7 @@ function CRMApp({ profile, session }) {
       lead_source: rest.lead_source,
     };
     // stage/assignee/received_docs 등은 빈값도 의미가 있을 수 있으나, 일반 정보 필드는 빈값이면 건드리지 않음
-    const keepEvenIfEmpty = { stage: 1, assignee: 1, received_docs: 1, requested_docs: 1, fee_status: 1, referrer: 1 };
+    const keepEvenIfEmpty = { stage: 1, assignee: 1, received_docs: 1, requested_docs: 1, fee_status: 1, referrer: 1, contract_status: 1 };
     const updateObj = {};
     Object.keys(allFields).forEach(function(k) {
       const v = allFields[k];
@@ -6432,6 +6461,10 @@ function CRMApp({ profile, session }) {
           currentUser={profile}
           onAgencyRegistered={handleAgencyRegistered}
           companies={companies}
+          onPatchCompany={function(id, patch) {
+            // 계약 상태 즉시 저장분을 목록에 바로 반영 (닫았다 열지 않아도 뱃지가 보이게)
+            setCompanies(function(prev) { return prev.map(function(c) { return c.id === id ? Object.assign({}, c, patch) : c; }); });
+          }}
         />
       )}
       {showAdd && <AddModal onClose={() => setShowAdd(false)} onAdd={addCompany} assignees={assignees.filter(a => a !== "전체")} companies={companies} />}
@@ -10631,7 +10664,13 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                       : (co.representative || "-")}
                   </td>
                   <td style={{ padding: "11px 13px", fontSize: 12, whiteSpace: "nowrap" }}>{co.assignee || "-"}</td>
-                  <td style={{ padding: "11px 13px", whiteSpace: "nowrap" }}><span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, fontWeight: 600 }}>{co.stage}</span>{(function(){ var ms = masterStatus(co.name); return ms ? <span style={{ display: "inline-block", marginLeft: 4, fontSize: 9, padding: "3px 7px", borderRadius: 99, background: ms.bg, color: ms.text, fontWeight: 700 }} title="여러 기관 종합 상태">{ms.label}</span> : null; })()}</td>
+                  <td style={{ padding: "11px 13px", whiteSpace: "nowrap" }}><span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 99, background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, fontWeight: 600 }}>{co.stage}</span>{(function(){ var ms = masterStatus(co.name); return ms ? <span style={{ display: "inline-block", marginLeft: 4, fontSize: 9, padding: "3px 7px", borderRadius: 99, background: ms.bg, color: ms.text, fontWeight: 700 }} title="여러 기관 종합 상태">{ms.label}</span> : null; })()}{(function(){
+                    // 📝 계약 상태 뱃지 — 같은 상태로 3일↑ 노랑 / 7일↑ 빨강 (입금완료는 초록 고정)
+                    var cb = contractBadge(co); if (!cb) return null;
+                    return <span title={"계약 " + cb.label + " · " + cb.days + "일 경과" + (cb.level === "danger" ? " (7일 이상 방치 — 전화 확인 필요)" : cb.level === "warn" ? " (3일 이상 멈춤)" : "")}
+                      style={{ display: "inline-block", marginLeft: 4, fontSize: 9, padding: "3px 7px", borderRadius: 99, background: cb.bg, color: cb.text, border: "1px solid " + cb.border, fontWeight: 700, whiteSpace: "nowrap" }}>
+                      📝 {cb.label}{cb.level === "warn" || cb.level === "danger" ? " " + cb.days + "일" : ""}</span>;
+                  })()}</td>
                   <td className="lst-hide-tablet" style={{ padding: "11px 13px", textAlign: "center" }}>{(function() { var cnt = isListDup(co); return cnt ? <span title={"같은 사업장이 총 " + cnt + "건 등록됨"} style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", whiteSpace: "nowrap" }}>중복</span> : null; })()}</td>
                   <td className="lst-hide-tablet" style={{ padding: "11px 13px", whiteSpace: "nowrap", textAlign: "center" }}>{(function() { var d = co.stagnant_days || 0; if (d >= 14) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", fontWeight: 700 }}>⚠ {d}일</span>; if (d >= 7) return <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 99, background: "#FEF3C7", color: "#B45309", fontWeight: 700 }}>{d}일</span>; return <span style={{ fontSize: 11, color: "#AAA" }}>{d}일</span>; })()}</td>
                   <td className="lst-hide-tablet" style={{ padding: "8px 8px", fontSize: 11, verticalAlign: "middle" }}>
@@ -10991,7 +11030,7 @@ function ZoomSection({ title, hint, value, onSave, children }) {
   );
 }
 
-function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAgencyRegistered, companies, initialTab }) {
+function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAgencyRegistered, companies, initialTab, onPatchCompany }) {
   const [tab, setTab] = useState(initialTab || "info");
   const [prevTab, setPrevTab] = useState(initialTab || "info");
   var goTab = function(id) { setPrevTab(tab); setTab(id); };
@@ -11013,6 +11052,35 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
       if (!r.error) setPartnersList(r.data || []);
     });
   }, []);
+  // 📝 계약 상태 — 버튼을 누르는 즉시 저장한다.
+  //    기존 fee_status 버튼처럼 setData만 하면, 저장을 안 누르고 닫았을 때 정체 시계가
+  //    시작되지 않는다. 방치 방지 기능인데 방치 감지가 시작을 못 하는 셈이라 즉시 저장으로 둔다.
+  //    writeGuarded를 쓰는 이유: RLS 0행 갱신·세션 만료 같은 조용한 실패를 화면에 띄우고 재시도 큐에 넣는다.
+  const [contractSaving, setContractSaving] = useState(false);
+  var setContractStatus = async function(next) {
+    if (contractSaving) return;
+    var cur = data.contract_status || null;
+    var value = (cur === next) ? null : next;              // 같은 버튼을 다시 누르면 "없음"으로 해제
+    var at = value ? new Date().toISOString() : null;      // 상태가 바뀐 시각 = 정체일수 기준
+    setContractSaving(true);
+    var r = await writeGuarded({
+      table: "companies", op: "update", id: data.id,
+      payload: { contract_status: value, contract_status_at: at },
+      label: "계약 상태 " + ((data.name || "") + " " + (value || "없음")).trim(),
+    });
+    setContractSaving(false);
+    if (!r.ok) {
+      // 컬럼이 아직 없는 환경 → 재시도해도 영영 실패하므로 큐에서 빼고 안내만 한다
+      if (/contract_status|column/.test((r.fail && r.fail.text) || "")) {
+        dropFailedSave(r.fail && r.fail.id);
+        alert("계약 상태 컬럼이 아직 없습니다.\n'계약상태_contract_status_컬럼추가.sql'을 Supabase에서 실행해주세요.");
+      }
+      return;                                              // 실패 시 화면 값을 바꾸지 않는다(저장된 것처럼 보이면 안 됨)
+    }
+    setData(function(p) { return Object.assign({}, p, { contract_status: value, contract_status_at: at }); });
+    if (onPatchCompany) onPatchCompany(data.id, { contract_status: value, contract_status_at: at });
+  };
+
   const [commInput, setCommInput] = useState("");
   // 소통내역은 길게 쓰는 칸이라 임시보관 대상. 업체별로 따로 보관한다(그 기기에만).
   const commDraft = useDraft("소통내역", company && company.id, commInput,
@@ -12146,6 +12214,37 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 <div style={{ background: "#fff", borderRadius: 8, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>예상 수수료</span>
                   <span style={{ fontSize: 20, fontWeight: 800, color: "#15803D" }}>{expectedFee(data) > 0 ? expectedFee(data).toLocaleString() + " 원" : "-"}</span>
+                </div>
+              </div>
+              {/* 📝 계약 상태 — 수수료 현황(정산)과 별개 축. 누르는 즉시 저장되고 그 시각이 정체일수 기준이 된다. */}
+              <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "13px 15px", marginBottom: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                  <span style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>계약 상태</span>
+                  {(function() {
+                    var cb = contractBadge(data); if (!cb) return null;
+                    return <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: cb.bg, color: cb.text, border: "1px solid " + cb.border }}>
+                      {cb.days}일 경과{cb.level === "danger" ? " · 확인 필요" : ""}</span>;
+                  })()}
+                  {contractSaving && <span style={{ fontSize: 10, color: "#888" }}>저장 중…</span>}
+                </div>
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                  {["없음"].concat(CONTRACT_STATUSES).map(function(s) {
+                    var isNone = s === "없음";
+                    var on = isNone ? !data.contract_status : data.contract_status === s;
+                    return (
+                      <button key={s} disabled={contractSaving}
+                        onClick={function() { setContractStatus(isNone ? null : s); }}
+                        style={{ flex: "1 1 0", minWidth: 58, padding: "7px 4px", borderRadius: 7,
+                          border: "1px solid " + (on ? "#1A1917" : "#E8E5E0"), background: on ? "#1A1917" : "#fff",
+                          color: on ? "#fff" : "#888", fontSize: 11, fontWeight: on ? 700 : 400,
+                          cursor: contractSaving ? "default" : "pointer", opacity: contractSaving ? 0.6 : 1 }}>
+                        {s}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ fontSize: 10, color: "#AAA", marginTop: 6 }}>
+                  누르면 바로 저장됩니다 · 같은 상태로 {CONTRACT_WARN_DAYS}일 지나면 노랑, {CONTRACT_DANGER_DAYS}일 지나면 빨강으로 기업목록에 표시돼요
                 </div>
               </div>
               <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "13px 15px" }}>
