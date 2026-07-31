@@ -10246,46 +10246,33 @@ function TeamTodoWidget({ setView }) {
 // ── 업종 셀 컴포넌트 (인라인 편집 + 자동완성 드롭다운) ──────────────────────
 function IndustryCell({ co, setCompanies, companies }) {
   const [editing, setEditing] = useState(false);
-  const [val, setVal] = useState("");
   const ref = useRef(null);
-
-  // 기본 옵션 + 다른 기업이 사용 중인 업종을 통합
-  var mergedOptions = useMemo(function() { return getMergedIndustryOptions(companies); }, [companies]);
 
   // industry는 "제조업, 도소매업" 같은 쉼표 구분 문자열
   var selectedList = (co.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
 
   useEffect(function() {
     if (!editing) return;
-    function handleClick(e) { if (ref.current && !ref.current.contains(e.target)) { setEditing(false); setVal(""); } }
+    function handleClick(e) { if (ref.current && !ref.current.contains(e.target)) { setEditing(false); } }
+    // Esc로 닫기 — 예전엔 입력칸의 onKeyDown이 처리했는데, 입력칸이 IndustryPanel 안으로
+    // 들어가면서 사라졌다. 포커스가 어디에 있든 닫히도록 document에 건다.
+    function handleKey(e) { if (e.key === "Escape") setEditing(false); }
     document.addEventListener("mousedown", handleClick);
-    return function() { document.removeEventListener("mousedown", handleClick); };
+    document.addEventListener("keydown", handleKey);
+    return function() {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKey);
+    };
   }, [editing]);
 
-  var saveList = async function(newList) {
-    var industry = newList.length > 0 ? newList.join(", ") : null;
+  // 이 셀은 모달의 저장 버튼이 없어서 예전부터 즉시 저장이다 — 그 동작을 그대로 둔다.
+  // 빈 선택을 ""가 아니라 null로 저장하던 것도 유지(IndustryPanel은 ""를 준다).
+  var saveValue = async function(next) {
+    var industry = (next || "").trim() ? next : null;
     var r = await supabase.from("companies").update({ industry: industry, updated_at: new Date().toISOString() }).eq("id", co.id);
     if (!r.error) {
       setCompanies && setCompanies(function(prev) { return prev.map(function(c) { return c.id === co.id ? Object.assign({}, c, { industry: industry }) : c; }); });
     }
-  };
-
-  var toggleItem = function(item) {
-    var cur = selectedList.slice();
-    var idx = cur.indexOf(item);
-    if (idx >= 0) cur.splice(idx, 1);
-    else cur.push(item);
-    saveList(cur);
-  };
-
-  var addCustom = function() {
-    var v = (val || "").trim();
-    if (!v) return;
-    if (selectedList.indexOf(v) >= 0) { setVal(""); return; }
-    var cur = selectedList.slice();
-    cur.push(v);
-    saveList(cur);
-    setVal("");
   };
 
   if (!editing) return (
@@ -10301,43 +10288,12 @@ function IndustryCell({ co, setCompanies, companies }) {
 
   return (
     <div ref={ref} style={{ position: "relative" }}>
-      <div style={{ position: "absolute", top: 0, left: 0, zIndex: 999, background: "#fff", border: "1px solid #4338CA", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.12)", minWidth: 260, padding: 10 }}>
-        <div style={{ fontSize: 10, color: "#888", marginBottom: 6, fontWeight: 700 }}>업종 선택 (복수 가능)</div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
-          {mergedOptions.map(function(opt) {
-            var sel = selectedList.indexOf(opt) >= 0;
-            var isCustom = INDUSTRY_OPTIONS.indexOf(opt) < 0;
-            return (
-              <button key={opt} onClick={function() { toggleItem(opt); }}
-                title={isCustom ? "다른 기업에서 사용 중인 업종" : ""}
-                style={{ padding: "3px 9px", borderRadius: 99, fontSize: 10, fontWeight: sel ? 700 : 400,
-                  background: sel ? "#4338CA" : (isCustom ? "#FEF3C7" : "#fff"), color: sel ? "#fff" : (isCustom ? "#92400E" : "#666"),
-                  border: sel ? "none" : "1px solid " + (isCustom ? "#FDE68A" : "#E8E5E0"), cursor: "pointer" }}>
-                {sel ? "✓ " : ""}{opt}
-              </button>
-            );
-          })}
-        </div>
-        {/* 이 기업이 사용 중이지만 통합 옵션에 없는 항목 (예외적 케이스) */}
-        {selectedList.filter(function(s) { return mergedOptions.indexOf(s) < 0; }).length > 0 && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
-            {selectedList.filter(function(s) { return mergedOptions.indexOf(s) < 0; }).map(function(s) {
-              return (
-                <span key={s} style={{ background: "#0F6E56", color: "#fff", padding: "3px 9px", borderRadius: 99, fontSize: 10, fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                  ✓ {s}
-                  <span onClick={function() { toggleItem(s); }} style={{ cursor: "pointer", fontSize: 11, opacity: 0.8 }}>✕</span>
-                </span>
-              );
-            })}
-          </div>
-        )}
-        <input value={val} placeholder="직접 입력 후 Enter (예: 부동산임대업)"
-          onChange={function(e) { setVal(e.target.value); }}
-          onKeyDown={function(e) { if (e.key === "Enter") { e.preventDefault(); addCustom(); } if (e.key === "Escape") { setEditing(false); setVal(""); } }}
-          style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 10, outline: "none", boxSizing: "border-box" }} />
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, paddingTop: 6, borderTop: "1px solid #F0EDE8" }}>
-          <span style={{ fontSize: 10, color: "#888" }}>{selectedList.length}개 선택됨</span>
-          <button onClick={function() { setEditing(false); setVal(""); }} style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 5, padding: "4px 12px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>완료</button>
+      <div style={{ position: "absolute", top: 0, left: 0, zIndex: 999, background: "#fff", border: "1px solid #4338CA", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.12)", minWidth: 300, padding: 10 }}>
+        {/* 팝오버가 이미 열린 상태라 접기 토글은 숨긴다(alwaysOpen) */}
+        <IndustryPanel value={co.industry || ""} companies={companies} alwaysOpen
+          onChange={function(next) { saveValue(next); }} />
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", marginTop: 8, paddingTop: 6, borderTop: "1px solid #F0EDE8" }}>
+          <button onClick={function() { setEditing(false); }} style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 5, padding: "4px 12px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>완료</button>
         </div>
       </div>
     </div>
@@ -10352,9 +10308,11 @@ function IndustryCell({ co, setCompanies, companies }) {
 //    규모판정(bizScaleCap)·소상공인(sosangEmpLimit)·기관추천·업종 검색이 전부 이 문자열을
 //    정규식/부분일치로 읽는다. 배열이나 다른 구분자로 바꾸면 그쪽이 전부 깨진다.
 //    이 컴포넌트는 UI만 담당하고, DB 반영은 호출하는 쪽(onChange)에 그대로 맡긴다.
-function IndustryPanel({ value, onChange, companies }) {
+// alwaysOpen: 이미 팝오버 안이라 접기 토글이 중복될 때(기업목록 IndustryCell) 항상 펼친 상태로 쓴다.
+function IndustryPanel({ value, onChange, companies, alwaysOpen }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
+  var expanded = !!alwaysOpen || open;
 
   var selected = useMemo(function() {
     return (value || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
@@ -10401,18 +10359,45 @@ function IndustryPanel({ value, onChange, companies }) {
     setDraft("");
   };
 
-  var checkItem = function(ind, isCustom) {
+  // 칩 색 구분 — 접기 패널 이전부터 쓰던 의미를 그대로 유지한다.
+  //   base   기본 업종(INDUSTRY_OPTIONS)
+  //   custom 노랑 — 기본엔 없지만 다른 기업이 이미 쓰는 업종
+  //   unsaved 초록 — 통합 옵션에도 없음 = 이 기업에만 있고 아직 저장 안 된 새 업종
+  var mergedSet = useMemo(function() {
+    var m = Object.create(null);
+    merged.forEach(function(o) { m[o] = true; });
+    return m;
+  }, [merged]);
+
+  var kindOf = function(ind) {
+    if (INDUSTRY_OPTIONS.indexOf(ind) >= 0) return "base";
+    return mergedSet[ind] ? "custom" : "unsaved";
+  };
+
+  var checkItem = function(ind) {
     var sel = selected.indexOf(ind) >= 0;
     var n = usage[ind] || 0;
+    var kind = kindOf(ind);
+    var tip = kind === "custom" ? "다른 기업에서 사용 중인 업종 (" + n + "개 기업)"
+      : kind === "unsaved" ? "아직 저장되지 않은 새 업종 — 저장하면 옵션에 남는다"
+      : n + "개 기업 사용 중";
+
+    // 초록(unsaved)은 선택 여부와 무관하게 항상 초록 — 예전 ✕ 칩과 같은 취급
+    var bg, fg, bd;
+    if (kind === "unsaved") { bg = "#0F6E56"; fg = "#fff"; bd = "transparent"; }
+    else if (sel) { bg = "#EEF2FF"; fg = "#4338CA"; bd = "transparent"; }
+    else if (kind === "custom") { bg = "#FEF3C7"; fg = "#92400E"; bd = "#FDE68A"; }
+    else { bg = "transparent"; fg = "#555"; bd = "transparent"; }
+
     return (
-      <label key={ind} title={isCustom ? "직접 추가한 업종 (" + n + "개 기업 사용 중)" : (n + "개 기업 사용 중)")}
+      <label key={ind} title={tip}
         style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 6px", borderRadius: 5, cursor: "pointer",
-          background: sel ? "#EEF2FF" : "transparent", minWidth: 0 }}>
+          background: bg, border: "1px solid " + bd, minWidth: 0 }}>
         <input type="checkbox" checked={sel} onChange={function() { toggle(ind); }}
-          style={{ accentColor: "#4338CA", flexShrink: 0 }} />
-        <span style={{ fontSize: 11, fontWeight: sel ? 700 : 400, color: sel ? "#4338CA" : "#555",
+          style={{ accentColor: kind === "unsaved" ? "#0F6E56" : "#4338CA", flexShrink: 0 }} />
+        <span style={{ fontSize: 11, fontWeight: sel ? 700 : 400, color: fg,
           overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ind}</span>
-        {n > 0 && <span style={{ fontSize: 9, color: "#AAA", flexShrink: 0 }}>{n}</span>}
+        {n > 0 && <span style={{ fontSize: 9, color: kind === "unsaved" ? "#BBE5D8" : "#AAA", flexShrink: 0 }}>{n}</span>}
       </label>
     );
   };
@@ -10421,16 +10406,18 @@ function IndustryPanel({ value, onChange, companies }) {
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginBottom: 6 }}>
         <span style={{ fontSize: 11, color: "#888" }}>업종 (복수 선택 가능)</span>
-        <button onClick={function() { setOpen(!open); }}
-          style={{ background: open ? "#4338CA" : "#fff", color: open ? "#fff" : "#4338CA",
-            border: "1px solid " + (open ? "#4338CA" : "#C7D2FE"), borderRadius: 6, padding: "3px 10px",
-            fontSize: 10, fontWeight: 700, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
-          {open ? "접기 ▲" : "업종 선택 ▼"}
-        </button>
+        {!alwaysOpen && (
+          <button onClick={function() { setOpen(!open); }}
+            style={{ background: open ? "#4338CA" : "#fff", color: open ? "#fff" : "#4338CA",
+              border: "1px solid " + (open ? "#4338CA" : "#C7D2FE"), borderRadius: 6, padding: "3px 10px",
+              fontSize: 10, fontWeight: 700, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
+            {open ? "접기 ▲" : "업종 선택 ▼"}
+          </button>
+        )}
       </div>
 
       {/* 접힌 상태 요약 — 칩 3개 + "외 N개" */}
-      {!open && (
+      {!expanded && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
           {selected.length === 0 ? (
             <span style={{ fontSize: 11, color: "#BBB" }}>선택된 업종 없음</span>
@@ -10452,20 +10439,28 @@ function IndustryPanel({ value, onChange, companies }) {
       )}
 
       {/* 펼친 상태 */}
-      {open && (
+      {expanded && (
         <div>
           <div style={{ fontSize: 10, color: "#888", fontWeight: 700, marginBottom: 3 }}>기본 업종</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, marginBottom: 8 }}>
-            {baseOpts.map(function(o) { return checkItem(o, false); })}
+            {baseOpts.map(function(o) { return checkItem(o); })}
           </div>
 
           {customOpts.length > 0 && (
             <>
-              <div style={{ fontSize: 10, color: "#92400E", fontWeight: 700, marginBottom: 3 }}>
-                직접 추가한 업종 <span style={{ color: "#AAA", fontWeight: 400 }}>· 다른 기업에서 쓰던 것 포함</span>
+              <div style={{ fontSize: 10, color: "#92400E", fontWeight: 700, marginBottom: 3, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                직접 추가한 업종
+                <span style={{ color: "#AAA", fontWeight: 400, display: "inline-flex", alignItems: "center", gap: 3 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: "#FEF3C7", border: "1px solid #FDE68A", display: "inline-block" }} />
+                  다른 기업 사용중
+                </span>
+                <span style={{ color: "#AAA", fontWeight: 400, display: "inline-flex", alignItems: "center", gap: 3 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: "#0F6E56", display: "inline-block" }} />
+                  저장 전
+                </span>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, marginBottom: 8 }}>
-                {customOpts.map(function(o) { return checkItem(o, true); })}
+                {customOpts.map(function(o) { return checkItem(o); })}
               </div>
             </>
           )}
@@ -13895,63 +13890,10 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
 
           {/* 업종 (복수 선택 가능) */}
           <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
-            <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>업종 (복수 선택 가능)</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
-              {getMergedIndustryOptions(companies).map(function(ind) {
-                var cur = (form.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
-                var sel = cur.indexOf(ind) >= 0;
-                var isCustom = INDUSTRY_OPTIONS.indexOf(ind) < 0;
-                return (
-                  <button key={ind} onClick={function() {
-                    var arr = (form.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
-                    var idx = arr.indexOf(ind);
-                    if (idx >= 0) arr.splice(idx, 1);
-                    else arr.push(ind);
-                    set("industry", arr.length > 0 ? arr.join(", ") : "");
-                  }}
-                    title={isCustom ? "다른 기업에서 사용 중인 업종" : ""}
-                    style={{ padding: "4px 9px", borderRadius: 99, fontSize: 11, fontWeight: sel ? 700 : 400, border: sel ? "none" : "1px solid " + (isCustom ? "#FDE68A" : "#E8E5E0"), cursor: "pointer",
-                      background: sel ? "#4338CA" : (isCustom ? "#FEF3C7" : "#fff"), color: sel ? "#fff" : (isCustom ? "#92400E" : "#666") }}>
-                    {sel ? "✓ " : ""}{ind}
-                  </button>
-                );
-              })}
-            </div>
-            {(function() {
-              var cur = (form.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
-              var allOpts = getMergedIndustryOptions(companies);
-              var custom = cur.filter(function(s) { return allOpts.indexOf(s) < 0; });
-              if (custom.length === 0) return null;
-              return (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
-                  {custom.map(function(s) {
-                    return (
-                      <span key={s} style={{ background: "#0F6E56", color: "#fff", padding: "3px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                        ✓ {s}
-                        <span onClick={function() {
-                          var arr = (form.industry || "").split(",").map(function(x) { return x.trim(); }).filter(Boolean);
-                          arr = arr.filter(function(x) { return x !== s; });
-                          set("industry", arr.length > 0 ? arr.join(", ") : "");
-                        }} style={{ cursor: "pointer", fontSize: 12, opacity: 0.85 }}>✕</span>
-                      </span>
-                    );
-                  })}
-                </div>
-              );
-            })()}
-            <input type="text" placeholder="직접 입력 후 Enter로 추가 (예: 부동산임대업)"
-              onKeyDown={function(e) {
-                if (e.key !== "Enter") return;
-                e.preventDefault();
-                var v = (e.target.value || "").trim();
-                if (!v) return;
-                var arr = (form.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
-                if (arr.indexOf(v) >= 0) { e.target.value = ""; return; }
-                arr.push(v);
-                set("industry", arr.join(", "));
-                e.target.value = "";
-              }}
-              style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, outline: "none", boxSizing: "border-box" }} />
+            {/* 업종 — 접기 패널(IndustryPanel). 저장 형식은 기존과 동일한 쉼표 문자열,
+                저장 시점도 그대로 등록 버튼에서 한 번에 insert한다. */}
+            <IndustryPanel value={form.industry || ""} companies={companies}
+              onChange={function(next) { set("industry", next); }} />
             {/* 중진공 예외 판정용 수동 플래그 (업종 텍스트로는 추정 불가) */}
             <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, paddingTop: 8, borderTop: "1px solid #E8E5E0", fontSize: 11, color: "#555", cursor: "pointer" }}>
               <input type="checkbox" checked={form.innovation_field === true}
