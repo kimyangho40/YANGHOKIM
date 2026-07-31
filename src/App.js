@@ -1211,6 +1211,34 @@ const TEAM_MEMBERS = {
 // 전체(공통) = 두 팀 합집합(중복 제거)
 TEAM_MEMBERS.all = TEAM_MEMBERS.individual.concat(TEAM_MEMBERS.corporate.filter(function(n) { return TEAM_MEMBERS.individual.indexOf(n) < 0; }));
 function teamRoster(teamKey) { return TEAM_MEMBERS[teamKey] || TEAM_MEMBERS.all; }
+// 직원 이름 표기 흔들림 보정 (총무 → 유진 등).
+// ⚠️ 같은 로직이 TeamNotesSection·그 위 컴포넌트에 지역 var normalizeName 으로 이미 두 벌 있다.
+//    그쪽은 팀노트 전반이 걸려 있어 이번엔 건드리지 않고, 새 코드만 이 전역을 쓴다.
+//    (정리한다면 세 곳을 한 번에 — 별도 작업으로 분리)
+function normalizeStaffName(rawName) {
+  if (!rawName) return "";
+  var s = String(rawName).trim();
+  if (s === "총무" || s === "총무(유진)") return "유진";
+  if (s === "김동일이사" || s === "김이사" || s === "동일이사") return "동일";
+  if (s === "김현애") return "현애";
+  if (s === "최지혜") return "지혜";
+  return s;
+}
+// 로그인 사용자 → team_notes.team 키("corporate"|"individual"|"all")
+// profiles.team 은 "법인전담"/"개인전담"/"관리자" 라 값이 다르다. 팀이 비어 있으면
+// 이름으로 보정하고, 양쪽 팀에 다 있는 사람(양호·동일)이나 관리자는 "전체(공통)"으로 둔다.
+function teamKeyOfProfile(profile) {
+  var t = profile && profile.team;
+  if (t === "법인전담") return "corporate";
+  if (t === "개인전담") return "individual";
+  if (t === "관리자") return "all";
+  var name = normalizeStaffName((profile && profile.name) || "");
+  var inCorp = TEAM_MEMBERS.corporate.indexOf(name) >= 0;
+  var inIndi = TEAM_MEMBERS.individual.indexOf(name) >= 0;
+  if (inCorp && !inIndi) return "corporate";
+  if (inIndi && !inCorp) return "individual";
+  return "all";
+}
 function wnIsAdmin(name) { return WN_ADMINS.indexOf(name) >= 0; }
 // 해당 사용자가 볼 수 있는 담당자 이름 목록 (본인 + 공유그룹, 관리자는 전원)
 function wnViewable(name) {
@@ -3763,6 +3791,133 @@ function MobileApp({ profile, session }) {
   );
 }
 
+// ── 채팅 메시지 → 업무노트 저장 팝업 ──────────────────────────────────────────
+// 소통내역 저장 버튼 옆 📅 아이콘에서 열린다. 날짜 + 저장 대상(개인/팀)을 고르면
+// 그 날짜의 업무노트를 만든다.
+//
+// ⚠️ 작성자는 반드시 "저장 버튼을 누른 사람"(profile.name)이다. 메시지 작성자
+//    (msg.sender)가 아니다 — 남의 채팅을 내 노트로 담는 게 정상 시나리오라 둘은 자주 다르고,
+//    msg.sender 를 넣으면 그 사람의 노트함에 꽂힌다.
+//    개인노트 열람은 DB(RLS)가 아니라 화면의 wnViewable 필터로만 갈린다는 점도 같은 이유로 중요.
+//
+// 날짜 필드: 개인노트는 note_date(캘린더 배치) + due_date(마감 뱃지) 둘 다,
+//            팀노트는 due_date 만(팀 업무 공간에는 캘린더 뷰가 없다).
+function ChatSaveToNotePopup({ msg, co, profile, channel, onClose, onSaved }) {
+  const [date, setDate] = useState(function() { return kstDate(); });
+  const [kind, setKind] = useState("personal"); // "personal" | "team"
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  var author = normalizeStaffName(profile && profile.name);
+  var teamKey = teamKeyOfProfile(profile);
+  var teamLabel = teamKey === "corporate" ? "법인팀" : teamKey === "individual" ? "개인팀" : "전체(공통)";
+  var isDM = String(channel || "").indexOf("dm:") === 0;
+  var whereLabel = isDM ? "DM" : "팀 채팅";
+
+  // 노트 본문 — 원문 + 출처(누가·언제·어디서). 나중에 노트만 봐도 추적되게 남긴다.
+  var buildContent = function() {
+    var when = msg && msg.created_at ? new Date(msg.created_at).toLocaleString("ko-KR") : "";
+    return (msg && msg.message ? msg.message : "")
+      + "\n\n— " + (msg && msg.sender ? msg.sender : "?") + " · " + when + " · " + whereLabel;
+  };
+  var buildTitle = function() {
+    return "💬 " + (co && co.name ? co.name : "") + " — " + (msg && msg.sender ? msg.sender : "");
+  };
+
+  var submit = async function() {
+    if (!author) { setErr("로그인 정보가 없습니다."); return; }
+    if (!date) { setErr("날짜를 선택해주세요."); return; }
+    setSaving(true); setErr("");
+    var r;
+    if (kind === "personal") {
+      r = await supabase.from("work_notes").insert({
+        assignee: author,          // ← 저장 누른 사람 (메시지 작성자 아님)
+        created_by: author,
+        title: buildTitle(),
+        content: buildContent(),
+        is_todo: true,
+        pinned: false,
+        note_date: date,           // 업무노트 캘린더가 읽는 필드
+        due_date: date,
+        company_id: co && co.id ? co.id : null,
+      });
+    } else {
+      r = await supabase.from("team_notes").insert({
+        posted_by: author,         // ← 저장 누른 사람
+        title: buildTitle(),
+        content: buildContent(),
+        status: "open",
+        priority: "normal",
+        due_date: date,            // 팀노트는 캘린더가 없어 마감일로만 쓰인다
+        team: teamKey,             // 로그인 사용자 팀으로 자동 지정
+        checklist: [],
+        is_announcement: false,
+        related_company_id: co && co.id ? co.id : null,
+      });
+    }
+    setSaving(false);
+    if (r && r.error) { setErr("저장 실패: " + r.error.message); return; }
+    onSaved && onSaved(kind, date);
+    onClose && onClose();
+  };
+
+  var optBtn = function(k, label, hint) {
+    var on = kind === k;
+    return (
+      <button key={k} onClick={function() { setKind(k); }}
+        style={{ flex: 1, textAlign: "left", padding: "8px 10px", borderRadius: 7, cursor: "pointer",
+          border: "1px solid " + (on ? "#4338CA" : "#E8E5E0"), background: on ? "#EEF2FF" : "#fff" }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: on ? "#4338CA" : "#555" }}>{label}</div>
+        <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>{hint}</div>
+      </button>
+    );
+  };
+
+  return (
+    <div onClick={onClose}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 3000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={function(e) { e.stopPropagation(); }}
+        style={{ background: "#fff", borderRadius: 12, padding: 16, width: 340, maxWidth: "100%", boxShadow: "0 10px 40px rgba(0,0,0,0.2)" }}>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 3 }}>📅 업무노트로 저장</div>
+        <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>
+          {co && co.name} · {msg && msg.sender}님 메시지
+        </div>
+
+        <div style={{ background: "#F7F6F3", borderRadius: 7, padding: "7px 9px", fontSize: 11, color: "#555",
+          marginBottom: 10, maxHeight: 66, overflowY: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          {msg && msg.message}
+        </div>
+
+        <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>날짜</div>
+        <input type="date" value={date} onChange={function(e) { setDate(e.target.value); }}
+          style={{ width: "100%", padding: "7px 9px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 12, boxSizing: "border-box", outline: "none", marginBottom: 10 }} />
+
+        <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>저장 위치</div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+          {optBtn("personal", "개인노트", "나만 봄 · 선택 날짜 캘린더에 표시")}
+          {optBtn("team", "팀 업무", teamLabel + " · 마감일로 표시")}
+        </div>
+        <div style={{ fontSize: 10, color: "#888", marginBottom: 10 }}>
+          {kind === "personal"
+            ? "작성자: " + author + " (저장하는 사람 기준)"
+            : "팀 업무 공간에는 캘린더가 없어 날짜는 마감일로 들어갑니다."}
+        </div>
+
+        {err && <div style={{ fontSize: 11, color: "#B91C1C", marginBottom: 8 }}>{err}</div>}
+
+        <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+          <button onClick={onClose} disabled={saving}
+            style={{ padding: "7px 14px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 12, cursor: "pointer" }}>취소</button>
+          <button onClick={submit} disabled={saving}
+            style={{ padding: "7px 14px", background: saving ? "#9CA3AF" : "#1A1917", color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: saving ? "default" : "pointer" }}>
+            {saving ? "저장 중…" : "저장"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── 실시간 팀 채팅 ────────────────────────────────────────────────────────────
 function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onChannelChange }) {
   const me = profile?.name || "";
@@ -3774,6 +3929,9 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
   const chatDraft = useDraft("채팅", channel, input, { label: "채팅(" + channel + ")" });
   const [sending, setSending] = useState(false);
   const [companiesList, setCompaniesList] = useState([]);
+  // 📅 업무노트로 저장 팝업 — { msg, co } / 저장 직후 안내 문구
+  const [notePopup, setNotePopup] = useState(null);
+  const [noteSavedMsg, setNoteSavedMsg] = useState("");
   const [mentionMatches, setMentionMatches] = useState([]);
   const [unreadByChannel, setUnreadByChannel] = useState({});
   const inputRef = useRef(null);
@@ -4016,6 +4174,20 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
 
   return (
     <div style={{ height: "calc(100vh - 56px)", display: "flex", gap: 0, border: "1px solid #E8E5E0", borderRadius: 12, overflow: "hidden", background: "#fff" }}>
+      {notePopup && (
+        <ChatSaveToNotePopup msg={notePopup.msg} co={notePopup.co} profile={profile} channel={channel}
+          onClose={function() { setNotePopup(null); }}
+          onSaved={function(kind, d) {
+            setNoteSavedMsg((kind === "personal" ? "개인노트" : "팀 업무") + "에 저장됐어요 · " + d);
+            setTimeout(function() { setNoteSavedMsg(""); }, 4000);
+          }} />
+      )}
+      {noteSavedMsg && (
+        <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", zIndex: 3100,
+          background: "#1A1917", color: "#fff", padding: "9px 16px", borderRadius: 99, fontSize: 12, fontWeight: 700, boxShadow: "0 4px 16px rgba(0,0,0,0.25)" }}>
+          ✅ {noteSavedMsg}
+        </div>
+      )}
       {/* 채널 목록 */}
       <div style={{ width: 220, borderRight: "1px solid #E8E5E0", background: "#FAF9F7", display: "flex", flexDirection: "column", overflowY: "auto" }}>
         <div style={{ padding: "16px 16px 8px", fontSize: 16, fontWeight: 700 }}>💬 팀 채팅</div>
@@ -4089,13 +4261,22 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
                     {tagged.map(function(co) {
                       var done = savedArr.indexOf(co.id) >= 0;
                       return (
-                        <button key={co.id} disabled={done} onClick={function() { saveToActivity(msg, co); }}
-                          title={done ? "이미 저장됨" : co.name + " 소통내역에 저장"}
-                          style={{ fontSize: 11, fontWeight: 700, borderRadius: 8, padding: "4px 10px", cursor: done ? "default" : "pointer",
-                            border: done ? "1px solid #86EFAC" : "1px solid #C7D2FE",
-                            background: done ? "#F0FDF4" : "#EEF2FF", color: done ? "#15803D" : "#4338CA" }}>
-                          {done ? "✅ " + co.name + " 저장됨" : "📋 " + co.name + " 소통내역 저장"}
-                        </button>
+                        <span key={co.id} style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+                          <button disabled={done} onClick={function() { saveToActivity(msg, co); }}
+                            title={done ? "이미 저장됨" : co.name + " 소통내역에 저장"}
+                            style={{ fontSize: 11, fontWeight: 700, borderRadius: 8, padding: "4px 10px", cursor: done ? "default" : "pointer",
+                              border: done ? "1px solid #86EFAC" : "1px solid #C7D2FE",
+                              background: done ? "#F0FDF4" : "#EEF2FF", color: done ? "#15803D" : "#4338CA" }}>
+                            {done ? "✅ " + co.name + " 저장됨" : "📋 " + co.name + " 소통내역 저장"}
+                          </button>
+                          {/* 📅 업무노트로 저장 — 소통내역 저장과 별개로 항상 누를 수 있다 */}
+                          <button onClick={function() { setNotePopup({ msg: msg, co: co }); }}
+                            title={co.name + " — 날짜 지정해서 업무노트로 저장"}
+                            style={{ fontSize: 11, borderRadius: 8, padding: "4px 7px", cursor: "pointer",
+                              border: "1px solid #C7D2FE", background: "#fff", color: "#4338CA", lineHeight: 1 }}>
+                            📅
+                          </button>
+                        </span>
                       );
                     })}
                   </div>
