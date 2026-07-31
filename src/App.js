@@ -2131,6 +2131,20 @@ function getMergedIndustryOptions(companies) {
   }).sort(function(a, b) { return a.localeCompare(b, "ko"); });
   return INDUSTRY_OPTIONS.concat(custom);
 }
+// 업종별 사용 기업 수 — 옵션이 수십 개로 늘어서, 자주 쓰는 업종을 위로 올려야 고르기 쉽다.
+// getMergedIndustryOptions와 같은 방식으로 쉼표 문자열을 쪼개 센다(저장 형식은 건드리지 않음).
+function getIndustryUsage(companies) {
+  var usage = Object.create(null);
+  (companies || []).forEach(function(co) {
+    if (!co || !co.industry) return;
+    co.industry.split(",").forEach(function(part) {
+      var t = (part || "").trim();
+      if (!t) return;
+      usage[t] = (usage[t] || 0) + 1;
+    });
+  });
+  return usage;
+}
 // ── DB리스트 필터 설정 — 사람이 바뀌면 아래 세 곳만 고치면 된다. (2026-07-27) ─────────────
 //  · 전화 담당자 = 전화를 거는 사람 → 표의 '전화 담당자' 열(db_leads.assignee)
 //  · 배정        = 영업 나가는 사람 → 표의 '배정' 열(db_leads.assigned_by)
@@ -10330,6 +10344,151 @@ function IndustryCell({ co, setCompanies, companies }) {
   );
 }
 
+// 업종 선택 접기 패널 (기업 상세 패널용)
+// 통합 옵션이 수십 개로 늘면서 업종 칩이 상세 화면을 꽉 채웠다. 평소엔 접어서 선택된 것만
+// 요약해 보여주고, "업종 선택"을 눌렀을 때만 펼친다.
+//
+// ⚠️ 저장 형식은 기존 그대로 — 쉼표+공백으로 이어붙인 문자열("제조업, 도소매업"), 없으면 "".
+//    규모판정(bizScaleCap)·소상공인(sosangEmpLimit)·기관추천·업종 검색이 전부 이 문자열을
+//    정규식/부분일치로 읽는다. 배열이나 다른 구분자로 바꾸면 그쪽이 전부 깨진다.
+//    이 컴포넌트는 UI만 담당하고, DB 반영은 호출하는 쪽(onChange)에 그대로 맡긴다.
+function IndustryPanel({ value, onChange, companies }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  var selected = useMemo(function() {
+    return (value || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+  }, [value]);
+
+  var usage = useMemo(function() { return getIndustryUsage(companies); }, [companies]);
+  var merged = useMemo(function() { return getMergedIndustryOptions(companies); }, [companies]);
+
+  // 기본 업종 — 자주 쓰는 순, 같으면 원래 정의 순서
+  var baseOpts = useMemo(function() {
+    return INDUSTRY_OPTIONS.slice().sort(function(a, b) {
+      var d = (usage[b] || 0) - (usage[a] || 0);
+      return d !== 0 ? d : INDUSTRY_OPTIONS.indexOf(a) - INDUSTRY_OPTIONS.indexOf(b);
+    });
+  }, [usage]);
+
+  // 직접 추가한 업종 — 통합 옵션 중 기본이 아닌 것 + 아직 저장 전이라 통합 옵션에 없는 선택값
+  // (후자를 빼면 방금 입력한 업종을 화면에서 지울 수 없게 된다)
+  var customOpts = useMemo(function() {
+    var bag = Object.create(null);
+    merged.forEach(function(o) { if (INDUSTRY_OPTIONS.indexOf(o) < 0) bag[o] = true; });
+    selected.forEach(function(s) { if (INDUSTRY_OPTIONS.indexOf(s) < 0) bag[s] = true; });
+    return Object.keys(bag).sort(function(a, b) {
+      var d = (usage[b] || 0) - (usage[a] || 0);
+      return d !== 0 ? d : a.localeCompare(b, "ko");
+    });
+  }, [merged, selected, usage]);
+
+  var commit = function(arr) { onChange(arr.length > 0 ? arr.join(", ") : ""); };
+
+  var toggle = function(ind) {
+    var arr = selected.slice();
+    var i = arr.indexOf(ind);
+    if (i >= 0) arr.splice(i, 1);
+    else arr.push(ind);
+    commit(arr);
+  };
+
+  var addDraft = function() {
+    var v = (draft || "").trim();
+    if (!v) return;
+    if (selected.indexOf(v) >= 0) { setDraft(""); return; }
+    commit(selected.concat([v]));
+    setDraft("");
+  };
+
+  var checkItem = function(ind, isCustom) {
+    var sel = selected.indexOf(ind) >= 0;
+    var n = usage[ind] || 0;
+    return (
+      <label key={ind} title={isCustom ? "직접 추가한 업종 (" + n + "개 기업 사용 중)" : (n + "개 기업 사용 중)")}
+        style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 6px", borderRadius: 5, cursor: "pointer",
+          background: sel ? "#EEF2FF" : "transparent", minWidth: 0 }}>
+        <input type="checkbox" checked={sel} onChange={function() { toggle(ind); }}
+          style={{ accentColor: "#4338CA", flexShrink: 0 }} />
+        <span style={{ fontSize: 11, fontWeight: sel ? 700 : 400, color: sel ? "#4338CA" : "#555",
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ind}</span>
+        {n > 0 && <span style={{ fontSize: 9, color: "#AAA", flexShrink: 0 }}>{n}</span>}
+      </label>
+    );
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginBottom: 6 }}>
+        <span style={{ fontSize: 11, color: "#888" }}>업종 (복수 선택 가능)</span>
+        <button onClick={function() { setOpen(!open); }}
+          style={{ background: open ? "#4338CA" : "#fff", color: open ? "#fff" : "#4338CA",
+            border: "1px solid " + (open ? "#4338CA" : "#C7D2FE"), borderRadius: 6, padding: "3px 10px",
+            fontSize: 10, fontWeight: 700, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
+          {open ? "접기 ▲" : "업종 선택 ▼"}
+        </button>
+      </div>
+
+      {/* 접힌 상태 요약 — 칩 3개 + "외 N개" */}
+      {!open && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+          {selected.length === 0 ? (
+            <span style={{ fontSize: 11, color: "#BBB" }}>선택된 업종 없음</span>
+          ) : (
+            <>
+              {selected.slice(0, 3).map(function(s) {
+                return (
+                  <span key={s} style={{ background: "#4338CA", color: "#fff", padding: "3px 9px", borderRadius: 99,
+                    fontSize: 11, fontWeight: 700, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s}</span>
+                );
+              })}
+              {selected.length > 3 && (
+                <span title={selected.join(", ")}
+                  style={{ fontSize: 11, color: "#666", fontWeight: 600 }}>외 {selected.length - 3}개</span>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* 펼친 상태 */}
+      {open && (
+        <div>
+          <div style={{ fontSize: 10, color: "#888", fontWeight: 700, marginBottom: 3 }}>기본 업종</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, marginBottom: 8 }}>
+            {baseOpts.map(function(o) { return checkItem(o, false); })}
+          </div>
+
+          {customOpts.length > 0 && (
+            <>
+              <div style={{ fontSize: 10, color: "#92400E", fontWeight: 700, marginBottom: 3 }}>
+                직접 추가한 업종 <span style={{ color: "#AAA", fontWeight: 400 }}>· 다른 기업에서 쓰던 것 포함</span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, marginBottom: 8 }}>
+                {customOpts.map(function(o) { return checkItem(o, true); })}
+              </div>
+            </>
+          )}
+
+          <div style={{ display: "flex", gap: 4 }}>
+            <input type="text" value={draft} placeholder="새 업종 직접 입력 후 Enter (예: 부동산임대업)"
+              onChange={function(e) { setDraft(e.target.value); }}
+              onKeyDown={function(e) {
+                if (e.key === "Enter") { e.preventDefault(); addDraft(); }
+                if (e.key === "Escape") { setDraft(""); }
+              }}
+              style={{ flex: 1, minWidth: 0, padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, outline: "none", boxSizing: "border-box" }} />
+            <button onClick={addDraft} disabled={!(draft || "").trim()}
+              style={{ background: (draft || "").trim() ? "#1A1917" : "#E8E5E0", color: "#fff", border: "none", borderRadius: 5,
+                padding: "4px 12px", fontSize: 10, fontWeight: 700, cursor: (draft || "").trim() ? "pointer" : "default", flexShrink: 0 }}>추가</button>
+          </div>
+          <div style={{ fontSize: 10, color: "#888", marginTop: 6 }}>{selected.length}개 선택됨</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ListView({ filtered, companies, search, setSearch, filterStage, setFilterStage, filterAssignee, setFilterAssignee, filterType, setFilterType, filterAgency, setFilterAgency, filterTeam, setFilterTeam, creditFilter, setCreditFilter, creditMode, setCreditMode, assignees, onSelect, onAdd, setCompanies, showToast, dashboardFilter, setDashboardFilter, canExport }) {
   const [showCompanyTrash, setShowCompanyTrash] = useState(false);
   const [trashedCompanies, setTrashedCompanies] = useState([]);
@@ -12089,66 +12248,10 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                       );
                     })}
                   </div>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>업종 (복수 선택 가능)</div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
-                    {getMergedIndustryOptions(companies).map(function(ind) {
-                      var cur = (data.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
-                      var sel = cur.indexOf(ind) >= 0;
-                      var isCustom = INDUSTRY_OPTIONS.indexOf(ind) < 0;
-                      return (
-                        <button key={ind} onClick={function() {
-                          var arr = (data.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
-                          var idx = arr.indexOf(ind);
-                          if (idx >= 0) arr.splice(idx, 1);
-                          else arr.push(ind);
-                          var newVal = arr.length > 0 ? arr.join(", ") : "";
-                          setData(function(p) { return Object.assign({}, p, { industry: newVal }); });
-                        }}
-                          title={isCustom ? "다른 기업에서 사용 중인 업종" : ""}
-                          style={{ padding: "4px 9px", borderRadius: 99, fontSize: 11, fontWeight: sel ? 700 : 400,
-                            background: sel ? "#4338CA" : (isCustom ? "#FEF3C7" : "#fff"), color: sel ? "#fff" : (isCustom ? "#92400E" : "#666"),
-                            border: sel ? "none" : "1px solid " + (isCustom ? "#FDE68A" : "#E8E5E0"), cursor: "pointer" }}>
-                          {sel ? "✓ " : ""}{ind}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {/* 통합 옵션에도 없는 항목 (예외) */}
-                  {(function() {
-                    var cur = (data.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
-                    var allOpts = getMergedIndustryOptions(companies);
-                    var custom = cur.filter(function(s) { return allOpts.indexOf(s) < 0; });
-                    if (custom.length === 0) return null;
-                    return (
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
-                        {custom.map(function(s) {
-                          return (
-                            <span key={s} style={{ background: "#0F6E56", color: "#fff", padding: "3px 9px", borderRadius: 99, fontSize: 11, fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                              ✓ {s}
-                              <span onClick={function() {
-                                var arr = (data.industry || "").split(",").map(function(x) { return x.trim(); }).filter(Boolean);
-                                arr = arr.filter(function(x) { return x !== s; });
-                                setData(function(p) { return Object.assign({}, p, { industry: arr.length > 0 ? arr.join(", ") : "" }); });
-                              }} style={{ cursor: "pointer", fontSize: 12, opacity: 0.85 }}>✕</span>
-                            </span>
-                          );
-                        })}
-                      </div>
-                    );
-                  })()}
-                  <input type="text" placeholder="직접 입력 후 Enter로 추가 (예: 부동산임대업)"
-                    onKeyDown={function(e) {
-                      if (e.key !== "Enter") return;
-                      e.preventDefault();
-                      var v = (e.target.value || "").trim();
-                      if (!v) return;
-                      var arr = (data.industry || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
-                      if (arr.indexOf(v) >= 0) { e.target.value = ""; return; }
-                      arr.push(v);
-                      setData(function(p) { return Object.assign({}, p, { industry: arr.join(", ") }); });
-                      e.target.value = "";
-                    }}
-                    style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, outline: "none", boxSizing: "border-box" }} />
+                  {/* 업종 — 접기 패널(IndustryPanel). 저장 형식·저장 시점은 기존과 동일하게
+                      setData로 로컬 반영 후 모달 저장에서 DB에 쓴다. */}
+                  <IndustryPanel value={data.industry || ""} companies={companies}
+                    onChange={function(next) { setData(function(p) { return Object.assign({}, p, { industry: next }); }); }} />
                   {/* 중진공 예외 판정용 수동 플래그 (업종 텍스트로는 추정 불가) */}
                   <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, paddingTop: 8, borderTop: "1px solid #E8E5E0", fontSize: 11, color: "#555", cursor: "pointer" }}>
                     <input type="checkbox" checked={data.innovation_field === true}
