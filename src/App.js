@@ -3079,14 +3079,29 @@ function findTaggedCompanies(text, companiesList) {
   });
   return out;
 }
+// 업체명 정규식 캐시 — 팀 업무 카드는 카드×항목마다 호출돼서, 매번 수천 개 이름으로
+// 정규식을 다시 만들면 렌더가 눈에 띄게 느려진다. 목록 배열 자체를 키로 재사용한다.
+// (setState로 새 배열이 들어오면 자동으로 새 정규식 → 결과는 캐시 없을 때와 동일)
+var _mentionReCache = typeof WeakMap !== "undefined" ? new WeakMap() : null;
+function getMentionRegex(companiesList) {
+  if (!companiesList) return null;
+  if (_mentionReCache && _mentionReCache.has(companiesList)) return _mentionReCache.get(companiesList);
+  var names = companiesList.map(function(c) { return c && c.name; }).filter(Boolean)
+    .sort(function(a, b) { return b.length - a.length; });
+  var re = null;
+  if (names.length > 0) {
+    var esc = names.map(function(n) { return n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); });
+    re = new RegExp("@(" + esc.join("|") + ")", "g");
+  }
+  if (_mentionReCache) _mentionReCache.set(companiesList, re);
+  return re;
+}
 // @업체 태그를 파란색으로 렌더 (기존 companiesList 재사용)
 function renderMentionText(text, companiesList) {
   if (!text) return null;
-  var names = (companiesList || []).map(function(c) { return c.name; }).filter(Boolean)
-    .sort(function(a, b) { return b.length - a.length; });
-  if (names.length === 0) return text;
-  var esc = names.map(function(n) { return n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); });
-  var re = new RegExp("@(" + esc.join("|") + ")", "g");
+  var re = getMentionRegex(companiesList);
+  if (!re) return text;
+  re.lastIndex = 0; // 캐시된 정규식(g 플래그)은 지난 호출의 위치가 남아 있다
   var parts = []; var last = 0; var m; var key = 0;
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) parts.push(text.slice(last, m.index));
@@ -23474,7 +23489,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                                     <div onClick={function() { openClEdit("edit", idx, item.text); }}
                                       title="눌러서 크게 편집"
                                       style={{ flex: 1, minHeight: 26, padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11, background: "#fff", cursor: "text", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", color: (item.text || "").trim() ? "#1A1917" : "#AAA" }}>
-                                      {(item.text || "").trim() || "눌러서 입력"}
+                                      {(item.text || "").trim() ? renderMentionText((item.text || "").trim(), companiesList) : "눌러서 입력"}
                                     </div>
                                   )}
                                   {locked ? (
@@ -23517,7 +23532,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                       style={{ background: "#F7F6F3", border: "1px solid #E8E5E0", borderLeft: "3px solid " + ps.dot, borderRadius: 8, padding: "8px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
                       <span style={{ fontSize: 12, color: "#999" }}>▶</span>
                       {note.is_announcement && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: "#FEF3C7", color: "#92400E", whiteSpace: "nowrap" }}>📌 공지</span>}
-                      <span style={{ fontSize: 12, fontWeight: 600, color: "#555", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{note.title || (note.content || "").split("\n")[0] || "팀 업무"}</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "#555", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{renderMentionText(note.title || (note.content || "").split("\n")[0] || "팀 업무", companiesList)}</span>
                       {allAck && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 99, background: "#DCFCE7", color: "#15803D", whiteSpace: "nowrap" }}>✅ 확인 완료</span>}
                       {isOld7(note) && !allAck && <span style={{ fontSize: 9, color: "#AAA", whiteSpace: "nowrap" }}>7일+ 경과</span>}
                     </div>
@@ -23542,7 +23557,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                         {note.created_at ? new Date(note.created_at).toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" }) : ""}
                       </span>
                     </div>
-                    {note.title && <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, lineHeight: 1.4 }}>{note.title}</div>}
+                    {note.title && <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, lineHeight: 1.4 }}>{renderMentionText(note.title, companiesList)}</div>}
                     {/* 체크리스트 (있을 때만) — 체크리스트가 주업무라 업무 내용보다 위에 둔다 */}
                     {(function() {
                       var cl = note.checklist || [];
@@ -23570,7 +23585,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                                   style={{ display: "flex", alignItems: "flex-start", gap: 6, padding: "5px 8px", background: taken ? "#F7F6F3" : "#fff", borderRadius: 6, border: "0.5px solid " + (taken ? "transparent" : "#E8E5E0") }}>
                                   <span style={{ fontSize: 11, color: taken ? "#888" : "#CCC", marginTop: 1 }}>☐</span>
                                   <span style={{ flex: 1, fontSize: 11, color: taken ? "#888" : "#1A1917", textDecoration: taken ? "line-through" : "none", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                                    {item.text}
+                                    {renderMentionText(item.text, companiesList)}
                                   </span>
                                   {taken ? (
                                     <span style={{ display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
@@ -23598,7 +23613,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                     })()}
                     {/* 업무 내용 — 체크리스트 아래로 내렸다(보조 설명 성격) */}
                     {note.content && (
-                      <div style={{ fontSize: 12, color: "#444", lineHeight: 1.5, whiteSpace: "pre-wrap", marginBottom: 8, maxHeight: 100, overflowY: "auto" }}>{note.content}</div>
+                      <div style={{ fontSize: 12, color: "#444", lineHeight: 1.5, whiteSpace: "pre-wrap", marginBottom: 8, maxHeight: 100, overflowY: "auto" }}>{renderMentionText(note.content, companiesList)}</div>
                     )}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 10, color: "#888", paddingTop: 6, borderTop: "1px solid " + (isOpen ? "#FEF3C7" : "#E8E5E0") }}>
                       <div>
@@ -23733,7 +23748,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                         <div onClick={function() { openClEdit("new", idx, item.text); }}
                           title="눌러서 크게 편집"
                           style={{ flex: 1, minHeight: 30, padding: "6px 10px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 12, background: "#fff", cursor: "text", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", color: (item.text || "").trim() ? "#1A1917" : "#AAA" }}>
-                          {(item.text || "").trim() || "예: @업체명 사업자등록증 받기 — 눌러서 입력"}
+                          {(item.text || "").trim() ? renderMentionText((item.text || "").trim(), companiesList) : "예: @업체명 사업자등록증 받기 — 눌러서 입력"}
                         </div>
                         <button onClick={function() {
                           setNewNote(function(p) {
