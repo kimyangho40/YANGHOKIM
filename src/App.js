@@ -23430,34 +23430,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                           onChange={function(v) { setEditingDraft(function(p) { return Object.assign({}, p, { title: v }); }); }}
                           style={{ width: "100%", padding: "6px 10px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 12, boxSizing: "border-box", outline: "none" }} />
                       </div>
-                      <div style={{ marginBottom: 8 }}>
-                        <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 2 }}>업무 내용 <span style={{ color: "#94A3B8" }}>· @업체명 연결</span></label>
-                        <MentionField multiline={true} companiesList={companiesList}
-                          value={editingDraft.content || ""} placeholder="어떤 업무를 누가 가져가야 하는지 상세하게 (@업체명 연결)"
-                          rows={Math.max(3, (editingDraft.content || "").split("\n").length)}
-                          onChange={function(v) { setEditingDraft(function(p) { return Object.assign({}, p, { content: v }); }); }}
-                          style={{ width: "100%", padding: "6px 10px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 12, lineHeight: 1.6, resize: "vertical", minHeight: 60, boxSizing: "border-box", outline: "none", fontFamily: "inherit" }} />
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 }}>
-                        <div>
-                          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 2 }}>우선순위</label>
-                          <select value={editingDraft.priority}
-                            onChange={function(e) { var v = e.target.value; setEditingDraft(function(p) { return Object.assign({}, p, { priority: v }); }); }}
-                            style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, boxSizing: "border-box", background: "#fff" }}>
-                            <option value="urgent">🔴 긴급</option>
-                            <option value="normal">🟡 보통</option>
-                            <option value="low">🟢 여유</option>
-                            <option value="high">⭐ 중요(기존)</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 2 }}>마감일</label>
-                          <input type="date" value={editingDraft.due_date}
-                            onChange={function(e) { var v = e.target.value; setEditingDraft(function(p) { return Object.assign({}, p, { due_date: v }); }); }}
-                            style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, boxSizing: "border-box", outline: "none" }} />
-                        </div>
-                      </div>
-                      {/* 체크리스트 편집 */}
+                      {/* 체크리스트 편집 — 주업무라 우선순위·업무 내용보다 위 */}
                       <div style={{ marginBottom: 8, background: "#F7F6F3", border: "1px solid #E8E5E0", borderRadius: 6, padding: "8px 10px" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                           <label style={{ fontSize: 10, color: "#666", fontWeight: 600 }}>📋 체크리스트</label>
@@ -23512,6 +23485,34 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                         {(editingDraft.checklist || []).some(function(it) { return !!it.taken_by; }) && (
                           <div style={{ marginTop: 6, fontSize: 9, color: "#92400E" }}>🔒 이미 가져간 항목은 수정·삭제할 수 없습니다.</div>
                         )}
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 }}>
+                        <div>
+                          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 2 }}>우선순위</label>
+                          <select value={editingDraft.priority}
+                            onChange={function(e) { var v = e.target.value; setEditingDraft(function(p) { return Object.assign({}, p, { priority: v }); }); }}
+                            style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, boxSizing: "border-box", background: "#fff" }}>
+                            <option value="urgent">🔴 긴급</option>
+                            <option value="normal">🟡 보통</option>
+                            <option value="low">🟢 여유</option>
+                            <option value="high">⭐ 중요(기존)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 2 }}>마감일</label>
+                          <input type="date" value={editingDraft.due_date}
+                            onChange={function(e) { var v = e.target.value; setEditingDraft(function(p) { return Object.assign({}, p, { due_date: v }); }); }}
+                            style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, boxSizing: "border-box", outline: "none" }} />
+                        </div>
+                      </div>
+                      {/* 업무 내용 — 체크리스트가 주업무라 맨 아래(보조 설명) */}
+                      <div style={{ marginBottom: 8 }}>
+                        <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 2 }}>업무 내용 <span style={{ color: "#94A3B8" }}>· @업체명 연결</span></label>
+                        <MentionField multiline={true} companiesList={companiesList}
+                          value={editingDraft.content || ""} placeholder="어떤 업무를 누가 가져가야 하는지 상세하게 (@업체명 연결)"
+                          rows={Math.max(3, (editingDraft.content || "").split("\n").length)}
+                          onChange={function(v) { setEditingDraft(function(p) { return Object.assign({}, p, { content: v }); }); }}
+                          style={{ width: "100%", padding: "6px 10px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 12, lineHeight: 1.6, resize: "vertical", minHeight: 60, boxSizing: "border-box", outline: "none", fontFamily: "inherit" }} />
                       </div>
                       {/* 저장/취소 */}
                       <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
@@ -23710,16 +23711,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                 onChange={function(v) { setNewNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
                 style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
             </div>
-            <div style={{ marginBottom: 10 }}>
-              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>업무 내용 *</label>
-              <MentionField multiline={true} companiesList={companiesList}
-                value={newNote.content} placeholder="어떤 업무를 누가 가져가야 하는지 상세하게 적어주세요 (@업체명 연결)"
-                rows={5}
-                onChange={function(v) { setNewNote(function(p) { return Object.assign({}, p, { content: v }); }); }}
-                style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, lineHeight: 1.7, resize: "vertical", minHeight: 100, boxSizing: "border-box", outline: "none", fontFamily: "inherit" }} />
-            </div>
-
-            {/* 체크리스트 입력 영역 */}
+            {/* 체크리스트 입력 영역 — 주업무라 우선순위·업무 내용보다 위 */}
             <div style={{ marginBottom: 12, background: "#F7F6F3", border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 12px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                 <label style={{ fontSize: 11, color: "#666", fontWeight: 600 }}>
@@ -23780,6 +23772,15 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                 <input type="date" value={newNote.due_date} onChange={function(e) { var v = e.target.value; setNewNote(function(p) { return Object.assign({}, p, { due_date: v }); }); }}
                   style={{ width: "100%", padding: "8px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
               </div>
+            </div>
+            {/* 업무 내용 — 체크리스트가 주업무라 맨 아래(보조 설명) */}
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>업무 내용 *</label>
+              <MentionField multiline={true} companiesList={companiesList}
+                value={newNote.content} placeholder="어떤 업무를 누가 가져가야 하는지 상세하게 적어주세요 (@업체명 연결)"
+                rows={5}
+                onChange={function(v) { setNewNote(function(p) { return Object.assign({}, p, { content: v }); }); }}
+                style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, lineHeight: 1.7, resize: "vertical", minHeight: 100, boxSizing: "border-box", outline: "none", fontFamily: "inherit" }} />
             </div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <button onClick={function() { if (confirmDiscard((newNote.title||"").trim() || (newNote.content||"").trim() || (newNote.checklist||[]).some(function(it){ return (it.text||"").trim(); }))) setShowAdd(false); }}
