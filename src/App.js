@@ -14645,14 +14645,23 @@ function parseUnfinishedItems(content) {
 }
 // content의 특정 라인들에 "(→ M/D 이월)" 안내 꼬리표만 추가 (체크 상태·텍스트는 그대로 유지)
 //   ⚠️ 원본 항목을 삭제하거나 완료([x])로 바꾸지 않는다 — 미완료([ ])와 원문을 보존하고 안내만 덧붙인다.
+//   이미 이월 표시가 있으면 "떼어내고 새 날짜로 다시 붙인다"(누적하지 않음).
+//   → 재이월해도 표시는 항상 1개. 누적되면 parseUnfinishedItems 가 꼬리표를 한 번만 떼기 때문에
+//     옛 표시가 이월된 항목 텍스트에 섞여 들어간다.
+var CARRIED_TAIL_RE = /(\s*\(?→\s*\d{1,2}\/\d{1,2}\s*이월\)?)+\s*$/; // 구형 "→ M/D 이월" · 신형 "(→ M/D 이월)" · 누적분 모두
 function markLinesCarried(content, lineIdxSet, md) {
   var lines = (content || "").split("\n");
   lineIdxSet.forEach(function(i) {
     var m = lines[i] != null && lines[i].match(/^(\s*)- \[ \]\s*(.*)$/);
     if (!m) return;
-    var body = m[2].replace(/\s*$/, "");
-    if (/\(?→\s*\d{1,2}\/\d{1,2}\s*이월\)?/.test(body)) return; // 이미 이월 표시가 있으면 중복 추가 안 함
-    lines[i] = m[1] + "- [ ] " + body + " (→ " + md + " 이월)";
+    // ⚠️ 대기사유 메타 {응답대기:날짜} 는 "줄 끝"에 있어야 splitItemWait 이 인식한다.
+    //    그냥 뒤에 이월 표시를 붙이면 대기사유가 줄 끝에서 밀려나 파싱에서 사라지고,
+    //    옛 이월 표시도 끝이 아니게 되어 안 지워진다 → 잠시 떼어 두고 맨 마지막에 다시 붙인다.
+    //    최종 형태: "- [ ] 텍스트 [마감일] (→ M/D 이월) {대기사유:since}"
+    var w = m[2].match(ITEM_WAIT_RE);
+    var waitTail = w ? "{" + w[1] + (w[2] ? ":" + w[2] : "") + "}" : "";
+    var body = (w ? m[2].replace(ITEM_WAIT_RE, "") : m[2]).replace(CARRIED_TAIL_RE, "").replace(/\s*$/, "");
+    lines[i] = m[1] + "- [ ] " + body + " (→ " + md + " 이월)" + (waitTail ? " " + waitTail : "");
   });
   return lines.join("\n");
 }
@@ -15557,12 +15566,13 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
                   </div>
                 );
               }
-              // 📌 카드에서 바로 이월 — 미완료 + 아직 이월 안 한 항목에만 버튼을 붙인다.
+              // 📌 카드에서 바로 이월 — 미완료 항목이면 버튼을 붙인다.
               //    onCarryItem 은 내 노트일 때만 부모가 내려준다. 누르면 날짜 선택 팝업이 뜨고,
               //    원본과 같은 날짜는 팝업에서 막는다(과거 노트로 제한하지 않음 — 아무 날짜나 고를 수 있어야 하므로).
+              //    이미 이월한 항목도 다시 미룰 수 있다("내일로 미뤘는데 또 못 해서 모레로"). 라벨만 구분해 준다.
               var rawLine = (note.content || "").split("\n")[item.idx] || "";
               var alreadyCarried = /\(?→\s*\d{1,2}\/\d{1,2}\s*이월\)?/.test(rawLine);
-              var showCarry = !!onCarryItem && !item.checked && !alreadyCarried;
+              var showCarry = !!onCarryItem && !item.checked;
               return (
                 <div key={item.idx} style={{ display: "flex", alignItems: "flex-start", gap: 6, padding: item.waitReason ? "6px 8px" : "6px 0", background: item.waitReason ? "#FFFBEB" : "transparent", border: item.waitReason ? "1px solid #FDE68A" : undefined, borderRadius: 8 }}>
                   <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", flex: 1, minWidth: 0 }}>
@@ -15574,10 +15584,11 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
                     )}
                   </label>
                   {showCarry && (
-                    <button title="이 항목을 다른 날짜 노트로 이월 (원본은 지우지 않고 '이월' 표시만 남음)"
+                    <button title={alreadyCarried ? "이미 한 번 이월한 항목 — 다른 날짜로 다시 미루기 (표시는 새 날짜로 바뀜)" : "이 항목을 다른 날짜 노트로 이월 (원본은 지우지 않고 '이월' 표시만 남음)"}
                       onClick={function() { onCarryItem(note, item.idx); }}
-                      style={{ flexShrink: 0, marginTop: 1, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", padding: "3px 9px", borderRadius: 6, cursor: "pointer", background: "#EEF2FF", border: "1px solid #C7D2FE", color: "#4338CA" }}>
-                      📅 이월
+                      style={{ flexShrink: 0, marginTop: 1, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", padding: "3px 9px", borderRadius: 6, cursor: "pointer",
+                        background: alreadyCarried ? "#FFFBEB" : "#EEF2FF", border: "1px solid " + (alreadyCarried ? "#FDE68A" : "#C7D2FE"), color: alreadyCarried ? "#B45309" : "#4338CA" }}>
+                      {alreadyCarried ? "📅 다시 이월" : "📅 이월"}
                     </button>
                   )}
                 </div>
@@ -16205,19 +16216,33 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     // 이월 항목 → 대상 날짜(destDate) 노트에 추가 (그 날짜 노트가 없으면 새로 생성)
     var todayInsert = null;
     if (carryTexts.length) {
-      var newLines = carryTexts.map(function(it) {
+      var todayNote = notes.find(function(n) { return (n.assignee || "") === me && getNoteDate(n) === destDate; });
+      var u = todayNote ? updates.find(function(x) { return x.id === todayNote.id; }) : null;
+      var base = todayNote ? (u ? u.content : (todayNote.content || "")) : "";
+      // 같은 날짜로 두 번 이월해도 그 노트에 같은 줄이 두 개 생기지 않게 — 대상 노트의 미완료 항목과 대조.
+      // (parseUnfinishedItems 는 꼬리표·마감일·대기사유를 뗀 순수 텍스트를 주므로 비교 기준으로 적합)
+      var already = {};
+      parseUnfinishedItems(base).forEach(function(x) { already[(x.text || "").trim().toLowerCase()] = 1; });
+      var fresh = carryTexts.filter(function(it) {
+        var k = (it.text || "").trim().toLowerCase();
+        if (!k || already[k]) return false;
+        already[k] = 1; // 이번 배치 안의 중복도 제거
+        return true;
+      });
+      var newLines = fresh.map(function(it) {
         return buildItemLine({ checked: false, text: it.text, dueDate: it.dueDate || "", waitReason: it.waitReason || "", waitSince: it.waitReason ? destDate : "" });
       }).join("\n");
-      var todayNote = notes.find(function(n) { return (n.assignee || "") === me && getNoteDate(n) === destDate; });
-      if (todayNote) {
-        var u = updates.find(function(x) { return x.id === todayNote.id; });
-        var base = u ? u.content : (todayNote.content || "");
-        var merged = base ? base + "\n" + newLines : newLines;
-        if (u) u.content = merged; else updates.push({ id: todayNote.id, content: merged });
-      } else {
-        var ins = { assignee: me, title: noteAutoTitle(me, destDate), content: newLines, is_todo: true, created_by: me, note_date: destDate };
-        var ri = await supabase.from("work_notes").insert(ins).select().single();
-        if (!ri.error && ri.data) todayInsert = ri.data;
+      // 전부 이미 있는 항목이면 대상 노트는 건드리지 않는다(빈 노트가 새로 생기지 않게).
+      // 원본의 이월 표시는 중복 여부와 무관하게 남긴다 — 사용자가 "미뤘다"는 의사를 표시했으므로.
+      if (newLines) {
+        if (todayNote) {
+          var merged = base ? base + "\n" + newLines : newLines;
+          if (u) u.content = merged; else updates.push({ id: todayNote.id, content: merged });
+        } else {
+          var ins = { assignee: me, title: noteAutoTitle(me, destDate), content: newLines, is_todo: true, created_by: me, note_date: destDate };
+          var ri = await supabase.from("work_notes").insert(ins).select().single();
+          if (!ri.error && ri.data) todayInsert = ri.data;
+        }
       }
     }
     for (var i = 0; i < updates.length; i++) {
