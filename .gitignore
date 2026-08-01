@@ -17,6 +17,8 @@
 .env.development.local
 .env.test.local
 .env.production.local
+# 저장소가 public 이라 .env 계열은 전부 막는다. 키를 넣는 순간 전 세계에 공개된다.
+.env.production
 
 npm-debug.log*
 yarn-debug.log*
