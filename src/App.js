@@ -15381,11 +15381,12 @@ function CreditReportImport({ existingCount, onApply }) {
   );
 }
 
-function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditingId, toggleDone, togglePin, deleteNote, fmtDate, currentUserName, onChecklistChange, moveNoteDate, setWaitReason, editable, getRequestForItem, onAddRequestReply }) {
+function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditingId, toggleDone, togglePin, deleteNote, fmtDate, currentUserName, onChecklistChange, moveNoteDate, setWaitReason, editable, getRequestForItem, onAddRequestReply, onCarryItem }) {
   var isEditing = editingId === note.id;
   var isMyNote = editable !== false; // 본인 노트만 수정/체크 가능 (공유그룹으로 보이는 남의 노트는 읽기 전용)
   var [replyOpenIdx, setReplyOpenIdx] = useState(null); // 답장 입력창 펼친 📩 항목 idx
   var [replyDraft, setReplyDraft] = useState("");
+  var [carryingIdx, setCarryingIdx] = useState(null); // 이월 처리 중인 항목 idx (중복 클릭 방지)
   var relTime = function(iso) {
     var ms = iso ? (new Date(iso)).getTime() : NaN;
     if (isNaN(ms)) return "";
@@ -15551,15 +15552,33 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
                   </div>
                 );
               }
+              // 📌 카드에서 바로 이월 — 미완료 + 아직 이월 안 한 항목에만 버튼을 붙인다.
+              //    onCarryItem 은 "내 노트 && 오늘 이전" 일 때만 부모가 내려준다(오늘 노트를 오늘로 옮기는 건 의미 없음).
+              var rawLine = (note.content || "").split("\n")[item.idx] || "";
+              var alreadyCarried = /\(?→\s*\d{1,2}\/\d{1,2}\s*이월\)?/.test(rawLine);
+              var showCarry = !!onCarryItem && !item.checked && !alreadyCarried;
+              var carrying = carryingIdx === item.idx;
               return (
-                <label key={item.idx} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: item.waitReason ? "6px 8px" : "6px 0", cursor: "pointer", background: item.waitReason ? "#FFFBEB" : "transparent", borderLeft: "1px solid transparent", border: item.waitReason ? "1px solid #FDE68A" : undefined, borderRadius: 8 }}>
-                  <input type="checkbox" checked={item.checked} onChange={function() { toggleCheckItem(item.idx); }}
-                    style={{ width: 15, height: 15, marginTop: 3, cursor: "pointer", accentColor: "#1A1917", flexShrink: 0 }} />
-                  <span style={{ fontSize: 13, color: item.checked ? "#AAA" : "#333", textDecoration: item.checked ? "line-through" : "none", lineHeight: 1.8, whiteSpace: "pre-wrap" }}>{item.text}</span>
-                  {item.waitReason && !item.checked && (
-                    <span style={{ fontSize: 10, fontWeight: 700, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 99, padding: "1px 7px", whiteSpace: "nowrap", flexShrink: 0, marginTop: 2 }}>⏳ {item.waitReason}</span>
+                <div key={item.idx} style={{ display: "flex", alignItems: "flex-start", gap: 6, padding: item.waitReason ? "6px 8px" : "6px 0", background: item.waitReason ? "#FFFBEB" : "transparent", border: item.waitReason ? "1px solid #FDE68A" : undefined, borderRadius: 8 }}>
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", flex: 1, minWidth: 0 }}>
+                    <input type="checkbox" checked={item.checked} onChange={function() { toggleCheckItem(item.idx); }}
+                      style={{ width: 15, height: 15, marginTop: 3, cursor: "pointer", accentColor: "#1A1917", flexShrink: 0 }} />
+                    <span style={{ fontSize: 13, color: item.checked ? "#AAA" : "#333", textDecoration: item.checked ? "line-through" : "none", lineHeight: 1.8, whiteSpace: "pre-wrap" }}>{item.text}</span>
+                    {item.waitReason && !item.checked && (
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 99, padding: "1px 7px", whiteSpace: "nowrap", flexShrink: 0, marginTop: 2 }}>⏳ {item.waitReason}</span>
+                    )}
+                  </label>
+                  {showCarry && (
+                    <button disabled={carrying} title="이 항목을 오늘 노트로 이월 (원본은 지우지 않고 '이월' 표시만 남음)"
+                      onClick={async function() {
+                        setCarryingIdx(item.idx);
+                        try { await onCarryItem(note, item.idx); } finally { setCarryingIdx(null); }
+                      }}
+                      style={{ flexShrink: 0, marginTop: 1, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", padding: "3px 9px", borderRadius: 6, cursor: carrying ? "default" : "pointer", background: "#EEF2FF", border: "1px solid #C7D2FE", color: "#4338CA", opacity: carrying ? 0.6 : 1 }}>
+                      {carrying ? "처리 중..." : "오늘로 이월"}
+                    </button>
                   )}
-                </label>
+                </div>
               );
             })}
           </div>
@@ -16202,6 +16221,21 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     });
     if (onBadgeUpdate) onBadgeUpdate();
     if (markDone) markWeeklyReviewed();
+  };
+
+  // 📌 카드에서 바로 이월 — 주간 정리 모달을 거치지 않고 체크리스트 항목 옆 버튼으로 1건 처리.
+  //    항목 추출은 주간 정리와 똑같이 parseUnfinishedItems 를 쓴다
+  //    → 마감일·대기사유·대기시작일이 그대로 따라간다(카드의 parseChecklist 는 마감일을 안 돌려줌).
+  var carryItemFromCard = async function(note, lineIdx) {
+    var it = parseUnfinishedItems(note.content).find(function(x) { return x.lineIdx === lineIdx; });
+    if (!it) return; // 이미 체크됐거나 줄이 바뀐 경우
+    await applyReviewActions([{ item: Object.assign({ noteId: note.id }, it), action: "carry" }], false);
+  };
+  // 이월 버튼을 붙일 노트인가 — 내 노트 && 오늘 이전(오늘 노트를 오늘로 옮기는 건 무의미)
+  var canCarryFromCard = function(n) {
+    if ((n.assignee || "") !== (profile?.name || "")) return false;
+    var nd = getNoteDate(n);
+    return !!nd && nd < todayStr;
   };
 
   // 📩 업무 요청: 받은/보낸 요청 로드 + 업무노트 열었으니 받은 요청 읽음 처리(기능5)
@@ -17305,7 +17339,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
                   {notesForSelectedDate.map(function(note) {
-                    return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} />;
+                    return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? carryItemFromCard : null} />;
                   })}
                 </div>
               )}
@@ -17367,7 +17401,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#B45309", letterSpacing: "0.05em", marginBottom: 10 }}>📌 고정된 노트</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} />; })}
+                {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? carryItemFromCard : null} />; })}
               </div>
             </div>
           )}
@@ -17376,7 +17410,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div>
               {pinned.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: "#888", letterSpacing: "0.05em", marginBottom: 10 }}>전체 노트</div>}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} />; })}
+                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? carryItemFromCard : null} />; })}
               </div>
             </div>
           )}
