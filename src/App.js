@@ -14618,6 +14618,12 @@ function mondayOf(dateStr) {
   d.setDate(d.getDate() + (day === 0 ? -6 : 1 - day));
   return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
 }
+// YYYY-MM-DD 에 n일 더한 날짜 (YYYY-MM-DD). 월말·연말 넘김은 Date 가 알아서 처리.
+function addDaysStr(dateStr, n) {
+  var d = new Date((dateStr || kstDate()) + "T00:00:00");
+  d.setDate(d.getDate() + n);
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
 // content 마크다운에서 미완료(- [ ]) 항목 파싱 → {lineIdx, text, dueDate, waitReason, waitSince}
 // text는 마감일 대괄호·대기사유 메타·기존 "→ 이월" 꼬리표를 제거한 순수 항목 텍스트
 function parseUnfinishedItems(content) {
@@ -15386,7 +15392,6 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
   var isMyNote = editable !== false; // 본인 노트만 수정/체크 가능 (공유그룹으로 보이는 남의 노트는 읽기 전용)
   var [replyOpenIdx, setReplyOpenIdx] = useState(null); // 답장 입력창 펼친 📩 항목 idx
   var [replyDraft, setReplyDraft] = useState("");
-  var [carryingIdx, setCarryingIdx] = useState(null); // 이월 처리 중인 항목 idx (중복 클릭 방지)
   var relTime = function(iso) {
     var ms = iso ? (new Date(iso)).getTime() : NaN;
     if (isNaN(ms)) return "";
@@ -15553,11 +15558,11 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
                 );
               }
               // 📌 카드에서 바로 이월 — 미완료 + 아직 이월 안 한 항목에만 버튼을 붙인다.
-              //    onCarryItem 은 "내 노트 && 오늘 이전" 일 때만 부모가 내려준다(오늘 노트를 오늘로 옮기는 건 의미 없음).
+              //    onCarryItem 은 내 노트일 때만 부모가 내려준다. 누르면 날짜 선택 팝업이 뜨고,
+              //    원본과 같은 날짜는 팝업에서 막는다(과거 노트로 제한하지 않음 — 아무 날짜나 고를 수 있어야 하므로).
               var rawLine = (note.content || "").split("\n")[item.idx] || "";
               var alreadyCarried = /\(?→\s*\d{1,2}\/\d{1,2}\s*이월\)?/.test(rawLine);
               var showCarry = !!onCarryItem && !item.checked && !alreadyCarried;
-              var carrying = carryingIdx === item.idx;
               return (
                 <div key={item.idx} style={{ display: "flex", alignItems: "flex-start", gap: 6, padding: item.waitReason ? "6px 8px" : "6px 0", background: item.waitReason ? "#FFFBEB" : "transparent", border: item.waitReason ? "1px solid #FDE68A" : undefined, borderRadius: 8 }}>
                   <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", flex: 1, minWidth: 0 }}>
@@ -15569,13 +15574,10 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
                     )}
                   </label>
                   {showCarry && (
-                    <button disabled={carrying} title="이 항목을 오늘 노트로 이월 (원본은 지우지 않고 '이월' 표시만 남음)"
-                      onClick={async function() {
-                        setCarryingIdx(item.idx);
-                        try { await onCarryItem(note, item.idx); } finally { setCarryingIdx(null); }
-                      }}
-                      style={{ flexShrink: 0, marginTop: 1, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", padding: "3px 9px", borderRadius: 6, cursor: carrying ? "default" : "pointer", background: "#EEF2FF", border: "1px solid #C7D2FE", color: "#4338CA", opacity: carrying ? 0.6 : 1 }}>
-                      {carrying ? "처리 중..." : "오늘로 이월"}
+                    <button title="이 항목을 다른 날짜 노트로 이월 (원본은 지우지 않고 '이월' 표시만 남음)"
+                      onClick={function() { onCarryItem(note, item.idx); }}
+                      style={{ flexShrink: 0, marginTop: 1, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", padding: "3px 9px", borderRadius: 6, cursor: "pointer", background: "#EEF2FF", border: "1px solid #C7D2FE", color: "#4338CA" }}>
+                      📅 이월
                     </button>
                   )}
                 </div>
@@ -15664,6 +15666,10 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   const [showCarry, setShowCarry] = useState(false);
   const [carrySel, setCarrySel] = useState({}); // key(noteId:lineIdx) -> bool
   const [carryUndo, setCarryUndo] = useState(null); // 방금 가져오기 되돌리기: {count, addedTexts, snapshots:[{id,content}]}
+  // 📅 카드 항목별 이월 — 날짜 선택 팝업 (부모가 1개만 소유)
+  const [carryPick, setCarryPick] = useState(null);      // {noteId, lineIdx, text, fromDate} | null
+  const [carryPickDate, setCarryPickDate] = useState(""); // 고른 날짜 YYYY-MM-DD
+  const [carryPickBusy, setCarryPickBusy] = useState(false);
   const carryUndoTimer = useRef(null);
   // 🗓️ 주간 정리 리마인드 모달
   const [showWeekly, setShowWeekly] = useState(false);
@@ -15671,6 +15677,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   // 주간 정리 항목별 이월 상태: key(noteId:lineIdx) -> 'processing' | 'done' (중복 클릭·중복 삽입 방지 + 시각 피드백)
   const [reviewStatus, setReviewStatus] = useState({});
   const [bulkCarry, setBulkCarry] = useState("idle"); // idle | processing | done (전체 이월 버튼)
+  const [weeklyTarget, setWeeklyTarget] = useState(""); // 주간 정리에서 이월해 넣을 날짜 (빈 값 = 오늘)
   const weeklyOpenedRef = useRef(false);
   // 📩 업무 요청 (팀원 간)
   const [showRequest, setShowRequest] = useState(false);
@@ -16118,9 +16125,10 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   }, [notes, profile, todayStr]);
   var weeklyItems = weeklyBoth[weeklyMode] || [];
   var weeklyTotal = weeklyBoth.mon.length + weeklyBoth.fri.length;
+  var wTarget = weeklyTarget || todayStr; // 주간 정리에서 이월해 넣을 날짜 (안 고르면 오늘)
 
   // 모달이 닫히면 이월 상태 초기화 (다음에 열 때 깨끗하게)
-  useEffect(function() { if (!showWeekly) { setReviewStatus({}); setBulkCarry("idle"); } }, [showWeekly]);
+  useEffect(function() { if (!showWeekly) { setReviewStatus({}); setBulkCarry("idle"); setWeeklyTarget(""); } }, [showWeekly]);
 
   var weeklyKey = function(mode, me) { return "lastWeeklyReview" + (mode === "fri" ? "Fri" : "Mon") + "_" + me; };
   var markWeeklyReviewed = function() {
@@ -16167,9 +16175,11 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   }, [loading, profile, todayStr, weeklyMode, weeklyItems, showWeekly]);
 
   // 주간 정리 실행: entries = [{item, action:'carry'|'done'|'delete'}]
-  var applyReviewActions = async function(entries, markDone) {
+  //   targetDate: 이월해 넣을 날짜(YYYY-MM-DD). 생략하면 오늘 — 기존 호출부 동작 그대로.
+  var applyReviewActions = async function(entries, markDone, targetDate) {
     var me = profile?.name || "";
-    var md = mdLabel(todayStr);
+    var destDate = targetDate || todayStr;
+    var md = mdLabel(destDate);
     var perNote = new Map(); // noteId -> {carried,done,del,content}
     var carryTexts = [];
     entries.forEach(function(e) {
@@ -16192,20 +16202,20 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       if (g.del.size) c = removeLines(c, g.del);
       updates.push({ id: nid, content: c });
     });
-    // '오늘로 이월' 항목 → 오늘 노트에 추가 (없으면 생성)
+    // 이월 항목 → 대상 날짜(destDate) 노트에 추가 (그 날짜 노트가 없으면 새로 생성)
     var todayInsert = null;
     if (carryTexts.length) {
       var newLines = carryTexts.map(function(it) {
-        return buildItemLine({ checked: false, text: it.text, dueDate: it.dueDate || "", waitReason: it.waitReason || "", waitSince: it.waitReason ? todayStr : "" });
+        return buildItemLine({ checked: false, text: it.text, dueDate: it.dueDate || "", waitReason: it.waitReason || "", waitSince: it.waitReason ? destDate : "" });
       }).join("\n");
-      var todayNote = notes.find(function(n) { return (n.assignee || "") === me && getNoteDate(n) === todayStr; });
+      var todayNote = notes.find(function(n) { return (n.assignee || "") === me && getNoteDate(n) === destDate; });
       if (todayNote) {
         var u = updates.find(function(x) { return x.id === todayNote.id; });
         var base = u ? u.content : (todayNote.content || "");
         var merged = base ? base + "\n" + newLines : newLines;
         if (u) u.content = merged; else updates.push({ id: todayNote.id, content: merged });
       } else {
-        var ins = { assignee: me, title: noteAutoTitle(me, todayStr), content: newLines, is_todo: true, created_by: me, note_date: todayStr };
+        var ins = { assignee: me, title: noteAutoTitle(me, destDate), content: newLines, is_todo: true, created_by: me, note_date: destDate };
         var ri = await supabase.from("work_notes").insert(ins).select().single();
         if (!ri.error && ri.data) todayInsert = ri.data;
       }
@@ -16223,19 +16233,34 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     if (markDone) markWeeklyReviewed();
   };
 
-  // 📌 카드에서 바로 이월 — 주간 정리 모달을 거치지 않고 체크리스트 항목 옆 버튼으로 1건 처리.
+  // 📌 카드에서 바로 이월 — 항목 옆 버튼 → 날짜 선택 팝업 → 고른 날짜 노트로 이동.
+  //    팝업은 부모가 1개만 들고 있는다(카드마다 오버레이가 생기지 않게).
   //    항목 추출은 주간 정리와 똑같이 parseUnfinishedItems 를 쓴다
   //    → 마감일·대기사유·대기시작일이 그대로 따라간다(카드의 parseChecklist 는 마감일을 안 돌려줌).
-  var carryItemFromCard = async function(note, lineIdx) {
+  var openCarryPicker = function(note, lineIdx) {
     var it = parseUnfinishedItems(note.content).find(function(x) { return x.lineIdx === lineIdx; });
     if (!it) return; // 이미 체크됐거나 줄이 바뀐 경우
-    await applyReviewActions([{ item: Object.assign({ noteId: note.id }, it), action: "carry" }], false);
+    setCarryPick({ noteId: note.id, lineIdx: lineIdx, text: it.text, fromDate: getNoteDate(note) });
+    setCarryPickDate(addDaysStr(todayStr, 1)); // 기본값 = 내일
   };
-  // 이월 버튼을 붙일 노트인가 — 내 노트 && 오늘 이전(오늘 노트를 오늘로 옮기는 건 무의미)
+  var confirmCarryPick = async function() {
+    if (!carryPick || !carryPickDate || carryPickBusy) return;
+    var note = notes.find(function(n) { return n.id === carryPick.noteId; });
+    // 팝업이 열려 있는 동안 원본이 바뀌었을 수 있으니 확정 시점에 다시 읽는다
+    var it = note ? parseUnfinishedItems(note.content).find(function(x) { return x.lineIdx === carryPick.lineIdx; }) : null;
+    if (!it) { setCarryPick(null); return; }
+    setCarryPickBusy(true);
+    try {
+      await applyReviewActions([{ item: Object.assign({ noteId: note.id }, it), action: "carry" }], false, carryPickDate);
+    } finally {
+      setCarryPickBusy(false);
+      setCarryPick(null);
+    }
+  };
+  // 이월 버튼을 붙일 노트인가 — 내 노트만. 날짜를 직접 고르므로 과거 노트로 제한하지 않는다
+  // (오늘·미래 노트의 항목도 다른 날짜로 옮길 수 있어야 함).
   var canCarryFromCard = function(n) {
-    if ((n.assignee || "") !== (profile?.name || "")) return false;
-    var nd = getNoteDate(n);
-    return !!nd && nd < todayStr;
+    return (n.assignee || "") === (profile?.name || "");
   };
 
   // 📩 업무 요청: 받은/보낸 요청 로드 + 업무노트 열었으니 받은 요청 읽음 처리(기능5)
@@ -16823,6 +16848,67 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
         </div>
       )}
 
+      {/* 📅 항목 이월 — 날짜 선택 팝업 */}
+      {carryPick && (function() {
+        var quick = [
+          { label: "내일", d: addDaysStr(todayStr, 1) },
+          { label: "모레", d: addDaysStr(todayStr, 2) },
+          { label: "다음주 월요일", d: addDaysStr(mondayOf(todayStr), 7) },
+        ];
+        var sameDay = carryPickDate === carryPick.fromDate; // 원본과 같은 날짜로는 옮길 이유가 없다
+        var closePick = function() { if (!carryPickBusy) setCarryPick(null); };
+        return (
+          <div onClick={closePick}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+            <div onClick={function(e) { e.stopPropagation(); }}
+              style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 380, padding: 20, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 15, fontWeight: 800 }}>📅 어느 날짜로 이월할까요?</div>
+                  <div style={{ fontSize: 12, color: "#555", marginTop: 6, background: "#F7F6F3", borderRadius: 6, padding: "6px 9px", lineHeight: 1.5, wordBreak: "break-all" }}>{carryPick.text}</div>
+                </div>
+                <button onClick={closePick} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#888", lineHeight: 1, marginLeft: 8 }}>✕</button>
+              </div>
+
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+                {quick.map(function(q) {
+                  var on = carryPickDate === q.d;
+                  return (
+                    <button key={q.label} onClick={function() { setCarryPickDate(q.d); }}
+                      style={{ fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 99, cursor: "pointer",
+                        background: on ? "#1A1917" : "#fff", color: on ? "#fff" : "#555", border: "1px solid " + (on ? "#1A1917" : "#E8E5E0") }}>
+                      {q.label} <span style={{ opacity: 0.7, fontWeight: 400 }}>{mdLabel(q.d)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <label style={{ display: "block", fontSize: 11, color: "#888", marginBottom: 5 }}>직접 고르기</label>
+              <input type="date" value={carryPickDate} onChange={function(e) { setCarryPickDate(e.target.value); }}
+                style={{ width: "100%", padding: "9px 11px", border: "1px solid #C7D2FE", borderRadius: 8, fontSize: 13, color: "#4338CA", outline: "none", boxSizing: "border-box" }} />
+
+              <div style={{ fontSize: 11, color: sameDay ? "#B91C1C" : "#888", marginTop: 9, lineHeight: 1.6 }}>
+                {sameDay
+                  ? "원본 노트와 같은 날짜예요. 다른 날짜를 골라주세요."
+                  : "그 날짜에 내 노트가 없으면 새로 만들어 담습니다. 원본 항목은 지우지 않고 \"(→ " + (carryPickDate ? mdLabel(carryPickDate) : "") + " 이월)\" 표시만 남아요."}
+              </div>
+
+              <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                <button disabled={!carryPickDate || sameDay || carryPickBusy} onClick={confirmCarryPick}
+                  style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: "none", fontSize: 13, fontWeight: 700,
+                    background: (!carryPickDate || sameDay || carryPickBusy) ? "#E8E5E0" : "#4338CA",
+                    color: (!carryPickDate || sameDay || carryPickBusy) ? "#AAA" : "#fff",
+                    cursor: (!carryPickDate || sameDay || carryPickBusy) ? "default" : "pointer" }}>
+                  {carryPickBusy ? "이월 중..." : (carryPickDate ? mdLabel(carryPickDate) + "로 이월" : "날짜를 골라주세요")}
+                </button>
+                <button onClick={closePick} disabled={carryPickBusy}
+                  style={{ padding: "10px 16px", background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: carryPickBusy ? "default" : "pointer" }}>취소</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ↩️ 가져오기 되돌리기 토스트 (5초) */}
       {carryUndo && (
         <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 2100, display: "flex", alignItems: "center", gap: 14, background: "#1A1917", color: "#fff", borderRadius: 10, padding: "10px 16px", boxShadow: "0 8px 30px rgba(0,0,0,0.3)" }}>
@@ -16924,20 +17010,34 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
               </div>
             ) : (
               <>
+                {/* 이월해 넣을 날짜 — 아래 [이월]·[전체 이월] 이 모두 이 날짜를 쓴다 (기본 오늘) */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 20px 0", flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 11, color: "#888" }}>이월할 날짜</span>
+                  <input type="date" value={wTarget} onChange={function(e) { setWeeklyTarget(e.target.value); }}
+                    style={{ padding: "5px 8px", border: "1px solid #C7D2FE", borderRadius: 6, fontSize: 12, color: "#4338CA", outline: "none" }} />
+                  {[{ label: "오늘", d: todayStr }, { label: "내일", d: addDaysStr(todayStr, 1) }, { label: "다음주 월요일", d: addDaysStr(mondayOf(todayStr), 7) }].map(function(q) {
+                    var on = wTarget === q.d;
+                    return (
+                      <button key={q.label} onClick={function() { setWeeklyTarget(q.d); }}
+                        style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 99, cursor: "pointer",
+                          background: on ? "#1A1917" : "#fff", color: on ? "#fff" : "#666", border: "1px solid " + (on ? "#1A1917" : "#E8E5E0") }}>{q.label}</button>
+                    );
+                  })}
+                </div>
                 <div style={{ display: "flex", gap: 8, padding: "10px 20px", borderBottom: "1px solid #F0EDE8", flexWrap: "wrap" }}>
                   <button disabled={bulkCarry !== "idle"} onClick={async function() {
                     setBulkCarry("processing");
                     // 아직 이월 안 된 항목만 (이미 done인 건 중복 삽입 방지 위해 제외)
                     var pending = weeklyItems.filter(function(it) { return reviewStatus[it.noteId + ":" + it.lineIdx] !== "done"; });
                     setReviewStatus(function(p) { var n = Object.assign({}, p); pending.forEach(function(it) { n[it.noteId + ":" + it.lineIdx] = "processing"; }); return n; });
-                    if (pending.length) await applyReviewActions(pending.map(function(it) { return { item: it, action: "carry" }; }), false);
+                    if (pending.length) await applyReviewActions(pending.map(function(it) { return { item: it, action: "carry" }; }), false, wTarget);
                     setReviewStatus(function(p) { var n = Object.assign({}, p); weeklyItems.forEach(function(it) { n[it.noteId + ":" + it.lineIdx] = "done"; }); return n; });
                     setBulkCarry("done");
                     // 모달은 닫지 않고 완료 표시를 보여준다. 다만 이번 주는 다시 안 뜨게 기록만.
                     var me2 = profile?.name; if (me2) { try { localStorage.setItem(weeklyKey(weeklyMode, me2), mondayOf(todayStr)); } catch (e) {} }
                   }}
                     style={{ fontSize: 12, padding: "6px 12px", background: bulkCarry === "done" ? "#DCFCE7" : "#EEF2FF", border: "1px solid " + (bulkCarry === "done" ? "#86EFAC" : "#C7D2FE"), borderRadius: 6, cursor: bulkCarry === "idle" ? "pointer" : "default", color: bulkCarry === "done" ? "#15803D" : "#4338CA", fontWeight: 600, opacity: bulkCarry === "processing" ? 0.7 : 1 }}>
-                    {bulkCarry === "processing" ? "처리 중..." : bulkCarry === "done" ? "✅ 전체 이월 완료" : "📌 전체 오늘로 이월"}
+                    {bulkCarry === "processing" ? "처리 중..." : bulkCarry === "done" ? "✅ 전체 이월 완료" : "📌 전체 " + mdLabel(wTarget) + "로 이월"}
                   </button>
                   <button onClick={function() { applyReviewActions(weeklyItems.map(function(it) { return { item: it, action: "done" }; }), true); }}
                     style={{ fontSize: 12, padding: "6px 12px", background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: 6, cursor: "pointer", color: "#15803D", fontWeight: 600 }}>✅ 전체 완료</button>
@@ -16959,15 +17059,15 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
                           </div>
                         </div>
                         <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
-                          <button disabled={carried} title="오늘 노트로 이월"
+                          <button disabled={carried} title={mdLabel(wTarget) + " 노트로 이월"}
                             onClick={async function() {
                               setReviewStatus(function(p) { var n = Object.assign({}, p); n[key] = "processing"; return n; });
-                              await applyReviewActions([{ item: it, action: "carry" }], false);
+                              await applyReviewActions([{ item: it, action: "carry" }], false, wTarget);
                               setReviewStatus(function(p) { var n = Object.assign({}, p); n[key] = "done"; return n; });
                             }}
                             style={{ fontSize: 11, padding: "5px 9px", borderRadius: 6, fontWeight: 600, whiteSpace: "nowrap", cursor: carried ? "default" : "pointer",
                               background: st === "done" ? "#DCFCE7" : "#EEF2FF", border: "1px solid " + (st === "done" ? "#86EFAC" : "#C7D2FE"), color: st === "done" ? "#15803D" : "#4338CA", opacity: st === "processing" ? 0.7 : 1 }}>
-                            {st === "processing" ? "처리 중..." : st === "done" ? "✅ 이월됨" : "오늘로 이월"}
+                            {st === "processing" ? "처리 중..." : st === "done" ? "✅ 이월됨" : mdLabel(wTarget) + "로 이월"}
                           </button>
                           <button disabled={carried} onClick={function() { applyReviewActions([{ item: it, action: "done" }], false); }} title="완료 처리"
                             style={{ fontSize: 11, padding: "5px 9px", background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: 6, cursor: carried ? "default" : "pointer", color: "#15803D", fontWeight: 600, whiteSpace: "nowrap", opacity: carried ? 0.4 : 1 }}>완료</button>
@@ -17339,7 +17439,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
                   {notesForSelectedDate.map(function(note) {
-                    return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? carryItemFromCard : null} />;
+                    return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? openCarryPicker : null} />;
                   })}
                 </div>
               )}
@@ -17401,7 +17501,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#B45309", letterSpacing: "0.05em", marginBottom: 10 }}>📌 고정된 노트</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? carryItemFromCard : null} />; })}
+                {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? openCarryPicker : null} />; })}
               </div>
             </div>
           )}
@@ -17410,7 +17510,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div>
               {pinned.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: "#888", letterSpacing: "0.05em", marginBottom: 10 }}>전체 노트</div>}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? carryItemFromCard : null} />; })}
+                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? openCarryPicker : null} />; })}
               </div>
             </div>
           )}
