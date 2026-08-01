@@ -12981,6 +12981,9 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
 
           {tab === "docs" && (
             <div>
+              <CompanyDriveFolder company={data} onSaveFolder={function(fid) {
+                setData(function(p) { return Object.assign({}, p, { drive_folder_id: fid }); });
+              }} />
               {(function() {
                 var reqList = (data.requested_docs || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
                 var recList = (data.received_docs || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
@@ -18901,7 +18904,10 @@ function CalendarView({ companies, onSelectCompany, profile }) {
       var token = hash.split("access_token=")[1].split("&")[0];
       var stateMatch = hash.match(/state=([^&]+)/);
       var target = stateMatch ? stateMatch[1] : "yangho";
-      
+      // 🔒 드라이브 연결로 받은 토큰을 캘린더 토큰으로 오인하지 않게(모르는 state 를 yangho 로 떨구는 구조라 필요).
+      //    드라이브 건은 모듈 로드 시점의 captureDriveToken 이 이미 처리하고 해시도 지운다.
+      if (target !== "yangho" && target !== "director") return;
+
       if (token) {
         if (target === "director") {
           setDirectorToken(token);
@@ -19302,6 +19308,82 @@ function CalendarView({ companies, onSelectCompany, profile }) {
 const DRIVE_FOLDER_ID = "15noP_C-r-ZTo56xGbjUWFv2gAKDzXMJa";
 const DRIVE_FOLDER_URL = "https://drive.google.com/drive/folders/15noP_C-r-ZTo56xGbjUWFv2gAKDzXMJa";
 
+// ── 📂 구글 드라이브 연동 (브라우저 OAuth) ──────────────────────────────────
+//  왜 API 키가 아니라 OAuth 인가:
+//   · API 키는 "링크가 있는 누구나"로 공개된 폴더만 읽는다. 사업계획서·재무자료를
+//     그렇게 공개할 수 없다. OAuth 는 로그인한 본인 권한으로 비공개 폴더를 읽는다.
+//   · 키를 클라이언트에 두지 않는다(옛 자료실은 API 키가 소스에 박혀 있었고 지금은 무효).
+//   · 토큰을 브라우저에만 두므로 **서버에 refresh token 을 저장하지 않는다**
+//     → 2026-07-27 사고로 잠근 google_oauth_tokens 를 잠긴 채로 둘 수 있다. 위험 표면을 늘리지 않는다.
+//  한계: implicit 토큰이라 약 1시간 뒤 만료된다(만료되면 다시 "구글 연결").
+const GDRIVE_TOKEN_KEY = "gdrive_token";
+const GDRIVE_EXP_KEY = "gdrive_token_exp";
+const GDRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+
+// 🔑 OAuth 복귀 처리 — 어느 화면에서 눌러도 루트로 돌아오므로 컴포넌트가 아니라
+//    모듈 로드 시점에 처리한다. 캘린더 핸들러(useEffect)보다 먼저 실행되는 게 중요:
+//    그쪽은 모르는 state 를 "yangho 캘린더 토큰"으로 취급해서 드라이브 토큰을 가로챈다.
+(function captureDriveToken() {
+  try {
+    var h = (typeof window !== "undefined" && window.location.hash) || "";
+    if (h.indexOf("access_token") < 0) return;
+    if (!/[#&]state=drive(&|$)/.test(h)) return; // 드라이브 건만 처리(캘린더는 기존 로직 그대로)
+    var tok = (h.split("access_token=")[1] || "").split("&")[0];
+    if (!tok) return;
+    var em = h.match(/[#&]expires_in=(\d+)/);
+    var ttl = em ? parseInt(em[1], 10) : 3600;
+    localStorage.setItem(GDRIVE_TOKEN_KEY, tok);
+    localStorage.setItem(GDRIVE_EXP_KEY, String(Date.now() + (ttl - 60) * 1000)); // 60초 여유
+    window.history.replaceState(null, "", window.location.pathname);
+  } catch (e) {}
+})();
+
+// 살아있는 드라이브 토큰(없거나 만료면 "")
+function getDriveToken() {
+  try {
+    var t = localStorage.getItem(GDRIVE_TOKEN_KEY);
+    if (!t) return "";
+    var exp = parseInt(localStorage.getItem(GDRIVE_EXP_KEY) || "0", 10);
+    if (exp && Date.now() > exp) { clearDriveToken(); return ""; }
+    return t;
+  } catch (e) { return ""; }
+}
+function clearDriveToken() {
+  try { localStorage.removeItem(GDRIVE_TOKEN_KEY); localStorage.removeItem(GDRIVE_EXP_KEY); } catch (e) {}
+}
+// 구글 동의 화면으로 이동(돌아오면 위 captureDriveToken 이 받는다)
+function connectGoogleDrive() {
+  var redirectUri = window.location.origin;
+  var url = "https://accounts.google.com/o/oauth2/v2/auth"
+    + "?client_id=" + GOOGLE_CLIENT_ID
+    + "&redirect_uri=" + encodeURIComponent(redirectUri)
+    + "&response_type=token"
+    + "&scope=" + encodeURIComponent(GDRIVE_SCOPE)
+    + "&state=drive"
+    + "&prompt=select_account";
+  window.location.href = url;
+}
+// 드라이브 URL/ID 문자열에서 폴더 ID 추출 (주소를 붙여넣어도 되게)
+function parseDriveFolderId(raw) {
+  var s = String(raw || "").trim();
+  if (!s) return "";
+  var m = s.match(/\/folders\/([A-Za-z0-9_-]+)/) || s.match(/[?&]id=([A-Za-z0-9_-]+)/);
+  if (m) return m[1];
+  return /^[A-Za-z0-9_-]{10,}$/.test(s) ? s : ""; // 순수 ID 를 그대로 붙여넣은 경우
+}
+// 폴더 안 항목 조회. 401/403 이면 토큰을 버리고 재연결을 유도한다.
+async function driveListFiles(folderId, token) {
+  var url = "https://www.googleapis.com/drive/v3/files"
+    + "?q=" + encodeURIComponent("'" + folderId + "' in parents and trashed=false")
+    + "&fields=" + encodeURIComponent("files(id,name,mimeType,size,modifiedTime,webViewLink,webContentLink)")
+    + "&orderBy=folder,name&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true";
+  var r = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+  if (r.status === 401 || r.status === 403) { clearDriveToken(); throw new Error("AUTH"); }
+  if (!r.ok) throw new Error("드라이브 조회 실패 (" + r.status + ")");
+  var d = await r.json();
+  return d.files || [];
+}
+
 const FILE_ICONS = {
   pdf:  { icon: "📄", color: "#DC2626", bg: "#FEF2F2" },
   xlsx: { icon: "📊", color: "#15803D", bg: "#F0FDF4" },
@@ -19458,6 +19540,152 @@ function QuickLinksView() {
   );
 }
 
+// ── 📂 업체별 구글 드라이브 폴더 연결 (기업 상세 > 서류현황) ────────────────
+//  대표자가 드라이브에 올린 서류를 직원이 다시 내려받아 CRM에 올리는 반복 작업을 줄인다.
+//  폴더 주소를 한 번 연결해 두면 그 업체 화면에서 파일 목록을 바로 본다.
+//  ⚠️ 자동 감지가 아니다(눌렀을 때 그 시점 목록을 가져온다). 자동 감지는 서버에 refresh token 을
+//     보관해야 해서 2026-07-27에 잠근 google_oauth_tokens 를 다시 열어야 한다 — 이번 범위에서 제외.
+function CompanyDriveFolder({ company, onSaveFolder }) {
+  var [editing, setEditing] = useState(false);
+  var [input, setInput] = useState("");
+  var [files, setFiles] = useState([]);
+  var [loading, setLoading] = useState(false);
+  var [err, setErr] = useState("");
+  var [needAuth, setNeedAuth] = useState(false);
+  var [saving, setSaving] = useState(false);
+
+  var folderId = company?.drive_folder_id || "";
+
+  var load = useCallback(async function(fid) {
+    if (!fid) return;
+    var token = getDriveToken();
+    if (!token) { setNeedAuth(true); setFiles([]); return; }
+    setLoading(true); setErr(""); setNeedAuth(false);
+    try {
+      setFiles(await driveListFiles(fid, token));
+    } catch (e) {
+      if (e && e.message === "AUTH") setNeedAuth(true);
+      else setErr(e.message || "조회 실패");
+      setFiles([]);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(function() { if (folderId) load(folderId); }, [folderId, load]);
+
+  var saveFolder = async function() {
+    var fid = parseDriveFolderId(input);
+    if (!fid) { setErr("드라이브 폴더 주소가 아닙니다. 폴더를 열고 주소창 URL을 그대로 붙여넣어 주세요."); return; }
+    if (!company?.id) return;
+    setSaving(true);
+    var r = await writeGuarded({ table: "companies", op: "update", id: company.id,
+      payload: { drive_folder_id: fid }, label: "드라이브 폴더 연결" });
+    setSaving(false);
+    if (!r.ok) {
+      // 컬럼 미생성(SQL 미실행) 시 안내 — 조용히 실패하지 않게
+      setErr("저장 실패. 'drive_folder_id' 컬럼이 없으면 구글드라이브_폴더연결_컬럼추가.sql 을 먼저 실행하세요.");
+      return;
+    }
+    setErr(""); setEditing(false);
+    if (onSaveFolder) onSaveFolder(fid);
+  };
+
+  var unlink = async function() {
+    if (!window.confirm("이 업체의 드라이브 폴더 연결을 해제할까요?\n(드라이브의 파일은 지워지지 않습니다)")) return;
+    var r = await writeGuarded({ table: "companies", op: "update", id: company.id,
+      payload: { drive_folder_id: null }, label: "드라이브 폴더 해제" });
+    if (r.ok) { setFiles([]); if (onSaveFolder) onSaveFolder(""); }
+  };
+
+  var box = { background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "12px 14px", marginBottom: 16 };
+
+  if (!folderId && !editing) {
+    return (
+      <div style={box}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 12, color: "#64748B" }}>📂 이 업체의 구글 드라이브 폴더를 연결하면 올라온 서류를 여기서 바로 봅니다.</div>
+          <button onClick={function() { setEditing(true); setInput(""); setErr(""); }}
+            style={{ fontSize: 12, fontWeight: 600, padding: "6px 12px", background: "#fff", border: "1px solid #C7D2FE", color: "#4338CA", borderRadius: 6, cursor: "pointer", whiteSpace: "nowrap" }}>
+            폴더 연결
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={box}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: editing || files.length || loading || err || needAuth ? 10 : 0, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#334155" }}>📂 구글 드라이브 폴더</div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {folderId && !editing && (
+            <>
+              <button onClick={function() { load(folderId); }} disabled={loading}
+                style={{ fontSize: 11, padding: "5px 10px", background: "#fff", border: "1px solid #E2E8F0", color: "#475569", borderRadius: 6, cursor: "pointer" }}>
+                {loading ? "불러오는 중..." : "🔄 새로고침"}
+              </button>
+              <a href={"https://drive.google.com/drive/folders/" + folderId} target="_blank" rel="noreferrer"
+                style={{ fontSize: 11, padding: "5px 10px", background: "#fff", border: "1px solid #E2E8F0", color: "#475569", borderRadius: 6, textDecoration: "none" }}>
+                드라이브 열기
+              </a>
+              <button onClick={unlink}
+                style={{ fontSize: 11, padding: "5px 10px", background: "#fff", border: "1px solid #FECACA", color: "#B91C1C", borderRadius: 6, cursor: "pointer" }}>연결 해제</button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {editing && (
+        <div>
+          <input value={input} onChange={function(e) { setInput(e.target.value); }} autoFocus
+            placeholder="드라이브에서 폴더를 열고 주소창 URL을 붙여넣으세요"
+            style={{ width: "100%", padding: "8px 10px", border: "1px solid #C7D2FE", borderRadius: 6, fontSize: 12, boxSizing: "border-box", outline: "none" }} />
+          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+            <button onClick={saveFolder} disabled={saving}
+              style={{ fontSize: 12, fontWeight: 700, padding: "7px 14px", background: "#4338CA", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>
+              {saving ? "저장 중..." : "연결"}
+            </button>
+            <button onClick={function() { setEditing(false); setErr(""); }}
+              style={{ fontSize: 12, padding: "7px 12px", background: "#fff", color: "#888", border: "1px solid #E2E8F0", borderRadius: 6, cursor: "pointer" }}>취소</button>
+          </div>
+        </div>
+      )}
+
+      {needAuth && !editing && (
+        <div style={{ fontSize: 12, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 6, padding: "9px 11px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <span>구글 계정 연결이 필요합니다(약 1시간마다 재연결).</span>
+          <button onClick={connectGoogleDrive}
+            style={{ fontSize: 11, fontWeight: 700, padding: "5px 12px", background: "#4338CA", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", whiteSpace: "nowrap" }}>구글 연결</button>
+        </div>
+      )}
+
+      {err && <div style={{ fontSize: 11, color: "#B91C1C", marginTop: 6, lineHeight: 1.6 }}>{err}</div>}
+
+      {!editing && !needAuth && !loading && folderId && files.length === 0 && !err && (
+        <div style={{ fontSize: 12, color: "#94A3B8" }}>폴더가 비어 있거나 볼 수 있는 파일이 없습니다.</div>
+      )}
+
+      {files.length > 0 && !editing && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {files.map(function(f) {
+            var isFolder = f.mimeType === "application/vnd.google-apps.folder";
+            var ext = (f.name || "").split(".").pop().toLowerCase();
+            var ic = isFolder ? { icon: "📁", color: "#B45309", bg: "#FFFBEB" } : (FILE_ICONS[ext] || { icon: "📎", color: "#64748B", bg: "#F1F5F9" });
+            return (
+              <a key={f.id} href={f.webViewLink} target="_blank" rel="noreferrer"
+                style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 9px", background: "#fff", border: "1px solid #E2E8F0", borderRadius: 6, textDecoration: "none", color: "inherit" }}>
+                <span style={{ fontSize: 14, width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", background: ic.bg, borderRadius: 5, flexShrink: 0 }}>{ic.icon}</span>
+                <span style={{ fontSize: 12, color: "#1E293B", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
+                <span style={{ fontSize: 10, color: "#94A3B8", flexShrink: 0 }}>{f.modifiedTime ? String(f.modifiedTime).slice(0, 10) : ""}</span>
+              </a>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ManualView() {
   const [files, setFiles] = useState([]);
   const [folders, setFolders] = useState([]);
@@ -19468,23 +19696,25 @@ function ManualView() {
   const [search, setSearch] = useState("");
   const [lastRefresh, setLastRefresh] = useState(null);
 
+  const [needAuth, setNeedAuth] = useState(false);
+
+  // 옛 방식(소스에 박힌 API 키)은 07-27 정리 때 무효화돼 자료실이 죽어 있었다.
+  //   → 본인 구글 계정 토큰으로 조회한다. 키는 어디에도 두지 않는다.
   const fetchFiles = useCallback(async (folderId) => {
+    var token = getDriveToken();
+    if (!token) { setNeedAuth(true); setLoading(false); return; }
     setLoading(true);
     setError(null);
+    setNeedAuth(false);
     try {
-      // Google Drive API - 공개 폴더 파일 목록 조회
-      const apiKey = "AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFmBBY"; // 공개용 API 키 필요
-      const url = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&fields=files(id,name,mimeType,size,modifiedTime,webViewLink,webContentLink)&orderBy=name&key=${apiKey}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("API 오류");
-      const data = await res.json();
-      const items = data.files || [];
+      const items = await driveListFiles(folderId, token);
       const folderMime = "application/vnd.google-apps.folder";
       setFolders(items.filter(f => f.mimeType === folderMime));
       setFiles(items.filter(f => f.mimeType !== folderMime));
       setLastRefresh(new Date());
     } catch (e) {
-      setError(e.message);
+      if (e && e.message === "AUTH") setNeedAuth(true);   // 토큰 만료·권한 없음 → 재연결 안내
+      else setError(e.message);
     }
     setLoading(false);
   }, []);
@@ -19574,8 +19804,24 @@ function ManualView() {
         </div>
       )}
 
-      {/* 오류 - API 키 없는 경우 */}
-      {!loading && error && (
+      {/* 구글 연결 필요 (미연결 · 토큰 만료 · 권한 없음) */}
+      {!loading && needAuth && (
+        <div style={{ background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 12, padding: "28px 24px", textAlign: "center" }}>
+          <div style={{ fontSize: 32, marginBottom: 12 }}>🔐</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#3730A3", marginBottom: 8 }}>구글 계정 연결이 필요해요</div>
+          <p style={{ fontSize: 13, color: "#4338CA", marginBottom: 20, lineHeight: 1.7 }}>
+            본인 구글 계정 권한으로 폴더를 읽습니다. 볼 수 있는 파일만 보이고,<br/>
+            연결 정보는 이 브라우저에만 저장됩니다(약 1시간 후 다시 연결).
+          </p>
+          <button onClick={connectGoogleDrive}
+            style={{ background: "#4338CA", color: "#fff", border: "none", borderRadius: 8, padding: "11px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+            구글 계정 연결하기
+          </button>
+        </div>
+      )}
+
+      {/* 오류 */}
+      {!loading && !needAuth && error && (
         <div style={{ background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 12, padding: "28px 24px", textAlign: "center" }}>
           <div style={{ fontSize: 32, marginBottom: 12 }}>🔗</div>
           <div style={{ fontSize: 15, fontWeight: 700, color: "#92400E", marginBottom: 8 }}>Google Drive 직접 접속</div>
@@ -19610,7 +19856,7 @@ function ManualView() {
       )}
 
       {/* 파일/폴더 목록 */}
-      {!loading && !error && (
+      {!loading && !error && !needAuth && (
         <>
           {/* 폴더 목록 */}
           {filteredFolders.length > 0 && (
