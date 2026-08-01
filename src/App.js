@@ -23403,6 +23403,15 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
   //    항목을 누르면 넓은 모달에서 편집하고, 저장할 때만 원래 배열에 반영한다.
   //    { where: "new"|"edit", idx: 번호, text: 편집중 텍스트 }
   const [clEdit, setClEdit] = useState(null);
+  // 📅 가져가기 날짜 선택 팝업 — 어느 날짜의 내 업무노트로 담을지 고른다.
+  //    { note, itemId|null }  itemId 가 null 이면 "통째로 가져가기"
+  const [takePick, setTakePick] = useState(null);
+  const [takePickDate, setTakePickDate] = useState("");
+  const [takePickBusy, setTakePickBusy] = useState(false);
+  var openTakePick = function(note, itemId) {
+    setTakePick({ note: note, itemId: itemId || null });
+    setTakePickDate(kstDate()); // 기본값 = 오늘(기존 동작 유지)
+  };
   var openClEdit = function(where, idx, text) { setClEdit({ where: where, idx: idx, text: text || "" }); };
   var saveClEdit = function() {
     if (!clEdit) return;
@@ -23529,11 +23538,12 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     return s;
   };
 
-  var takeToMyNote = async function(teamNote) {
+  //   targetDate: 담을 내 업무노트의 날짜(YYYY-MM-DD). 생략하면 오늘.
+  var takeToMyNote = async function(teamNote, targetDate) {
     if (!profile?.name) { alert("로그인 정보가 없습니다."); return; }
     var assigneeName = normalizeName(profile.name);
     // work_notes에 새 노트 생성
-    var todayStr = kstDate();
+    var todayStr = targetDate || kstDate();
     var teamLabel = teamNote.team === "corporate" ? "[법인팀]" : teamNote.team === "all" ? "[전체]" : "[개인팀]";
     var workNotePayload = {
       assignee: assigneeName,
@@ -23563,11 +23573,12 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       });
     });
     if (onTakenToMyNote) onTakenToMyNote(wr.data);
-    alert("✅ '" + (teamNote.title || "팀 노트") + "'을(를) 내 노트로 가져왔습니다.\n업무노트에서 확인하세요.");
+    alert("✅ '" + (teamNote.title || "팀 노트") + "'을(를) " + mdLabel(todayStr) + " 내 노트로 가져왔습니다.\n업무노트에서 확인하세요.");
   };
 
   // 체크리스트 항목 하나 가져가기
-  var takeChecklistItem = async function(teamNote, itemId) {
+  //   targetDate: 담을 내 업무노트의 날짜(YYYY-MM-DD). 생략하면 오늘.
+  var takeChecklistItem = async function(teamNote, itemId, targetDate) {
     if (!profile?.name) { alert("로그인 정보가 없습니다."); return; }
     var assigneeName = normalizeName(profile.name);
     var item = (teamNote.checklist || []).find(function(it) { return it.id === itemId; });
@@ -23575,14 +23586,27 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     if (item.taken_by) { alert("이미 " + item.taken_by + "님이 가져간 항목입니다."); return; }
 
     var teamLabel = teamNote.team === "corporate" ? "[법인팀]" : teamNote.team === "all" ? "[전체]" : "[개인팀]";
-    var todayStr = kstDate();
+    var todayStr = targetDate || kstDate();
     var noteTitle = teamLabel + " " + (teamNote.title || "팀 노트");
 
-    // 1) 같은 팀 노트에서 이미 가져온 항목이 있는지 - 같은 사용자가 같은 team_note에서 가져온 work_note 찾기
+    // 1) 같은 팀 노트에서 내가 이미 가져간 항목들이 담긴 노트 중 "고른 날짜와 같은 노트"를 찾는다.
+    //    ⚠️ 날짜를 고를 수 있게 되면서 필수가 된 조건 — 예전처럼 첫 번째 노트에 무조건 합치면
+    //       8/2 로 가져간 뒤 8/5 를 고른 항목이 8/2 노트에 들어가 버린다.
+    //    가져간 날짜가 여러 개일 수 있으므로 후보를 전부 모아 조회한 뒤 날짜로 고른다.
     var existingWorkNoteId = null;
-    if (teamNote.checklist) {
-      var alreadyTaken = teamNote.checklist.find(function(it) { return it.taken_by === assigneeName && it.taken_work_note_id; });
-      if (alreadyTaken) existingWorkNoteId = alreadyTaken.taken_work_note_id;
+    var candidateIds = [];
+    (teamNote.checklist || []).forEach(function(it) {
+      if (it.taken_by === assigneeName && it.taken_work_note_id && candidateIds.indexOf(it.taken_work_note_id) < 0) {
+        candidateIds.push(it.taken_work_note_id);
+      }
+    });
+    if (candidateIds.length) {
+      var cand = await supabase.from("work_notes").select("id, note_date")
+        .in("id", candidateIds).is("deleted_at", null);
+      if (!cand.error && cand.data) {
+        var hit = cand.data.find(function(n) { return n.note_date === todayStr; });
+        if (hit) existingWorkNoteId = hit.id;
+      }
     }
 
     var workNoteId;
@@ -24079,7 +24103,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                                       )}
                                     </span>
                                   ) : (
-                                    <button onClick={function() { takeChecklistItem(note, item.id); }}
+                                    <button onClick={function() { openTakePick(note, item.id); }}
                                       style={{ fontSize: 9, padding: "3px 8px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}>
                                       📥 내가 하기
                                     </button>
@@ -24132,7 +24156,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                     {/* 액션 버튼 */}
                     <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
                       {isOpen && (
-                        <button onClick={function() { takeToMyNote(note); }}
+                        <button onClick={function() { openTakePick(note, null); }}
                           style={{ flex: 1, background: "#1A1917", color: "#fff", border: "none", borderRadius: 6, padding: "6px 8px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
                           📥 {(note.checklist && note.checklist.length > 0) ? "통째로 가져가기" : "가져가기"}
                         </button>
@@ -24270,6 +24294,81 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
           </div>
         </div>
       )}
+
+      {/* 📅 가져가기 날짜 선택 모달 — 어느 날짜의 내 업무노트로 담을지 (9999: 등록/수정 모달 위) */}
+      {takePick && (function() {
+        var isWhole = !takePick.itemId; // 통째로 가져가기
+        var picked = takePick.itemId
+          ? ((takePick.note.checklist || []).find(function(it) { return it.id === takePick.itemId; }) || {})
+          : null;
+        var quick = [
+          { label: "오늘", d: kstDate() },
+          { label: "내일", d: addDaysStr(kstDate(), 1) },
+          { label: "모레", d: addDaysStr(kstDate(), 2) },
+        ];
+        var closePick = function() { if (!takePickBusy) setTakePick(null); };
+        var doTake = async function() {
+          if (!takePickDate || takePickBusy) return;
+          setTakePickBusy(true);
+          try {
+            if (isWhole) await takeToMyNote(takePick.note, takePickDate);
+            else await takeChecklistItem(takePick.note, takePick.itemId, takePickDate);
+          } finally {
+            setTakePickBusy(false);
+            setTakePick(null);
+          }
+        };
+        return (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+            onClick={closePick}>
+            <div onClick={function(e) { e.stopPropagation(); }}
+              style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 380, padding: 20, boxShadow: "0 10px 40px rgba(0,0,0,0.2)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 15, fontWeight: 800 }}>📥 어느 날짜로 가져갈까요?</div>
+                  <div style={{ fontSize: 12, color: "#555", marginTop: 6, background: "#F7F6F3", borderRadius: 6, padding: "6px 9px", lineHeight: 1.5, wordBreak: "break-all" }}>
+                    {isWhole ? ("📋 " + (takePick.note.title || "팀 노트") + " (통째로)") : (picked.text || "항목")}
+                  </div>
+                </div>
+                <button onClick={closePick} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#888", lineHeight: 1, marginLeft: 8 }}>✕</button>
+              </div>
+
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+                {quick.map(function(q) {
+                  var on = takePickDate === q.d;
+                  return (
+                    <button key={q.label} onClick={function() { setTakePickDate(q.d); }}
+                      style={{ fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 99, cursor: "pointer",
+                        background: on ? "#1A1917" : "#fff", color: on ? "#fff" : "#555", border: "1px solid " + (on ? "#1A1917" : "#E8E5E0") }}>
+                      {q.label} <span style={{ opacity: 0.7, fontWeight: 400 }}>{mdLabel(q.d)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <label style={{ display: "block", fontSize: 11, color: "#888", marginBottom: 5 }}>직접 고르기</label>
+              <input type="date" value={takePickDate} onChange={function(e) { setTakePickDate(e.target.value); }}
+                style={{ width: "100%", padding: "9px 11px", border: "1px solid #C7D2FE", borderRadius: 8, fontSize: 13, color: "#4338CA", outline: "none", boxSizing: "border-box" }} />
+
+              <div style={{ fontSize: 11, color: "#888", marginTop: 9, lineHeight: 1.6 }}>
+                그 날짜에 내 업무노트가 없으면 새로 만들어 담습니다.
+              </div>
+
+              <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                <button disabled={!takePickDate || takePickBusy} onClick={doTake}
+                  style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: "none", fontSize: 13, fontWeight: 700,
+                    background: (!takePickDate || takePickBusy) ? "#E8E5E0" : "#15803D",
+                    color: (!takePickDate || takePickBusy) ? "#AAA" : "#fff",
+                    cursor: (!takePickDate || takePickBusy) ? "default" : "pointer" }}>
+                  {takePickBusy ? "가져오는 중..." : (takePickDate ? mdLabel(takePickDate) + " 노트로 가져가기" : "날짜를 골라주세요")}
+                </button>
+                <button onClick={closePick} disabled={takePickBusy}
+                  style={{ padding: "10px 16px", background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: takePickBusy ? "default" : "pointer" }}>취소</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* 📝 체크리스트 항목 편집 모달 — 등록/수정 모달(9998)보다 위에 떠야 하므로 9999 */}
       {clEdit && (

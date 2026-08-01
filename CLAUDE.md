@@ -109,8 +109,10 @@ Supabase는 테이블 기본값이 **"열림"**이라, RLS를 켜지 않으면 �
 ## 참고: 알려진 함정
 - 팀 업무 표시 필터는 반드시 `status === "done"`만 완료로 취급.
   `status !== "open"`으로 집계하면 `taken`(진행중)이 완료로 오인된다. (2026-07-21 수정)
-- 모바일 `MobileApp`(약 1759줄~)은 `TeamNotesSection`을 렌더하지 않는다(work_notes/채팅만).
-  팀 업무 관련 수정은 데스크톱 경로에만 영향.
+- ⚠️ 모바일 `MobileApp`은 **`TeamNotesSection`을 렌더한다**(`tab === "team"`, 데스크톱 컴포넌트 재사용).
+  예전에는 안 그랬으나 지금은 아니다 — **팀 업무 관련 수정은 모바일에도 그대로 영향**을 준다. (2026-08-01 확인)
+  단 `WorkNotesView`는 데스크톱 전용이라, 업무노트(work_notes) 화면 수정은 모바일에 영향이 없다.
+  모바일은 업무노트를 자체 UI로 그린다(`newItems` 등).
 - 한셀/한컴오피스로 만든 xlsx는 표준 엑셀과 달리 ①모든 요소 태그에 `x:` 네임스페이스 접두사(`<x:row>`,`<x:c>`,`<x:si>`),
   ②리치텍스트/스타일에 haansoft 전용 확장(`<hs:size>` 등)을 `mc:AlternateContent`로 섞는다.
   SheetJS는 이 둘 때문에 **에러 없이 0행**을 반환하거나 `"Unrecognized rich format"` 예외로 실패한다.
