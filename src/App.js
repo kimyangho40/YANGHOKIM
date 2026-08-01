@@ -3948,6 +3948,7 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
   const [companiesList, setCompaniesList] = useState([]);
   // 📅 업무노트로 저장 팝업 — { msg, co } / 저장 직후 안내 문구
   const [notePopup, setNotePopup] = useState(null);
+  const [calPopup, setCalPopup] = useState(null); // 🗓️ 구글 캘린더 추가 팝업 { msg }
   const [noteSavedMsg, setNoteSavedMsg] = useState("");
   const [mentionMatches, setMentionMatches] = useState([]);
   const [unreadByChannel, setUnreadByChannel] = useState({});
@@ -4205,6 +4206,18 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
           ✅ {noteSavedMsg}
         </div>
       )}
+      {/* 🗓️ 구글 캘린더 추가 — 메시지 내용을 제목으로 채워 연다 */}
+      {calPopup && (
+        <CalendarQuickAdd
+          defaultTitle={(calPopup.msg.message || "").slice(0, 120)}
+          defaultDate={kstDate()}
+          createdBy={profile?.name || ""}
+          onClose={function() { setCalPopup(null); }}
+          onSaved={function(res) {
+            setNoteSavedMsg(res.googleOk ? "구글 캘린더에 추가했어요" : "CRM 캘린더에만 저장했어요 (구글 연결 확인 필요)");
+            setTimeout(function() { setNoteSavedMsg(""); }, 3000);
+          }} />
+      )}
       {/* 채널 목록 */}
       <div style={{ width: 220, borderRight: "1px solid #E8E5E0", background: "#FAF9F7", display: "flex", flexDirection: "column", overflowY: "auto" }}>
         <div style={{ padding: "16px 16px 8px", fontSize: 16, fontWeight: 700 }}>💬 팀 채팅</div>
@@ -4272,9 +4285,9 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
                     )}
                   </div>
                 </div>
-                {/* @업체 태그 → 소통내역 저장 버튼 (업체별) */}
-                {!deleted && tagged.length > 0 && (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 5, justifyContent: mine ? "flex-end" : "flex-start" }}>
+                {/* 액션 줄 — 🗓️ 캘린더는 태그 없는 메시지에도 항상, 소통내역/업무노트는 @업체 태그가 있을 때만 */}
+                {!deleted && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 5, alignItems: "center", justifyContent: mine ? "flex-end" : "flex-start" }}>
                     {tagged.map(function(co) {
                       var done = savedArr.indexOf(co.id) >= 0;
                       return (
@@ -4296,6 +4309,14 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
                         </span>
                       );
                     })}
+                    {/* 구글 캘린더에 추가 — 태그 여부와 무관하게 모든 메시지에.
+                        아이콘만 두면 폰트에 따라 안 그려져 빈 상자로 보이므로 글자를 같이 넣는다. */}
+                    <button onClick={function() { setCalPopup({ msg: msg }); }}
+                      title="이 내용을 구글 캘린더 일정으로 추가"
+                      style={{ fontSize: 11, fontWeight: 700, borderRadius: 8, padding: "4px 10px", cursor: "pointer", whiteSpace: "nowrap",
+                        border: "1px solid #FDE68A", background: "#FFFBEB", color: "#B45309" }}>
+                      📅 캘린더
+                    </button>
                   </div>
                 )}
               </div>
@@ -15419,7 +15440,7 @@ function CreditReportImport({ existingCount, onApply }) {
   );
 }
 
-function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditingId, toggleDone, togglePin, deleteNote, fmtDate, currentUserName, onChecklistChange, moveNoteDate, setWaitReason, editable, getRequestForItem, onAddRequestReply, onCarryItem }) {
+function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditingId, toggleDone, togglePin, deleteNote, fmtDate, currentUserName, onChecklistChange, moveNoteDate, setWaitReason, editable, getRequestForItem, onAddRequestReply, onCarryItem, onAddToCalendar }) {
   var isEditing = editingId === note.id;
   var isMyNote = editable !== false; // 본인 노트만 수정/체크 가능 (공유그룹으로 보이는 남의 노트는 읽기 전용)
   var [replyOpenIdx, setReplyOpenIdx] = useState(null); // 답장 입력창 펼친 📩 항목 idx
@@ -15606,6 +15627,19 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
                       <span style={{ fontSize: 10, fontWeight: 700, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 99, padding: "1px 7px", whiteSpace: "nowrap", flexShrink: 0, marginTop: 2 }}>⏳ {item.waitReason}</span>
                     )}
                   </label>
+                  {/* 🗓️ 이 항목을 구글 캘린더 일정으로 — 항목 마감일이 있으면 그 날짜로 채운다 */}
+                  {onAddToCalendar && !item.checked && (
+                    <button title="이 항목을 구글 캘린더 일정으로 추가"
+                      onClick={function() {
+                        // parseChecklist 는 항목 마감일을 안 돌려준다 → 원본 줄의 [YYYY-MM-DD] 를 직접 읽는다.
+                        var dm = rawLine.match(/\[(\d{4}-\d{2}-\d{2})\]/);
+                        onAddToCalendar(item.text, (dm && dm[1]) || note.due_date || note.note_date || "");
+                      }}
+                      style={{ flexShrink: 0, marginTop: 1, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", padding: "3px 8px", borderRadius: 6, cursor: "pointer",
+                        background: "#FFFBEB", border: "1px solid #FDE68A", color: "#B45309", lineHeight: 1.5 }}>
+                      📅 캘린더
+                    </button>
+                  )}
                   {showCarry && (
                     <button title={alreadyCarried ? "이미 한 번 이월한 항목 — 다른 날짜로 다시 미루기 (표시는 새 날짜로 바뀜)" : "이 항목을 다른 날짜 노트로 이월 (원본은 지우지 않고 '이월' 표시만 남음)"}
                       onClick={function() { onCarryItem(note, item.idx); }}
@@ -15629,6 +15663,15 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <div style={{ width: 20, height: 20, borderRadius: "50%", background: "#1A1917", color: "#F7F6F3", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700 }}>{(note.assignee || "?")[0]}</div>
           <span style={{ fontSize: 11, color: "#AAA" }}>{note.assignee}</span>
+          {/* 🗓️ 노트 전체를 캘린더 일정으로 — 노트 마감일이 있으면 그 날짜로 채운다 */}
+          {onAddToCalendar && (
+            <button title="이 노트를 구글 캘린더 일정으로 추가"
+              onClick={function() { onAddToCalendar(note.title || (note.content || "").split("\n")[0] || "업무", note.due_date || note.note_date || ""); }}
+              style={{ fontSize: 10, fontWeight: 600, padding: "2px 7px", borderRadius: 6, cursor: "pointer",
+                background: "#FFFBEB", border: "1px solid #FDE68A", color: "#B45309", lineHeight: 1.6 }}>
+              📅 캘린더
+            </button>
+          )}
         </div>
         <span style={{ fontSize: 11, color: "#888" }}>{fmtDate(note.updated_at || note.created_at)}</span>
       </div>
@@ -15700,6 +15743,11 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   const [showCarry, setShowCarry] = useState(false);
   const [carrySel, setCarrySel] = useState({}); // key(noteId:lineIdx) -> bool
   const [carryUndo, setCarryUndo] = useState(null); // 방금 가져오기 되돌리기: {count, addedTexts, snapshots:[{id,content}]}
+  // 🗓️ 구글 캘린더 추가 팝업 (노트·항목 공용, 부모가 1개만 소유) { title, date }
+  const [calAdd, setCalAdd] = useState(null);
+  const [calToast, setCalToast] = useState("");
+  var openCalAdd = function(title, date) { setCalAdd({ title: title || "", date: date || todayStr }); };
+
   // 📅 카드 항목별 이월 — 날짜 선택 팝업 (부모가 1개만 소유)
   const [carryPick, setCarryPick] = useState(null);      // {noteId, lineIdx, text, fromDate} | null
   const [carryPickDate, setCarryPickDate] = useState(""); // 고른 날짜 YYYY-MM-DD
@@ -16913,6 +16961,25 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
         </div>
       )}
 
+      {/* 🗓️ 구글 캘린더 추가 (노트·항목 공용) */}
+      {calAdd && (
+        <CalendarQuickAdd
+          defaultTitle={calAdd.title}
+          defaultDate={calAdd.date || todayStr}
+          createdBy={profile?.name || ""}
+          onClose={function() { setCalAdd(null); }}
+          onSaved={function(res) {
+            setCalToast(res.googleOk ? "구글 캘린더에 추가했어요" : "CRM 캘린더에만 저장했어요 (구글 연결 확인 필요)");
+            setTimeout(function() { setCalToast(""); }, 3000);
+          }} />
+      )}
+      {calToast && (
+        <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", zIndex: 3100,
+          background: "#1A1917", color: "#fff", padding: "9px 16px", borderRadius: 99, fontSize: 12, fontWeight: 700, boxShadow: "0 4px 16px rgba(0,0,0,0.25)" }}>
+          ✅ {calToast}
+        </div>
+      )}
+
       {/* 📅 항목 이월 — 날짜 선택 팝업 */}
       {carryPick && (function() {
         var quick = [
@@ -17504,7 +17571,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
                   {notesForSelectedDate.map(function(note) {
-                    return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? openCarryPicker : null} />;
+                    return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? openCarryPicker : null} onAddToCalendar={openCalAdd} />;
                   })}
                 </div>
               )}
@@ -17566,7 +17633,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#B45309", letterSpacing: "0.05em", marginBottom: 10 }}>📌 고정된 노트</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? openCarryPicker : null} />; })}
+                {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? openCarryPicker : null} onAddToCalendar={openCalAdd} />; })}
               </div>
             </div>
           )}
@@ -17575,7 +17642,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div>
               {pinned.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: "#888", letterSpacing: "0.05em", marginBottom: 10 }}>전체 노트</div>}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? openCarryPicker : null} />; })}
+                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? openCarryPicker : null} onAddToCalendar={openCalAdd} />; })}
               </div>
             </div>
           )}
@@ -18703,40 +18770,13 @@ function CalendarView({ companies, onSelectCompany, profile }) {
 
   var saveEvent = async function() {
     if (!newEvent.title || !newEvent.date) { alert("제목과 날짜를 입력해주세요."); return; }
-    var googleEventId = null;
-    // 어느 캘린더에 등록할지 calSheet 기준
-    var useToken = newEvent.sheet === "director" ? directorToken : gToken;
-    // 구글 캘린더에도 동시 등록 (연결돼 있으면)
-    if (useToken) {
-      try {
-        var startObj, endObj;
-        if (newEvent.time) {
-          // 시간 있는 일정: 1시간 기본
-          var startISO = newEvent.date + "T" + newEvent.time + ":00";
-          var startD = new Date(startISO);
-          var endD = new Date(startD.getTime() + 60 * 60 * 1000);
-          startObj = { dateTime: startD.toISOString(), timeZone: "Asia/Seoul" };
-          endObj = { dateTime: endD.toISOString(), timeZone: "Asia/Seoul" };
-        } else {
-          // 종일 일정
-          startObj = { date: newEvent.date };
-          endObj = { date: newEvent.date };
-        }
-        var gres = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
-          method: "POST",
-          headers: { Authorization: "Bearer " + useToken, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            summary: newEvent.title,
-            description: newEvent.memo || "",
-            start: startObj,
-            end: endObj,
-            colorId: newEvent.color || "9",
-          }),
-        });
-        var gdata = await gres.json();
-        if (gdata.id) googleEventId = gdata.id;
-      } catch (err) {}
-    }
+    // 구글 등록은 공용 함수로 — 채팅·업무노트의 🗓️ 버튼과 같은 코드를 쓴다(호출부만 여럿, API 호출은 한 곳).
+    var gres2 = await createGoogleCalendarEvent({
+      slot: newEvent.sheet === "director" ? "director" : "yangho",
+      title: newEvent.title, date: newEvent.date, time: newEvent.time,
+      memo: newEvent.memo, color: newEvent.color,
+    });
+    var googleEventId = gres2.ok ? gres2.googleEventId : null;
     var r = await supabase.from("calendar_events").insert({
       title: newEvent.title, date: newEvent.date, time: newEvent.time || null,
       memo: newEvent.memo || null, sheet: newEvent.sheet,
@@ -19320,20 +19360,35 @@ const GDRIVE_TOKEN_KEY = "gdrive_token";
 const GDRIVE_EXP_KEY = "gdrive_token_exp";
 const GDRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 
+// 📅 구글 캘린더 — 슬롯 2개(기존 캘린더 화면의 "김양호"/"이사님" 구분을 그대로 따른다).
+//    실제로는 각자 브라우저의 localStorage 라 "그 브라우저에서 연결한 구글 계정"으로 들어간다.
+const GCAL_SLOTS = { yangho: "gcal_yangho_token", director: "gcal_director_token" };
+const GCAL_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+
 // 🔑 OAuth 복귀 처리 — 어느 화면에서 눌러도 루트로 돌아오므로 컴포넌트가 아니라
-//    모듈 로드 시점에 처리한다. 캘린더 핸들러(useEffect)보다 먼저 실행되는 게 중요:
-//    그쪽은 모르는 state 를 "yangho 캘린더 토큰"으로 취급해서 드라이브 토큰을 가로챈다.
-(function captureDriveToken() {
+//    모듈 로드 시점에 처리한다. 두 가지 이유로 여기여야 한다:
+//    ① 캘린더 화면의 핸들러는 모르는 state 를 "yangho 토큰"으로 취급해 드라이브 토큰을 가로챈다.
+//    ② 채팅·업무노트에서 연결하면 캘린더 화면이 안 떠 있어서 그 핸들러가 아예 안 돈다
+//       → 토큰을 영영 못 받는다. 여기서 받아 localStorage 에 넣으면 어느 화면에서 눌러도 된다.
+(function captureGoogleToken() {
   try {
     var h = (typeof window !== "undefined" && window.location.hash) || "";
     if (h.indexOf("access_token") < 0) return;
-    if (!/[#&]state=drive(&|$)/.test(h)) return; // 드라이브 건만 처리(캘린더는 기존 로직 그대로)
+    var sm = h.match(/[#&]state=([^&]+)/);
+    var state = sm ? sm[1] : "";
     var tok = (h.split("access_token=")[1] || "").split("&")[0];
-    if (!tok) return;
+    if (!tok || !state) return;
     var em = h.match(/[#&]expires_in=(\d+)/);
     var ttl = em ? parseInt(em[1], 10) : 3600;
-    localStorage.setItem(GDRIVE_TOKEN_KEY, tok);
-    localStorage.setItem(GDRIVE_EXP_KEY, String(Date.now() + (ttl - 60) * 1000)); // 60초 여유
+
+    if (state === "drive") {
+      localStorage.setItem(GDRIVE_TOKEN_KEY, tok);
+      localStorage.setItem(GDRIVE_EXP_KEY, String(Date.now() + (ttl - 60) * 1000)); // 60초 여유
+    } else if (GCAL_SLOTS[state]) {
+      localStorage.setItem(GCAL_SLOTS[state], tok);
+    } else {
+      return; // 모르는 state 는 손대지 않는다(해시도 그대로 둬 기존 로직이 처리하게)
+    }
     window.history.replaceState(null, "", window.location.pathname);
   } catch (e) {}
 })();
@@ -19363,6 +19418,77 @@ function connectGoogleDrive() {
     + "&prompt=select_account";
   window.location.href = url;
 }
+// ── 📅 구글 캘린더 일정 생성 (캘린더 화면·채팅·업무노트 공용) ────────────────
+//  기존에는 CalendarView.saveEvent 안에 인라인으로 있어서 다른 화면에서 못 썼다.
+//  세 화면이 같은 함수를 쓰도록 모듈 레벨로 뺀다(호출부만 늘리고 API 호출은 한 곳).
+function getCalendarToken(slot) {
+  try { return localStorage.getItem(GCAL_SLOTS[slot] || GCAL_SLOTS.yangho) || ""; } catch (e) { return ""; }
+}
+function clearCalendarToken(slot) {
+  try { localStorage.removeItem(GCAL_SLOTS[slot] || GCAL_SLOTS.yangho); } catch (e) {}
+}
+function connectGoogleCalendar(slot) {
+  var url = "https://accounts.google.com/o/oauth2/v2/auth"
+    + "?client_id=" + GOOGLE_CLIENT_ID
+    + "&redirect_uri=" + encodeURIComponent(window.location.origin)
+    + "&response_type=token"
+    + "&scope=" + encodeURIComponent(GCAL_SCOPE)
+    + "&state=" + (GCAL_SLOTS[slot] ? slot : "yangho")
+    + "&prompt=select_account";
+  window.location.href = url;
+}
+// 구글 캘린더에 일정 하나 생성.
+//   ev = { slot, title, date(YYYY-MM-DD), time("HH:MM"|""), memo, color }
+//   time 이 비면 종일 일정. 반환 { ok, googleEventId, error, needAuth }
+async function createGoogleCalendarEvent(ev) {
+  var token = getCalendarToken(ev.slot);
+  if (!token) return { ok: false, needAuth: true, error: "캘린더가 연결되어 있지 않습니다." };
+  var startObj, endObj;
+  if (ev.time) {
+    var startD = new Date(ev.date + "T" + ev.time + ":00");
+    var endD = new Date(startD.getTime() + 60 * 60 * 1000); // 기본 1시간
+    startObj = { dateTime: startD.toISOString(), timeZone: "Asia/Seoul" };
+    endObj = { dateTime: endD.toISOString(), timeZone: "Asia/Seoul" };
+  } else {
+    startObj = { date: ev.date };
+    endObj = { date: ev.date };
+  }
+  try {
+    var r = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        summary: ev.title, description: ev.memo || "",
+        start: startObj, end: endObj, colorId: ev.color || "9",
+      }),
+    });
+    if (r.status === 401 || r.status === 403) { clearCalendarToken(ev.slot); return { ok: false, needAuth: true, error: "연결이 만료됐습니다. 다시 연결해주세요." }; }
+    var d = await r.json();
+    if (d && d.id) return { ok: true, googleEventId: d.id };
+    return { ok: false, error: (d && d.error && d.error.message) || "구글 캘린더 저장 실패" };
+  } catch (e) {
+    return { ok: false, error: e.message || "네트워크 오류" };
+  }
+}
+// 구글 + CRM(calendar_events) 양쪽에 저장. 캘린더 화면의 기존 동작과 동일하게 맞춘다.
+//   구글이 실패해도 CRM 기록은 남긴다(연결이 끊겨도 일정을 잃지 않게).
+async function saveCalendarEventEverywhere(ev, createdBy) {
+  var g = await createGoogleCalendarEvent(ev);
+  var r = await supabase.from("calendar_events").insert({
+    title: ev.title, date: ev.date, time: ev.time || null,
+    memo: ev.memo || null, sheet: ev.slot, color: ev.color || "9",
+    created_by: createdBy || "",
+  }).select().single();
+  return {
+    ok: !r.error,
+    row: r.data || null,
+    googleOk: !!g.ok,
+    googleEventId: g.googleEventId || null,
+    needAuth: !!g.needAuth,
+    error: r.error ? r.error.message : (g.ok ? "" : g.error),
+  };
+}
+
 // 드라이브 URL/ID 문자열에서 폴더 ID 추출 (주소를 붙여넣어도 되게)
 function parseDriveFolderId(raw) {
   var s = String(raw || "").trim();
@@ -19536,6 +19662,102 @@ function QuickLinksView() {
             </div>
           );
         })}
+    </div>
+  );
+}
+
+// ── 🗓️ 캘린더 빠른 추가 팝업 (채팅·업무노트 공용) ──────────────────────────
+//  버튼만 여러 곳에 두고 실제 저장은 saveCalendarEventEverywhere 하나로 모은다.
+//  props: { defaultTitle, defaultDate, defaultTime, createdBy, onClose, onSaved }
+function CalendarQuickAdd({ defaultTitle, defaultDate, defaultTime, createdBy, onClose, onSaved }) {
+  var [slot, setSlot] = useState("yangho");
+  var [title, setTitle] = useState(defaultTitle || "");
+  var [date, setDate] = useState(defaultDate || kstDate());
+  var [time, setTime] = useState(defaultTime || "");
+  var [memo, setMemo] = useState("");
+  var [busy, setBusy] = useState(false);
+  var [err, setErr] = useState("");
+  var [needAuth, setNeedAuth] = useState(false);
+
+  var save = async function() {
+    if (!title.trim()) { setErr("제목을 입력해주세요."); return; }
+    if (!date) { setErr("날짜를 골라주세요."); return; }
+    setBusy(true); setErr(""); setNeedAuth(false);
+    var res = await saveCalendarEventEverywhere(
+      { slot: slot, title: title.trim(), date: date, time: time, memo: memo },
+      createdBy);
+    setBusy(false);
+    if (res.needAuth) { setNeedAuth(true); setErr(res.error || ""); return; }
+    if (!res.ok) { setErr(res.error || "저장 실패"); return; }
+    if (onSaved) onSaved(res);
+    onClose();
+  };
+
+  return (
+    <div onClick={function() { if (!busy) onClose(); }}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={function(e) { e.stopPropagation(); }}
+        style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 400, padding: 20, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={{ fontSize: 15, fontWeight: 800 }}>📅 구글 캘린더에 추가</div>
+          <button onClick={onClose} disabled={busy} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#888", lineHeight: 1 }}>✕</button>
+        </div>
+
+        <label style={{ display: "block", fontSize: 11, color: "#888", marginBottom: 5 }}>대상 캘린더</label>
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+          {[{ k: "yangho", label: "김양호" }, { k: "director", label: "이사님" }].map(function(o) {
+            var on = slot === o.k;
+            var linked = !!getCalendarToken(o.k);
+            return (
+              <button key={o.k} onClick={function() { setSlot(o.k); setNeedAuth(false); setErr(""); }}
+                style={{ flex: 1, fontSize: 12, fontWeight: 600, padding: "7px 0", borderRadius: 8, cursor: "pointer",
+                  background: on ? "#1A1917" : "#fff", color: on ? "#fff" : "#555", border: "1px solid " + (on ? "#1A1917" : "#E8E5E0") }}>
+                {o.label}{linked ? "" : " (미연결)"}
+              </button>
+            );
+          })}
+        </div>
+
+        <label style={{ display: "block", fontSize: 11, color: "#888", marginBottom: 5 }}>일정 제목</label>
+        <textarea value={title} onChange={function(e) { setTitle(e.target.value); }} rows={2}
+          style={{ width: "100%", padding: "8px 10px", border: "1px solid #C7D2FE", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none", resize: "vertical", lineHeight: 1.5, marginBottom: 12 }} />
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <div style={{ flex: 1 }}>
+            <label style={{ display: "block", fontSize: 11, color: "#888", marginBottom: 5 }}>날짜</label>
+            <input type="date" value={date} onChange={function(e) { setDate(e.target.value); }}
+              style={{ width: "100%", padding: "8px 10px", border: "1px solid #C7D2FE", borderRadius: 8, fontSize: 13, color: "#4338CA", boxSizing: "border-box", outline: "none" }} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={{ display: "block", fontSize: 11, color: "#888", marginBottom: 5 }}>시간 <span style={{ color: "#BBB" }}>(비우면 종일)</span></label>
+            <input type="time" value={time} onChange={function(e) { setTime(e.target.value); }}
+              style={{ width: "100%", padding: "8px 10px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+          </div>
+        </div>
+
+        <label style={{ display: "block", fontSize: 11, color: "#888", marginBottom: 5 }}>메모 (선택)</label>
+        <input value={memo} onChange={function(e) { setMemo(e.target.value); }}
+          style={{ width: "100%", padding: "8px 10px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+
+        {needAuth && (
+          <div style={{ marginTop: 12, fontSize: 12, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 8, padding: "9px 11px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+            <span>이 캘린더가 연결되어 있지 않습니다.</span>
+            <button onClick={function() { connectGoogleCalendar(slot); }}
+              style={{ fontSize: 11, fontWeight: 700, padding: "5px 12px", background: "#4338CA", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", whiteSpace: "nowrap" }}>구글 연결</button>
+          </div>
+        )}
+        {err && !needAuth && <div style={{ marginTop: 10, fontSize: 11, color: "#B91C1C", lineHeight: 1.6 }}>{err}</div>}
+
+        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          <button onClick={save} disabled={busy}
+            style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: "none", fontSize: 13, fontWeight: 700,
+              background: busy ? "#E8E5E0" : "#4338CA", color: busy ? "#AAA" : "#fff", cursor: busy ? "default" : "pointer" }}>
+            {busy ? "저장 중..." : "캘린더에 추가"}
+          </button>
+          <button onClick={onClose} disabled={busy}
+            style={{ padding: "10px 16px", background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: busy ? "default" : "pointer" }}>취소</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -24351,7 +24573,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                                   ) : (
                                     <button onClick={function() { openTakePick(note, item.id); }}
                                       style={{ fontSize: 9, padding: "3px 8px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}>
-                                      📥 내가 하기
+                                      📅 가져가기
                                     </button>
                                   )}
                                 </div>
@@ -24404,7 +24626,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                       {isOpen && (
                         <button onClick={function() { openTakePick(note, null); }}
                           style={{ flex: 1, background: "#1A1917", color: "#fff", border: "none", borderRadius: 6, padding: "6px 8px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
-                          📥 {(note.checklist && note.checklist.length > 0) ? "통째로 가져가기" : "가져가기"}
+                          📅 {(note.checklist && note.checklist.length > 0) ? "통째로 가져가기" : "가져가기"}
                         </button>
                       )}
                       {note.status === "taken" && isMine && (
