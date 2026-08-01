@@ -5064,20 +5064,40 @@ function CRMApp({ profile, session }) {
       if (!Ctx) return;
       if (!chatAudioCtxRef.current) chatAudioCtxRef.current = new Ctx();
       var ctx = chatAudioCtxRef.current;
-      if (ctx.state === "suspended") ctx.resume();
-      var t0 = ctx.currentTime;
-      [880, 1174.66].forEach(function(freq, i) {
-        var osc = ctx.createOscillator();
-        var gain = ctx.createGain();
-        osc.type = "sine";
-        osc.frequency.value = freq;
-        var s = t0 + i * 0.13;
-        gain.gain.setValueAtTime(0.0001, s);
-        gain.gain.exponentialRampToValueAtTime(0.22, s + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.0001, s + 0.12);
-        osc.connect(gain); gain.connect(ctx.destination);
-        osc.start(s); osc.stop(s + 0.13);
-      });
+
+      // 🔑 정지(suspended)된 컨텍스트에서는 currentTime 이 멈춰 있다.
+      //    resume() 은 비동기라, 곧바로 예약하면 '이미 지나간 시각'에 잡혀 소리가 안 난다.
+      //    크롬은 백그라운드 탭의 AudioContext 를 정지시킨다 = 알림이 가장 필요한 순간에만 골라서 실패했다.
+      //    → 반드시 resume() 이 끝난 뒤에 예약한다.
+      var schedule = function() {
+        var t0 = ctx.currentTime + 0.02; // 예약 시점과 겹쳐 앞부분이 잘리지 않게 살짝 뒤로
+        [880, 1174.66].forEach(function(freq, i) {
+          var osc = ctx.createOscillator();
+          var gain = ctx.createGain();
+          osc.type = "sine";
+          osc.frequency.value = freq;
+          var s = t0 + i * 0.13;
+          gain.gain.setValueAtTime(0.0001, s);
+          gain.gain.exponentialRampToValueAtTime(0.22, s + 0.02);
+          gain.gain.exponentialRampToValueAtTime(0.0001, s + 0.12);
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.start(s); osc.stop(s + 0.13);
+        });
+      };
+
+      if (ctx.state === "suspended") {
+        var p = ctx.resume();
+        if (p && typeof p.then === "function") {
+          p.then(schedule, function() {
+            // 페이지를 한 번도 클릭하지 않은 상태면 브라우저가 재개를 거부한다(팝업은 정상 동작).
+            console.log("[알림음] ⚠️ AudioContext 재개 거부 — 소리 생략. 화면을 한 번 클릭하면 이후부터 울립니다.");
+          });
+        } else {
+          schedule(); // 구형 브라우저: resume() 이 Promise 를 반환하지 않는 경우
+        }
+      } else {
+        schedule();
+      }
     } catch (e) {}
   }, []);
 
@@ -16055,26 +16075,30 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     return function() { window.removeEventListener("keydown", onKey); };
   }, [carryUndo]);
 
-  // 🗓️ 주간 정리 대상 항목 — 본인 것만
+  // 🗓️ 주간 정리 대상 항목 — 본인 것만. 두 모드를 한 번에 계산해 둔다.
   //   mon 모드: 이번 주 월요일 이전(지난주까지) 미완료 / fri 모드: 이번 주(월~오늘) 미완료
-  var weeklyItems = useMemo(function() {
+  //   (수동 열기에서 "어느 쪽에 항목이 있는지" 알아야 해서 모드별로 따로 담는다. 노트 하나는 두 범위 중 한쪽에만 속한다.)
+  var weeklyBoth = useMemo(function() {
     var me = profile?.name || "";
-    if (!me) return [];
+    var out = { mon: [], fri: [] };
+    if (!me) return out;
     var thisMon = mondayOf(todayStr);
-    var list = [];
     notes.forEach(function(n) {
       if ((n.assignee || "") !== me) return;
       var nd = getNoteDate(n);
       if (!nd) return;
-      if (weeklyMode === "fri") { if (nd < thisMon || nd > todayStr) return; } // 이번 주 범위
-      else { if (nd >= thisMon) return; } // 지난주 이전
+      var bucket = nd < thisMon ? "mon" : (nd <= todayStr ? "fri" : null); // 미래 날짜 노트는 정리 대상 아님
+      if (!bucket) return;
       parseUnfinishedItems(n.content).forEach(function(it) {
-        list.push(Object.assign({ noteId: n.id, noteTitle: n.title || "(제목 없음)", noteDate: nd }, it));
+        out[bucket].push(Object.assign({ noteId: n.id, noteTitle: n.title || "(제목 없음)", noteDate: nd }, it));
       });
     });
-    list.sort(function(a, b) { return (a.noteDate || "").localeCompare(b.noteDate || ""); }); // 오래된 것 먼저
-    return list;
-  }, [notes, profile, todayStr, weeklyMode]);
+    var byDateAsc = function(a, b) { return (a.noteDate || "").localeCompare(b.noteDate || ""); }; // 오래된 것 먼저
+    out.mon.sort(byDateAsc); out.fri.sort(byDateAsc);
+    return out;
+  }, [notes, profile, todayStr]);
+  var weeklyItems = weeklyBoth[weeklyMode] || [];
+  var weeklyTotal = weeklyBoth.mon.length + weeklyBoth.fri.length;
 
   // 모달이 닫히면 이월 상태 초기화 (다음에 열 때 깨끗하게)
   useEffect(function() { if (!showWeekly) { setReviewStatus({}); setBulkCarry("idle"); } }, [showWeekly]);
@@ -16083,6 +16107,20 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
   var markWeeklyReviewed = function() {
     var me = profile?.name; if (me) localStorage.setItem(weeklyKey(weeklyMode, me), mondayOf(todayStr));
     setShowWeekly(false);
+  };
+
+  // 🗓️ 주간 정리 수동 열기 — 자동 표시는 "주 1회, 한 번 닫으면 그 주엔 끝"이라
+  //   한 번 넘기면 항목별 [오늘로 이월] 을 다음 주까지 못 쓴다. 언제든 열 수 있는 입구를 둔다.
+  var openWeeklyManually = function() {
+    weeklyOpenedRef.current = true; // 닫은 뒤 자동 오픈이 뒤따라 뜨지 않게
+    var day = new Date().getDay();
+    var mode = (day === 5 || day === 6 || day === 0) ? "fri" : "mon"; // 자동 표시와 같은 기준
+    // 오늘 기준 모드가 비어 있으면 항목이 있는 쪽을 연다 (빈 모달만 뜨는 일 방지)
+    if (weeklyBoth[mode].length === 0 && weeklyBoth[mode === "fri" ? "mon" : "fri"].length > 0) {
+      mode = mode === "fri" ? "mon" : "fri";
+    }
+    setWeeklyMode(mode);
+    setShowWeekly(true);
   };
 
   // 월요일(월~목)·금요일(금~일) 탭 진입 시 자동 표시 — 이번 주 해당 모드 이미 정리했으면 skip
@@ -16551,6 +16589,10 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
           </button>
             );
           })()}
+          <button onClick={openWeeklyManually} title={weeklyTotal ? ("미완료 " + weeklyTotal + "건 — 항목별로 오늘로 이월 · 완료 · 삭제") : "정리할 미완료 항목 없음"}
+            style={{ display: "flex", alignItems: "center", gap: 6, background: weeklyTotal ? "#FFFBEB" : "#fff", color: weeklyTotal ? "#B45309" : "#AAA", border: "1px solid " + (weeklyTotal ? "#FDE68A" : "#E8E5E0"), borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            🗓️ 주간 정리{weeklyTotal ? " (" + weeklyTotal + ")" : ""}
+          </button>
           <button onClick={openTrash}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
             🗑️ 휴지통
@@ -16825,6 +16867,18 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
               <div>
                 <div style={{ fontSize: 15, fontWeight: 800, color: "#92400E" }}>🗓️ 주간 정리 · {weeklyMode === "fri" ? "이번 주 미완료" : "지난주 미완료"} {weeklyItems.length}건 정리</div>
                 <div style={{ fontSize: 11, color: "#B45309", marginTop: 3 }}>{profile?.name} 님, {weeklyMode === "fri" ? "이번 주 마무리 전에 남은 항목을" : "지난주에 마치지 못한 항목들을"} 정리해요.</div>
+                {/* 범위 토글 — 한쪽이 비어도 다른 쪽으로 넘어갈 수 있게(빈 모달에서 막히지 않도록) */}
+                <div style={{ display: "flex", gap: 2, padding: 3, background: "rgba(255,255,255,0.6)", borderRadius: 7, marginTop: 8, width: "fit-content" }}>
+                  {[{ m: "fri", label: "이번 주" }, { m: "mon", label: "지난주 이전" }].map(function(o) {
+                    var on = weeklyMode === o.m;
+                    return (
+                      <button key={o.m} onClick={function() { setWeeklyMode(o.m); }}
+                        style={{ padding: "4px 10px", fontSize: 11, fontWeight: on ? 700 : 500, background: on ? "#fff" : "transparent", border: "1px solid " + (on ? "#FDE68A" : "transparent"), borderRadius: 5, color: on ? "#92400E" : "#B45309", cursor: "pointer" }}>
+                        {o.label} ({weeklyBoth[o.m].length})
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
               <button onClick={function() { setShowWeekly(false); }} title="닫기 (다음에 다시 표시)" style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#92400E", lineHeight: 1 }}>✕</button>
             </div>
