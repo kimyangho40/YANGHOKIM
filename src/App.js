@@ -1248,6 +1248,23 @@ function wnViewable(name) {
   WN_SHARE_GROUPS.forEach(function(g) { if (g.indexOf(name) >= 0) g.forEach(function(n) { if (s.indexOf(n) < 0) s.push(n); }); });
   return s;
 }
+// 💰 정산관리(수수료·계약금) 열람 권한 — 본인이 담당자로 들어간 건만. 아래 4명은 예외로 전체 열람.
+const SETTLEMENT_ADMINS = ["관호", "동일", "양호", "유진"];
+// assignee 는 "양호, 미현, 인선" 처럼 콤마로 여러 명이 들어 있고, "김동일이사" 같은 옛 표기도 섞여 있다.
+//   → 콤마로 쪼갠 뒤 normalizeStaffName 으로 정규화해서 비교한다(단순 일치 비교로는 안 걸린다).
+function settlementAssignees(raw) {
+  return String(raw == null ? "" : raw).split(",")
+    .map(function(s) { return normalizeStaffName(s); })
+    .filter(function(s) { return !!s; });
+}
+// 이 사람이 이 정산 건을 볼 수 있는가.
+//   담당자가 비어 있는 건은 예외 4명에게만 보인다(주인 없는 건을 전원에게 열지 않는다).
+function canViewSettlement(row, myName) {
+  var me = normalizeStaffName(myName);
+  if (!me) return false;
+  if (SETTLEMENT_ADMINS.indexOf(me) >= 0) return true;
+  return settlementAssignees(row && row.assignee).indexOf(me) >= 0;
+}
 const INDUSTRY_OPTIONS = ["제조업","농업·어업","숙박업","음식점업","전자상거래업","정보통신업","도소매업","서비스업","창고업","자동차임대업"];
 
 // ── 정책자금 신규 기능: 상수 & 계산 로직 ─────────────────────────────────────────
@@ -3630,7 +3647,7 @@ function MobileApp({ profile, session }) {
                         </div>
                       );
                     })}
-                    <button onClick={function() { setNewItems(function(p) { return p.concat([{ text: "" }]); }); }} className="m-tap" style={{ width: "100%", background: "#fff", border: "1px dashed #86EFAC", color: "#15803D", borderRadius: 10, padding: "10px", fontWeight: 600, marginBottom: 10, cursor: "pointer" }}>☑️ 체크리스트 항목 추가</button>
+                    <button onClick={function() { setNewItems(function(p) { return [{ text: "" }].concat(p); }); }} className="m-tap" style={{ width: "100%", background: "#fff", border: "1px dashed #86EFAC", color: "#15803D", borderRadius: 10, padding: "10px", fontWeight: 600, marginBottom: 10, cursor: "pointer" }}>☑️ 체크리스트 항목 추가</button>
                     {newCompanyId && <div style={{ fontSize: 12, color: "#4338CA", marginBottom: 8 }}>🔗 업체 연결됨</div>}
                     <div style={{ display: "flex", gap: 8 }}>
                       <button onClick={saveNote} className="m-tap" style={{ flex: 1, background: "#15803D", color: "#fff", border: "none", borderRadius: 10, padding: "12px", fontWeight: 700, cursor: "pointer" }}>저장</button>
@@ -6648,7 +6665,7 @@ function CRMApp({ profile, session }) {
             {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setFilterAssignee={setFilterAssignee} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} myName={profile?.name} stagnRows={stagnRows} />}
             {view === "agency" && <AgencyView key={agencyJumpKey} jumpToMonth={agencyJumpMonth} jumpToGroup={agencyJumpGroup} />}
             {view === "dbleads" && <DBLeadsView canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
-            {view === "settlement" && <SettlementView />}
+            {view === "settlement" && <SettlementView profile={profile} />}
             {view === "activitylog" && <ActivityLogView />}
             {view === "worknotes" && <WorkNotesView profile={profile} onBadgeUpdate={function() { fetchWorkNotesBadge(profile?.name); }} />}
             {view === "chat" && <ChatView profile={profile} onUnreadChange={function() { fetchChatUnread(profile?.name); }}
@@ -14601,10 +14618,12 @@ function composeNoteDraftText(n) {
   return parts.join("\n");
 }
 // 노트 자동 제목: "M월D일 이름 업무" (예: "7월19일 양호 업무")
+// 자동 제목 — "8월3일 업무노트". 담당자 이름은 넣지 않는다(노트에 담당자 표시가 이미 따로 있다).
+//   name 파라미터는 호출부 6곳을 그대로 두려고 시그니처만 유지하고 쓰지 않는다.
 function noteAutoTitle(name, dateStr) {
   var d = dateStr || kstDate();
   var mm = parseInt(d.slice(5, 7), 10), dd = parseInt(d.slice(8, 10), 10);
-  return mm + "월" + dd + "일 " + (name || "") + " 업무";
+  return mm + "월" + dd + "일 업무노트";
 }
 // YYYY-MM-DD → "M/D" (이월 표시용)
 function mdLabel(dateStr) {
@@ -15070,7 +15089,8 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
       <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
         <button onClick={function() {
           setEditNote(function(p) {
-            var items = (p.checkItems || []).concat([{ text: "", checked: false, dueDate: "" }]);
+            // 새 항목은 맨 위로 — 아래로 쌓이면 스크롤해야 보여서 업무가 누락된다
+            var items = [{ text: "", checked: false, dueDate: "" }].concat(p.checkItems || []);
             return Object.assign({}, p, { checkItems: items, is_todo: true });
           });
         }} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", background: "#fff", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, color: "#15803D", fontWeight: 600, cursor: "pointer" }}>
@@ -16792,6 +16812,22 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
               </>
             )}
           </div>
+          {/* 📅 노트 날짜 — 바꾸면 자동 제목도 같이 갱신(직접 쓴 제목은 보존) */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, color: "#15803D", fontWeight: 700 }}>📅 노트 날짜</span>
+            <input type="date" value={newNote.note_date || todayStr}
+              onChange={function(e) {
+                var v = e.target.value; if (!v) return;
+                setNewNote(function(p) {
+                  var upd = { note_date: v };
+                  // 비어 있거나 "이전 날짜의 자동 제목" 그대로면 새 날짜 제목으로 교체
+                  if (!p.title || p.title === noteAutoTitle("", p.note_date)) upd.title = noteAutoTitle("", v);
+                  return Object.assign({}, p, upd);
+                });
+              }}
+              style={{ padding: "6px 10px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 13, fontWeight: 600, color: "#15803D", background: "#fff", outline: "none" }} />
+            <span style={{ fontSize: 11, color: "#94A3B8" }}>이 날짜의 노트로 저장됩니다</span>
+          </div>
           <div style={{ position: "relative", marginBottom: 10 }}>
             <MentionField multiline={false} companiesList={companiesList}
               value={newNote.title} placeholder="제목 (선택사항) — @업체명 으로 연결"
@@ -16844,7 +16880,8 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
           <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
             <button onClick={function() {
               setNewNote(function(p) {
-                var items = (p.checkItems || []).concat([{ text: "" }]);
+                // 새 항목은 맨 위로 — 아래로 쌓이면 스크롤해야 보여서 업무가 누락된다
+                var items = [{ text: "" }].concat(p.checkItems || []);
                 return Object.assign({}, p, { checkItems: items, is_todo: true });
               });
             }} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", background: "#fff", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, color: "#15803D", fontWeight: 600, cursor: "pointer" }}>
@@ -18070,7 +18107,7 @@ function LeaveView({ profile, profiles }) {
 }
 
 // ── 정산관리 ──────────────────────────────────────────────────────────────────
-function SettlementView() {
+function SettlementView({ profile }) {
   const [cases, setCases] = useState([]);       // 자동 (agency_cases)
   const [manuals, setManuals] = useState([]);   // 수동 (settlement_manual)
   const [loading, setLoading] = useState(true);
@@ -18112,8 +18149,11 @@ function SettlementView() {
   var allFiltered = useMemo(function() {
     var auto = filteredAuto.map(function(c) { return Object.assign({}, c, { _source: "auto" }); });
     var manual = filteredManual.map(function(m) { return Object.assign({}, m, { _source: "manual" }); });
-    return auto.concat(manual);
-  }, [filteredAuto, filteredManual]);
+    // 🔒 열람 권한: 본인이 담당자인 건만. 예외 4명(SETTLEMENT_ADMINS)은 전체.
+    //    여기서 한 번 거르면 팀 필터·팀별 건수·합계가 모두 따라온다.
+    var myName = profile?.name || "";
+    return auto.concat(manual).filter(function(r) { return canViewSettlement(r, myName); });
+  }, [filteredAuto, filteredManual, profile?.name]);
 
   // 팀 필터 적용 (전체/법인팀/개인팀) — 사업자명 기준 자동 분류
   var teamFiltered = useMemo(function() {
