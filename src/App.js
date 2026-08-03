@@ -3852,7 +3852,8 @@ function ChatSaveToNotePopup({ msg, co, profile, channel, onClose, onSaved }) {
       var mine = await findMergeableWorkNote(author, date);
       if (mine) {
         r = await supabase.from("work_notes").update({
-          title: noteAutoTitle(author, date),   // 합치는 순간 하루치 노트가 되므로 "8월3일 업무노트"로 교체
+          // 하루치 노트가 되므로 "8월3일 업무노트"로 교체 — 단 담당자가 직접 지은 제목은 보존
+          title: mergedNoteTitle(mine.title, noteAutoTitle(author, date)),
           content: appendNoteContent(mine.content, buildContent()),
           updated_at: new Date().toISOString(),
         }).eq("id", mine.id);
@@ -3875,7 +3876,7 @@ function ChatSaveToNotePopup({ msg, co, profile, channel, onClose, onSaved }) {
       var teamCard = await findMergeableTeamNote(teamKey, date, author);
       if (teamCard) {
         r = await supabase.from("team_notes").update({
-          title: teamNoteAutoTitle(date),       // "8월3일 업무"
+          title: mergedNoteTitle(teamCard.title, teamNoteAutoTitle(date)),   // "8월3일 업무" (수기 제목은 보존)
           content: appendNoteContent(teamCard.content, buildContent()),
           updated_at: new Date().toISOString(),
         }).eq("id", teamCard.id);
@@ -14707,7 +14708,7 @@ function teamNoteAutoTitle(dateStr) {
 async function findMergeableWorkNote(assignee, noteDate) {
   if (!assignee || !noteDate) return null;
   var r = await supabase.from("work_notes")
-    .select("id, content")
+    .select("id, title, content")
     .eq("assignee", assignee)
     .eq("note_date", noteDate)
     .is("deleted_at", null)
@@ -14721,7 +14722,7 @@ async function findMergeableWorkNote(assignee, noteDate) {
 async function findMergeableTeamNote(team, workDate, postedBy) {
   if (!team || !workDate || !postedBy) return null;
   var r = await supabase.from("team_notes")
-    .select("id, content")
+    .select("id, title, content")
     .eq("team", team)
     .eq("work_date", workDate)
     .eq("posted_by", postedBy)
@@ -14731,6 +14732,26 @@ async function findMergeableTeamNote(team, workDate, postedBy) {
     .limit(1);
   if (r.error || !r.data || !r.data.length) return null;
   return r.data[0];
+}
+
+// 합칠 때 제목을 자동 제목으로 바꿔도 되는지 — 사람이 직접 지은 제목은 덮어쓰지 않는다.
+// 교체해도 되는 "자동 생성 제목"만 골라낸다:
+//   빈 제목
+//   "💬 업체명 — 발신자"              … 채팅 저장(ChatSaveToNotePopup.buildTitle)
+//   "[법인팀]/[개인팀]/[전체] …"       … 팀 카드 가져가기(takeToMyNote/takeChecklistItem)
+//   "8월3일 업무노트" / "8월3일 업무"   … 이미 날짜 자동 제목
+// 그 외(예: "260716", "8월 권구현 업무")는 담당자가 직접 붙인 제목이므로 그대로 둔다.
+var AUTO_NOTE_TITLE_RE = /^\d{1,2}월\d{1,2}일 업무(노트)?$/;
+function isAutoNoteTitle(title) {
+  var s = String(title == null ? "" : title).trim();
+  if (!s) return true;
+  if (s.indexOf("💬") === 0) return true;
+  if (/^\[(법인팀|개인팀|전체)\]/.test(s)) return true;
+  return AUTO_NOTE_TITLE_RE.test(s);
+}
+// 합쳐진 카드에 쓸 제목 — 수기 제목이면 보존, 자동 제목이면 날짜 자동 제목으로 교체
+function mergedNoteTitle(existingTitle, autoTitle) {
+  return isAutoNoteTitle(existingTitle) ? autoTitle : existingTitle;
 }
 
 // 기존 본문 뒤에 새 내용을 덧붙인다. 빈 줄 하나로 띄워 원문 경계가 남게 한다.
@@ -24147,7 +24168,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       // 어느 팀 카드에서 넘어온 내용인지 본문에 머리글로 남긴다(합치면 제목이 날짜 제목으로 바뀌므로).
       var addition = "── " + srcTitle + " ──\n" + (teamNote.content || "");
       var upd = await supabase.from("work_notes").update({
-        title: noteAutoTitle(assigneeName, todayStr),   // "8월3일 업무노트"
+        title: mergedNoteTitle(mine.title, noteAutoTitle(assigneeName, todayStr)),   // "8월3일 업무노트" (수기 제목은 보존)
         content: appendNoteContent(mine.content, addition),
         updated_at: new Date().toISOString(),
       }).eq("id", mine.id).select().single();
