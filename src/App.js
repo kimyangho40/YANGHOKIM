@@ -14858,15 +14858,21 @@ function toggleLineChecked(content, lineIdx) {
   }
   return lines.join("\n");
 }
-// @업체 태그: 입력값 끝(공백 없는) "@질의" 를 추출. 없으면 null.
-function extractMention(value) {
+// @업체 태그: 커서 바로 앞의 (공백 없는) "@질의" 를 추출. 없으면 null.
+// caret(커서 위치)까지만 보고 판단한다. caret을 주지 않으면 예전처럼 값 전체를 본다(옛 호출부 호환).
+// 커서를 무시하면 값 끝의 마지막 @만 잡혀서, 이미 써 둔 문장 중간·앞에 @태그를 넣을 수 없었다.
+// (예: "해온푸드 사업전환" 앞에 @해온 을 넣으면 뒤에 공백이 있어 null → 자동완성이 안 떴다)
+// end = 태그로 대체될 구간의 끝(=커서). 커서 뒤 내용을 살려 붙이는 데 쓴다.
+function extractMention(value, caret) {
   if (value == null) return null;
   var s = String(value);
-  var at = s.lastIndexOf("@");
+  var pos = (caret == null || caret < 0 || caret > s.length) ? s.length : caret;
+  var upto = s.slice(0, pos);
+  var at = upto.lastIndexOf("@");
   if (at < 0) return null;
-  var after = s.slice(at + 1);
+  var after = upto.slice(at + 1);
   if (/[\s\n]/.test(after)) return null; // 공백이 오면 태그 입력 종료로 간주
-  return { at: at, query: after };
+  return { at: at, query: after, end: pos };
 }
 
 // ── @업체 태그 입력 필드 (재사용) ─────────────────────────────────────────────
@@ -14902,25 +14908,78 @@ function MentionField(props) {
     }
   };
 
+  // 자동 포커스: React의 autoFocus 속성을 그대로 넘기면, 값이 이미 들어 있는 칸에서
+  // 커서가 글 맨 앞(0)에 놓인다. (팀 업무 체크리스트 항목 편집 팝업에서 "커서가 맨 앞으로
+  // 튄다"던 그 증상 — 이 칸은 autoFocus={true}이고 기존 내용을 담은 채 열린다.)
+  // 그래서 속성 대신 직접 focus() 하고 커서를 글 끝으로 보낸다.
+  // 마운트 시 1회만 — React autoFocus와 같은 동작을 유지해야 나중에 autoFocus가
+  // false→true로 바뀌는 칸(새 노트 체크리스트)에서 포커스를 뺏지 않는다.
+  var autoFocusInit = useRef(!!props.autoFocus);
+  useLayoutEffect(function() {
+    if (!autoFocusInit.current) return;
+    var el = elRef.current;
+    if (!el) return;
+    el.focus();
+    var len = el.value.length;
+    try { el.setSelectionRange(len, len); } catch (e) {}
+  }, []);
+
+  // 커서 위치 기준으로 @태그 상태를 다시 계산한다.
+  // 결과가 같으면 이전 객체를 그대로 돌려줘 불필요한 리렌더를 막는다(한글 IME 조합 방해 방지).
+  var syncMention = function(el) {
+    if (!el) return;
+    var next = extractMention(el.value, el.selectionStart);
+    setMq(function(prev) {
+      if (!prev && !next) return prev;
+      if (prev && next && prev.at === next.at && prev.query === next.query && prev.end === next.end) return prev;
+      return next;
+    });
+  };
+
   var handleChange = function(e) {
-    var v = e.target.value;
-    if (props.onChange) props.onChange(v);
-    setMq(extractMention(v));
+    var el = e.target;
+    if (props.onChange) props.onChange(el.value);
+    syncMention(el);
     setActive(0);
     setTimeout(syncScroll, 0);
   };
 
+  // 커서만 움직여도(클릭·←→·드래그) 태그 상태를 맞춘다.
+  // 안 맞추면 커서가 태그를 벗어난 뒤에도 드롭다운이 남아 Enter를 계속 가로챈다.
+  var handleSelect = function(e) { syncMention(e.target); };
+
   var pick = function(co) {
-    var m = extractMention(value);
-    if (m && props.onChange) props.onChange(value.slice(0, m.at) + "@" + co.name + " ");
+    var el = elRef.current;
+    var caret = el && el.selectionStart != null ? el.selectionStart : value.length;
+    var m = extractMention(value, caret);
+    var pos = null;
+    if (m && props.onChange) {
+      var inserted = "@" + co.name + " ";
+      // 커서 뒤 내용을 반드시 살린다. 예전엔 앞부분만 남기고 뒤를 통째로 버렸다.
+      props.onChange(value.slice(0, m.at) + inserted + value.slice(m.end));
+      pos = m.at + inserted.length;
+    }
     if (props.onLink) props.onLink(co);
     setMq(null);
-    setTimeout(function() { if (elRef.current) elRef.current.focus(); }, 0);
+    setTimeout(function() {
+      var el2 = elRef.current;
+      if (!el2) return;
+      el2.focus();
+      // 값 교체 후 커서를 삽입한 태그 바로 뒤로 되돌린다(예전엔 복원이 없어 커서가 튀었다).
+      if (pos != null) { try { el2.setSelectionRange(pos, pos); } catch (e2) {} }
+    }, 0);
   };
 
   var handleKeyDown = function(e) {
     if (props.onKeyDown) props.onKeyDown(e);
     if (!mq || matches.length === 0) return;
+    // 한글 조합 중(IME)의 Enter는 "글자 확정"이다. 가로채면 조합이 깨지고 커서가 튄다.
+    if (e.nativeEvent && (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229)) return;
+    // 커서가 "지금도" 그 @태그 안에 있을 때만 키를 가로챈다.
+    // 특히 Enter — 체크리스트 항목·업무 내용은 여러 줄 입력이라 줄바꿈을 뺏으면 안 된다.
+    var el = elRef.current;
+    var live = el ? extractMention(el.value, el.selectionStart) : null;
+    if (!live || live.at !== mq.at) { setMq(null); return; }
     if (e.key === "ArrowDown") { e.preventDefault(); setActive(function(a) { return Math.min(matches.length - 1, a + 1); }); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setActive(function(a) { return Math.max(0, a - 1); }); }
     else if (e.key === "Enter") { e.preventDefault(); pick(matches[active] || matches[0]); }
@@ -14989,9 +15048,10 @@ function MentionField(props) {
     </div>
   ) : null;
 
+  // autoFocus는 DOM 속성으로 넘기지 않는다 — 위 useLayoutEffect가 focus + 커서를 글 끝으로 처리한다.
   var fieldProps = {
     ref: elRef, value: value, onChange: handleChange, onKeyDown: handleKeyDown,
-    onBlur: handleBlur, onScroll: syncScroll, placeholder: "", autoFocus: props.autoFocus, style: fieldStyle,
+    onSelect: handleSelect, onBlur: handleBlur, onScroll: syncScroll, placeholder: "", style: fieldStyle,
   };
 
   return (
