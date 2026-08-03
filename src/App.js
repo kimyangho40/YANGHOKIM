@@ -3931,7 +3931,8 @@ function ChatSaveToNotePopup({ msg, co, profile, channel, onClose, onSaved }) {
   };
 
   return (
-    <div onClick={onClose}
+    <div
+      /* 바깥 클릭으로는 닫지 않는다 — 작성 중이던 내용이 날아간다. 닫기는 취소 버튼으로만. */
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 3000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
       <div onClick={function(e) { e.stopPropagation(); }}
         style={{ background: "#fff", borderRadius: 12, padding: 16, width: 340, maxWidth: "100%", boxShadow: "0 10px 40px rgba(0,0,0,0.2)" }}>
@@ -4427,6 +4428,27 @@ export default function App() {
       else { setProfile(null); setLoading(false); }
     });
     return () => subscription.unsubscribe();
+  }, []);
+
+  // ⌫ 백스페이스가 브라우저 "뒤로가기"로 새어나가 작성 중이던 내용이 날아가는 것 차단.
+  //    데스크톱(CRMApp)·모바일(MobileApp) 공통이라 최상위 App 에 단다. 아래 CRMApp 에 달면
+  //    /m 경로에서는 리스너가 없다.
+  //    ⚠️ 입력창 안에서는 절대 preventDefault 하지 않는다 — 하면 글자가 안 지워진다.
+  //       포커스가 입력창 밖(body 등)일 때만 막는다. 브라우저가 뒤로 가는 건 바로 그때다.
+  //    참고: 앱 코드에는 Backspace 핸들러도 history.back/popstate 도 없다(전수 확인).
+  //         순수하게 브라우저·실행환경 기본동작에 대한 방어다.
+  useEffect(function() {
+    var onKeyDown = function(e) {
+      if (e.key !== "Backspace" && e.keyCode !== 8) return;
+      var t = e.target;
+      var tag = (t && t.tagName) || "";
+      var typing = (tag === "INPUT" || tag === "TEXTAREA" || (t && t.isContentEditable))
+        && !(t && (t.readOnly || t.disabled));
+      if (typing) return;   // 정상 글자 삭제 — 손대지 않는다
+      e.preventDefault();   // 그 외 = 뒤로가기 차단
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return function() { window.removeEventListener("keydown", onKeyDown, true); };
   }, []);
 
   const fetchProfile = async (uid) => {
@@ -8902,7 +8924,9 @@ function MappingModal({ onClose, setPipelineCards, setStagnConfig, canEdit }) {
   };
 
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+    <div
+      /* 바깥 클릭으로는 닫지 않는다 — 작성 중이던 내용이 날아간다. 닫기는 "닫기" 버튼으로만. */
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div onClick={function(e) { e.stopPropagation(); }} style={{ background: "#fff", borderRadius: 16, width: "min(760px, 96vw)", maxHeight: "88vh", overflow: "auto", padding: 22 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>파이프라인 설정</h2>
@@ -9028,7 +9052,9 @@ function AgencyPickModal({ row, mode, onClose, onPick }) {
     try { await onPick(id); } finally { setBusy(false); }
   };
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+    <div
+      /* 바깥 클릭으로는 닫지 않는다 — 작성 중이던 내용이 날아간다. 닫기는 "닫기" 버튼으로만. */
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div onClick={function(e) { e.stopPropagation(); }} style={{ background: "#fff", borderRadius: 16, width: "min(420px, 96vw)", padding: 22 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>{isAdd ? "새 기관 추가 신청" : "기관 지정"}</h2>
@@ -9071,7 +9097,9 @@ function OtherReasonModal({ row, onClose, onSave }) {
     try { await onSave(rid, note); } finally { setBusy(false); }
   };
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+    <div
+      /* 바깥 클릭으로는 닫지 않는다 — 작성 중이던 내용이 날아간다. 닫기는 "닫기" 버튼으로만. */
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div onClick={function(e) { e.stopPropagation(); }} style={{ background: "#fff", borderRadius: 16, width: "min(430px, 96vw)", padding: 22 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>기타 사유 지정</h2>
@@ -15488,7 +15516,7 @@ function CreditReportImport({ existingCount, onApply }) {
   var reviewCount = parsed ? parsed.loans.filter(function(l) { return l.needs_review; }).length : 0;
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
-      onClick={function(e) { if (e.target === e.currentTarget) close(); }}>
+      /* 바깥 클릭으로는 닫지 않는다 — 작성 중이던 내용이 날아간다. 닫기는 ✕/취소 버튼으로만. */>
       <div style={{ background: "#fff", borderRadius: 14, width: 860, maxWidth: "100%", maxHeight: "88vh", overflow: "auto", padding: 22 }}>
         <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
           <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>📄 여신·금융거래 첨부</h3>
@@ -17196,7 +17224,8 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
         var sameDay = carryPickDate === carryPick.fromDate; // 원본과 같은 날짜로는 옮길 이유가 없다
         var closePick = function() { if (!carryPickBusy) setCarryPick(null); };
         return (
-          <div onClick={closePick}
+          <div
+            /* 바깥 클릭으로는 닫지 않는다 — 작성 중이던 내용이 날아간다. 닫기는 ✕/취소 버튼으로만. */
             style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
             <div onClick={function(e) { e.stopPropagation(); }}
               style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 380, padding: 20, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
@@ -19900,7 +19929,8 @@ function CalendarQuickAdd({ defaultTitle, defaultDate, defaultTime, createdBy, o
   };
 
   return (
-    <div onClick={function() { if (!busy) onClose(); }}
+    <div
+      /* 바깥 클릭으로는 닫지 않는다 — 작성 중이던 내용이 날아간다. 닫기는 ✕/취소 버튼으로만. */
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
       <div onClick={function(e) { e.stopPropagation(); }}
         style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 400, padding: 20, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
@@ -21968,8 +21998,9 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       {/* 기관별현황 사이드패널 */}
       {selectedCase && (
         <div style={{ position: "fixed", inset: 0, zIndex: 900 }}
-          onMouseDown={function(e) { window.__panelMouseDownTarget = e.target; }}
-          onClick={function(e) { if (window.__panelMouseDownTarget === e.target) setSelectedCase(null); window.__panelMouseDownTarget = null; }}>
+          /* 바깥 클릭으로는 닫지 않는다 — 패널 안에 입력이 있어 작성 중이던 내용이 날아간다.
+             닫기는 ✕/취소 버튼으로만. (예전 __panelMouseDownTarget 가드는 드래그만 막고
+             단순 바깥 클릭은 그대로 닫혔다.) */>
           <div style={{ position: "absolute", top: 0, right: 0, width: 460, height: "100%", background: "#fff", boxShadow: "-4px 0 30px rgba(0,0,0,0.15)", overflowY: "auto" }}
             onClick={function(e) { e.stopPropagation(); }}
             onMouseDown={function(e) { e.stopPropagation(); }}>
@@ -22794,8 +22825,9 @@ function DBLeadsView({ canExport }) {
       {/* DB리스트 사이드패널 */}
       {selectedLead && (
         <div style={{ position: "fixed", inset: 0, zIndex: 900 }}
-          onMouseDown={function(e) { window.__panelMouseDownTarget = e.target; }}
-          onClick={function(e) { if (window.__panelMouseDownTarget === e.target) setSelectedLead(null); window.__panelMouseDownTarget = null; }}>
+          /* 바깥 클릭으로는 닫지 않는다 — 패널 안에 입력이 있어 작성 중이던 내용이 날아간다.
+             닫기는 ✕/취소 버튼으로만. (예전 __panelMouseDownTarget 가드는 드래그만 막고
+             단순 바깥 클릭은 그대로 닫혔다.) */>
           <div style={{ position: "absolute", top: 0, right: 0, width: 480, height: "100%", background: "#fff", boxShadow: "-4px 0 30px rgba(0,0,0,0.15)", overflowY: "auto" }}
             onClick={function(e) { e.stopPropagation(); }}
             onMouseDown={function(e) { e.stopPropagation(); }}>
@@ -25082,7 +25114,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
         };
         return (
           <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
-            onClick={closePick}>
+            /* 바깥 클릭으로는 닫지 않는다 — 작성 중이던 내용이 날아간다. 닫기는 ✕/취소 버튼으로만. */>
             <div onClick={function(e) { e.stopPropagation(); }}
               style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 380, padding: 20, boxShadow: "0 10px 40px rgba(0,0,0,0.2)" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
@@ -25135,7 +25167,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       {/* 📝 체크리스트 항목 편집 모달 — 등록/수정 모달(9998)보다 위에 떠야 하므로 9999 */}
       {clEdit && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
-          onClick={function() { setClEdit(null); }}>
+          /* 바깥 클릭으로는 닫지 않는다 — 작성 중이던 내용이 날아간다. 닫기는 ✕/취소 버튼으로만. */>
           <div onClick={function(e) { e.stopPropagation(); }}
             style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 560, padding: 18, boxShadow: "0 10px 40px rgba(0,0,0,0.2)" }}>
             <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>📋 체크리스트 항목</div>
