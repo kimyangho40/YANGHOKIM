@@ -14967,6 +14967,48 @@ function MentionField(props) {
     }
   };
 
+  // 백드롭(보이는 글자)과 textarea(커서)의 글자 영역 폭을 맞춘다.
+  //
+  // textarea 는 내용이 넘치면 세로 스크롤바(약 15px)가 생겨 글자 영역이 그만큼 좁아지는데,
+  // 백드롭은 overflow:hidden 이라 스크롤바가 없어 폭이 그대로다. 그래서 같은 글이 textarea
+  // 에서 더 자주 감기고 → 줄 수가 달라지고 → textarea 의 scrollHeight 가 더 커진다.
+  // 그러면 syncScroll 의 scrollTop 대입이 백드롭 최대치를 넘어 브라우저가 조용히 clamp 하고,
+  // 백드롭이 뒤처져 "더 위쪽 내용"을 보여준다 = 커서가 엉뚱한 윗줄에 있는 것처럼 보인다.
+  // (스크롤이 길수록·아래로 갈수록 심해지던 그 증상)
+  //
+  // 그래서 실제 스크롤바 폭(gutter)을 재서 백드롭 border-box 를 그만큼 좁힌다.
+  // 백드롭은 boxSizing:border-box 라 이것만으로 content 폭이 textarea 와 같아진다
+  // (padding 문자열을 파싱할 필요가 없다).
+  // CSS scrollbar-gutter 는 쓰지 않는다 — 구형 브라우저 가능성이 있다.
+  var alignBackdrop = function() {
+    var el = elRef.current, bd = backRef.current;
+    if (!el || !bd) return;
+    var gutter = 0;
+    try {
+      var cs = window.getComputedStyle(el);
+      var bx = (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.borderRightWidth) || 0);
+      gutter = el.offsetWidth - el.clientWidth - bx;   // 스크롤바 없으면 0
+      if (!(gutter > 0)) gutter = 0;
+    } catch (e) { gutter = 0; }
+    bd.style.width = gutter > 0 ? ("calc(100% - " + gutter + "px)") : "100%";
+    syncScroll();
+  };
+
+  // 값이 바뀌면 스크롤바가 생기거나 사라질 수 있으므로 다시 잰다.
+  // 페인트 전에 도는 useLayoutEffect 라 handleChange 의 setTimeout(syncScroll, 0) 보다 정확하다.
+  useLayoutEffect(function() {
+    alignBackdrop();
+  });
+
+  // 사용자가 resize:vertical 로 크기를 바꾸거나 창 크기가 변할 때도 다시 잰다.
+  useLayoutEffect(function() {
+    var el = elRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;   // 구형 브라우저 가드
+    var ro = new ResizeObserver(function() { alignBackdrop(); });
+    ro.observe(el);
+    return function() { ro.disconnect(); };
+  }, []);
+
   // 자동 포커스: React의 autoFocus 속성을 그대로 넘기면, 값이 이미 들어 있는 칸에서
   // 커서가 글 맨 앞(0)에 놓인다. (팀 업무 체크리스트 항목 편집 팝업에서 "커서가 맨 앞으로
   // 튄다"던 그 증상 — 이 칸은 autoFocus={true}이고 기존 내용을 담은 채 열린다.)
@@ -14981,6 +15023,9 @@ function MentionField(props) {
     el.focus();
     var len = el.value.length;
     try { el.setSelectionRange(len, len); } catch (e) {}
+    // 커서를 끝으로 보내면 textarea 가 맨 아래까지 스크롤된다. 위 alignBackdrop effect 는
+    // 이 effect 보다 먼저 선언돼 마운트 때 더 일찍 돌므로, 여기서 한 번 더 맞춰준다.
+    alignBackdrop();
   }, []);
 
   // 커서 위치 기준으로 @태그 상태를 다시 계산한다.
@@ -15086,7 +15131,11 @@ function MentionField(props) {
     padding: style.padding, border: style.border, borderColor: "transparent",
     borderRadius: style.borderRadius, color: textColor, background: "transparent",
     pointerEvents: "none", overflow: "hidden",
-    whiteSpace: multiline ? "pre-wrap" : "pre", wordBreak: multiline ? "break-word" : "normal",
+    // 줄바꿈 규칙은 아래 fieldStyle 과 글자 하나까지 같아야 한다. 예전엔 백드롭만
+    // wordBreak:"break-word" 였고 textarea 는 브라우저 기본이라, 한글에 영문·URL 이 섞이면
+    // 분기점이 달라져 글자와 커서가 어긋났다.
+    whiteSpace: multiline ? "pre-wrap" : "pre",
+    overflowWrap: multiline ? "break-word" : "normal", wordBreak: "normal",
     textDecoration: style.textDecoration, zIndex: 0,
   };
   var fieldStyle = Object.assign({}, style, {
@@ -15094,6 +15143,12 @@ function MentionField(props) {
     caretColor: textColor, zIndex: 1,
     fontFamily: style.fontFamily || "inherit", // 백드롭과 폰트 강제 일치(정렬 어긋남 방지)
   });
+  if (multiline) {
+    // 백드롭과 동일한 줄바꿈 규칙을 textarea 에도 명시(브라우저 기본값에 기대지 않는다)
+    fieldStyle.whiteSpace = "pre-wrap";
+    fieldStyle.overflowWrap = "break-word";
+    fieldStyle.wordBreak = "normal";
+  }
 
   var dropdown = (mq && matches.length > 0) ? (
     <div style={{ position: "absolute", zIndex: 60, top: "100%", left: 0, minWidth: 220, background: "#fff", border: "1px solid #86EFAC", borderRadius: 8, boxShadow: "0 6px 20px rgba(0,0,0,0.12)", marginTop: 2, maxHeight: 220, overflowY: "auto" }}>
@@ -25174,8 +25229,9 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
             <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>
               @업체명을 쓰면 업체가 연결됩니다 · Enter는 줄바꿈 · Ctrl+Enter로 저장
             </div>
-            {/* MentionField는 props.onKeyDown을 전달하지 않는다(자체 @자동완성 핸들러가 덮어씀).
-                감싸는 div에서 버블링된 키 이벤트를 받아 Ctrl+Enter 저장을 처리한다. */}
+            {/* Ctrl+Enter 저장은 감싸는 div에서 버블링된 키 이벤트로 처리한다.
+                (MentionField는 props.onKeyDown을 handleKeyDown 첫 줄에서 전달하므로 직접
+                 넘겨도 되지만, 이미 동작 중인 이 방식을 굳이 바꾸지 않는다.) */}
             <div onKeyDown={function(e) { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); saveClEdit(); } }}>
               <MentionField multiline={true} companiesList={companiesList}
                 value={clEdit.text}
