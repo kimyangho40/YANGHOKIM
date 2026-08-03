@@ -10900,6 +10900,15 @@ function IndustryPanel({ value, onChange, companies, alwaysOpen }) {
 function ListView({ filtered, companies, search, setSearch, filterStage, setFilterStage, filterAssignee, setFilterAssignee, filterType, setFilterType, filterAgency, setFilterAgency, filterTeam, setFilterTeam, creditFilter, setCreditFilter, creditMode, setCreditMode, assignees, onSelect, onAdd, setCompanies, showToast, dashboardFilter, setDashboardFilter, canExport }) {
   const [showCompanyTrash, setShowCompanyTrash] = useState(false);
   const [trashedCompanies, setTrashedCompanies] = useState([]);
+  const [showDriveLink, setShowDriveLink] = useState(false);   // 📂 드라이브 폴더 일괄 자동연결
+
+  // 폴더가 연결된 기업 수. "미연결 수"를 쓰면 안 된다 — 드라이브 폴더는 계약 진행 업체 위주라
+  // 기업 391건 중 100여 개뿐이고, (391) 이라고 띄우면 391건을 연결해야 하는 것처럼 읽힌다.
+  const linkedCount = useMemo(function() {
+    return (companies || []).filter(function(c) {
+      return c && !c.deleted_at && c.drive_folder_id && String(c.drive_folder_id).trim();
+    }).length;
+  }, [companies]);
 
   // 중복 사업장: 업체명 + 대표자명이 같으면 중복 (전체 기업 기준)
   const listDupKeys = useMemo(function() {
@@ -11105,6 +11114,11 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
             <Icon name="plus" size={15} color="#F7F6F3" /> 신규 등록
           </button>
           <ExportButton rows={companies} filenamePrefix="기업목록" label="내보내기" canExport={canExport} />
+          <button onClick={function() { setShowDriveLink(true); }}
+            title="구글 드라이브의 업체 폴더를 기업목록과 자동으로 맞춰 연결합니다"
+            style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            📂 드라이브 연결{linkedCount > 0 ? " (" + linkedCount + "건 연결됨)" : ""}
+          </button>
           <button onClick={openTrash} style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
             🗑️ 휴지통{trashedCompanies.length > 0 ? " (" + trashedCompanies.length + ")" : ""}
           </button>
@@ -11362,6 +11376,12 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
         </div>
         {filtered.length === 0 && <div style={{ padding: "40px", textAlign: "center", color: "#888", fontSize: 13 }}>검색 결과가 없어요</div>}
       </div>
+
+      {/* 📂 드라이브 폴더 일괄 자동연결 모달 */}
+      {showDriveLink && (
+        <DriveAutoLinkModal companies={companies} setCompanies={setCompanies} showToast={showToast}
+          onClose={function() { setShowDriveLink(false); }} />
+      )}
 
       {/* 기업목록 휴지통 모달 */}
       {showCompanyTrash && (
@@ -19905,6 +19925,133 @@ async function driveListFiles(folderId, token) {
   return d.files || [];
 }
 
+// ── 📂 드라이브 폴더 ↔ 기업 자동 연결 ────────────────────────────────────────
+// 기업 폴더가 모여 있는 상위 폴더. 실측(2026-08-03) 기준 이 아래에 업체 폴더 103개가
+// `사업장명_대표자명대표` 규칙으로 들어 있다. 폴더를 옮기면 아래 localStorage 값으로 덮어쓴다.
+const GDRIVE_ROOT_DEFAULT = "1FiPop76DX859CcTkI6zJuja0TNznrpmT";
+const GDRIVE_ROOT_KEY = "gdrive_company_root";
+function getDriveRootId() {
+  try { return localStorage.getItem(GDRIVE_ROOT_KEY) || GDRIVE_ROOT_DEFAULT; } catch (e) { return GDRIVE_ROOT_DEFAULT; }
+}
+function setDriveRootId(id) {
+  try { if (id) localStorage.setItem(GDRIVE_ROOT_KEY, id); else localStorage.removeItem(GDRIVE_ROOT_KEY); } catch (e) {}
+}
+
+// 상위 폴더 바로 아래의 "폴더"만 전부 가져온다(파일은 제외). 100개가 넘으므로 페이지를 끝까지 넘긴다 —
+// driveListFiles 는 한 폴더 안을 보는 용도라 페이지네이션이 없어서 따로 만든다.
+async function driveListChildFolders(parentId, token) {
+  var out = [], pageToken = "", guard = 0;
+  do {
+    var url = "https://www.googleapis.com/drive/v3/files"
+      + "?q=" + encodeURIComponent("'" + parentId + "' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false")
+      + "&fields=" + encodeURIComponent("nextPageToken,files(id,name,modifiedTime,webViewLink)")
+      + "&orderBy=name&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true"
+      + (pageToken ? "&pageToken=" + encodeURIComponent(pageToken) : "");
+    var r = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+    if (r.status === 401 || r.status === 403) { clearDriveToken(); throw new Error("AUTH"); }
+    if (!r.ok) throw new Error("드라이브 폴더 조회 실패 (" + r.status + ")");
+    var d = await r.json();
+    out = out.concat(d.files || []);
+    pageToken = d.nextPageToken || "";
+    guard += 1;
+  } while (pageToken && guard < 20);
+  return out;
+}
+
+// 업체명 정규화 — 법인 표기·괄호 꼬리표·기호·공백을 털어낸다.
+// CRM 이름에는 업무 상태 꼬리표가 붙어 있는 경우가 많다("동진건설_방치", "비에스테크(국세 체납)").
+// 괄호를 통째로 지우는 이유가 이것 — 드라이브 폴더명에는 그런 꼬리표가 없다.
+function gdNormName(s) {
+  return String(s || "").replace(/\r|\n/g, "")
+    .replace(/\(주\)|㈜|주식회사|\(유\)|유한회사|농업회사법인|영농조합법인/g, "")
+    .replace(/\([^)]*\)/g, "")
+    .replace(/[\s·・.,'"`&\-_:]/g, "").toLowerCase();
+}
+// 대표자명 정규화 — "홍길동대표님", "김현정,배순애대표", "서성현대표 010-1234-5678" 을 ["홍길동"] 형태로.
+function gdCleanReps(s) {
+  return String(s || "").replace(/\r|\n/g, "")
+    .replace(/\([^)]*\)/g, "")
+    .replace(/0\d{1,2}-?\d{3,4}-?\d{4}/g, "")
+    .replace(/대표님|대표이사|대표|본부장|사장/g, "")
+    .split(/[,、/]/).map(function(x) { return x.replace(/\s/g, ""); }).filter(Boolean);
+}
+// 폴더명 → { name, reps }. 마지막 "_" 뒤가 대표자처럼 보일 때만 쪼갠다
+// ("주식회사 이루미기획"처럼 대표자가 없는 폴더를 통째로 이름으로 살리기 위함).
+function gdParseFolderTitle(title) {
+  var t = String(title || "");
+  var i = t.lastIndexOf("_");
+  if (i < 0) return { name: t, reps: [] };
+  var left = t.slice(0, i).replace(/_+$/, "");   // "신영주류(명)__김봉수대표" 처럼 언더바가 겹친 경우
+  var right = t.slice(i + 1);
+  if (!/대표|사장|본부장/.test(right)) return { name: t, reps: [] };
+  return { name: left, reps: gdCleanReps(right) };
+}
+// 두 문자열의 bigram Dice 계수(0~1).
+function gdDice(a, b) {
+  if (a === b) return a ? 1 : 0;
+  if (a.length < 2 || b.length < 2) return 0;
+  var m = new Map(), hit = 0, i, j;
+  for (i = 0; i < a.length - 1; i++) { var g = a.slice(i, i + 2); m.set(g, (m.get(g) || 0) + 1); }
+  for (j = 0; j < b.length - 1; j++) { var h = b.slice(j, j + 2); if (m.get(h) > 0) { hit++; m.set(h, m.get(h) - 1); } }
+  return (2 * hit) / (a.length + b.length - 2);
+}
+
+// 폴더 목록 × 기업 목록 → { auto, review, none }
+//   auto   : 이름이 거의 같고 대표자까지 맞는 건 (바로 연결)
+//   review : 둘 중 하나만 맞거나 후보가 엇비슷한 건 (사람이 고름)
+//   none   : 후보 자체가 없는 건 (CRM 미등록 업체로 보임)
+//
+// ⚠️ 한 기업에 폴더가 2개 이상 자동 배정되면 양쪽 다 review 로 내린다.
+//    실측 사례: "사랑해줄개_신지혜대표"와 오타 폴더 "사랑해줄게_신지혜대표"가 동시에 존재한다.
+//    이름 유사도 0.75 + 대표자 완전일치라 어떤 규칙으로도 못 가른다 — 사람만 판단할 수 있다.
+function matchDriveFolders(folders, companies) {
+  var live = (companies || []).filter(function(c) { return c && !c.deleted_at; });
+  // 이미 다른 기업에 물려 있는 폴더 id — 재실행 시 중복 배정 방지
+  var takenFolder = {};
+  live.forEach(function(c) { if (c.drive_folder_id) takenFolder[c.drive_folder_id] = true; });
+
+  var auto = [], review = [], none = [];
+  (folders || []).forEach(function(f) {
+    var parsed = gdParseFolderTitle(f.name);
+    var fn = gdNormName(parsed.name);
+    var scored = live.map(function(c) {
+      var ns = gdDice(fn, gdNormName(c.name));
+      var cr = gdCleanReps(c.representative);
+      var rm = parsed.reps.length > 0 && cr.length > 0
+        && parsed.reps.some(function(x) { return cr.some(function(y) { return x === y; }); });
+      return { co: c, ns: ns, rm: rm, score: ns * 0.6 + (rm ? 0.4 : 0) };
+    }).sort(function(a, b) { return b.score - a.score; });
+
+    var top = scored[0];
+    if (!top) { none.push({ folder: f, parsed: parsed, cands: [] }); return; }
+    var gap = top.score - (scored[1] ? scored[1].score : 0);
+    var cands = scored.slice(0, 3).filter(function(s) { return s.score > 0.2 || s.rm; });
+    var item = { folder: f, parsed: parsed, co: top.co, ns: top.ns, rm: top.rm, gap: gap, cands: cands };
+
+    if (takenFolder[f.id]) { review.push(item); return; }       // 이미 어딘가에 연결된 폴더
+    if ((top.ns >= 0.9 && top.rm) || (top.rm && top.ns >= 0.5 && gap >= 0.15)) auto.push(item);
+    // 대표자가 맞으면 이름이 아무리 달라도 버리지 않는다 ("CH-D" ↔ "씨에이치디" 같은 한글/영문 표기 차이)
+    else if (top.rm || top.score >= 0.45) review.push(item);
+    else none.push(item);
+  });
+
+  // 같은 기업을 노리는 auto 가 2건 이상이면 전부 review 로 강등
+  var byCo = {};
+  auto.forEach(function(x) { (byCo[x.co.id] = byCo[x.co.id] || []).push(x); });
+  var demoted = {};
+  Object.keys(byCo).forEach(function(k) {
+    if (byCo[k].length > 1) byCo[k].forEach(function(x) { demoted[x.folder.id] = true; x.dupWarn = true; });
+  });
+  // 이미 폴더가 연결된 기업은 덮어쓰지 않는다 — 사람이 손으로 지정했을 수 있다
+  var kept = [], pushedBack = [];
+  auto.forEach(function(x) {
+    if (demoted[x.folder.id]) { pushedBack.push(x); return; }
+    if (x.co.drive_folder_id) { x.alreadyLinked = true; pushedBack.push(x); return; }
+    kept.push(x);
+  });
+  return { auto: kept, review: pushedBack.concat(review), none: none };
+}
+
 const FILE_ICONS = {
   pdf:  { icon: "📄", color: "#DC2626", bg: "#FEF2F2" },
   xlsx: { icon: "📊", color: "#15803D", bg: "#F0FDF4" },
@@ -20163,6 +20310,339 @@ function CalendarQuickAdd({ defaultTitle, defaultDate, defaultTime, createdBy, o
 //  폴더 주소를 한 번 연결해 두면 그 업체 화면에서 파일 목록을 바로 본다.
 //  ⚠️ 자동 감지가 아니다(눌렀을 때 그 시점 목록을 가져온다). 자동 감지는 서버에 refresh token 을
 //     보관해야 해서 2026-07-27에 잠근 google_oauth_tokens 를 다시 열어야 한다 — 이번 범위에서 제외.
+// ── 📂 드라이브 폴더 일괄 자동연결 모달 (기업목록 상단 버튼) ─────────────────
+// 상위 폴더 아래 업체 폴더를 전부 훑어 CRM 기업과 맞춰 본 뒤,
+//   · 확실한 건(이름+대표자 일치) → 바로 연결
+//   · 애매한 건               → 후보만 보여주고 사람이 고름
+//   · 후보 없는 건            → CRM 미등록으로 안내만
+// 브라우저 OAuth(drive.readonly) 그대로 쓰므로 새 권한·테이블·서버리스가 필요 없다.
+function DriveAutoLinkModal({ companies, setCompanies, showToast, onClose }) {
+  var [phase, setPhase] = useState("idle");   // idle | scanning | linking | done
+  var [err, setErr] = useState("");
+  var [needAuth, setNeedAuth] = useState(false);
+  var [result, setResult] = useState(null);   // { auto, review, none }
+  var [linked, setLinked] = useState([]);     // 이번에 자동 연결한 [{coId, coName, folder}]
+  var [failed, setFailed] = useState([]);
+  var [progress, setProgress] = useState(0);
+  var [rootInput, setRootInput] = useState("");
+  var [editingRoot, setEditingRoot] = useState(false);
+
+  // 한 건 연결 — 실패해도 나머지는 계속 진행한다(부분 성공을 그대로 보고).
+  var linkOne = useCallback(async function(co, folder) {
+    var r = await writeGuarded({ table: "companies", op: "update", id: co.id,
+      payload: { drive_folder_id: folder.id }, label: "드라이브 폴더 자동연결" });
+    if (!r.ok) return false;
+    setCompanies(function(prev) {
+      return (prev || []).map(function(c) {
+        return c.id === co.id ? Object.assign({}, c, { drive_folder_id: folder.id }) : c;
+      });
+    });
+    return true;
+  }, [setCompanies]);
+
+  var scan = useCallback(async function() {
+    var token = getDriveToken();
+    if (!token) { setNeedAuth(true); return; }
+    setPhase("scanning"); setErr(""); setNeedAuth(false);
+    var folders;
+    try {
+      folders = await driveListChildFolders(getDriveRootId(), token);
+    } catch (e) {
+      if (e && e.message === "AUTH") setNeedAuth(true);
+      else setErr(e.message || "조회 실패");
+      setPhase("idle");
+      return;
+    }
+    if (folders.length === 0) {
+      setErr("이 상위 폴더 안에 하위 폴더가 없습니다. 폴더 주소가 맞는지 확인해주세요.");
+      setPhase("idle");
+      return;
+    }
+    var m = matchDriveFolders(folders, companies);
+    setResult(m);
+
+    // 확실한 건은 바로 연결
+    setPhase("linking");
+    var ok = [], bad = [];
+    for (var i = 0; i < m.auto.length; i++) {
+      var it = m.auto[i];
+      /* eslint-disable-next-line no-await-in-loop */
+      var done = await linkOne(it.co, it.folder);
+      if (done) ok.push({ coId: it.co.id, coName: it.co.name, folder: it.folder });
+      else bad.push(it);
+      setProgress(i + 1);
+    }
+    setLinked(ok); setFailed(bad); setPhase("done");
+  }, [companies, linkOne]);
+
+  // 사람이 고른 후보를 연결 — 연결한 항목은 목록에서 뺀다
+  var pickCandidate = async function(item, co) {
+    var done = await linkOne(co, item.folder);
+    if (!done) return;
+    setLinked(function(p) { return p.concat([{ coId: co.id, coName: co.name, folder: item.folder }]); });
+    setResult(function(p) {
+      if (!p) return p;
+      return Object.assign({}, p, { review: p.review.filter(function(x) { return x.folder.id !== item.folder.id; }) });
+    });
+  };
+
+  // 방금 자동 연결한 것 전부 해제 — 잘못 붙었을 때 되돌릴 길을 남긴다.
+  // ⚠️ 성공한 id를 먼저 모아서 setCompanies는 마지막에 한 번만 부른다.
+  //    루프 안에서 부르면 React가 updater를 나중에 실행할 때 var 로 잡은 항목이
+  //    이미 다음 것으로 넘어가 있을 수 있다(엉뚱한 기업을 해제).
+  var undoAll = async function() {
+    var rest = [], cleared = {};
+    for (var i = 0; i < linked.length; i++) {
+      var l = linked[i];
+      /* eslint-disable-next-line no-await-in-loop */
+      var r = await writeGuarded({ table: "companies", op: "update", id: l.coId,
+        payload: { drive_folder_id: null }, label: "드라이브 폴더 연결 해제" });
+      if (r.ok) cleared[l.coId] = true; else rest.push(l);
+    }
+    setCompanies(function(prev) {
+      return (prev || []).map(function(c) { return cleared[c.id] ? Object.assign({}, c, { drive_folder_id: null }) : c; });
+    });
+    setLinked(rest);
+    if (showToast) showToast(rest.length === 0 ? "연결을 모두 되돌렸습니다." : "일부는 되돌리지 못했습니다 (" + rest.length + "건).");
+  };
+
+  var box = { background: "#fff", borderRadius: 12, width: "min(860px, 94vw)", maxHeight: "88vh", display: "flex", flexDirection: "column", overflow: "hidden" };
+  var head = { padding: "16px 20px", borderBottom: "1px solid #E8E5E0", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 };
+  var body = { padding: "16px 20px", overflowY: "auto" };
+  var chip = function(bg, bd, color) { return { background: bg, border: "1px solid " + bd, color: color, borderRadius: 8, padding: "10px 12px", flex: 1, minWidth: 120 }; };
+
+  return (
+    <div onClick={function(e) { if (e.target === e.currentTarget && phase !== "scanning" && phase !== "linking") onClose(); }}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 3100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={box}>
+        <div style={head}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>📂 드라이브 폴더 자동 연결</div>
+            <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>
+              업체 폴더를 훑어 기업목록과 맞춰 봅니다. 확실한 건은 바로 연결하고, 애매한 건만 물어봅니다.
+            </div>
+          </div>
+          <button onClick={onClose} disabled={phase === "scanning" || phase === "linking"}
+            style={{ background: "none", border: "none", fontSize: 18, color: "#888", cursor: phase === "scanning" || phase === "linking" ? "not-allowed" : "pointer" }}>✕</button>
+        </div>
+
+        <div style={body}>
+          {needAuth && (
+            <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 10, padding: 14, marginBottom: 12 }}>
+              <div style={{ fontSize: 13, marginBottom: 8 }}>구글 드라이브 연결이 필요합니다. (연결은 약 1시간 유지됩니다)</div>
+              <button onClick={connectGoogleDrive} style={{ background: "#4338CA", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                구글 드라이브 연결하기
+              </button>
+            </div>
+          )}
+          {err && <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", color: "#B91C1C", borderRadius: 8, padding: "10px 12px", fontSize: 12, marginBottom: 12 }}>{err}</div>}
+
+          {phase === "idle" && !needAuth && (
+            <div>
+              <div style={{ fontSize: 12, color: "#555", lineHeight: 1.8, background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
+                <b>업체 폴더가 모여 있는 상위 폴더</b> 아래를 훑습니다.<br />
+                폴더명이 <code>사업장명_대표자명대표</code> 형태면 자동으로 맞춰집니다.<br />
+                이미 폴더가 연결된 기업은 <b>건드리지 않습니다.</b>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, color: "#888" }}>상위 폴더 ID</span>
+                <code style={{ fontSize: 11, background: "#F1F5F9", padding: "4px 8px", borderRadius: 5, wordBreak: "break-all" }}>{getDriveRootId()}</code>
+                <button onClick={function() { setEditingRoot(!editingRoot); setRootInput(""); }}
+                  style={{ fontSize: 11, background: "#fff", border: "1px solid #E2E8F0", borderRadius: 6, padding: "4px 10px", cursor: "pointer", color: "#64748B" }}>
+                  {editingRoot ? "취소" : "바꾸기"}
+                </button>
+              </div>
+              {editingRoot && (
+                <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+                  <input value={rootInput} onChange={function(e) { setRootInput(e.target.value); }}
+                    placeholder="드라이브에서 상위 폴더를 열고 주소창 URL을 붙여넣으세요"
+                    style={{ flex: 1, padding: "8px 10px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 12, outline: "none" }} />
+                  <button onClick={function() {
+                    var fid = parseDriveFolderId(rootInput);
+                    if (!fid) { setErr("드라이브 폴더 주소가 아닙니다."); return; }
+                    setDriveRootId(fid); setEditingRoot(false); setErr("");
+                  }} style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 7, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>저장</button>
+                </div>
+              )}
+              <button onClick={scan} style={{ width: "100%", background: "#15803D", color: "#fff", border: "none", borderRadius: 10, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+                드라이브 훑어보기
+              </button>
+            </div>
+          )}
+
+          {phase === "scanning" && <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>드라이브에서 폴더 목록을 가져오는 중…</div>}
+          {phase === "linking" && (
+            <div style={{ padding: 30, textAlign: "center", color: "#15803D", fontSize: 13 }}>
+              확실한 건 연결 중… {progress} / {result ? result.auto.length : 0}
+            </div>
+          )}
+
+          {phase === "done" && result && (
+            <div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+                <div style={chip("#F0FDF4", "#BBF7D0", "#15803D")}>
+                  <div style={{ fontSize: 20, fontWeight: 800 }}>{linked.length}</div>
+                  <div style={{ fontSize: 11 }}>연결 완료</div>
+                </div>
+                <div style={chip("#FFFBEB", "#FDE68A", "#B45309")}>
+                  <div style={{ fontSize: 20, fontWeight: 800 }}>{result.review.length}</div>
+                  <div style={{ fontSize: 11 }}>확인 필요</div>
+                </div>
+                <div style={chip("#F8FAFC", "#E2E8F0", "#64748B")}>
+                  <div style={{ fontSize: 20, fontWeight: 800 }}>{result.none.length}</div>
+                  <div style={{ fontSize: 11 }}>CRM 미등록</div>
+                </div>
+              </div>
+
+              {failed.length > 0 && (
+                <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", color: "#B91C1C", borderRadius: 8, padding: "10px 12px", fontSize: 12, marginBottom: 12 }}>
+                  {failed.length}건은 저장에 실패했습니다. 화면 상단 저장실패 알림에서 재시도할 수 있습니다.
+                </div>
+              )}
+
+              {/* 자동 연결 전수 목록.
+                  ⚠️ 안쪽에 스크롤 박스를 두지 않는다 — 85건을 150px 창으로 보면 확인이 불가능하다.
+                     모달 본문(body)이 이미 스크롤되므로 목록은 통째로 펼쳐 둔다.
+                  ⚠️ linked(성공분)가 아니라 result.auto(매칭 결과)를 돌린다 —
+                     저장이 실패해도 "무엇을 무엇에 붙이려 했는지"는 보여야 확인이 된다. */}
+              {(function() {
+                var okSet = {};
+                linked.forEach(function(l) { okSet[l.coId] = true; });
+                var autoIds = {};
+                result.auto.forEach(function(x) { autoIds[x.co.id] = true; });
+                var manual = linked.filter(function(l) { return !autoIds[l.coId]; });
+                var rowBase = { display: "flex", alignItems: "baseline", gap: 8, padding: "7px 10px", borderBottom: "1px solid #F1F5F9", fontSize: 12 };
+                var numSt = { color: "#CBD5E1", fontSize: 11, minWidth: 24, textAlign: "right", flexShrink: 0 };
+                var coSt = { fontWeight: 700, flex: 1, minWidth: 0, wordBreak: "break-all" };
+                var fdSt = { color: "#64748B", flex: 1, minWidth: 0, wordBreak: "break-all" };
+
+                return (
+                  <div>
+                    {result.auto.length > 0 && (
+                      <div style={{ marginBottom: 18 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D" }}>
+                            ✅ 자동 연결 {result.auto.length}건
+                            <span style={{ fontWeight: 400, fontSize: 11, color: "#888", marginLeft: 6 }}>기업명 ← 드라이브 폴더명</span>
+                          </div>
+                          {linked.length > 0 && (
+                            <button onClick={undoAll} style={{ fontSize: 11, background: "#fff", border: "1px solid #E8E5E0", borderRadius: 6, padding: "4px 10px", cursor: "pointer", color: "#888" }}>
+                              전부 되돌리기 ({linked.length}건)
+                            </button>
+                          )}
+                        </div>
+                        <div style={{ border: "1px solid #BBF7D0", borderRadius: 8, overflow: "hidden" }}>
+                          {result.auto.map(function(x, i) {
+                            var ok = okSet[x.co.id];
+                            return (
+                              <div key={x.folder.id} style={Object.assign({}, rowBase, { background: ok ? "#fff" : "#FEF2F2" })}>
+                                <span style={numSt}>{i + 1}</span>
+                                <span style={coSt}>{x.co.name}</span>
+                                <span style={{ color: "#94A3B8", flexShrink: 0 }}>←</span>
+                                <span style={fdSt}>{x.folder.name}</span>
+                                <span title={"이름 유사도 " + x.ns.toFixed(2) + " / 대표자 " + (x.rm ? "일치" : "불일치")}
+                                  style={{ fontSize: 10, color: "#94A3B8", flexShrink: 0, minWidth: 62, textAlign: "right" }}>
+                                  {x.ns >= 0.999 ? "이름일치" : "유사 " + x.ns.toFixed(2)}{x.rm ? " ·대표○" : ""}
+                                </span>
+                                <span style={{ fontSize: 11, flexShrink: 0, minWidth: 34, textAlign: "right", color: ok ? "#15803D" : "#B91C1C", fontWeight: 700 }}>
+                                  {ok ? "저장됨" : "실패"}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {manual.length > 0 && (
+                      <div style={{ marginBottom: 18 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D", marginBottom: 6 }}>
+                          👆 직접 지정한 연결 {manual.length}건
+                        </div>
+                        <div style={{ border: "1px solid #BBF7D0", borderRadius: 8, overflow: "hidden" }}>
+                          {manual.map(function(l, i) {
+                            return (
+                              <div key={l.coId} style={Object.assign({}, rowBase, { background: "#fff" })}>
+                                <span style={numSt}>{i + 1}</span>
+                                <span style={coSt}>{l.coName}</span>
+                                <span style={{ color: "#94A3B8", flexShrink: 0 }}>←</span>
+                                <span style={fdSt}>{l.folder.name}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {result.review.length > 0 && (
+                <div style={{ marginBottom: 18 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#B45309", marginBottom: 6 }}>
+                    ⚠️ 확인 필요 {result.review.length}건 <span style={{ fontWeight: 400, fontSize: 11, color: "#888" }}>— 맞는 기업을 눌러주세요</span>
+                  </div>
+                  {result.review.map(function(it, i) {
+                    return (
+                      <div key={it.folder.id} style={{ border: "1px solid #FDE68A", background: "#FFFBEB", borderRadius: 10, padding: "10px 12px", marginBottom: 8 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 2, wordBreak: "break-all" }}>
+                          <span style={{ color: "#CBD5E1", fontWeight: 400, marginRight: 6 }}>{i + 1}</span>
+                          📁 {it.folder.name}
+                          <a href={it.folder.webViewLink} target="_blank" rel="noreferrer" style={{ marginLeft: 6, fontSize: 11, fontWeight: 400, color: "#4338CA" }}>열기</a>
+                        </div>
+                        {it.dupWarn && <div style={{ fontSize: 11, color: "#B91C1C", marginBottom: 4 }}>⚠️ 같은 기업을 가리키는 폴더가 2개 이상입니다 — 어느 쪽이 맞는지 확인해주세요.</div>}
+                        {it.alreadyLinked && <div style={{ fontSize: 11, color: "#B45309", marginBottom: 4 }}>이 기업에는 이미 다른 폴더가 연결돼 있습니다. 바꾸려면 아래에서 다시 눌러주세요.</div>}
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                          {it.cands.map(function(s) {
+                            return (
+                              <button key={s.co.id} onClick={function() { pickCandidate(it, s.co); }}
+                                title={"이름 유사도 " + s.ns.toFixed(2) + " / 대표자 " + (s.rm ? "일치" : "불일치")}
+                                style={{ background: "#fff", border: "1px solid " + (s.rm ? "#86EFAC" : "#E8E5E0"), borderRadius: 7, padding: "6px 10px", fontSize: 12, cursor: "pointer", textAlign: "left" }}>
+                                <b>{s.co.name}</b>
+                                <span style={{ color: "#94A3B8", marginLeft: 5, fontSize: 11 }}>{s.co.representative || "-"}{s.rm ? " ·대표자일치" : ""}</span>
+                              </button>
+                            );
+                          })}
+                          {it.cands.length === 0 && <span style={{ fontSize: 11, color: "#888" }}>후보 없음</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {result.none.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#64748B", marginBottom: 6 }}>
+                    ⚪ CRM 미등록으로 보이는 폴더 {result.none.length}건 <span style={{ fontWeight: 400, fontSize: 11, color: "#888" }}>— 기업목록에 없는 업체입니다</span>
+                  </div>
+                  <div style={{ border: "1px solid #E8E5E0", borderRadius: 8, overflow: "hidden" }}>
+                    {result.none.map(function(x, i) {
+                      return (
+                        <div key={x.folder.id} style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "7px 10px", borderBottom: "1px solid #F1F5F9", fontSize: 12 }}>
+                          <span style={{ color: "#CBD5E1", fontSize: 11, minWidth: 24, textAlign: "right", flexShrink: 0 }}>{i + 1}</span>
+                          <span style={{ flex: 1, minWidth: 0, wordBreak: "break-all", color: "#475569" }}>📁 {x.folder.name}</span>
+                          <a href={x.folder.webViewLink} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#4338CA", flexShrink: 0 }}>열기</a>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {phase === "done" && (
+          <div style={{ padding: "12px 20px", borderTop: "1px solid #E8E5E0", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <button onClick={onClose} style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>닫기</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CompanyDriveFolder({ company, onSaveFolder }) {
   var [editing, setEditing] = useState(false);
   var [input, setInput] = useState("");
