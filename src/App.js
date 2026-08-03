@@ -3612,7 +3612,7 @@ function MobileApp({ profile, session }) {
                     <DraftNotice draft={mNoteDraft} compact onRestore={function(t) {
                       var lines = String(t).split("\n");
                       setNewTitle(lines[0] || "");
-                      setNewItems(lines.slice(1).filter(function(x) { return x.trim(); }).map(function(x) { return { text: x }; }));
+                      setNewItems(lines.slice(1).filter(function(x) { return x.trim(); }).map(function(x) { return { id: newCheckItemId(), text: x }; }));
                     }} />
                     {wnIsAdmin(myName) && (
                       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
@@ -3634,12 +3634,15 @@ function MobileApp({ profile, session }) {
                     </div>
                     {newItems.map(function(it, idx) {
                       return (
-                        <div key={idx} style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
+                        /* key 는 반드시 항목 고유 id — idx 를 쓰면 맨 위 추가 때 행이 밀려 DOM 이 재사용된다. */
+                        <div key={it.id || idx} style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
                           <span style={{ marginTop: 12, fontSize: 16 }}>☐</span>
                           <div style={{ flex: 1, position: "relative" }}>
                             <MentionField multiline={true} companiesList={companiesList} value={it.text} placeholder={"항목 " + (idx + 1) + " · @업체명 연결"}
-                              rows={1} autoFocus={idx === newItems.length - 1}
-                              onChange={function(v) { setNewItems(function(p) { var a = p.slice(); a[idx] = { text: v }; return a; }); }}
+                              rows={1} autoFocus={idx === 0}
+                              /* Object.assign 으로 id 를 보존한다 — { text: v } 로 통째 교체하면
+                                 key 가 사라져 매 글자마다 행이 remount 된다. */
+                              onChange={function(v) { setNewItems(function(p) { var a = p.slice(); a[idx] = Object.assign({}, a[idx], { text: v }); return a; }); }}
                               onLink={function(co) { setNewCompanyId(co.id); }}
                               style={{ width: "100%", padding: "10px 12px", border: "1px solid #D1FAE5", borderRadius: 10, outline: "none", background: "#fff", resize: "none", fontFamily: "inherit", boxSizing: "border-box" }} />
                           </div>
@@ -3647,7 +3650,7 @@ function MobileApp({ profile, session }) {
                         </div>
                       );
                     })}
-                    <button onClick={function() { setNewItems(function(p) { return [{ text: "" }].concat(p); }); }} className="m-tap" style={{ width: "100%", background: "#fff", border: "1px dashed #86EFAC", color: "#15803D", borderRadius: 10, padding: "10px", fontWeight: 600, marginBottom: 10, cursor: "pointer" }}>☑️ 체크리스트 항목 추가</button>
+                    <button onClick={function() { setNewItems(function(p) { return [{ id: newCheckItemId(), text: "" }].concat(p); }); }} className="m-tap" style={{ width: "100%", background: "#fff", border: "1px dashed #86EFAC", color: "#15803D", borderRadius: 10, padding: "10px", fontWeight: 600, marginBottom: 10, cursor: "pointer" }}>☑️ 체크리스트 항목 추가</button>
                     {newCompanyId && <div style={{ fontSize: 12, color: "#4338CA", marginBottom: 8 }}>🔗 업체 연결됨</div>}
                     <div style={{ display: "flex", gap: 8 }}>
                       <button onClick={saveNote} className="m-tap" style={{ flex: 1, background: "#15803D", color: "#fff", border: "none", borderRadius: 10, padding: "12px", fontWeight: 700, cursor: "pointer" }}>저장</button>
@@ -4773,6 +4776,9 @@ function parseTsMs(s) {
   return Date.parse(str);
 }
 
+// 채팅 토스트가 화면에 보이는 시간(ms). "탭이 보이는 동안"만 세므로 실제 노출 시간과 같다.
+const CHAT_TOAST_MS = 7000;
+
 // ── CRM 메인 앱 ───────────────────────────────────────────────────────────────
 function CRMApp({ profile, session }) {
   const [dashboardFilter, setDashboardFilter] = useState(null);
@@ -4847,6 +4853,18 @@ function CRMApp({ profile, session }) {
   const [chatSoundOn, setChatSoundOn] = useState(function() {
     try { return localStorage.getItem("crm_chat_sound") !== "off"; } catch (e) { return true; }
   });
+  // 💬 앱 내 채팅 토스트 (우측 하단) — [{ key, id, sender, channel, message, shownAt }]
+  //    지금까지 새 메시지의 시각적 표시는 브라우저 네이티브 알림 하나뿐이라,
+  //    알림 권한이 denied 인 사람은 탭 제목 "(N)" 말고는 아무것도 못 봤다(2026-08-03 실측: 동일 님).
+  //    이 토스트는 권한과 무관하게 뜨므로 전원이 같은 알림을 받는다.
+  //
+  //    ⚠️ shownAt = "화면에 실제로 보이기 시작한 시각". 그냥 setTimeout(7초)으로 지우면 안 된다 —
+  //    토스트가 뜨는 상황은 대부분 이 탭이 백그라운드일 때인데, 브라우저는 숨은 탭의 타이머를
+  //    최대 1분 단위까지 늦춘다(Chrome intensive throttling). 그래서 7초로 짜도 탭을 다시 열면
+  //    30초 넘게 남아 있었다(2026-08-03 실측). 숨어 있는 동안은 shownAt 을 찍지 않고,
+  //    보이기 시작한 시점부터 벽시계로 7초를 센다 → 사용자가 보는 시간은 항상 7초.
+  const [chatToasts, setChatToasts] = useState([]);
+  const chatToastSeqRef = useRef(0);
   const activeChatChannelRef = useRef(null); // ChatView가 보고하는 현재 열람 채널
   const chatSeenRef = useRef({});            // 알림음/브라우저알림 이미 처리한 메시지 id
   const notifSinceRef = useRef(Date.now());  // 이 시각 이후 INSERT된 메시지에만 알림 (재구독/초기로드 오탐 방지)
@@ -5303,7 +5321,52 @@ function CRMApp({ profile, session }) {
     if (chatSoundRef.current) playChatSound({ id: row.id, sender: row.sender, reason: "새 채팅 수신" });
     else console.log("[알림음] 🔇 알림음 꺼짐 설정이라 소리 생략. id=" + row.id + " 보낸이=" + row.sender);
     showChatBrowserNotif(row);
+
+    // 앱 내 토스트 — 브라우저 알림 권한과 무관하게 항상 뜬다. 최근 3개까지만 쌓는다.
+    // 지우는 건 여기서 setTimeout 하지 않고 아래 useEffect 가 맡는다(숨은 탭 타이머 지연 때문).
+    chatToastSeqRef.current += 1;
+    setChatToasts(function(prev) {
+      return prev.concat({
+        key: "t" + chatToastSeqRef.current, id: row.id, sender: row.sender,
+        channel: row.channel, message: row.message || "",
+        // 지금 화면이 안 보이면 0 — 보이기 시작할 때 아래 useEffect 가 찍는다.
+        shownAt: document.visibilityState === "visible" ? Date.now() : 0,
+      }).slice(-3);
+    });
   }, [playChatSound, showChatBrowserNotif]);
+
+  // 채팅 토스트 수명 관리 — ① 보이기 시작한 시각(shownAt) 찍기 ② 7초 지난 것 치우기.
+  // 화면이 다시 보일 때마다 재계산하므로, 숨은 탭에서 타이머가 늦게 깨도 노출 시간은 7초로 유지된다.
+  useEffect(function() {
+    if (chatToasts.length === 0) return;
+    var timer = null;
+    function sweep() {
+      if (timer) { clearTimeout(timer); timer = null; } // visibilitychange/focus 로 여러 번 불려도 타이머는 하나
+      if (document.visibilityState !== "visible") return; // 안 보이는 동안은 시간이 흐르지 않는다
+      var now = Date.now();
+      setChatToasts(function(prev) {
+        var next = prev
+          .filter(function(t) { return !t.shownAt || now - t.shownAt < CHAT_TOAST_MS; })
+          .map(function(t) { return t.shownAt ? t : Object.assign({}, t, { shownAt: now }); });
+        // 바뀐 게 없으면 같은 배열을 돌려줘야 이 useEffect 가 무한 재실행되지 않는다.
+        var same = next.length === prev.length && next.every(function(t, i) { return t === prev[i]; });
+        return same ? prev : next;
+      });
+      var due = chatToasts
+        .filter(function(t) { return t.shownAt; })
+        .map(function(t) { return t.shownAt + CHAT_TOAST_MS - now; });
+      var wait = due.length ? Math.max(0, Math.min.apply(null, due)) : CHAT_TOAST_MS;
+      timer = setTimeout(sweep, wait + 30);
+    }
+    sweep();
+    document.addEventListener("visibilitychange", sweep);
+    window.addEventListener("focus", sweep);
+    return function() {
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", sweep);
+      window.removeEventListener("focus", sweep);
+    };
+  }, [chatToasts]);
 
   // 브라우저 알림 권한 요청(최초 1회) + 탭 기본 제목 기억
   useEffect(function() {
@@ -6102,6 +6165,34 @@ function CRMApp({ profile, session }) {
         <div style={{ position: "fixed", top: 20, right: 20, zIndex: 9999, background: toast.type === "success" ? "#15803D" : "#DC2626", color: "#fff", padding: "11px 18px", borderRadius: 8, fontSize: 13, fontWeight: 500, boxShadow: "0 4px 20px rgba(0,0,0,0.2)", animation: "fadein 0.2s ease" }}>
           <style>{`@keyframes fadein{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}`}</style>
           {toast.msg}
+        </div>
+      )}
+
+      {/* 💬 앱 내 채팅 토스트 (우측 하단) — 브라우저 알림 권한이 denied 여도 보인다.
+          클릭하면 해당 채널로 이동. 7초 뒤 자동 사라짐. zIndex 는 저장실패 배너(3000)보다 위. */}
+      {chatToasts.length > 0 && (
+        <div style={{ position: "fixed", right: 16, bottom: 16, zIndex: 3050, width: 320, maxWidth: "92vw", display: "flex", flexDirection: "column", gap: 8 }}>
+          {chatToasts.map(function(t) {
+            return (
+              <div key={t.key}
+                onClick={function() {
+                  setChatToasts(function(prev) { return prev.filter(function(x) { return x.key !== t.key; }); });
+                  goToChat(t.channel);
+                }}
+                style={{ background: "#1A1917", color: "#fff", borderRadius: 10, padding: "11px 13px", boxShadow: "0 6px 22px rgba(0,0,0,0.25)", cursor: "pointer", animation: "chattoastin 0.18s ease" }}>
+                <style>{`@keyframes chattoastin{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}`}</style>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                  <span style={{ fontSize: 12, fontWeight: 800 }}>{t.sender}</span>
+                  <span style={{ fontSize: 10, opacity: 0.7 }}>{chatChannelLabel(t.channel, profile?.name)}</span>
+                  <span onClick={function(e) { e.stopPropagation(); setChatToasts(function(prev) { return prev.filter(function(x) { return x.key !== t.key; }); }); }}
+                    style={{ marginLeft: "auto", fontSize: 13, opacity: 0.6, cursor: "pointer", lineHeight: 1 }}>✕</span>
+                </div>
+                <div style={{ fontSize: 12, lineHeight: 1.5, opacity: 0.92, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", wordBreak: "break-all" }}>
+                  {t.message}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -14742,6 +14833,15 @@ function teamNoteAutoTitle(dateStr) {
   return mm + "월" + dd + "일 업무";
 }
 
+// 체크리스트 항목의 화면 렌더용 고유 key. DB에는 저장되지 않는다(항목은 저장 시 텍스트 라인으로
+// 직렬화되므로 스키마 변경이 필요 없다). 팀 업무 checklist 의 tmp_ id 와 같은 역할.
+//
+// ⚠️ key={idx} 를 쓰면 안 되는 이유: 새 항목은 "맨 위"에 추가되므로 기존 항목들의 인덱스가
+//    한 칸씩 밀린다. 그러면 React 가 index 0 의 DOM 을 그대로 재사용해 값만 바꾸고 마지막
+//    인덱스를 새로 mount 한다 → autoFocus 가 방금 만든 빈 칸이 아니라 엉뚱한(맨 아래) 기존
+//    항목으로 가고, 스크롤 위치·한글 IME 조합 상태도 다른 행에 옮겨붙는다.
+function newCheckItemId() { return "ci_" + Math.random().toString(36).slice(2, 11); }
+
 // ── "같은 날짜면 새로 만들지 말고 합치기" 공용 로직 ──────────────────────────
 // 채팅 "업무노트로 저장"(개인/팀)과 팀 업무 "가져가기"가 모두 조회 없이 곧바로 insert 만
 // 하던 탓에, 같은 날짜 카드를 골라 저장해도 매번 새 카드가 생겨 중복이 쌓였다.
@@ -15220,7 +15320,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
           }
           displayText = textFull.replace(/\[\d{4}-\d{2}-\d{2}\]|\[\d{1,2}\/\d{1,2}\]/, "").replace(/→\s*\d{4}-\d{2}-\d{2}\s*$|→\s*\d{1,2}\/\d{1,2}\s*$/, "").trim();
         }
-        items.push({ checked: m[2].toLowerCase() === "x", text: decodeItemText(displayText), dueDate: dateStr || "", waitReason: waitReason || "", waitSince: waitSince || "" });
+        items.push({ id: newCheckItemId(), checked: m[2].toLowerCase() === "x", text: decodeItemText(displayText), dueDate: dateStr || "", waitReason: waitReason || "", waitSince: waitSince || "" });
       } else {
         freeLines.push(line);
       }
@@ -15355,7 +15455,9 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
         <div style={{ border: "1px solid #86EFAC", borderRadius: 8, padding: "10px 12px", marginBottom: 8, background: "#fff" }}>
           {checkItems.map(function(item, idx) {
             return (
-              <div key={idx} style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 8, background: item.waitReason && item.waitReason !== "일반" ? "#FFFBEB" : "transparent", border: "1px solid " + (item.waitReason && item.waitReason !== "일반" ? "#FDE68A" : "transparent"), borderRadius: 8, padding: item.waitReason && item.waitReason !== "일반" ? "4px 6px" : "0" }}>
+              /* key 는 반드시 항목 고유 id — idx 를 쓰면 맨 위 추가 때 행이 밀려 DOM 이 재사용된다.
+                 (id 는 parseContent·추가 버튼에서 부여. 없으면 idx 로 폴백) */
+              <div key={item.id || idx} style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 8, background: item.waitReason && item.waitReason !== "일반" ? "#FFFBEB" : "transparent", border: "1px solid " + (item.waitReason && item.waitReason !== "일반" ? "#FDE68A" : "transparent"), borderRadius: 8, padding: item.waitReason && item.waitReason !== "일반" ? "4px 6px" : "0" }}>
                 <input type="checkbox" checked={item.checked || false} onChange={function(e) {
                   var ck = e.target.checked;
                   // state 업데이트
@@ -15403,7 +15505,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
         <button onClick={function() {
           setEditNote(function(p) {
             // 새 항목은 맨 위로 — 아래로 쌓이면 스크롤해야 보여서 업무가 누락된다
-            var items = [{ text: "", checked: false, dueDate: "" }].concat(p.checkItems || []);
+            var items = [{ id: newCheckItemId(), text: "", checked: false, dueDate: "" }].concat(p.checkItems || []);
             return Object.assign({}, p, { checkItems: items, is_todo: true });
           });
         }} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", background: "#fff", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, color: "#15803D", fontWeight: 600, cursor: "pointer" }}>
@@ -16416,7 +16518,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       chosen.forEach(function(c) {
         var k = c.text.trim().toLowerCase();
         if (existing[k]) return; existing[k] = 1;
-        items.push({ text: c.text, dueDate: c.dueDate || "", waitReason: c.waitReason || "", waitSince: c.waitReason ? (c.waitSince || kstDate()) : "" });
+        items.push({ id: newCheckItemId(), text: c.text, dueDate: c.dueDate || "", waitReason: c.waitReason || "", waitSince: c.waitReason ? (c.waitSince || kstDate()) : "" });
       });
       return Object.assign({}, p, { checkItems: items, is_todo: true });
     });
@@ -17188,13 +17290,16 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <div style={{ border: "1px solid #86EFAC", borderRadius: 8, padding: "10px 12px", marginBottom: 8, background: "#fff" }}>
               {newNote.checkItems.map(function(item, idx) {
                 return (
-                  <div key={idx} style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 8, background: item.waitReason && item.waitReason !== "일반" ? "#FFFBEB" : "transparent", border: "1px solid " + (item.waitReason && item.waitReason !== "일반" ? "#FDE68A" : "transparent"), borderRadius: 8, padding: item.waitReason && item.waitReason !== "일반" ? "4px 6px" : "0" }}>
+                  /* key 는 반드시 항목 고유 id — idx 를 쓰면 맨 위 추가 때 행이 밀려 DOM 이 재사용된다. */
+                  <div key={item.id || idx} style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 8, background: item.waitReason && item.waitReason !== "일반" ? "#FFFBEB" : "transparent", border: "1px solid " + (item.waitReason && item.waitReason !== "일반" ? "#FDE68A" : "transparent"), borderRadius: 8, padding: item.waitReason && item.waitReason !== "일반" ? "4px 6px" : "0" }}>
                     <input type="checkbox" disabled style={{ width: 15, height: 15, flexShrink: 0, marginTop: 6 }} />
                     <div style={{ flex: 1, position: "relative" }}>
                       <MentionField multiline={true} companiesList={companiesList}
                         value={item.text || ""} placeholder={"항목 " + (idx + 1) + " (예: 스크립트 작성 / @업체명 연결 / Enter로 줄바꿈)"}
                         rows={Math.max(1, (item.text || "").split("\n").length)}
-                        autoFocus={idx === newNote.checkItems.length - 1}
+                        /* 새 항목은 맨 위에 들어가므로 포커스 대상은 첫 번째다.
+                           (예전 idx===len-1 은 맨 아래 = 가장 오래된 항목을 가리켰다) */
+                        autoFocus={idx === 0}
                         onChange={function(v) { setNewNote(function(p) { var items = p.checkItems.slice(); items[idx] = Object.assign({}, items[idx], { text: v }); return Object.assign({}, p, { checkItems: items }); }); }}
                         onLink={linkCompany}
                         style={{ width: "100%", boxSizing: "border-box", border: "none", outline: "none", fontSize: 13, lineHeight: 1.7, background: "transparent", resize: "vertical", fontFamily: "inherit", overflow: "hidden", padding: "3px 0" }} />
@@ -17221,7 +17326,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
             <button onClick={function() {
               setNewNote(function(p) {
                 // 새 항목은 맨 위로 — 아래로 쌓이면 스크롤해야 보여서 업무가 누락된다
-                var items = [{ text: "" }].concat(p.checkItems || []);
+                var items = [{ id: newCheckItemId(), text: "" }].concat(p.checkItems || []);
                 return Object.assign({}, p, { checkItems: items, is_todo: true });
               });
             }} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", background: "#fff", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, color: "#15803D", fontWeight: 600, cursor: "pointer" }}>
