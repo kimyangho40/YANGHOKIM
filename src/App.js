@@ -3865,7 +3865,8 @@ function ChatSaveToNotePopup({ msg, co, profile, channel, onClose, onSaved }) {
         content: buildContent(),
         status: "open",
         priority: "normal",
-        due_date: date,            // 팀노트는 캘린더가 없어 마감일로만 쓰인다
+        due_date: date,            // 마감일
+        work_date: date,           // 업무 날짜 — 개인 노트의 note_date 와 같은 자리(둘 다 고른 날짜 하나로 채운다)
         team: teamKey,             // 로그인 사용자 팀으로 자동 지정
         checklist: [],
         is_announcement: false,
@@ -14649,6 +14650,15 @@ function noteAutoTitle(name, dateStr) {
   var mm = parseInt(d.slice(5, 7), 10), dd = parseInt(d.slice(8, 10), 10);
   return mm + "월" + dd + "일 업무노트";
 }
+// 팀 업무 자동 제목 — "8월3일 업무" (team_notes.work_date 기준)
+//   개인 업무노트의 noteAutoTitle("…업무노트")과 일부러 다른 문구다. 팀 업무 카드는 목록에 섞여 보이므로
+//   "업무노트"라고 붙으면 개인 노트로 오해된다. 날짜가 없으면 빈 문자열(자동 제목 없음).
+function teamNoteAutoTitle(dateStr) {
+  if (!dateStr) return "";
+  var mm = parseInt(dateStr.slice(5, 7), 10), dd = parseInt(dateStr.slice(8, 10), 10);
+  if (!mm || !dd) return "";
+  return mm + "월" + dd + "일 업무";
+}
 // YYYY-MM-DD → "M/D" (이월 표시용)
 function mdLabel(dateStr) {
   var d = dateStr || kstDate();
@@ -23866,7 +23876,13 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
   const [activeTab, setActiveTab] = useState("corporate"); // "corporate" | "individual" | "all"(전체·공통)
   const [showAdd, setShowAdd] = useState(false);
   const [showDone, setShowDone] = useState(false); // 가져간/완료된 것도 볼지
-  const [newNote, setNewNote] = useState({ title: "", content: "", priority: "normal", due_date: "", tags: [], checklist: [], is_announcement: false });
+  // 📅 work_date = 이 업무가 "언제 것인지"(업무 날짜). 마감일(due_date)과 다른 값이다.
+  //    기본값 = 오늘. 날짜를 고르면 제목이 "M월D일 업무"로 자동 채워진다(직접 쓴 제목은 보존).
+  var blankNewNote = function() {
+    var d = kstDate();
+    return { title: teamNoteAutoTitle(d), content: "", priority: "normal", due_date: "", work_date: d, tags: [], checklist: [], is_announcement: false };
+  };
+  const [newNote, setNewNote] = useState(blankNewNote);
   // 📝 체크리스트 항목 편집 모달 — 카드 그리드가 minmax(280px)라 칸 안에서는 길게 못 쓴다.
   //    항목을 누르면 넓은 모달에서 편집하고, 저장할 때만 원래 배열에 반영한다.
   //    { where: "new"|"edit", idx: 번호, text: 편집중 텍스트 }
@@ -23958,7 +23974,10 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
 
   // 팀 노트 새로 추가
   var addTeamNote = async function() {
-    if (!newNote.title.trim() && !newNote.content.trim() && (!newNote.checklist || newNote.checklist.length === 0)) {
+    // ⚠️ 제목은 날짜에서 자동으로 채워지므로 "비어 있지 않다"만으로는 입력 판정을 하면 안 된다.
+    //    (자동 제목만 있고 내용·체크리스트가 없으면 빈 업무가 등록돼 버린다)
+    var typedTitle = newNote.title.trim() && newNote.title.trim() !== teamNoteAutoTitle(newNote.work_date);
+    if (!typedTitle && !newNote.content.trim() && (!newNote.checklist || newNote.checklist.length === 0)) {
       alert("제목, 내용 또는 체크리스트 중 하나는 입력해주세요.");
       return;
     }
@@ -23979,6 +23998,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       content: newNote.content.trim() || null,
       priority: newNote.priority || "normal",
       due_date: newNote.due_date || null,
+      work_date: newNote.work_date || null, // 업무 날짜(마감일 아님)
       tags: newNote.tags && newNote.tags.length > 0 ? newNote.tags : null,
       posted_by: profile?.name || "익명",
       status: "open",
@@ -23986,11 +24006,17 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       is_announcement: !!newNote.is_announcement, // 📌 공지 고정 여부
     };
     var r = await supabase.from("team_notes").insert(payload).select().single();
-    // is_announcement 컬럼이 아직 없는 환경 → 컬럼 제거 후 재시도 (안내된 SQL 실행 전에도 등록은 되게)
-    if (r.error && /is_announcement|column/.test(r.error.message || "")) { var p2 = Object.assign({}, payload); delete p2.is_announcement; r = await supabase.from("team_notes").insert(p2).select().single(); }
+    // 컬럼이 아직 없는 환경 → 그 컬럼만 빼고 재시도 (안내된 SQL 실행 전에도 등록은 되게)
+    if (r.error && /is_announcement|work_date|column/.test(r.error.message || "")) {
+      var msg = r.error.message || "";
+      var p2 = Object.assign({}, payload);
+      if (/work_date/.test(msg)) delete p2.work_date;
+      if (/is_announcement/.test(msg) || !/work_date/.test(msg)) delete p2.is_announcement; // 컬럼명이 안 찍히면 기존 동작 유지
+      r = await supabase.from("team_notes").insert(p2).select().single();
+    }
     if (r.error) { alert("등록 실패: " + r.error.message); return; }
     setAllTeamNotes(function(prev) { return [r.data].concat(prev); });
-    setNewNote({ title: "", content: "", priority: "normal", due_date: "", tags: [], checklist: [], is_announcement: false });
+    setNewNote(blankNewNote());
     setShowAdd(false);
   };
 
@@ -24228,6 +24254,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       content: note.content || "",
       priority: note.priority || "normal",
       due_date: note.due_date || "",
+      work_date: note.work_date || "", // 기존 노트는 비어 있을 수 있다(백필하지 않음)
       checklist: (note.checklist || []).map(function(it) { return Object.assign({}, it); }),
     });
   };
@@ -24257,6 +24284,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       content: editingDraft.content.trim() || null,
       priority: editingDraft.priority || "normal",
       due_date: editingDraft.due_date || null,
+      work_date: editingDraft.work_date || null, // 업무 날짜(마감일 아님)
       checklist: cleanChecklist,
       updated_at: new Date().toISOString(),
     };
@@ -24346,7 +24374,17 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
               <input type="checkbox" checked={showDone} onChange={function(e) { setShowDone(e.target.checked); }} />
               완료된 업무 {doneCount > 0 ? doneCount + "건 " : ""}보기
             </label>
-            <button onClick={function() { setNewNoteTeam(activeTab); setShowAdd(true); }}
+            <button onClick={function() {
+              setNewNoteTeam(activeTab);
+              // 아직 아무것도 안 쓴 상태면 오늘 날짜·자동 제목으로 새로 시작(자정 넘겨 열어도 어제 날짜가 남지 않게).
+              // 쓰다 만 내용이 있으면 그대로 살려둔다(취소 후 다시 열기).
+              setNewNote(function(p) {
+                var pristine = !p.content.trim() && (!p.checklist || p.checklist.length === 0)
+                  && (!p.title.trim() || p.title.trim() === teamNoteAutoTitle(p.work_date));
+                return pristine ? blankNewNote() : p;
+              });
+              setShowAdd(true);
+            }}
               style={{ background: "#1A1917", color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ 새 업무</button>
           </div>
         )}
@@ -24476,6 +24514,13 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                             style={{ width: "100%", padding: "5px 8px", border: "1px solid #E8E5E0", borderRadius: 5, fontSize: 11, boxSizing: "border-box", outline: "none" }} />
                         </div>
                       </div>
+                      {/* 📅 업무 날짜 — 수정 화면에서는 제목을 건드리지 않는다(이미 붙은 제목을 덮어쓰면 안 되므로) */}
+                      <div style={{ marginBottom: 8 }}>
+                        <label style={{ fontSize: 10, color: "#15803D", display: "block", marginBottom: 2, fontWeight: 700 }}>📅 업무 날짜 <span style={{ color: "#94A3B8", fontWeight: 400 }}>· 마감일과 다름</span></label>
+                        <input type="date" value={editingDraft.work_date || ""}
+                          onChange={function(e) { var v = e.target.value; setEditingDraft(function(p) { return Object.assign({}, p, { work_date: v }); }); }}
+                          style={{ width: "100%", padding: "5px 8px", border: "1px solid #86EFAC", borderRadius: 5, fontSize: 11, boxSizing: "border-box", outline: "none", color: "#15803D", fontWeight: 600 }} />
+                      </div>
                       {/* 업무 내용 — 체크리스트가 주업무라 맨 아래(보조 설명) */}
                       <div style={{ marginBottom: 8 }}>
                         <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 2 }}>업무 내용 <span style={{ color: "#94A3B8" }}>· @업체명 연결</span></label>
@@ -24590,7 +24635,8 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 10, color: "#888", paddingTop: 6, borderTop: "1px solid " + (isOpen ? "#FEF3C7" : "#E8E5E0") }}>
                       <div>
                         <span>등록: {note.posted_by || "-"}</span>
-                        {note.due_date && <span style={{ marginLeft: 8, color: "#B91C1C" }}>📅 {note.due_date}</span>}
+                        {note.work_date && <span style={{ marginLeft: 8, color: "#15803D" }} title="업무 날짜">🗓 {mdLabel(note.work_date)}</span>}
+                        {note.due_date && <span style={{ marginLeft: 8, color: "#B91C1C" }} title="마감일">📅 {note.due_date}</span>}
                       </div>
                       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                         {note.taken_by && (
@@ -24675,8 +24721,24 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
               <span style={{ fontSize: 12, fontWeight: 700, color: newNote.is_announcement ? "#92400E" : "#666" }}>📌 공지로 등록</span>
               <span style={{ fontSize: 10, color: "#888" }}>· 팀 목록 최상단에 고정 · 전원 확인하면 자동으로 내려감</span>
             </label>
+            {/* 📅 업무 날짜 — 바꾸면 자동 제목도 같이 갱신(직접 쓴 제목은 보존). 마감일(due_date)과 다른 값이다. */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, color: "#15803D", fontWeight: 700 }}>📅 업무 날짜</span>
+              <input type="date" value={newNote.work_date || ""}
+                onChange={function(e) {
+                  var v = e.target.value;
+                  setNewNote(function(p) {
+                    var upd = { work_date: v };
+                    // 비어 있거나 "이전 날짜의 자동 제목" 그대로면 새 날짜 제목으로 교체
+                    if (!p.title.trim() || p.title.trim() === teamNoteAutoTitle(p.work_date)) upd.title = teamNoteAutoTitle(v);
+                    return Object.assign({}, p, upd);
+                  });
+                }}
+                style={{ padding: "6px 10px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 13, fontWeight: 600, color: "#15803D", background: "#fff", outline: "none" }} />
+              <span style={{ fontSize: 11, color: "#94A3B8" }}>언제 할 업무인지 · 마감일과 다릅니다</span>
+            </div>
             <div style={{ marginBottom: 10 }}>
-              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>제목 (선택) <span style={{ color: "#94A3B8" }}>· @업체명 입력 시 파란색 표시</span></label>
+              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>제목 (선택) <span style={{ color: "#94A3B8" }}>· 날짜에서 자동으로 채워집니다 · @업체명 입력 시 파란색 표시</span></label>
               <MentionField multiline={false} companiesList={companiesList}
                 value={newNote.title} placeholder="예: @메이크올 7월 신청 준비"
                 onChange={function(v) { setNewNote(function(p) { return Object.assign({}, p, { title: v }); }); }}
