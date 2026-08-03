@@ -23948,15 +23948,28 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     var rb = Array.isArray(n.read_by) ? n.read_by : [];
     return !teamRoster(n.team).every(function(nm) { return rb.indexOf(nm) >= 0; });
   };
-  // 탭별 노트 (📌공지 고정 먼저 → 긴급 먼저 → 최신순). 완료/가져간 카드는 토글에 따라 표시
+  // 탭별 노트 (📌공지 고정 먼저 → 업무 날짜 최신순 → 긴급 먼저 → 등록 최신순).
+  // 완료/가져간 카드는 토글에 따라 표시
   var displayNotes = useMemo(function() {
     // 기본 화면: 대기중(open) + 진행중(taken) 모두 표시. 완료(done)만 숨김(토글 시 표시).
     // ⚠️ '가져가기'는 taken(진행중)일 뿐 완료가 아니므로 절대 숨기지 않는다.
     //    (진행중 카드가 보여야 담당자가 '✅ 완료처리' 버튼을 눌러 직접 완료할 수 있다)
+    // 정렬 기준 날짜 — work_date(업무 날짜)가 없으면 created_at 의 날짜 부분으로 대체한다.
+    // ⚠️ work_date 는 2026-08-03 에 추가된 컬럼이라 그 전에 만든 카드는 전부 비어 있다(백필 안 함).
+    //    이 카드들을 맨 뒤로 몰면 진행중 업무가 화면 아래로 사라져 "업무가 없어졌다"로 보인다.
+    //    등록일로 대체해 기존 카드와 자연스럽게 섞이게 한다.
+    var sortKeyDate = function(n) {
+      return String(n.work_date || (n.created_at || "").slice(0, 10) || "");
+    };
     var list = tabNotes.filter(function(n) { return showDone || n.status !== "done"; });
     return list.slice().sort(function(a, b) {
       var pa = isPinnedAnnounce(a) ? 0 : 1, pb = isPinnedAnnounce(b) ? 0 : 1;
       if (pa !== pb) return pa - pb; // 공지 고정 카드 최상단
+      // 업무 날짜 내림차순 (YYYY-MM-DD 고정폭이라 문자열 비교로 정확)
+      var dc = sortKeyDate(b).localeCompare(sortKeyDate(a));
+      if (dc !== 0) return dc;
+      // ⚠️ 우선순위는 "같은 업무 날짜 안에서만" 적용된다. 날짜보다 앞세우면
+      //    긴급 카드가 날짜 순서를 건너뛰어 8/5 → 8/4(긴급) → 8/3 배치가 깨진다.
       var pr = (PRI_RANK[a.priority] == null ? 2 : PRI_RANK[a.priority]) - (PRI_RANK[b.priority] == null ? 2 : PRI_RANK[b.priority]);
       if (pr !== 0) return pr;
       return String(b.created_at || "").localeCompare(String(a.created_at || ""));
