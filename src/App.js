@@ -4777,7 +4777,7 @@ function parseTsMs(s) {
 }
 
 // 채팅 토스트가 화면에 보이는 시간(ms). "탭이 보이는 동안"만 세므로 실제 노출 시간과 같다.
-const CHAT_TOAST_MS = 7000;
+const CHAT_TOAST_MS = 30000;
 
 // ── CRM 메인 앱 ───────────────────────────────────────────────────────────────
 function CRMApp({ profile, session }) {
@@ -4858,11 +4858,11 @@ function CRMApp({ profile, session }) {
   //    알림 권한이 denied 인 사람은 탭 제목 "(N)" 말고는 아무것도 못 봤다(2026-08-03 실측: 동일 님).
   //    이 토스트는 권한과 무관하게 뜨므로 전원이 같은 알림을 받는다.
   //
-  //    ⚠️ shownAt = "화면에 실제로 보이기 시작한 시각". 그냥 setTimeout(7초)으로 지우면 안 된다 —
+  //    ⚠️ shownAt = "화면에 실제로 보이기 시작한 시각". 그냥 setTimeout 으로 지우면 안 된다 —
   //    토스트가 뜨는 상황은 대부분 이 탭이 백그라운드일 때인데, 브라우저는 숨은 탭의 타이머를
-  //    최대 1분 단위까지 늦춘다(Chrome intensive throttling). 그래서 7초로 짜도 탭을 다시 열면
+  //    최대 1분 단위까지 늦춘다(Chrome intensive throttling). 그래서 7초로 짰을 때 탭을 다시 열면
   //    30초 넘게 남아 있었다(2026-08-03 실측). 숨어 있는 동안은 shownAt 을 찍지 않고,
-  //    보이기 시작한 시점부터 벽시계로 7초를 센다 → 사용자가 보는 시간은 항상 7초.
+  //    보이기 시작한 시점부터 벽시계로 CHAT_TOAST_MS 를 센다 → 사용자가 보는 시간은 설정값 그대로.
   const [chatToasts, setChatToasts] = useState([]);
   const chatToastSeqRef = useRef(0);
   const activeChatChannelRef = useRef(null); // ChatView가 보고하는 현재 열람 채널
@@ -5335,8 +5335,8 @@ function CRMApp({ profile, session }) {
     });
   }, [playChatSound, showChatBrowserNotif]);
 
-  // 채팅 토스트 수명 관리 — ① 보이기 시작한 시각(shownAt) 찍기 ② 7초 지난 것 치우기.
-  // 화면이 다시 보일 때마다 재계산하므로, 숨은 탭에서 타이머가 늦게 깨도 노출 시간은 7초로 유지된다.
+  // 채팅 토스트 수명 관리 — ① 보이기 시작한 시각(shownAt) 찍기 ② CHAT_TOAST_MS 지난 것 치우기.
+  // 화면이 다시 보일 때마다 재계산하므로, 숨은 탭에서 타이머가 늦게 깨도 노출 시간은 그대로 유지된다.
   useEffect(function() {
     if (chatToasts.length === 0) return;
     var timer = null;
@@ -6169,7 +6169,7 @@ function CRMApp({ profile, session }) {
       )}
 
       {/* 💬 앱 내 채팅 토스트 (우측 하단) — 브라우저 알림 권한이 denied 여도 보인다.
-          클릭하면 해당 채널로 이동. 7초 뒤 자동 사라짐. zIndex 는 저장실패 배너(3000)보다 위. */}
+          클릭하면 해당 채널로 이동. CHAT_TOAST_MS(30초) 뒤 자동 사라짐. zIndex 는 저장실패 배너(3000)보다 위. */}
       {chatToasts.length > 0 && (
         <div style={{ position: "fixed", right: 16, bottom: 16, zIndex: 3050, width: 320, maxWidth: "92vw", display: "flex", flexDirection: "column", gap: 8 }}>
           {chatToasts.map(function(t) {
