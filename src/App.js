@@ -3810,7 +3810,8 @@ function MobileApp({ profile, session }) {
 
 // ── 채팅 메시지 → 업무노트 저장 팝업 ──────────────────────────────────────────
 // 소통내역 저장 버튼 옆 📅 아이콘에서 열린다. 날짜 + 저장 대상(개인/팀)을 고르면
-// 그 날짜의 업무노트를 만든다.
+// 그 날짜의 업무노트에 담는다 — 그 날짜에 내 카드가 이미 있으면 새로 만들지 않고 합친다
+// (기준·주의사항은 findMergeableWorkNote / findMergeableTeamNote 주석 참고).
 //
 // ⚠️ 작성자는 반드시 "저장 버튼을 누른 사람"(profile.name)이다. 메시지 작성자
 //    (msg.sender)가 아니다 — 남의 채팅을 내 노트로 담는 게 정상 시나리오라 둘은 자주 다르고,
@@ -3847,31 +3848,52 @@ function ChatSaveToNotePopup({ msg, co, profile, channel, onClose, onSaved }) {
     setSaving(true); setErr("");
     var r;
     if (kind === "personal") {
-      r = await supabase.from("work_notes").insert({
-        assignee: author,          // ← 저장 누른 사람 (메시지 작성자 아님)
-        created_by: author,
-        title: buildTitle(),
-        content: buildContent(),
-        is_todo: true,
-        pinned: false,
-        note_date: date,           // 업무노트 캘린더가 읽는 필드
-        due_date: date,
-        company_id: co && co.id ? co.id : null,
-      });
+      // 고른 날짜에 내 업무노트가 이미 있으면 새 카드를 만들지 않고 그 노트에 덧붙인다.
+      var mine = await findMergeableWorkNote(author, date);
+      if (mine) {
+        r = await supabase.from("work_notes").update({
+          title: noteAutoTitle(author, date),   // 합치는 순간 하루치 노트가 되므로 "8월3일 업무노트"로 교체
+          content: appendNoteContent(mine.content, buildContent()),
+          updated_at: new Date().toISOString(),
+        }).eq("id", mine.id);
+      } else {
+        r = await supabase.from("work_notes").insert({
+          assignee: author,          // ← 저장 누른 사람 (메시지 작성자 아님)
+          created_by: author,
+          title: buildTitle(),
+          content: buildContent(),
+          is_todo: true,
+          pinned: false,
+          note_date: date,           // 업무노트 캘린더가 읽는 필드
+          due_date: date,
+          company_id: co && co.id ? co.id : null,
+        });
+      }
     } else {
-      r = await supabase.from("team_notes").insert({
-        posted_by: author,         // ← 저장 누른 사람
-        title: buildTitle(),
-        content: buildContent(),
-        status: "open",
-        priority: "normal",
-        due_date: date,            // 마감일
-        work_date: date,           // 업무 날짜 — 개인 노트의 note_date 와 같은 자리(둘 다 고른 날짜 하나로 채운다)
-        team: teamKey,             // 로그인 사용자 팀으로 자동 지정
-        checklist: [],
-        is_announcement: false,
-        related_company_id: co && co.id ? co.id : null,
-      });
+      // 같은 팀·같은 업무날짜에 내가 올린 미착수(open) 카드가 있으면 거기에 덧붙인다.
+      // taken/done 카드에는 붙이지 않는다 — 이미 가져간 사람 노트에 반영되지 않아 누락된다.
+      var teamCard = await findMergeableTeamNote(teamKey, date, author);
+      if (teamCard) {
+        r = await supabase.from("team_notes").update({
+          title: teamNoteAutoTitle(date),       // "8월3일 업무"
+          content: appendNoteContent(teamCard.content, buildContent()),
+          updated_at: new Date().toISOString(),
+        }).eq("id", teamCard.id);
+      } else {
+        r = await supabase.from("team_notes").insert({
+          posted_by: author,         // ← 저장 누른 사람
+          title: buildTitle(),
+          content: buildContent(),
+          status: "open",
+          priority: "normal",
+          due_date: date,            // 마감일
+          work_date: date,           // 업무 날짜 — 개인 노트의 note_date 와 같은 자리(둘 다 고른 날짜 하나로 채운다)
+          team: teamKey,             // 로그인 사용자 팀으로 자동 지정
+          checklist: [],
+          is_announcement: false,
+          related_company_id: co && co.id ? co.id : null,
+        });
+      }
     }
     setSaving(false);
     if (r && r.error) { setErr("저장 실패: " + r.error.message); return; }
@@ -14659,6 +14681,68 @@ function teamNoteAutoTitle(dateStr) {
   if (!mm || !dd) return "";
   return mm + "월" + dd + "일 업무";
 }
+
+// ── "같은 날짜면 새로 만들지 말고 합치기" 공용 로직 ──────────────────────────
+// 채팅 "업무노트로 저장"(개인/팀)과 팀 업무 "가져가기"가 모두 조회 없이 곧바로 insert 만
+// 하던 탓에, 같은 날짜 카드를 골라 저장해도 매번 새 카드가 생겨 중복이 쌓였다.
+// 아래 조회 함수로 "있으면 합치고, 없으면 만든다"로 세 경로를 통일한다.
+//
+// 합치기 기준 — 남의 카드는 절대 건드리지 않는다(작성자 본인 카드에만 붙인다):
+//   개인 업무노트: assignee + note_date
+//   팀 업무 카드 : team + work_date + posted_by + status='open'
+//
+// ⚠️ 팀 카드에 status='open' 이 필수인 이유: 가져가기(takeToMyNote)는 가져가는 시점의
+//    content 를 개인노트로 "복사"한다. 이미 taken/done 인 카드에 나중에 덧붙이면 그 업무를
+//    가져간 담당자의 개인노트에는 반영되지 않아 내용이 조용히 누락된다.
+//
+// ⚠️ 동시 저장: content 는 읽기→수정→쓰기 방식이라, 두 명이 같은 카드에 거의 동시에 저장하면
+//    한쪽 내용이 덮여 사라질 수 있다. 기존 takeChecklistItem 도 갖고 있던 한계이며,
+//    창을 좁히려고 합치기 직전에 content 를 다시 읽는다(캐시된 값을 쓰지 않는다).
+//
+// ⚠️ work_date/note_date 가 NULL 인 예전 카드는 매칭되지 않는다 — 당분간 새 카드끼리만
+//    합쳐지고, 마이그레이션 이전 중복분은 그대로 남는다(별도 정리 작업).
+
+// 같은 (담당자 + 날짜) 개인 업무노트 한 장. 없으면 null.
+// 이미 중복이 여러 장 쌓여 있는 날짜는 가장 먼저 만들어진 카드를 "원본"으로 보고 거기에 합친다.
+async function findMergeableWorkNote(assignee, noteDate) {
+  if (!assignee || !noteDate) return null;
+  var r = await supabase.from("work_notes")
+    .select("id, content")
+    .eq("assignee", assignee)
+    .eq("note_date", noteDate)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: true })
+    .limit(1);
+  if (r.error || !r.data || !r.data.length) return null;
+  return r.data[0];
+}
+
+// 같은 (팀 + 업무날짜 + 등록자) 이면서 아직 아무도 가져가지 않은(open) 팀 업무 카드 한 장. 없으면 null.
+async function findMergeableTeamNote(team, workDate, postedBy) {
+  if (!team || !workDate || !postedBy) return null;
+  var r = await supabase.from("team_notes")
+    .select("id, content")
+    .eq("team", team)
+    .eq("work_date", workDate)
+    .eq("posted_by", postedBy)
+    .eq("status", "open")
+    .is("deleted_at", null)
+    .order("created_at", { ascending: true })
+    .limit(1);
+  if (r.error || !r.data || !r.data.length) return null;
+  return r.data[0];
+}
+
+// 기존 본문 뒤에 새 내용을 덧붙인다. 빈 줄 하나로 띄워 원문 경계가 남게 한다.
+// 체크리스트("- [ ] …")는 본문 앞쪽에 모여 있고 덧붙는 건 자유글이라 항목 파싱에 영향이 없다.
+function appendNoteContent(existing, addition) {
+  var base = String(existing == null ? "" : existing).replace(/\s+$/, "");
+  var add = String(addition == null ? "" : addition).trim();
+  if (!add) return base;
+  if (!base) return add;
+  return base + "\n\n" + add;
+}
+
 // YYYY-MM-DD → "M/D" (이월 표시용)
 function mdLabel(dateStr) {
   var d = dateStr || kstDate();
@@ -24049,38 +24133,61 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
   var takeToMyNote = async function(teamNote, targetDate) {
     if (!profile?.name) { alert("로그인 정보가 없습니다."); return; }
     var assigneeName = normalizeName(profile.name);
-    // work_notes에 새 노트 생성
+    // 그 날짜 내 work_notes 에 담는다 — 있으면 합치고, 없으면 새로 만든다
     var todayStr = targetDate || kstDate();
     var teamLabel = teamNote.team === "corporate" ? "[법인팀]" : teamNote.team === "all" ? "[전체]" : "[개인팀]";
-    var workNotePayload = {
-      assignee: assigneeName,
-      title: teamLabel + " " + (teamNote.title || "팀 노트에서 가져온 업무"),
-      content: teamNote.content || "",
-      is_todo: true,
-      pinned: false,
-      created_by: assigneeName,
-      note_date: todayStr,
-    };
-    if (teamNote.due_date) workNotePayload.due_date = teamNote.due_date;
-    var wr = await supabase.from("work_notes").insert(workNotePayload).select().single();
-    if (wr.error) { alert("내 노트로 가져오기 실패: " + wr.error.message); return; }
-    // team_notes 상태 업데이트
+    var srcTitle = teamLabel + " " + (teamNote.title || "팀 노트에서 가져온 업무");
+
+    // 그 날짜에 내 업무노트가 이미 있으면 새로 만들지 않고 합친다.
+    // (팝업 안내문 "그 날짜에 내 업무노트가 없으면 새로 만들어 담습니다"와 이제 실제 동작이 일치한다.
+    //  항목별 가져가기(takeChecklistItem)만 합치고 통째로 가져가기는 무조건 insert 하던 불일치를 없앤 것.)
+    var mine = await findMergeableWorkNote(assigneeName, todayStr);
+    var noteRow;
+    if (mine) {
+      // 어느 팀 카드에서 넘어온 내용인지 본문에 머리글로 남긴다(합치면 제목이 날짜 제목으로 바뀌므로).
+      var addition = "── " + srcTitle + " ──\n" + (teamNote.content || "");
+      var upd = await supabase.from("work_notes").update({
+        title: noteAutoTitle(assigneeName, todayStr),   // "8월3일 업무노트"
+        content: appendNoteContent(mine.content, addition),
+        updated_at: new Date().toISOString(),
+      }).eq("id", mine.id).select().single();
+      if (upd.error) { alert("내 노트에 합치기 실패: " + upd.error.message); return; }
+      noteRow = upd.data;
+    } else {
+      var workNotePayload = {
+        assignee: assigneeName,
+        title: srcTitle,
+        content: teamNote.content || "",
+        is_todo: true,
+        pinned: false,
+        created_by: assigneeName,
+        note_date: todayStr,
+      };
+      // 마감일은 새로 만들 때만 팀 카드에서 가져온다.
+      // (합치는 쪽에서 due_date 를 안 건드리는 건 의도 — 기존 노트의 마감일을 덮어쓰면 안 된다.)
+      if (teamNote.due_date) workNotePayload.due_date = teamNote.due_date;
+      var wr = await supabase.from("work_notes").insert(workNotePayload).select().single();
+      if (wr.error) { alert("내 노트로 가져오기 실패: " + wr.error.message); return; }
+      noteRow = wr.data;
+    }
+
+    // team_notes 상태 업데이트 — 가리키는 노트는 새로 만든 것이든 합친 것이든 noteRow 기준
     var tr = await supabase.from("team_notes").update({
       status: "taken",
       taken_by: assigneeName,
       taken_at: new Date().toISOString(),
-      taken_work_note_id: wr.data.id,
+      taken_work_note_id: noteRow.id,
     }).eq("id", teamNote.id);
     if (tr.error) { alert("팀 노트 상태 업데이트 실패: " + tr.error.message); return; }
     // 로컬 상태 업데이트
     setAllTeamNotes(function(prev) {
       return prev.map(function(n) {
-        if (n.id === teamNote.id) return Object.assign({}, n, { status: "taken", taken_by: assigneeName, taken_at: new Date().toISOString(), taken_work_note_id: wr.data.id });
+        if (n.id === teamNote.id) return Object.assign({}, n, { status: "taken", taken_by: assigneeName, taken_at: new Date().toISOString(), taken_work_note_id: noteRow.id });
         return n;
       });
     });
-    if (onTakenToMyNote) onTakenToMyNote(wr.data);
-    alert("✅ '" + (teamNote.title || "팀 노트") + "'을(를) " + mdLabel(todayStr) + " 내 노트로 가져왔습니다.\n업무노트에서 확인하세요.");
+    if (onTakenToMyNote) onTakenToMyNote(noteRow);
+    alert("✅ '" + (teamNote.title || "팀 노트") + "'을(를) " + mdLabel(todayStr) + " 내 노트에 " + (mine ? "합쳤습니다" : "가져왔습니다") + ".\n업무노트에서 확인하세요.");
   };
 
   // 체크리스트 항목 하나 가져가기
