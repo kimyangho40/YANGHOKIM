@@ -3823,12 +3823,17 @@ function MobileApp({ profile, session }) {
 function ChatSaveToNotePopup({ msg, co, profile, channel, onClose, onSaved }) {
   const [date, setDate] = useState(function() { return kstDate(); });
   const [kind, setKind] = useState("personal"); // "personal" | "team"
+  // 팀 업무로 저장할 때 어느 팀에 넣을지. 기본값은 로그인 사용자 팀이되 바꿀 수 있다.
+  // 예전엔 teamKeyOfProfile 고정이라, 관리자(team='관리자')와 양팀 겸직자는 항상 "all"로
+  // 저장됐다. 팀 업무 등록 모달의 기본값은 "corporate"라, 같은 날짜에 등록 모달로 만든
+  // 법인팀 카드가 있어도 findMergeableTeamNote 의 team 조건이 어긋나 합쳐지지 않고
+  // 중복 카드가 생겼다. (2026-08-03: "8월4일 업무"(corporate) vs "💬 (주)한국가스켓"(all))
+  const [team, setTeam] = useState(function() { return teamKeyOfProfile(profile); });
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
   var author = normalizeStaffName(profile && profile.name);
-  var teamKey = teamKeyOfProfile(profile);
-  var teamLabel = teamKey === "corporate" ? "법인팀" : teamKey === "individual" ? "개인팀" : "전체(공통)";
+  var teamLabel = team === "corporate" ? "법인팀" : team === "individual" ? "개인팀" : "전체(공통)";
   var isDM = String(channel || "").indexOf("dm:") === 0;
   var whereLabel = isDM ? "DM" : "팀 채팅";
 
@@ -3873,7 +3878,7 @@ function ChatSaveToNotePopup({ msg, co, profile, channel, onClose, onSaved }) {
     } else {
       // 같은 팀·같은 업무날짜에 내가 올린 미착수(open) 카드가 있으면 거기에 덧붙인다.
       // taken/done 카드에는 붙이지 않는다 — 이미 가져간 사람 노트에 반영되지 않아 누락된다.
-      var teamCard = await findMergeableTeamNote(teamKey, date, author);
+      var teamCard = await findMergeableTeamNote(team, date, author);
       if (teamCard) {
         r = await supabase.from("team_notes").update({
           title: mergedNoteTitle(teamCard.title, teamNoteAutoTitle(date)),   // "8월3일 업무" (수기 제목은 보존)
@@ -3889,7 +3894,7 @@ function ChatSaveToNotePopup({ msg, co, profile, channel, onClose, onSaved }) {
           priority: "normal",
           due_date: date,            // 마감일
           work_date: date,           // 업무 날짜 — 개인 노트의 note_date 와 같은 자리(둘 다 고른 날짜 하나로 채운다)
-          team: teamKey,             // 로그인 사용자 팀으로 자동 지정
+          team: team,                // 위 "대상 팀" 3버튼에서 고른 값 (기본값 = 로그인 사용자 팀)
           checklist: [],
           is_announcement: false,
           related_company_id: co && co.id ? co.id : null,
@@ -3900,6 +3905,17 @@ function ChatSaveToNotePopup({ msg, co, profile, channel, onClose, onSaved }) {
     if (r && r.error) { setErr("저장 실패: " + r.error.message); return; }
     onSaved && onSaved(kind, date);
     onClose && onClose();
+  };
+
+  // 대상 팀 3버튼 — 팀 업무 등록 모달과 같은 색·같은 순서(법인 → 개인 → 전체)
+  var teamBtn = function(k, label, onColor) {
+    var on = team === k;
+    return (
+      <button key={k} onClick={function() { setTeam(k); }}
+        style={{ flex: 1, padding: "7px 4px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 600,
+          background: on ? onColor : "#fff", color: on ? "#fff" : "#666",
+          border: "1px solid " + (on ? onColor : "#E8E5E0") }}>{label}</button>
+    );
   };
 
   var optBtn = function(k, label, hint) {
@@ -3938,6 +3954,21 @@ function ChatSaveToNotePopup({ msg, co, profile, channel, onClose, onSaved }) {
           {optBtn("personal", "개인노트", "나만 봄 · 선택 날짜 캘린더에 표시")}
           {optBtn("team", "팀 업무", teamLabel + " · 마감일로 표시")}
         </div>
+        {kind === "team" && (
+          <div style={{ marginBottom: 6 }}>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>대상 팀</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              {teamBtn("corporate", "🏢 법인팀", "#1A1917")}
+              {teamBtn("individual", "👤 개인팀", "#1A1917")}
+              {teamBtn("all", "🌐 전체(공통)", "#7C3AED")}
+            </div>
+            {team === "all" && (
+              <div style={{ fontSize: 10, color: "#7C3AED", marginTop: 4 }}>
+                전체(공통)로 등록하면 법인팀·개인팀 양쪽 목록에 모두 표시됩니다.
+              </div>
+            )}
+          </div>
+        )}
         <div style={{ fontSize: 10, color: "#888", marginBottom: 10 }}>
           {kind === "personal"
             ? "작성자: " + author + " (저장하는 사람 기준)"
