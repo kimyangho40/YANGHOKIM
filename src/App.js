@@ -24445,8 +24445,8 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                           <label style={{ fontSize: 10, color: "#666", fontWeight: 600 }}>📋 체크리스트</label>
                           <button onClick={function() {
                             setEditingDraft(function(p) {
-                              var arr = (p.checklist || []).slice();
-                              arr.push({ id: "tmp_" + Math.random().toString(36).slice(2, 11), text: "" });
+                              // 새 항목은 맨 위로 — 아래로 쌓이면 스크롤해야 보여서 업무가 누락된다 (개인노트와 동일 규칙)
+                              var arr = [{ id: "tmp_" + Math.random().toString(36).slice(2, 11), text: "" }].concat(p.checklist || []);
                               return Object.assign({}, p, { checklist: arr });
                             });
                           }}
@@ -24752,8 +24752,8 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                 </label>
                 <button onClick={function() {
                   setNewNote(function(p) {
-                    var arr = (p.checklist || []).slice();
-                    arr.push({ id: "tmp_" + Math.random().toString(36).slice(2, 11), text: "" });
+                    // 새 항목은 맨 위로 — 아래로 쌓이면 스크롤해야 보여서 업무가 누락된다 (개인노트와 동일 규칙)
+                    var arr = [{ id: "tmp_" + Math.random().toString(36).slice(2, 11), text: "" }].concat(p.checklist || []);
                     return Object.assign({}, p, { checklist: arr });
                   });
                 }}
