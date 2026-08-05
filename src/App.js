@@ -1190,9 +1190,8 @@ function teamByName(name) {
   var n = (name || "").replace(/\s+/g, "");
   return (n.indexOf("(주)") !== -1 || n.indexOf("㈜") !== -1 || n.indexOf("주식회사") !== -1) ? "법인팀" : "개인팀";
 }
-// 업체의 팀 반환: 업체명 기준 자동 분류.
-//   co.team 은 DB 값이 아니다 — companies 에 team 컬럼이 없다(2026-08-05 실측). 화면에서 팀 버튼을 눌렀을 때
-//   그 화면에서만 쓰이는 메모리 값이라, 새로고침하면 사라진다. 수동 지정을 실제로 남기려면 컬럼부터 만들어야 한다.
+// 업체의 팀 반환: 손으로 지정한 companies.team 이 있으면 그걸 쓰고, 없으면 업체명 기준 자동 분류.
+//   (team 컬럼은 2026-08-05 에 추가 — 기업_팀컬럼_추가.sql. 그 전에는 저장 자체가 안 됐다.)
 function teamOf(co) {
   if (co && co.team) return co.team;
   return teamByName(co && co.name);
@@ -5848,6 +5847,9 @@ function CRMApp({ profile, session }) {
       //  · contract_status    는 keepEvenIfEmpty 대상 → "없음"(null)으로 되돌리는 조작이 반영된다
       //  · contract_status_at 는 일부러 제외 → 값이 비어 있을 때 기존 시각을 지우지 않는다
       contract_status: rest.contract_status,
+      // 팀(법인팀/개인팀) 수동 지정 — 비어 있으면 저장에서 빠지고, 화면은 업체명 기준 자동 분류로 표시된다.
+      //   (keepEvenIfEmpty 에 넣지 않는 이유: 버튼을 누른 적 없는 업체의 기존 값을 null 로 덮지 않기 위해)
+      team: rest.team,
       // 신규 기능용 컬럼
       approved_amount: rest.approved_amount ? (parseInt(String(rest.approved_amount).replace(/[^0-9]/g, "")) || null) : null,
       import_ratio: (rest.import_ratio === "" || rest.import_ratio === null || rest.import_ratio === undefined) ? null : (parseFloat(rest.import_ratio) || 0),
@@ -5889,9 +5891,9 @@ function CRMApp({ profile, session }) {
     if (prevData && rest.stage !== prevData.stage) updateObj.stage_updated_at = kstDate();
     const { error } = await supabase.from("companies").update(updateObj).eq("id", rest.id);
     if (!error) {
-      // ⚠️ 예전엔 여기서 companies.team 을 따로 UPDATE 했다. companies 에는 team 컬럼이 없어(2026-08-05 카탈로그 실측)
-      //    저장할 때마다 400 이 한 번씩 났고, try/catch 로 삼켜서 안 보였을 뿐이다. 호출을 걷어냈다.
-      //    팀 표시는 teamOf() 가 업체명 기준(teamByName)으로 계산한다 — 화면 동작은 그대로다.
+      // 팀 값은 위 updateObj 에 함께 담아 한 번에 저장한다.
+      //   (예전에는 저장 뒤 companies.team 을 따로 UPDATE 했는데, 컬럼이 없어 매번 400 이 났고 try/catch 로 삼켜졌다.
+      //    2026-08-05 에 컬럼을 만들고 → 별도 호출을 없애 일반 저장에 합쳤다. 기업_팀컬럼_추가.sql)
       // 🆕 stage가 "부결/반려"로 새로 바뀌면 → 사례집 자동 초안 생성
       if (rest.stage === "부결/반려" && prevData && prevData.stage !== "부결/반려") {
         try {
@@ -6122,14 +6124,15 @@ function CRMApp({ profile, session }) {
     if (form.company_info_memo) insertData.company_info_memo = form.company_info_memo;
     if (form.referrer) insertData.referrer = form.referrer;
     if (form.lead_source) insertData.lead_source = form.lead_source;
+    // 팀(법인팀/개인팀) — 등록 화면에서 고른 값을 그대로 저장. 값이 이상하면 넣지 않는다(CHECK 제약 위반 방지)
+    if (form.team === "법인팀" || form.team === "개인팀") insertData.team = form.team;
 
     const { data: co, error } = await supabase.from("companies").insert(insertData).select().single();
     if (!error && co) {
       // 서류 체크리스트 자동 생성
       var docsInsert = await supabase.from("documents").insert(DOC_LIST.map(d => ({ company_id: co.id, doc_name: d, received: false }))).select();
-      // 팀 값은 DB에 저장하지 않는다 — companies 에 team 컬럼이 없다(있는 건 profiles.team·team_notes.team 으로 다른 것).
-      //   화면에는 방금 고른 값이 바로 보이도록 메모리 객체에만 담아 넘긴다. 새로고침하면 업체명 기준 자동 분류로 돌아간다.
-      var wantTeamA = form.team || teamByName(form.name);
+      // 팀은 insert payload 에 이미 담겨 저장된다(아래 newCompany 는 방금 저장된 값을 화면에 바로 보여주기 위한 것).
+      var wantTeamA = co.team || form.team || teamByName(form.name);
       var newCompany = Object.assign({}, co, { documents: docsInsert.data || [], team: wantTeamA });
       showToast("신규 업체가 등록됐어요! 상세 정보를 입력하세요.");
       setShowAdd(false);
@@ -12695,8 +12698,8 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                       );
                     })}
                   </div>
-                  {/* 팀은 저장되는 값이 아니다(companies 에 team 컬럼 없음) — 라벨에 그대로 적어 오해가 없게 한다 */}
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>팀 <span style={{ color: "#AAA", fontSize: 9 }}>(업체명 기준 자동 · 여기서 바꿔도 저장되지 않음)</span></div>
+                  {/* 여기서 고른 값은 아래 "저장"을 눌러야 DB(companies.team)에 남는다. 안 고르면 업체명 기준 자동 분류 */}
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>팀 <span style={{ color: "#AAA", fontSize: 9 }}>(업체명 기준 자동 · 바꾸면 저장 시 반영)</span></div>
                   <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
                     {["법인팀","개인팀"].map(function(t) {
                       var cur = data.team || teamByName(data.name);
@@ -14342,9 +14345,9 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
             </div>
           </div>
 
-          {/* 팀 (업체명 기준 자동 분류) — 고른 값은 DB에 저장되지 않는다(companies 에 team 컬럼 없음) */}
+          {/* 팀 (업체명 기준 자동 분류 · 필요 시 수동 변경) — 고른 값은 등록과 함께 companies.team 에 저장된다 */}
           <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
-            <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>팀 {!teamTouched && <span style={{ color: "#15803D", fontSize: 9, fontWeight: 700 }}>✓ 업체명 기준 자동</span>} <span style={{ color: "#AAA", fontSize: 9 }}>(바꿔도 저장되지 않음)</span></div>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>팀 {!teamTouched && <span style={{ color: "#15803D", fontSize: 9, fontWeight: 700 }}>✓ 업체명 기준 자동</span>}</div>
             <div style={{ display: "flex", gap: 6 }}>
               {["법인팀","개인팀"].map(function(t) {
                 var sel = form.team === t;
