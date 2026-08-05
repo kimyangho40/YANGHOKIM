@@ -1190,7 +1190,9 @@ function teamByName(name) {
   var n = (name || "").replace(/\s+/g, "");
   return (n.indexOf("(주)") !== -1 || n.indexOf("㈜") !== -1 || n.indexOf("주식회사") !== -1) ? "법인팀" : "개인팀";
 }
-// 업체의 팀 반환: DB에 저장된 team이 있으면 우선 사용(수동 변경 반영), 없으면 업체명 기준 자동 분류
+// 업체의 팀 반환: 업체명 기준 자동 분류.
+//   co.team 은 DB 값이 아니다 — companies 에 team 컬럼이 없다(2026-08-05 실측). 화면에서 팀 버튼을 눌렀을 때
+//   그 화면에서만 쓰이는 메모리 값이라, 새로고침하면 사라진다. 수동 지정을 실제로 남기려면 컬럼부터 만들어야 한다.
 function teamOf(co) {
   if (co && co.team) return co.team;
   return teamByName(co && co.name);
@@ -5887,11 +5889,9 @@ function CRMApp({ profile, session }) {
     if (prevData && rest.stage !== prevData.stage) updateObj.stage_updated_at = kstDate();
     const { error } = await supabase.from("companies").update(updateObj).eq("id", rest.id);
     if (!error) {
-      // 팀 자동/수동 분류값 저장 (team 컬럼 미생성 시 무시 → 일반 저장은 정상 동작)
-      try {
-        var wantTeamU = rest.team || teamByName(rest.name);
-        await supabase.from("companies").update({ team: wantTeamU }).eq("id", rest.id);
-      } catch (teamErr) { /* team 컬럼 없음 등 → 무시, 화면은 업체명 기준 자동 표시 */ }
+      // ⚠️ 예전엔 여기서 companies.team 을 따로 UPDATE 했다. companies 에는 team 컬럼이 없어(2026-08-05 카탈로그 실측)
+      //    저장할 때마다 400 이 한 번씩 났고, try/catch 로 삼켜서 안 보였을 뿐이다. 호출을 걷어냈다.
+      //    팀 표시는 teamOf() 가 업체명 기준(teamByName)으로 계산한다 — 화면 동작은 그대로다.
       // 🆕 stage가 "부결/반려"로 새로 바뀌면 → 사례집 자동 초안 생성
       if (rest.stage === "부결/반려" && prevData && prevData.stage !== "부결/반려") {
         try {
@@ -6127,9 +6127,9 @@ function CRMApp({ profile, session }) {
     if (!error && co) {
       // 서류 체크리스트 자동 생성
       var docsInsert = await supabase.from("documents").insert(DOC_LIST.map(d => ({ company_id: co.id, doc_name: d, received: false }))).select();
-      // 팀 자동/수동 분류값 저장 (team 컬럼 미생성 시 무시)
+      // 팀 값은 DB에 저장하지 않는다 — companies 에 team 컬럼이 없다(있는 건 profiles.team·team_notes.team 으로 다른 것).
+      //   화면에는 방금 고른 값이 바로 보이도록 메모리 객체에만 담아 넘긴다. 새로고침하면 업체명 기준 자동 분류로 돌아간다.
       var wantTeamA = form.team || teamByName(form.name);
-      try { await supabase.from("companies").update({ team: wantTeamA }).eq("id", co.id); } catch (teamErr) { /* 무시 */ }
       var newCompany = Object.assign({}, co, { documents: docsInsert.data || [], team: wantTeamA });
       showToast("신규 업체가 등록됐어요! 상세 정보를 입력하세요.");
       setShowAdd(false);
@@ -7378,7 +7378,7 @@ function VoiceModeOverlay({ myName, onClose }) {
     var r = await supabase.from("companies").insert(row).select().single();
     if (r.error || !r.data) throw new Error(r.error ? r.error.message : "등록 실패");
     try { await supabase.from("documents").insert(DOC_LIST.map(function(d) { return { company_id: r.data.id, doc_name: d, received: false }; })); } catch (e) {}
-    try { await supabase.from("companies").update({ team: teamByName(name) }).eq("id", r.data.id); } catch (e) {}
+    // (companies 에는 team 컬럼이 없어 저장하지 않는다 — 팀은 업체명 기준 teamOf() 로 계산)
     // 말로 덧붙인 메모는 소통내역으로 남긴다(companies에는 메모 컬럼이 없음)
     if (c.memo && String(c.memo).trim()) {
       try {
@@ -12695,7 +12695,8 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                       );
                     })}
                   </div>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>팀 <span style={{ color: "#AAA", fontSize: 9 }}>(업체명 기준 자동 · 수동 변경 가능)</span></div>
+                  {/* 팀은 저장되는 값이 아니다(companies 에 team 컬럼 없음) — 라벨에 그대로 적어 오해가 없게 한다 */}
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>팀 <span style={{ color: "#AAA", fontSize: 9 }}>(업체명 기준 자동 · 여기서 바꿔도 저장되지 않음)</span></div>
                   <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
                     {["법인팀","개인팀"].map(function(t) {
                       var cur = data.team || teamByName(data.name);
@@ -14341,9 +14342,9 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
             </div>
           </div>
 
-          {/* 팀 (업체명 기준 자동 분류 · 필요 시 수동 변경) */}
+          {/* 팀 (업체명 기준 자동 분류) — 고른 값은 DB에 저장되지 않는다(companies 에 team 컬럼 없음) */}
           <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 10 }}>
-            <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>팀 {!teamTouched && <span style={{ color: "#15803D", fontSize: 9, fontWeight: 700 }}>✓ 업체명 기준 자동</span>}</div>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>팀 {!teamTouched && <span style={{ color: "#15803D", fontSize: 9, fontWeight: 700 }}>✓ 업체명 기준 자동</span>} <span style={{ color: "#AAA", fontSize: 9 }}>(바꿔도 저장되지 않음)</span></div>
             <div style={{ display: "flex", gap: 6 }}>
               {["법인팀","개인팀"].map(function(t) {
                 var sel = form.team === t;
