@@ -6451,21 +6451,15 @@ function CRMApp({ profile, session }) {
           if (!me || qtItems.length === 0) return;
           var lines = qtItems.map(function(t) { return buildItemLine({ checked: false, text: isMe ? t : ("📩 " + me + " 요청: " + t) }); });
           var block = lines.join("\n");
-          var noteId = null;
-          var found = await supabase.from("work_notes").select("*").eq("assignee", to).eq("note_date", qtDate).is("deleted_at", null).order("created_at", { ascending: false }).limit(1);
-          if (found.error) { alert("저장 실패: " + found.error.message); return; }
-          if (found.data && found.data.length) {
-            var tn = found.data[0];
-            var nc = tn.content ? tn.content + "\n" + block : block;
-            var up = await supabase.from("work_notes").update({ content: nc, is_todo: true, updated_at: new Date().toISOString() }).eq("id", tn.id);
-            if (up.error) { alert("저장 실패: " + up.error.message); return; }
-            noteId = tn.id;
-          } else {
-            var ins = { assignee: to, title: noteAutoTitle(to, qtDate), content: block, is_todo: true, created_by: me, note_date: qtDate };
-            var ir = await supabase.from("work_notes").insert(ins).select().single();
-            if (ir.error) { alert("저장 실패: " + ir.error.message); return; }
-            noteId = ir.data ? ir.data.id : null;
-          }
+          // 🔒 개인노트 비공개(RLS) — 남의 노트는 조회가 안 되므로 직접 찾아 합칠 수 없다.
+          //    서버 함수가 "그 날짜 노트를 찾아 합치고, 없으면 새로 만들어" id 만 돌려준다.
+          //    (그냥 insert 로 바꾸면 상대에게 같은 날 노트가 두 장 생긴다 — 중복 카드 재발)
+          var qtRes = await supabase.rpc("wn_append_todo", {
+            p_assignee: to, p_note_date: qtDate, p_line: block,
+            p_company_id: null, p_title: noteAutoTitle(to, qtDate),
+          });
+          if (qtRes.error) { alert("저장 실패: " + qtRes.error.message); return; }
+          var noteId = qtRes.data || null;
           // 다른 사람이면 업무 요청으로도 기록(항목별 1건) + 푸시 알림
           if (!isMe) {
             for (var i = 0; i < qtItems.length; i++) {
@@ -6867,7 +6861,8 @@ function CRMApp({ profile, session }) {
             {view === "quicklinks" && <QuickLinksView />}
             {view === "pipeline" && <PipelineView cardRows={pipelineCardRows} hiddenByList={pipelineCardData.hiddenByList} onClearListFilters={clearListFilters} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setPipelineCards={setPipelineCards} setStagnConfig={setStagnConfig} canEditMapping={profile?.name === "양호"} myName={profile?.name} stagnRows={stagnRows} />}
             {view === "cases" && <ApprovalCasesView profile={profile} />}
-            {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={profile?.role === "admin" || profile?.name === "양호"} onSelectCompany={setSelectedCompany} setView={setView} companies={companies} />}
+            {/* 전체 담당자 보기는 업무노트 열람 권한(wnIsAdmin=양호)과 같은 기준으로. role='admin' 만으로는 DB(RLS)가 남의 노트를 안 준다 */}
+            {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={wnIsAdmin(profile?.name)} onSelectCompany={setSelectedCompany} setView={setView} companies={companies} />}
             {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} filterAgency={filterAgency} setFilterAgency={setFilterAgency} filterTeam={filterTeam} setFilterTeam={setFilterTeam} creditFilter={creditFilter} setCreditFilter={setCreditFilter} creditMode={creditMode} setCreditMode={setCreditMode} assignees={assignees} onSelect={openCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
             {view === "stagnant" && <StagnantView stagnant={stagnant} onSelect={setSelectedCompany} />}
             {view === "members" && profile.role === "admin" && <MembersView profiles={profiles} onRefresh={fetchAll} showToast={showToast} />}
@@ -7323,23 +7318,13 @@ function VoiceModeOverlay({ myName, onClose }) {
   // 어떤 담당자의 오늘 업무노트에 체크리스트 한 줄을 덧붙인다(없으면 새로 만든다)
   var appendTodoLine = async function(assignee, line, companyId) {
     var day = kstDate();
-    var found = await supabase.from("work_notes").select("*").eq("assignee", assignee).eq("note_date", day)
-      .is("deleted_at", null).order("created_at", { ascending: false }).limit(1);
-    if (!found.error && found.data && found.data.length) {
-      var tn = found.data[0];
-      var nc = tn.content ? tn.content + "\n" + line : line;
-      await supabase.from("work_notes").update({ content: nc, is_todo: true, updated_at: new Date().toISOString() }).eq("id", tn.id);
-      return tn.id;
-    }
-    var ins = { assignee: assignee, title: noteAutoTitle(assignee, day), content: line, is_todo: true, created_by: myName, note_date: day };
-    if (companyId) ins.company_id = companyId;
-    var ir = await supabase.from("work_notes").insert(ins).select().single();
-    if (ir.error && /company_id/.test(ir.error.message || "")) {
-      delete ins.company_id;
-      ir = await supabase.from("work_notes").insert(ins).select().single();
-    }
-    if (ir.error) throw new Error(ir.error.message);
-    return ir.data ? ir.data.id : null;
+    // 🔒 개인노트 비공개(RLS) — 남의 노트는 조회가 안 되므로 서버 함수로 "찾아 합치기 / 없으면 생성"한다.
+    var ar = await supabase.rpc("wn_append_todo", {
+      p_assignee: assignee, p_note_date: day, p_line: line,
+      p_company_id: companyId || null, p_title: noteAutoTitle(assignee, day),
+    });
+    if (ar.error) throw new Error(ar.error.message);
+    return ar.data || null;
   };
 
   // ① 업무 요청 — 빠른업무와 같은 경로(업무노트 항목 + work_requests + 푸시)
@@ -8282,7 +8267,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
               {/* 📋 내 할일 위젯 - work_notes 체크박스 기반 (항상 표시) */}
-              <MyTodoWidget setView={setView} />
+              <MyTodoWidget setView={setView} myName={myName} />
 
               {/* 📋 팀 업무 대기 - team_notes 기반 (법인팀/개인팀 · 전체는 양쪽 모두) */}
               <TeamTodoWidget setView={setView} />
@@ -10431,28 +10416,16 @@ function AssigneeUnfinishedWidget({ myName, setView, defaultOpen }) {
   useEffect(function() { setOpen(!!defaultOpen); }, [defaultOpen]);
   useEffect(function() {
     async function load() {
-      var r = await supabase.from("work_notes").select("assignee,content,note_date,created_at").is("deleted_at", null);
+      // 🔒 개인노트 비공개(RLS) — 남의 노트 내용은 더 이상 받아올 수 없다.
+      //    담당자별 "숫자만" 돌려주는 서버 함수(wn_team_unfinished)로 집계한다.
+      //    함수 안의 미완료 판정 규칙은 parseUnfinishedItems 와 같게 맞춰 놨다
+      //    (2026-08-05 실측 대조 — 10명 전원 미완료/방치/최고참 일치).
+      //    ⚠ parseUnfinishedItems 를 고치면 업무노트_개인노트_비공개_RLS.sql 의 함수도 같이 고칠 것.
+      var r = await supabase.rpc("wn_team_unfinished");
       if (r.error || !r.data) { setRows([]); return; }
-      var today = kstDate();
-      var agg = {};
-      r.data.forEach(function(n) {
-        var name = (n.assignee || "").trim();
-        if (!name) return;
-        var un = parseUnfinishedItems(n.content);
-        if (!un.length) return;
-        var nd = n.note_date || (n.created_at ? new Date(n.created_at).toISOString().slice(0, 10) : null);
-        if (!agg[name]) agg[name] = { name: name, count: 0, stale: 0, oldest: null };
-        var a = agg[name];
-        un.forEach(function() {
-          a.count++;
-          if (nd) {
-            var days = Math.floor((new Date(today + "T00:00:00") - new Date(nd + "T00:00:00")) / 86400000);
-            if (days >= 3) a.stale++;
-            if (!a.oldest || nd < a.oldest) a.oldest = nd;
-          }
-        });
-      });
-      var list = Object.keys(agg).map(function(k) { return agg[k]; });
+      var list = r.data.map(function(x) {
+        return { name: (x.assignee || "").trim(), count: x.cnt || 0, stale: x.stale || 0, oldest: x.oldest || null };
+      }).filter(function(x) { return x.name && x.count > 0; });
       list.sort(function(a, b) { return b.count - a.count; });
       setRows(list);
     }
@@ -10567,13 +10540,16 @@ function SheetStatusWidget({ companies, setView }) {
   );
 }
 
-function MyTodoWidget({ setView }) {
+function MyTodoWidget({ setView, myName }) {
   const [count, setCount] = useState({ total: 0, overdue: 0, today: 0 });
-  
+
   useEffect(function() {
     async function load() {
+      // "내 할일" 위젯인데 담당자 조건이 없어 팀 전체 미완료를 세고 있었다 → 본인 것만으로 정정.
+      if (!myName) { setCount({ total: 0, overdue: 0, today: 0 }); return; }
       var res = await supabase.from("work_notes")
         .select("content, due_date")
+        .eq("assignee", myName)
         .is("deleted_at", null);
       if (res.error || !res.data) return;
       
@@ -10598,8 +10574,8 @@ function MyTodoWidget({ setView }) {
       setCount({ total: total, overdue: overdue, today: todayCount });
     }
     load();
-  }, []);
-  
+  }, [myName]);
+
   // 항상 표시 (할일 없어도 안내 표시)
   
   return (
@@ -16797,24 +16773,16 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     if (!text) { alert("요청 내용을 입력하세요."); return; }
     var today = kstDate();
     var itemLine = buildItemLine({ checked: false, text: "📩 " + from + " 요청: " + text });
-    // 받는 사람 오늘 노트 찾기(DB 직접 조회 — 로컬 notes엔 남의 노트가 없을 수 있음)
-    var found = await supabase.from("work_notes").select("*").eq("assignee", to).eq("note_date", today).is("deleted_at", null).order("created_at", { ascending: false }).limit(1);
-    var noteId = null, savedNote = null;
-    if (!found.error && found.data && found.data.length) {
-      var tn = found.data[0];
-      var nc = tn.content ? tn.content + "\n" + itemLine : itemLine;
-      var up = await supabase.from("work_notes").update({ content: nc, is_todo: true, updated_at: new Date().toISOString() }).eq("id", tn.id).select().single();
-      if (!up.error) { noteId = tn.id; savedNote = up.data; }
-    }
-    if (!noteId) {
-      var ins = { assignee: to, title: noteAutoTitle(to, today), content: itemLine, is_todo: true, created_by: from, note_date: today };
-      if (reqCompanyId) ins.company_id = reqCompanyId;
-      var ir = await supabase.from("work_notes").insert(ins).select().single();
-      if (ir.error && /company_id/.test(ir.error.message || "")) { delete ins.company_id; ir = await supabase.from("work_notes").insert(ins).select().single(); }
-      if (ir.error) { alert("요청 노트 생성 실패: " + ir.error.message); return; }
-      noteId = ir.data.id; savedNote = ir.data;
-    }
-    if (savedNote) setNotes(function(prev) { var ex = prev.find(function(n) { return n.id === savedNote.id; }); return ex ? prev.map(function(n) { return n.id === savedNote.id ? savedNote : n; }) : [savedNote].concat(prev); });
+    // 🔒 개인노트 비공개(RLS) — 받는 사람 노트는 조회가 안 되므로 서버 함수가 찾아서 합치거나 새로 만든다.
+    //    (돌려받는 건 노트 id 뿐 — 남의 노트 내용은 화면으로 내려오지 않는다)
+    var rq = await supabase.rpc("wn_append_todo", {
+      p_assignee: to, p_note_date: today, p_line: itemLine,
+      p_company_id: reqCompanyId || null, p_title: noteAutoTitle(to, today),
+    });
+    if (rq.error) { alert("요청 노트 생성 실패: " + rq.error.message); return; }
+    var noteId = rq.data || null;
+    // 나에게 보낸 요청이면 내 목록에 바로 보이도록 다시 읽는다(남에게 보낸 건은 원래 내 목록에 안 보임)
+    if (to === from) fetchNotes();
     // work_requests 기록 (테이블 없으면 조용히 skip)
     var reqRow = { request_from: from, request_to: to, content: text, urgent: reqUrgent, note_id: noteId, status: "pending" };
     if (reqCompanyId) reqRow.company_id = reqCompanyId;
@@ -24459,7 +24427,8 @@ function TeamActivityWidget({ profiles }) {
 
     // 병렬 fetch
     var [notesRes, agencyRes, logsRes, approvalRes] = await Promise.all([
-      supabase.from("work_notes").select("assignee,created_at,updated_at").is("deleted_at", null).gte("updated_at", sinceStr),
+      // 🔒 개인노트 비공개(RLS) — 노트 행을 직접 받지 않고 담당자별 건수/마지막활동만 받는다.
+      supabase.rpc("wn_activity_counts", { p_since: sinceStr }),
       supabase.from("agency_cases").select("assignee,status,updated_at").is("deleted_at", null).gte("updated_at", sinceStr),
       supabase.from("activity_logs").select("assignee,logged_by,created_at").is("deleted_at", null).gte("created_at", sinceStr),
       supabase.from("approval_cases").select("created_by,created_at,result").is("deleted_at", null).gte("created_at", sinceStr),
@@ -24472,11 +24441,12 @@ function TeamActivityWidget({ profiles }) {
     };
 
     if (!notesRes.error && notesRes.data) {
+      // wn_activity_counts 는 담당자별로 이미 집계된 { assignee, n, last_active } 를 준다.
       notesRes.data.forEach(function(n) {
         if (!n.assignee) return;
         var d = ensure(n.assignee);
-        d.notes++;
-        if (!d.lastActive || n.updated_at > d.lastActive) d.lastActive = n.updated_at;
+        d.notes += (n.n || 0);
+        if (!d.lastActive || n.last_active > d.lastActive) d.lastActive = n.last_active;
       });
     }
     if (!agencyRes.error && agencyRes.data) {
