@@ -18648,6 +18648,7 @@ function SettlementView({ profile }) {
   const [showAddManual, setShowAddManual] = useState(false);
   const [newManual, setNewManual] = useState({});
   const [teamFilter, setTeamFilter] = useState("전체"); // 전체 / 법인팀 / 개인팀
+  const [assigneeFilter, setAssigneeFilter] = useState("전체"); // 전체 / 담당자 이름 / 미지정
 
   // 정산 건의 팀 = 사업자명 기준 자동 분류 (기업목록과 동일 규칙)
   var teamOfRow = function(row) { return teamByName(row && row.business_name); };
@@ -18685,18 +18686,52 @@ function SettlementView({ profile }) {
     return auto.concat(manual).filter(function(r) { return canViewSettlement(r, myName); });
   }, [filteredAuto, filteredManual, profile?.name]);
 
-  // 팀 필터 적용 (전체/법인팀/개인팀) — 사업자명 기준 자동 분류
-  var teamFiltered = useMemo(function() {
+  // 👤 담당자 판정 — assignee 는 "양호, 유진" 처럼 여러 명이 들어 있고 "김동일이사" 같은 옛 표기도 섞여 있다.
+  //    settlementAssignees() 로 쪼개고 정규화해서 비교한다(열람 권한 판정과 같은 함수 = 규칙이 어긋나지 않는다).
+  var rowAssignees = function(r) { return settlementAssignees(r && r.assignee); };
+  var matchAssignee = function(r, who) {
+    if (who === "전체") return true;
+    var list = rowAssignees(r);
+    if (who === "미지정") return list.length === 0;
+    return list.indexOf(who) >= 0;
+  };
+
+  // 두 필터(팀·담당자)를 각각 적용 — 버튼 건수는 "자기 축만 빼고" 세야 눌렀을 때 보이는 수와 맞는다.
+  var byAssignee = useMemo(function() {
+    return allFiltered.filter(function(r) { return matchAssignee(r, assigneeFilter); });
+  }, [allFiltered, assigneeFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+  var byTeam = useMemo(function() {
     if (teamFilter === "전체") return allFiltered;
     return allFiltered.filter(function(r) { return teamOfRow(r) === teamFilter; });
-  }, [allFiltered, teamFilter]);
+  }, [allFiltered, teamFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+  var teamFiltered = useMemo(function() {
+    return byTeam.filter(function(r) { return matchAssignee(r, assigneeFilter); });
+  }, [byTeam, assigneeFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 팀별 건수 (필터 버튼 뱃지용)
+  // 팀별 건수 (담당자 필터는 반영, 팀 필터는 자기 축이라 미반영)
   var teamCounts = useMemo(function() {
     var corp = 0, indi = 0;
-    allFiltered.forEach(function(r) { if (teamOfRow(r) === "법인팀") corp++; else indi++; });
-    return { 전체: allFiltered.length, 법인팀: corp, 개인팀: indi };
-  }, [allFiltered]);
+    byAssignee.forEach(function(r) { if (teamOfRow(r) === "법인팀") corp++; else indi++; });
+    return { 전체: byAssignee.length, 법인팀: corp, 개인팀: indi };
+  }, [byAssignee]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 담당자 버튼 목록 — 정산 담당 4명(SETTLEMENT_ADMINS)은 건수가 0이어도 항상 보이게 고정하고,
+  //   그 밖에 실제 데이터에 있는 이름은 뒤에 붙인다(이름이 필터에서 빠져 건이 숨는 일이 없도록).
+  var assigneeOpts = useMemo(function() {
+    var counts = {}, unassigned = 0;
+    byTeam.forEach(function(r) {
+      var list = rowAssignees(r);
+      if (!list.length) { unassigned++; return; }
+      list.forEach(function(n) { counts[n] = (counts[n] || 0) + 1; });
+    });
+    var opts = [{ key: "전체", n: byTeam.length }];
+    SETTLEMENT_ADMINS.forEach(function(n) { opts.push({ key: n, n: counts[n] || 0 }); });
+    Object.keys(counts).sort(function(a, b) { return counts[b] - counts[a]; }).forEach(function(n) {
+      if (SETTLEMENT_ADMINS.indexOf(n) < 0) opts.push({ key: n, n: counts[n] });
+    });
+    if (unassigned > 0) opts.push({ key: "미지정", n: unassigned });
+    return opts;
+  }, [byTeam]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 월 탭용 - 데이터 있는 월
   var monthsWithData = useMemo(function() {
@@ -19029,6 +19064,25 @@ function SettlementView({ profile }) {
         })}
       </div>
 
+      {/* 담당자 필터 — 정산 담당 4명은 0건이어도 항상 표시, 그 밖의 이름은 데이터에 있을 때만 뒤에 붙는다.
+          건수는 위 팀 필터를 반영한 값(자기 축인 담당자는 미반영). "양호, 유진"처럼 여러 명이면 양쪽 모두에 잡힌다. */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, color: "#999", marginRight: 2 }}>담당자</span>
+        {assigneeOpts.map(function(o) {
+          var isActive = assigneeFilter === o.key;
+          var dim = !isActive && o.n === 0;
+          return (
+            <div key={o.key} onClick={function() { setAssigneeFilter(o.key); setEditingId(null); setEditData({}); }}
+              title={o.key === "미지정" ? "담당자가 비어 있는 건" : (o.key === "전체" ? "" : o.key + " 님이 담당자로 들어간 건(공동 담당 포함)")}
+              style={{ padding: "6px 13px", borderRadius: 99, cursor: "pointer", fontSize: 12, fontWeight: isActive ? 700 : 500,
+                background: isActive ? "#B45309" : "#fff", color: isActive ? "#fff" : (dim ? "#BBB" : "#666"),
+                border: "1px solid " + (isActive ? "#B45309" : "#E8E5E0") }}>
+              {o.key} <span style={{ opacity: 0.75, fontWeight: 600 }}>{o.n}</span>
+            </div>
+          );
+        })}
+      </div>
+
       {/* KPI 카드 */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
         {[
@@ -19052,7 +19106,7 @@ function SettlementView({ profile }) {
       <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
         {teamFiltered.length === 0 ? (
           <div style={{ padding: "60px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>
-            {activeMonth}월{teamFilter !== "전체" ? " · " + teamFilter : ""} 데이터가 없습니다. 직접 등록하거나 기관별 현황에서 승인 상태로 변경해주세요.
+            {activeMonth}월{teamFilter !== "전체" ? " · " + teamFilter : ""}{assigneeFilter !== "전체" ? " · 담당자 " + assigneeFilter : ""} 데이터가 없습니다. 직접 등록하거나 기관별 현황에서 승인 상태로 변경해주세요.
           </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
