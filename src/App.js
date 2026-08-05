@@ -11835,11 +11835,69 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
     if (!file) return;
     try {
       var res = await parseUploadedSheet(file);
+      // 내용으로 판별 — 읽어낸 값이 하나도 없으면 현황표·시트지가 아니다.
+      //   (엑셀은 마지막에 '시트지' 범용 파서로 넘어가 항상 결과를 주므로, 빈 결과를 여기서 걸러야
+      //    빈 미리보기 창이 뜨지 않는다.) 추측하지 않고 무엇을 첨부한 건지 안내만 한다.
+      var got = (res && res.updates ? Object.keys(res.updates).length : 0)
+        + (res && res.auto ? Object.keys(res.auto).length : 0);
+      if (!got && !(res && res.commText)) {
+        alert("이 엑셀에서 기업현황표·시트지 내용을 찾지 못했어요.\n\n" +
+          "· 기업현황표·시트지라면: 양식이 맞는지 확인해주세요.\n" +
+          "· 여신정보·금융거래확인서라면: PDF나 이미지(캡처)로 첨부해주세요.");
+        return;
+      }
       setXlsxCommDraft(res.commText || "");
       setXlsxPreview(res);
     }
     catch (err) { alert("❌ 엑셀 읽기 실패: " + err.message + "\n\n엑셀(.xlsx) 파일이 맞는지 확인해주세요."); }
   }
+
+  // 📎 자료 첨부 — 현황표 첨부와 여신정보 첨부를 버튼 하나로 합친 뒤, 파일을 보고 알아서 나눠 보낸다.
+  //   · 엑셀(.xlsx/.xls) → 기업현황표·시트지 파서 (parseUploadedSheet)
+  //   · PDF·이미지       → 여신정보/금융거래확인서 파서 (/api/parse-credit, 문서 종류는 내용으로 판별)
+  //   판별이 애매하면 추측하지 않고 담당자에게 묻는다(엑셀은 파싱 결과가 비면 안내, PDF는 기존 종류 선택 화면).
+  //   두 종류를 한 번에 고르면 어느 화면을 먼저 띄울지 정할 수 없어 그냥 안내하고 멈춘다.
+  const [creditSignal, setCreditSignal] = useState(null); // { seq, files } — 여신정보 첨부 창을 파일과 함께 연다
+  function handleAttachFiles(fileList) {
+    var files = Array.prototype.slice.call(fileList || []);
+    if (!files.length) return;
+    var isExcel = function(f) { return /\.(xlsx|xls)$/i.test(f.name || ""); };
+    var isDoc = function(f) {
+      return /^application\/pdf$/.test(f.type || "") || /^image\//.test(f.type || "")
+        || /\.(pdf|png|jpe?g|webp|gif)$/i.test(f.name || "");
+    };
+    var xls = files.filter(isExcel);
+    var docs = files.filter(function(f) { return !isExcel(f) && isDoc(f); });
+    var etc = files.filter(function(f) { return !isExcel(f) && !isDoc(f); });
+    if (etc.length) {
+      alert("읽을 수 없는 형식이에요: " + etc.map(function(f) { return f.name; }).join(", ") +
+        "\n\n엑셀(.xlsx·.xls) 또는 PDF·이미지(PNG·JPG)만 첨부할 수 있어요.");
+      return;
+    }
+    if (xls.length && docs.length) {
+      alert("엑셀(기업현황표·시트지)과 PDF·이미지(여신정보·금융거래확인서)는 읽는 방식이 달라\n한 번에 한 종류씩 첨부해주세요.");
+      return;
+    }
+    if (xls.length) {
+      if (xls.length > 1) alert("현황표는 한 번에 한 개만 읽을 수 있어 첫 번째 파일(" + xls[0].name + ")만 처리합니다.");
+      handleXlsxAttach(xls[0]);
+      return;
+    }
+    setCreditSignal({ seq: Date.now(), files: docs });
+  }
+  // 💾 저장은 한 곳으로 — 예전엔 "기업정보 저장"(탭 안, onSave(data))과 "DB에 저장"(맨 아래,
+  //    이름 편집분 + 이전 값 전달)이 따로 있었다. 같은 saveCompany 를 부르면서 넘기는 값이 달라
+  //    탭 안 버튼으로 저장하면 ①고친 업체명이 안 들어가고 ②단계 변경일(stage_updated_at)이 갱신되지 않고
+  //    ③부결 전환 시 사례집 초안이 안 만들어졌다. 이제 모든 저장이 이 함수를 지난다.
+  var saveAll = function() { onSave(Object.assign({}, data, { name: nameInput || data.name }), company); };
+
+  var attachInput = function() {
+    return (
+      <input type="file" multiple accept=".xlsx,.xls,.pdf,image/png,image/jpeg,image/webp,image/gif"
+        style={{ display: "none" }}
+        onChange={function(e) { var fl = e.target.files; var arr = Array.prototype.slice.call(fl || []); e.target.value = ""; handleAttachFiles(arr); }} />
+    );
+  };
   async function applyXlsxPreview() {
     if (!xlsxPreview) return;
     var u = xlsxPreview.updates;
@@ -12521,9 +12579,10 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           {tab === "info" && (
             <>
               <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 4, background: "#FEF3C7", color: "#B45309", border: "none", borderRadius: 7, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                  📎 기업현황표·시트지 첨부 (자동 입력)
-                  <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={function(e) { var f = e.target.files && e.target.files[0]; e.target.value = ""; handleXlsxAttach(f); }} />
+                <label title="기업현황표·시트지(엑셀) 또는 여신정보·금융거래확인서(PDF·이미지)를 첨부하면 종류를 알아서 판별해 자동 입력합니다"
+                  style={{ display: "flex", alignItems: "center", gap: 4, background: "#FEF3C7", color: "#B45309", border: "none", borderRadius: 7, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                  📎 자료 첨부 (자동 입력)
+                  {attachInput()}
                 </label>
               </div>
               <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "12px 14px", marginBottom: 10 }}>
@@ -12805,7 +12864,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               {/* 💹 소진공·중진공 재무비율 자동 계산 (부채총계/자본총계/영업이익/이자비용 기반, 실시간) */}
               <ZoomSection title="💹 재무비율 자동 계산" hint="부채비율·이자보상배율 직접 입력"
                 value={{ ci: data.company_info, dr: data.debt_ratio, icr: data.interest_coverage_ratio }}
-                onSave={function() { onSave(data); }}>
+                onSave={saveAll}>
               {(function() {
                 var fr = computeFinanceRatios(data);
                 var fitStyle = function(fit) {
@@ -12876,36 +12935,17 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 8, flexWrap: "wrap" }}>
                 <div style={{ fontSize: 11, color: "#888" }}>기업현황표에서 자동 추출 · 직접 수정 가능</div>
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: 4, background: "#FEF3C7", color: "#B45309", border: "none", borderRadius: 7, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                    📎 현황표 첨부
-                    <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={function(e) { var f = e.target.files && e.target.files[0]; e.target.value = ""; handleXlsxAttach(f); }} />
+                  {/* 📎 현황표(엑셀)·여신정보(PDF·이미지)를 버튼 하나로 — 파일을 보고 알아서 나눠 읽는다 */}
+                  <label title="기업현황표·시트지(엑셀) 또는 여신정보·금융거래확인서(PDF·이미지)를 첨부하면 종류를 알아서 판별해 자동 입력합니다"
+                    style={{ display: "flex", alignItems: "center", gap: 4, background: "#FEF3C7", color: "#B45309", border: "none", borderRadius: 7, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                    📎 자료 첨부
+                    {attachInput()}
                   </label>
-                  {/* 여신정보·금융거래확인서 첨부 — 현황표 첨부 바로 옆에 둔다(예전엔 기대출 표 위에 따로 떨어져 있었다) */}
-                  <CreditReportImport
-                    existingCount={Array.isArray(data.loans) ? data.loans.length : 0}
-                    onApply={function(rows, applyMode, asOf) {
-                      setData(function(p) {
-                        var prev = Array.isArray(p.loans) ? p.loans : [];
-                        var next = applyMode === "replace" ? rows.slice() : prev.concat(rows);
-                        // 기준일자는 company_info에 함께 남긴다(3단계 '최신화 필요' 판정에 쓰임)
-                        var info = Array.isArray(p.company_info) ? p.company_info.slice() : [];
-                        if (asOf) {
-                          var idx = info.findIndex(function(it) { return it && it.label === "여신정보 기준일자"; });
-                          if (idx >= 0) info[idx] = { label: "여신정보 기준일자", value: asOf };
-                          else info.push({ label: "여신정보 기준일자", value: asOf });
-                        }
-                        return Object.assign({}, p, { loans: next, company_info: info });
-                      });
-                    }}
-                  />
-                  <button onClick={function() { onSave(data); }} style={{ display: "flex", alignItems: "center", gap: 5, background: "#15803D", color: "#fff", border: "none", borderRadius: 7, padding: "8px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                    <Icon name="save" size={13} color="#fff" /> 기업정보 저장
-                  </button>
                 </div>
               </div>
 
               {/* 기대출 내역 표 */}
-              <ZoomSection title="💰 기대출 내역" hint="구분·금액·기간 입력" value={data.loans} onSave={function() { onSave(data); }}>
+              <ZoomSection title="💰 기대출 내역" hint="구분·금액·기간 입력" value={data.loans} onSave={saveAll}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
                 {/* 여신정보 기준일자 — 오래되면 '최신화 필요'로 표시(값은 건드리지 않는다) */}
                 {(function() {
@@ -13095,7 +13135,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
 
               {/* 기업정보 항목 — 기본 6개(고정) + 추가 항목(자유) */}
               <ZoomSection title="📋 기업정보 항목" hint="기본 항목 + 추가 항목 + 비고"
-                value={{ ci: data.company_info, memo: data.company_info_memo }} onSave={function() { onSave(data); }}>
+                value={{ ci: data.company_info, memo: data.company_info_memo }} onSave={saveAll}>
               {(function() {
                 var DEFAULT_LABELS = ["재창업 조건 (폐업이력)", "수출실적", "연구소", "노란우산공제", "기업인증", "특허 및 상표권"];
                 var infoArr = Array.isArray(data.company_info) ? data.company_info : [];
@@ -13162,11 +13202,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                 style={{ width: "100%", minHeight: 70, border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, boxSizing: "border-box", outline: "none", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }} />
               </ZoomSection>
 
-              <div style={{ marginTop: 16 }}>
-                <button onClick={function() { onSave(data); }} style={{ width: "100%", display: "flex", justifyContent: "center", alignItems: "center", gap: 6, background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                  <Icon name="save" size={14} color="#fff" /> 기업정보 저장
-                </button>
-              </div>
+              {/* 저장 버튼은 창 맨 아래 '저장' 하나로 합쳤다(탭마다 저장 버튼이 따로 있어 어느 걸 눌러야 하는지 헷갈렸다) */}
             </div>
           )}
 
@@ -13820,11 +13856,33 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           </div>
         )}
 
-        {/* 저장 버튼 */}
+        {/* 📄 여신정보·금융거래확인서 첨부 창 — 버튼은 각 탭의 "자료 첨부"가 대신하고,
+            창 자체는 탭과 무관하게 한 번만 그린다(어느 탭에서 첨부해도 같은 화면이 뜨게) */}
+        <CreditReportImport
+          hideButton
+          openSignal={creditSignal}
+          existingCount={Array.isArray(data.loans) ? data.loans.length : 0}
+          onApply={function(rows, applyMode, asOf) {
+            setData(function(p) {
+              var prev = Array.isArray(p.loans) ? p.loans : [];
+              var next = applyMode === "replace" ? rows.slice() : prev.concat(rows);
+              // 기준일자는 company_info에 함께 남긴다('최신화 필요' 판정에 쓰임)
+              var info = Array.isArray(p.company_info) ? p.company_info.slice() : [];
+              if (asOf) {
+                var idx = info.findIndex(function(it) { return it && it.label === "여신정보 기준일자"; });
+                if (idx >= 0) info[idx] = { label: "여신정보 기준일자", value: asOf };
+                else info.push({ label: "여신정보 기준일자", value: asOf });
+              }
+              return Object.assign({}, p, { loans: next, company_info: info });
+            });
+          }}
+        />
+
+        {/* 저장 버튼 — 창 전체에서 이거 하나 (예전 "기업정보 저장" · "DB에 저장" 통합) */}
         <div style={{ padding: "14px 24px", borderTop: "1px solid #E8E5E0", display: "flex", gap: 8 }}>
-          <button onClick={() => onSave({ ...data, name: nameInput || data.name }, company)}
+          <button onClick={saveAll} title="이 창에서 고친 내용을 모두 저장합니다(기본정보·기업정보·기대출 내역)"
             style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
-            <Icon name="save" size={15} color="#F7F6F3" /> DB에 저장
+            <Icon name="save" size={15} color="#F7F6F3" /> 저장
           </button>
           <button onClick={async function() {
             if (!data.agency) { alert("담당기관을 선택해주세요!"); return; }
@@ -15553,7 +15611,10 @@ function mergeParsed(a, b, kind) {
     docTypes: types,
   };
 }
-function CreditReportImport({ existingCount, onApply }) {
+// hideButton / openSignal: "자료 첨부" 버튼 하나로 합치면서 추가된 것.
+//   버튼 없이 렌더해 두고, 부모가 PDF·이미지를 고르면 openSignal({seq, files})로 창을 연다.
+//   두 prop 을 안 넘기면 예전처럼 자기 버튼을 그린다(다른 화면에서 그대로 쓸 수 있게 남겨 둠).
+function CreditReportImport({ existingCount, onApply, hideButton, openSignal }) {
   var [open, setOpen] = useState(false);
   var [busy, setBusy] = useState(false);
   var [err, setErr] = useState("");
@@ -15639,6 +15700,15 @@ function CreditReportImport({ existingCount, onApply }) {
     setParsed(null); setDone([]);
     runQueue(files, "", null, []);
   };
+  // 부모("자료 첨부")가 PDF·이미지를 골랐을 때 — 창을 열고 바로 읽는다.
+  var lastSignal = useRef(null);
+  useEffect(function() {
+    if (!openSignal || !openSignal.seq || lastSignal.current === openSignal.seq) return;
+    lastSignal.current = openSignal.seq;
+    reset();
+    setOpen(true);
+    handleFiles(openSignal.files || []);
+  }, [openSignal]); // eslint-disable-line react-hooks/exhaustive-deps
   // 종류를 고른 뒤: 그 파일부터 다시 읽고 큐에 남은 파일을 이어서 처리한다
   var pickDocType = function(hint) {
     if (!pendingFile) return;
@@ -15658,6 +15728,7 @@ function CreditReportImport({ existingCount, onApply }) {
 
   var btn = { padding: "5px 10px", fontSize: 11, fontWeight: 700, borderRadius: 6, cursor: "pointer" };
   if (!open) {
+    if (hideButton) return null;
     return (
       <button onClick={function() { setOpen(true); }} title="기업 여신정보 · 금융거래확인서(PDF·이미지)를 첨부하면 대출 명세를 읽어 기대출 내역에 넣어줍니다"
         style={Object.assign({}, btn, { background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE", padding: "8px 14px", fontSize: 12 })}>
@@ -15703,6 +15774,8 @@ function CreditReportImport({ existingCount, onApply }) {
               <b>{askType.name ? "‘" + askType.name + "’이(가) " : ""}어느 문서인지 확실하지 않습니다.</b> 잘못 고르면 엉뚱한 값이 들어가므로 추측하지 않았습니다. 직접 골라주세요.
               {askType.reason ? <div style={{ fontSize: 11, marginTop: 5, color: "#B45309" }}>판독 메모: {askType.reason}</div> : null}
               {queue.length > 0 ? <div style={{ fontSize: 11, marginTop: 5 }}>고르시면 남은 {queue.length}개 파일도 이어서 읽습니다.</div> : null}
+              {/* "자료 첨부" 하나로 합치면서 — 현황표를 PDF로 넣은 경우를 알려준다(현황표는 엑셀만 읽는다) */}
+              <div style={{ fontSize: 11, marginTop: 5 }}>기업현황표·시트지라면 이 창을 닫고 <b>엑셀(.xlsx) 파일</b>로 첨부해주세요.</div>
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
               {Object.keys(DOC_TYPES).map(function(k) {
