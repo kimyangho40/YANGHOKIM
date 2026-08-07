@@ -183,17 +183,85 @@ function classifyWriteFail(err, rowCount) {
 }
 
 // 저장 1건. 성공 {ok:true, data}, 실패 {ok:false, fail} — 실패는 화면 알림 + 재시도 큐로 반드시 남는다.
-// spec: { table, op:"update"|"insert", id, payload, label, retry }
+// spec: { table, op:"update"|"insert", id, payload, label, retry, expectedUpdatedAt }
+//
+// ── expectedUpdatedAt = 동시 저장 덮어쓰기 방지(낙관적 잠금) ──────────────────
+// content 는 "읽고 → 화면에서 고치고 → 통째로 쓰기"라, 그 사이 다른 사람(또는 내 다른 창)이
+// 저장하면 나중에 누른 쪽이 앞의 내용을 통째로 덮어써 조용히 사라진다. UPDATE 한 방으로는
+// 막을 수 없다. → 불러올 때의 updated_at 을 WHERE 에 같이 넣어, 그 사이 누가 저장했으면
+// 0행이 되게 한다. 값이 없으면(null/undefined) 잠금을 걸지 않고 예전 동작 그대로 간다.
+//
+// ⚠️ 충돌(0행)을 재시도 큐에 넣으면 안 된다 — 재시도는 곧 "남의 저장 덮어쓰기"다.
+//    그래서 충돌은 failWrite 를 타지 않고 {ok:false, conflict:true, current} 로만 돌려준다.
+//    RLS 차단·세션 만료도 0행이라 겉모습이 같으므로, 행을 다시 읽어 둘을 구분한다.
 async function writeGuarded(spec) {
   try {
-    var r = spec.op === "insert"
-      ? await supabase.from(spec.table).insert(spec.payload).select("id")
-      : await supabase.from(spec.table).update(spec.payload).eq("id", spec.id).select("id");
+    var r;
+    if (spec.op === "insert") {
+      r = await supabase.from(spec.table).insert(spec.payload).select("id");
+    } else {
+      var q = supabase.from(spec.table).update(spec.payload).eq("id", spec.id);
+      if (spec.expectedUpdatedAt) q = q.eq("updated_at", spec.expectedUpdatedAt);
+      r = await q.select("id");
+    }
     if (!r.error && r.data && r.data.length > 0) return { ok: true, data: r.data };
+    if (!r.error && spec.expectedUpdatedAt && spec.op !== "insert" && (!r.data || r.data.length === 0)) {
+      var cur = await supabase.from(spec.table).select("*").eq("id", spec.id).maybeSingle();
+      if (!cur.error && cur.data && cur.data.updated_at !== spec.expectedUpdatedAt) {
+        return { ok: false, conflict: true, current: cur.data };
+      }
+      // 행이 없거나(삭제됨/RLS) updated_at 이 그대로면 충돌이 아니다 → 아래 기존 실패 처리로.
+    }
     return failWrite(spec, classifyWriteFail(r.error, r.data ? r.data.length : 0), r.error);
   } catch (e) {
     return failWrite(spec, classifyWriteFail(e, null), e);
   }
+}
+
+// content 를 "저장 직전의 최신 값" 기준으로 다시 계산해 쓴다. 충돌하면 최신 content 로
+// 다시 계산해 재시도하므로 양쪽 내용이 모두 남는다.
+//   apply(currentRow) -> { content, title? } | null(저장 안 함)
+// ⚠️ 덧붙이기(append)처럼 "다시 적용해도 안전한" 작업에만 쓸 것. 체크박스 토글처럼 줄
+//    위치(index)에 기대는 작업에 쓰면 사이에 줄이 늘어났을 때 엉뚱한 줄을 건드린다.
+async function saveContentWithRetry(table, id, apply, label) {
+  for (var attempt = 0; attempt < 3; attempt++) {
+    var cur = await supabase.from(table).select("*").eq("id", id).maybeSingle();
+    if (cur.error) return { ok: false, error: cur.error };
+    if (!cur.data) return { ok: false, error: { message: "대상이 사라졌습니다(삭제되었거나 열람 권한이 없습니다)." } };
+    var next = apply(cur.data);
+    if (!next) return { ok: false, skipped: true, data: cur.data,
+      error: { message: "다른 곳에서 이 노트가 먼저 바뀌어 이번 변경을 안전하게 반영할 수 없습니다.\n최신 내용을 확인한 뒤 다시 해주세요." } };
+    var payload = Object.assign({}, next, { updated_at: new Date().toISOString() });
+    var r = await writeGuarded({
+      table: table, op: "update", id: id, payload: payload, label: label,
+      expectedUpdatedAt: cur.data.updated_at, retry: false,
+    });
+    if (r.ok) return { ok: true, data: Object.assign({}, cur.data, payload) };
+    if (!r.conflict) return { ok: false, error: { message: (r.fail && r.fail.text) || "저장 실패" } };
+    // 충돌 → 최신 값으로 다시 계산해 재시도
+  }
+  return { ok: false, error: { message: "다른 곳에서 계속 저장 중이라 반영하지 못했습니다. 잠시 후 다시 시도해주세요." } };
+}
+
+// 체크박스 토글처럼 "화면이 보고 있던 본문(base)을 고쳐 만든 본문(next)"을, 그 사이 바뀐
+// 최신 본문(latest)에 다시 적용한다. 줄 번호가 아니라 **줄 내용**으로 찾으므로, 사이에 줄이
+// 늘거나 줄어도 엉뚱한 줄을 건드리지 않는다. 안전하게 못 옮기면 null → 호출부가 사람에게 알린다.
+//   · base 와 next 의 줄 수가 다르면(추가/삭제 섞임) 포기
+//   · 바뀌기 전 줄이 최신 본문에 없으면(누가 그 줄을 지웠거나 고쳤음) 포기
+function reapplyLineChanges(base, next, latest) {
+  var b = String(base == null ? "" : base).split("\n");
+  var n = String(next == null ? "" : next).split("\n");
+  if (b.length !== n.length) return null;
+  var out = String(latest == null ? "" : latest).split("\n");
+  var changed = 0;
+  for (var i = 0; i < b.length; i++) {
+    if (b[i] === n[i]) continue;
+    var at = out.indexOf(b[i]);
+    if (at < 0) return null;
+    out[at] = n[i];
+    changed++;
+  }
+  return changed ? out.join("\n") : null;
 }
 
 function failWrite(spec, info, rawErr) {
@@ -3452,12 +3520,25 @@ function MobileApp({ profile, session }) {
   }, [notes, todayStr]);
 
   var toggleItem = async function(note, lineIdx) {
-    var nc = toggleLineChecked(note.content, lineIdx);
+    var base = note.content;
+    var nc = toggleLineChecked(base, lineIdx);
     setNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { content: nc }) : n; }); });
-    var r = await writeGuarded({ table: "work_notes", op: "update", id: note.id,
-      payload: { content: nc, updated_at: new Date().toISOString() }, label: "노트 항목 체크" });
-    // 실패하면 화면도 되돌린다 — 저장 안 된 것이 저장된 것처럼 보이면 안 된다
-    if (!r.ok) setNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { content: note.content }) : n; }); });
+    // 체크 하나 때문에 본문 전체를 덮어쓰면, 그 사이 다른 곳에서 추가된 줄이 통째로 사라진다.
+    // → 최신 본문을 다시 읽어 "체크한 그 줄"만 옮겨 붙인다(reapplyLineChanges).
+    var r = await saveContentWithRetry("work_notes", note.id, function(row) {
+      var latest = row.content || "";
+      if (latest === (base || "")) return { content: nc };
+      var merged = reapplyLineChanges(base, nc, latest);
+      return merged == null ? null : { content: merged };
+    }, "노트 항목 체크");
+    if (r.ok) {
+      setNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { content: r.data.content, updated_at: r.data.updated_at }) : n; }); });
+    } else {
+      // 실패하면 화면도 되돌린다 — 저장 안 된 것이 저장된 것처럼 보이면 안 된다
+      var latestRow = r.data;
+      setNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, latestRow ? { content: latestRow.content, updated_at: latestRow.updated_at } : { content: base }) : n; }); });
+      alert((r.error && r.error.message) || "저장하지 못했습니다.");
+    }
   };
 
   var saveNote = async function() {
@@ -3860,12 +3941,17 @@ function ChatSaveToNotePopup({ msg, co, profile, channel, onClose, onSaved }) {
       // 고른 날짜에 내 업무노트가 이미 있으면 새 카드를 만들지 않고 그 노트에 덧붙인다.
       var mine = await findMergeableWorkNote(author, date);
       if (mine) {
-        r = await supabase.from("work_notes").update({
-          // 하루치 노트가 되므로 "8월3일 업무노트"로 교체 — 단 담당자가 직접 지은 제목은 보존
-          title: mergedNoteTitle(mine.title, noteAutoTitle(author, date)),
-          content: appendNoteContent(mine.content, buildContent()),
-          updated_at: new Date().toISOString(),
-        }).eq("id", mine.id);
+        // 저장 직전의 최신 content 에 덧붙인다 — 그 사이 상대가 저장했으면 다시 읽어 재시도하므로
+        // 양쪽 내용이 모두 남는다(예전에는 캐시된 content 를 써서 상대 저장분이 통째로 날아갔다).
+        var addBody = buildContent();
+        var sr = await saveContentWithRetry("work_notes", mine.id, function(row) {
+          return {
+            // 하루치 노트가 되므로 "8월3일 업무노트"로 교체 — 단 담당자가 직접 지은 제목은 보존
+            title: mergedNoteTitle(row.title, noteAutoTitle(author, date)),
+            content: appendNoteContent(row.content, addBody),
+          };
+        }, "채팅→내 업무노트 합치기");
+        r = sr.ok ? { error: null } : { error: sr.error };
       } else {
         r = await supabase.from("work_notes").insert({
           assignee: author,          // ← 저장 누른 사람 (메시지 작성자 아님)
@@ -3884,11 +3970,15 @@ function ChatSaveToNotePopup({ msg, co, profile, channel, onClose, onSaved }) {
       // taken/done 카드에는 붙이지 않는다 — 이미 가져간 사람 노트에 반영되지 않아 누락된다.
       var teamCard = await findMergeableTeamNote(team, date, author);
       if (teamCard) {
-        r = await supabase.from("team_notes").update({
-          title: mergedNoteTitle(teamCard.title, teamNoteAutoTitle(date)),   // "8월3일 업무" (수기 제목은 보존)
-          content: appendNoteContent(teamCard.content, buildContent()),
-          updated_at: new Date().toISOString(),
-        }).eq("id", teamCard.id);
+        // 팀 카드는 여러 사람이 동시에 볼 수 있으므로 반드시 최신 content 기준으로 덧붙인다.
+        var addTeamBody = buildContent();
+        var tsr = await saveContentWithRetry("team_notes", teamCard.id, function(row) {
+          return {
+            title: mergedNoteTitle(row.title, teamNoteAutoTitle(date)),   // "8월3일 업무" (수기 제목은 보존)
+            content: appendNoteContent(row.content, addTeamBody),
+          };
+        }, "채팅→팀 업무 합치기");
+        r = tsr.ok ? { error: null } : { error: tsr.error };
       } else {
         r = await supabase.from("team_notes").insert({
           posted_by: author,         // ← 저장 누른 사람
@@ -15402,6 +15492,24 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
   var checkItems = editNote.checkItems || [];
   var freeContent = editNote.freeContent !== undefined ? editNote.freeContent : (editNote.content || "");
 
+  // 편집창에서 본문을 통째로 쓰는 자리(자동저장·체크박스) 공용.
+  // ⚠️ 편집창은 열어둔 채로 몇 분이 지나기도 한다. 그 사이 다른 곳(다른 창·다른 사람)에서
+  //    저장됐는데 여기서 통째로 쓰면 그 내용이 조용히 사라진다.
+  //    → 불러올 때의 updated_at 을 걸어 두고, 충돌하면 **쓰지 않고 멈춘다**.
+  //      덮어쓸지 말지는 [저장] 버튼(saveEdit)에서 사람이 정한다.
+  var saveEditorContent = function(noteId, newContent, expectedAt, label) {
+    var stamp = new Date().toISOString();
+    return writeGuarded({ table: "work_notes", op: "update", id: noteId,
+      payload: { content: newContent, updated_at: stamp }, label: label,
+      expectedUpdatedAt: expectedAt }).then(function(r) {
+        // 성공하면 최신 시각을 들고 있어야 다음 자동저장이 자기 자신과 충돌하지 않는다.
+        if (r.ok) setEditNote(function(q) { return q && q.id === noteId ? Object.assign({}, q, { updated_at: stamp }) : q; });
+        else if (r.conflict) pushSaveAlert({ id: "wnconf_" + noteId, level: "error", label: label, kind: "conflict",
+          text: "다른 곳에서 이 노트가 먼저 저장돼 자동저장을 멈췄습니다. [저장]을 눌러 어떻게 할지 정해주세요.", retryable: false });
+        return r;
+      });
+  };
+
   // 자동저장: 칸을 벗어나거나 항목 변경 시 즉시 DB 반영 (저장 버튼 안 눌러도 손실 방지)
   var autoSaveEditNow = function() {
     setEditNote(function(p) {
@@ -15413,9 +15521,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
       if (ft) parts.push(ft);
       var newContent = parts.join("\n");
       // 예전엔 await도 error 확인도 없어 실패가 완전히 묻혔다. 이제 실패는 화면 알림 + 재시도 큐로 간다.
-      writeGuarded({ table: "work_notes", op: "update", id: p.id,
-        payload: { content: newContent, updated_at: new Date().toISOString() },
-        label: "업무노트 자동저장" });
+      saveEditorContent(p.id, newContent, p.updated_at, "업무노트 자동저장");
       return p;
     });
   };
@@ -15529,8 +15635,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
                   if (lines.length > 0) parts.push(lines.join("\n"));
                   if (ft) parts.push(ft);
                   var newContent = parts.join("\n");
-                  writeGuarded({ table: "work_notes", op: "update", id: editNote.id,
-                    payload: { content: newContent, updated_at: new Date().toISOString() }, label: "업무노트 체크" });
+                  saveEditorContent(editNote.id, newContent, editNote.updated_at, "업무노트 체크");
                 }} style={{ width: 15, height: 15, flexShrink: 0, cursor: "pointer", marginTop: 6 }} />
                 <div style={{ flex: 1, position: "relative" }}>
                   <MentionField multiline={true} companiesList={companiesList}
@@ -16602,13 +16707,23 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     var updates = [], snapshots = [];
     byNote.forEach(function(set, nid) {
       var cur = notes.find(function(n) { return n.id === nid; });
-      if (cur) { snapshots.push({ id: nid, content: cur.content }); updates.push({ id: nid, content: markLinesCarried(cur.content, set, md) }); } // 원본 스냅샷 = 되돌리기용
+      if (cur) { snapshots.push({ id: nid, content: cur.content }); updates.push({ id: nid, content: markLinesCarried(cur.content, set, md), at: cur.updated_at }); } // 원본 스냅샷 = 되돌리기용
     });
+    // at(불러올 때의 updated_at)을 걸어 둔다 — 그 사이 다른 곳에서 저장됐으면 덮어쓰지 않고 건너뛴다.
+    var carryConflicts = 0;
     for (var i = 0; i < updates.length; i++) {
-      await writeGuarded({ table: "work_notes", op: "update", id: updates[i].id,
-        payload: { content: updates[i].content, updated_at: new Date().toISOString() }, label: "이월 표시" });
+      var u0 = updates[i];
+      var stamp0 = new Date().toISOString();
+      var w0 = await writeGuarded({ table: "work_notes", op: "update", id: u0.id,
+        payload: { content: u0.content, updated_at: stamp0 }, label: "이월 표시", expectedUpdatedAt: u0.at });
+      if (w0.ok) u0.savedAt = stamp0;
+      else if (w0.conflict) carryConflicts++;
     }
-    setNotes(function(prev) { return prev.map(function(n) { var u = updates.find(function(x) { return x.id === n.id; }); return u ? Object.assign({}, n, { content: u.content }) : n; }); });
+    // 되돌리기용 스냅샷에도 "저장 직후 시각"을 남긴다(되돌릴 때 같은 방식으로 잠근다)
+    snapshots.forEach(function(s) { var u = updates.find(function(x) { return x.id === s.id; }); s.at = u && u.savedAt; });
+    var applied0 = updates.filter(function(x) { return x.savedAt; });   // 저장된 것만 화면에 반영
+    setNotes(function(prev) { return prev.map(function(n) { var u = applied0.find(function(x) { return x.id === n.id; }); return u ? Object.assign({}, n, { content: u.content, updated_at: u.savedAt }) : n; }); });
+    if (carryConflicts > 0) alert("노트 " + carryConflicts + "건은 다른 곳에서 먼저 저장돼 이월 표시를 반영하지 못했습니다.\n새로고침 후 다시 시도해주세요.");
     setShowCarry(false);
     // 되돌리기 토스트 (5초) + Ctrl+Z
     setCarryUndo({ count: chosen.length, addedTexts: addedTexts, snapshots: snapshots });
@@ -16629,12 +16744,18 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       return Object.assign({}, p, { checkItems: items });
     });
     // 2) 원본 노트 content를 가져오기 이전으로 복원 (이월 표시 제거)
+    var undoConflicts = 0;
     for (var i = 0; i < (u.snapshots || []).length; i++) {
       var s = u.snapshots[i];
-      await writeGuarded({ table: "work_notes", op: "update", id: s.id,
-        payload: { content: s.content, updated_at: new Date().toISOString() }, label: "이월 되돌리기" });
+      if (!s.at) continue;   // 애초에 저장되지 않은 노트(충돌로 건너뛴 건)는 되돌릴 것도 없다
+      var stampU = new Date().toISOString();
+      var wu = await writeGuarded({ table: "work_notes", op: "update", id: s.id,
+        payload: { content: s.content, updated_at: stampU }, label: "이월 되돌리기", expectedUpdatedAt: s.at });
+      if (wu.ok) s.restoredAt = stampU;
+      else if (wu.conflict) undoConflicts++;
     }
-    setNotes(function(prev) { return prev.map(function(n) { var s = (u.snapshots || []).find(function(x) { return x.id === n.id; }); return s ? Object.assign({}, n, { content: s.content }) : n; }); });
+    setNotes(function(prev) { return prev.map(function(n) { var s = (u.snapshots || []).find(function(x) { return x.id === n.id && x.restoredAt; }); return s ? Object.assign({}, n, { content: s.content, updated_at: s.restoredAt }) : n; }); });
+    if (undoConflicts > 0) alert("노트 " + undoConflicts + "건은 그 사이 다른 곳에서 저장돼 되돌리지 못했습니다.");
   };
 
   // Ctrl+Z (또는 ⌘Z) 로 방금 가져오기 되돌리기 (토스트 떠 있는 동안만)
@@ -16732,7 +16853,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       var it = e.item;
       if (!perNote.has(it.noteId)) {
         var cur = notes.find(function(n) { return n.id === it.noteId; });
-        perNote.set(it.noteId, { carried: new Set(), done: new Set(), del: new Set(), content: cur ? cur.content : "" });
+        perNote.set(it.noteId, { carried: new Set(), done: new Set(), del: new Set(), content: cur ? cur.content : "", at: cur ? cur.updated_at : null });
       }
       var g = perNote.get(it.noteId);
       if (e.action === "carry") { g.carried.add(it.lineIdx); carryTexts.push(it); }
@@ -16746,7 +16867,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       if (g.carried.size) c = markLinesCarried(c, g.carried, md);
       if (g.done.size) c = markLinesDone(c, g.done);
       if (g.del.size) c = removeLines(c, g.del);
-      updates.push({ id: nid, content: c });
+      updates.push({ id: nid, content: c, at: g.at });
     });
     // 이월 항목 → 대상 날짜(destDate) 노트에 추가 (그 날짜 노트가 없으면 새로 생성)
     var todayInsert = null;
@@ -16772,7 +16893,7 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
       if (newLines) {
         if (todayNote) {
           var merged = base ? base + "\n" + newLines : newLines;
-          if (u) u.content = merged; else updates.push({ id: todayNote.id, content: merged });
+          if (u) u.content = merged; else updates.push({ id: todayNote.id, content: merged, at: todayNote.updated_at });
         } else {
           var ins = { assignee: me, title: noteAutoTitle(me, destDate), content: newLines, is_todo: true, created_by: me, note_date: destDate };
           var ri = await supabase.from("work_notes").insert(ins).select().single();
@@ -16780,15 +16901,21 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
         }
       }
     }
+    var weekConflicts = 0;
     for (var i = 0; i < updates.length; i++) {
-      await writeGuarded({ table: "work_notes", op: "update", id: updates[i].id,
-        payload: { content: updates[i].content, updated_at: new Date().toISOString() }, label: "주간 이월" });
+      var uw = updates[i];
+      var stampW = new Date().toISOString();
+      var ww = await writeGuarded({ table: "work_notes", op: "update", id: uw.id,
+        payload: { content: uw.content, updated_at: stampW }, label: "주간 이월", expectedUpdatedAt: uw.at });
+      if (ww.ok) uw.savedAt = stampW;
+      else if (ww.conflict) weekConflicts++;
     }
     setNotes(function(prev) {
-      var next = prev.map(function(n) { var u = updates.find(function(x) { return x.id === n.id; }); return u ? Object.assign({}, n, { content: u.content }) : n; });
+      var next = prev.map(function(n) { var u = updates.find(function(x) { return x.id === n.id && x.savedAt; }); return u ? Object.assign({}, n, { content: u.content, updated_at: u.savedAt }) : n; });
       if (todayInsert) next = [todayInsert].concat(next);
       return next;
     });
+    if (weekConflicts > 0) alert("노트 " + weekConflicts + "건은 다른 곳에서 먼저 저장돼 반영하지 못했습니다.\n새로고침 후 다시 시도해주세요.");
     if (onBadgeUpdate) onBadgeUpdate();
     if (markDone) markWeeklyReviewed();
   };
@@ -17016,10 +17143,25 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
 
   var onChecklistChange = async function(noteId, newContent) {
     var prevNoteForReq = notes.find(function(n) { return n.id === noteId; });
-    var r = await writeGuarded({ table: "work_notes", op: "update", id: noteId,
-      payload: { content: newContent, updated_at: new Date().toISOString() }, label: "업무노트 체크리스트" });
+    // 화면이 보고 있던 본문을 기준으로 "바뀐 줄만" 최신 본문에 옮겨 붙인다.
+    // 예전엔 화면 본문을 통째로 덮어써서, 그 사이 다른 곳에서 늘어난 줄이 사라졌다.
+    var baseContent = prevNoteForReq ? (prevNoteForReq.content || "") : null;
+    var r = await saveContentWithRetry("work_notes", noteId, function(row) {
+      var latest = row.content || "";
+      if (baseContent == null || latest === baseContent) return { content: newContent };
+      var merged = reapplyLineChanges(baseContent, newContent, latest);
+      return merged == null ? null : { content: merged };
+    }, "업무노트 체크리스트");
+    if (!r.ok) {
+      if (r.data) setNotes(function(prev) { return prev.map(function(n) { return n.id === noteId ? Object.assign({}, n, { content: r.data.content, updated_at: r.data.updated_at }) : n; }); });
+      alert((r.error && r.error.message) || "저장하지 못했습니다.");
+    }
     if (r.ok) {
-      setNotes(function(prev) { return prev.map(function(n) { return n.id === noteId ? Object.assign({}, n, { content: newContent }) : n; }); });
+      // 화면·후속 처리는 실제 저장된 본문(합쳐진 결과)으로 반영하되,
+      // 아래 "방금 체크된 항목" 판정은 사용자의 의도(base → newContent)를 그대로 쓴다.
+      // 합쳐진 본문은 줄 순서가 달라질 수 있어 index 비교에 쓰면 오탐이 난다.
+      var savedContent = r.data.content;
+      setNotes(function(prev) { return prev.map(function(n) { return n.id === noteId ? Object.assign({}, n, { content: savedContent, updated_at: r.data.updated_at }) : n; }); });
       // 📩 받은 요청 항목 완료 시 보낸 사람 쪽에 반영
       if (prevNoteForReq) syncRequestDone(prevNoteForReq.content, newContent);
       // 방금 체크 완료된 항목 → 활동로그 기록
@@ -17086,7 +17228,26 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     };
     // 2026-07-28 사고 수정: 예전엔 `if (!r.error)`만 있고 else가 없어 실패해도 아무 표시가 없었다.
     // writeGuarded가 0행 갱신(세션 끊김)까지 실패로 잡고 화면 알림 + 재시도 큐에 넣는다.
-    var res = await writeGuarded({ table: "work_notes", op: "update", id: editNote.id, payload: upd, label: "업무노트 저장" });
+    //
+    // expectedUpdatedAt = 동시 저장 방지. 이 저장은 편집창 내용으로 content 를 통째로 덮어쓰므로,
+    // 편집창을 열어 둔 사이 누가 저장했다면 그 내용이 조용히 사라진다. 그래서 여기서는
+    // 자동 재시도를 하지 않고(=덮어쓰기 금지) 사람에게 물어본다.
+    var res = await writeGuarded({ table: "work_notes", op: "update", id: editNote.id, payload: upd,
+      label: "업무노트 저장", expectedUpdatedAt: editNote.updated_at });
+    if (res.conflict) {
+      var whenTxt = res.current && res.current.updated_at
+        ? new Date(res.current.updated_at).toLocaleString("ko-KR") : "";
+      var overwrite = window.confirm(
+        "이 노트가 다른 곳에서 먼저 저장됐어요" + (whenTxt ? "\n(마지막 저장: " + whenTxt + ")" : "") + ".\n\n" +
+        "[확인] 내가 쓴 내용으로 덮어쓰기 (먼저 저장된 내용은 사라집니다)\n" +
+        "[취소] 저장하지 않기 — 목록에 최신 내용을 불러오고, 내가 쓴 내용은 편집창에 그대로 둡니다");
+      if (!overwrite) {
+        setNotes(function(prev) { return prev.map(function(n) { return n.id === editNote.id ? Object.assign({}, n, res.current) : n; }); });
+        return; // 편집창은 닫지 않는다 — 쓴 내용이 남아 있어야 옮겨 붙일 수 있다
+      }
+      // 덮어쓰기 선택 — 잠금 없이 다시 저장
+      res = await writeGuarded({ table: "work_notes", op: "update", id: editNote.id, payload: upd, label: "업무노트 저장(덮어쓰기)" });
+    }
     if (!res.ok && /company_id/.test((res.fail && res.fail.text) || "")) {
       // company_id 컬럼이 없는 환경 — 그 칸만 빼고 재시도하고, 못 고칠 첫 실패는 큐에서 뺀다
       dropFailedSave(res.fail && res.fail.id);
@@ -17095,7 +17256,9 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     }
     if (res.ok) {
       editDraft.done();
-      setNotes(function(prev) { return prev.map(function(n) { return n.id === editNote.id ? Object.assign({}, n, editNote, { content: finalContent }) : n; }); });
+      // ⚠️ updated_at 을 같이 갱신해야 한다 — editNote 의 옛 값이 목록에 남으면 다음 저장이
+      //    자기 자신과 충돌한 것처럼 판정된다.
+      setNotes(function(prev) { return prev.map(function(n) { return n.id === editNote.id ? Object.assign({}, n, editNote, { content: finalContent, updated_at: upd.updated_at }) : n; }); });
       setEditingId(null); setEditNote({});
       if (onBadgeUpdate) onBadgeUpdate();
     }
@@ -25031,12 +25194,14 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     if (mine) {
       // 어느 팀 카드에서 넘어온 내용인지 본문에 머리글로 남긴다(합치면 제목이 날짜 제목으로 바뀌므로).
       var addition = "── " + srcTitle + " ──\n" + (teamNote.content || "");
-      var upd = await supabase.from("work_notes").update({
-        title: mergedNoteTitle(mine.title, noteAutoTitle(assigneeName, todayStr)),   // "8월3일 업무노트" (수기 제목은 보존)
-        content: appendNoteContent(mine.content, addition),
-        updated_at: new Date().toISOString(),
-      }).eq("id", mine.id).select().single();
-      if (upd.error) { alert("내 노트에 합치기 실패: " + upd.error.message); return; }
+      // 최신 content 기준으로 덧붙인다 — 충돌하면 다시 읽어 재시도하므로 상대 저장분이 날아가지 않는다.
+      var upd = await saveContentWithRetry("work_notes", mine.id, function(row) {
+        return {
+          title: mergedNoteTitle(row.title, noteAutoTitle(assigneeName, todayStr)),   // "8월3일 업무노트" (수기 제목은 보존)
+          content: appendNoteContent(row.content, addition),
+        };
+      }, "가져가기 합치기");
+      if (!upd.ok) { alert("내 노트에 합치기 실패: " + upd.error.message); return; }
       noteRow = upd.data;
     } else {
       var workNotePayload = {
@@ -25111,15 +25276,18 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     var workNoteId;
     if (existingWorkNoteId) {
       // 기존 노트에 항목 추가
-      var fetchRes = await supabase.from("work_notes").select("*").eq("id", existingWorkNoteId).maybeSingle();
+      var fetchRes = await supabase.from("work_notes").select("id").eq("id", existingWorkNoteId).maybeSingle();
       if (fetchRes.error || !fetchRes.data) {
         // 기존 노트가 사라졌으면 새로 만듦
         existingWorkNoteId = null;
       } else {
-        var existingContent = fetchRes.data.content || "";
-        var newContent = existingContent + (existingContent ? "\n" : "") + "- [ ] " + encodeItemText(item.text);
-        var upd = await supabase.from("work_notes").update({ content: newContent, updated_at: new Date().toISOString() }).eq("id", existingWorkNoteId).select().single();
-        if (upd.error) { alert("기존 노트 갱신 실패: " + upd.error.message); return; }
+        // 최신 content 기준으로 줄을 붙인다(충돌 시 재조회 후 재시도) — 예전엔 읽은 값을 그대로
+        // 덮어써서, 그 사이 상대가 저장한 내용이 통째로 사라졌다.
+        var upd = await saveContentWithRetry("work_notes", existingWorkNoteId, function(row) {
+          var c = row.content || "";
+          return { content: c + (c ? "\n" : "") + "- [ ] " + encodeItemText(item.text) };
+        }, "항목 가져가기");
+        if (!upd.ok) { alert("기존 노트 갱신 실패: " + upd.error.message); return; }
         workNoteId = existingWorkNoteId;
         // 부모 컴포넌트에 갱신된 노트 알림 (화면 즉시 반영)
         if (onTakenToMyNote && upd.data) onTakenToMyNote(upd.data);
@@ -25134,14 +25302,15 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     if (!existingWorkNoteId) {
       var mine = await findMergeableWorkNote(assigneeName, todayStr);
       if (mine) {
-        var mergedContent = (mine.content || "") + ((mine.content || "") ? "\n" : "") + "- [ ] " + encodeItemText(item.text);
-        var mu = await supabase.from("work_notes").update({
-          // 하루치 노트가 되므로 날짜 자동 제목으로 — 담당자가 직접 지은 제목은 보존한다.
-          title: mergedNoteTitle(mine.title, noteAutoTitle(assigneeName, todayStr)),
-          content: mergedContent,
-          updated_at: new Date().toISOString(),
-        }).eq("id", mine.id).select().single();
-        if (mu.error) { alert("내 노트에 합치기 실패: " + mu.error.message); return; }
+        var mu = await saveContentWithRetry("work_notes", mine.id, function(row) {
+          var c = row.content || "";
+          return {
+            // 하루치 노트가 되므로 날짜 자동 제목으로 — 담당자가 직접 지은 제목은 보존한다.
+            title: mergedNoteTitle(row.title, noteAutoTitle(assigneeName, todayStr)),
+            content: c + (c ? "\n" : "") + "- [ ] " + encodeItemText(item.text),
+          };
+        }, "항목 가져가기 합치기");
+        if (!mu.ok) { alert("내 노트에 합치기 실패: " + mu.error.message); return; }
         workNoteId = mu.data.id;
         existingWorkNoteId = mu.data.id;   // 아래 "새로 만들기" 갈래를 타지 않게
         if (onTakenToMyNote) onTakenToMyNote(mu.data);
@@ -25167,31 +25336,41 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     }
 
     // 2) team_notes checklist 업데이트
-    var newChecklist = (teamNote.checklist || []).map(function(it) {
-      if (it.id === itemId) {
+    // ⚠️ 팀 카드는 여러 명이 동시에 본다. 화면에 있던 checklist 를 통째로 쓰면, 그 사이 다른
+    //    사람이 가져간 항목의 표시가 지워진다(둘이 같은 항목을 두 번 가져가게 된다).
+    //    → 저장 직전에 다시 읽어 "이 항목만" 표시하고, 충돌하면 다시 읽어 재시도한다.
+    var tr = await saveContentWithRetry("team_notes", teamNote.id, function(row) {
+      var list = row.checklist || [];
+      var target = list.find(function(it) { return it.id === itemId; });
+      if (!target) return null;                                     // 항목이 사라짐
+      if (target.taken_by && target.taken_by !== assigneeName) return null;  // 그새 남이 가져감
+      var newList = list.map(function(it) {
+        if (it.id !== itemId) return it;
         return Object.assign({}, it, {
           taken_by: assigneeName,
           taken_at: new Date().toISOString(),
           taken_work_note_id: workNoteId,
         });
+      });
+      var payload = { checklist: newList };
+      // 모두 가져갔으면 상태를 taken으로
+      if (newList.length > 0 && newList.every(function(it) { return it.taken_by; }) && row.status === "open") {
+        payload.status = "taken";
+        payload.taken_at = new Date().toISOString();
       }
-      return it;
-    });
-
-    // 모두 가져갔으면 상태를 taken으로
-    var allTaken = newChecklist.every(function(it) { return it.taken_by; });
-    var updatePayload = { checklist: newChecklist };
-    if (allTaken && teamNote.status === "open") {
-      updatePayload.status = "taken";
-      updatePayload.taken_at = new Date().toISOString();
+      return payload;
+    }, "팀 노트 항목 갱신");
+    if (!tr.ok) {
+      alert(tr.skipped
+        ? "그 사이 다른 분이 이 항목을 가져갔거나 항목이 사라졌습니다.\n화면을 새로고침한 뒤 확인해주세요."
+        : "팀 노트 업데이트 실패: " + tr.error.message);
+      return;
     }
 
-    var tr = await supabase.from("team_notes").update(updatePayload).eq("id", teamNote.id);
-    if (tr.error) { alert("팀 노트 업데이트 실패: " + tr.error.message); return; }
-
+    var savedTeamRow = tr.data;
     setAllTeamNotes(function(prev) {
       return prev.map(function(n) {
-        if (n.id === teamNote.id) return Object.assign({}, n, updatePayload);
+        if (n.id === teamNote.id) return Object.assign({}, n, savedTeamRow);
         return n;
       });
     });
