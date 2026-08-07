@@ -11718,6 +11718,248 @@ function ZoomSection({ title, hint, value, onSave, children }) {
   );
 }
 
+// ── 🤖 외부 AI 요약본(제미나이 등) 붙여넣기 → 소통내역 + 담당자별 할 일로 나누기 ─────────
+// 대표자가 녹음을 제미나이로 요약해 보내오면, 받은 사람이 소통내역·업무노트·담당자에게
+// 손으로 옮겨 적던 일을 없애는 용도. 붙여넣기 한 번 → 미리보기 → 저장.
+//
+// ⚠️ 이 파서는 "후보"만 고른다. 여기서 곧바로 저장하지 않는다.
+//    추측으로 남의 업무노트에 줄을 꽂으면 안 되므로, 반드시 미리보기에서 사람이 확인한다.
+//    담당자를 못 찾은 줄은 비워 두고 사람이 고르게 한다 — 임의 배정 금지.
+// ⚠️ 소통내역에는 **원문 전체**를 남긴다. 할 일로 고른 줄도 원문에서 빼지 않는다
+//    (나중에 "그때 뭐라고 왔었지"를 확인할 수 있어야 한다).
+
+// "할 일" 묶음의 시작 머리글
+var SUMMARY_TODO_HEAD_RE = /^[#*\-•·>\s]*(할\s*일|해야\s*할\s*일|액션\s*아이템|액션|조치\s*사항|후속\s*조치|후속\s*업무|다음\s*단계|요청\s*사항|to-?do|action\s*items?|next\s*steps?)\s*[:：]?\s*$/i;
+// 다른 묶음의 시작(= 할 일 묶음 끝)
+var SUMMARY_OTHER_HEAD_RE = /^[#*\-•·>\s]*(요약|통화\s*요약|대화\s*요약|녹음\s*요약|주요\s*내용|배경|참고|메모|특이\s*사항|결론|현황|summary|notes?)\s*[:：]?\s*$/i;
+// 머리글 밖에서도 "지시문"으로 보이는 줄 (동사가 줄 끝에 오는 한국어 특성 이용)
+// ⚠️ 끝맺음(주세요/필요/할 것…)을 좁게 잡아 둔 게 핵심 안전장치다.
+//    "…라고 알려주셨습니다" 같은 보고 문장은 끝맺음이 안 맞아 걸리지 않는다.
+//    키워드만 늘리고 끝맺음을 느슨하게 하면 잡담까지 할 일로 끌려온다.
+var SUMMARY_TODO_TAIL_RE = /(요청|전달|확인|준비|발송|접수|신청|예약|방문|작성|제출|정리|연락|문의|보완|수정|재신청|안내|첨부|공유|검토|상담|보내|받기|잡기|챙기)\s*(해야\s*(함|한다|합니다)|하기|필요|바랍니다|바람|주세요|주시기\s*바랍니다|예정|할\s*것|요망)?\s*[.。!]?$/;
+
+function sdPad2(n) { return String(parseInt(n, 10)).padStart(2, "0"); }
+// 줄에서 마감일 후보를 뽑는다. 못 찾으면 "".
+// 연/월/일이 다 있으면 그대로. "8월 12일"처럼 연도가 없으면 올해로 보되,
+// 오늘보다 60일 이상 과거면 내년으로 본다(연말 경계 오판 방지 — 12월에 받은 "1월 5일").
+function sdExtractDueDate(text, todayStr) {
+  var t = String(text == null ? "" : text);
+  var m = t.match(/(20\d{2})[-./](\d{1,2})[-./](\d{1,2})/);
+  if (m) return m[1] + "-" + sdPad2(m[2]) + "-" + sdPad2(m[3]);
+  m = t.match(/(\d{1,2})\s*월\s*(\d{1,2})\s*일/);
+  if (!m) return "";
+  var mm = parseInt(m[1], 10), dd = parseInt(m[2], 10);
+  if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return "";
+  var base = todayStr || kstDate();
+  var y = parseInt(base.slice(0, 4), 10);
+  var cand = y + "-" + sdPad2(mm) + "-" + sdPad2(dd);
+  var diff = (new Date(cand + "T00:00:00") - new Date(base + "T00:00:00")) / 86400000;
+  if (diff < -60) cand = (y + 1) + "-" + sdPad2(mm) + "-" + sdPad2(dd);
+  return cand;
+}
+
+// raw(붙여넣은 원문) → { commText: 소통내역에 남길 원문, items: 할 일 후보 }
+//   staffNames: 담당자로 인정할 이름 목록(TEAM_MEMBERS.all)
+function parseSummaryText(raw, staffNames, todayStr) {
+  var names = staffNames || [];
+  var lines = String(raw == null ? "" : raw).replace(/\r\n/g, "\n").split("\n");
+  var inTodoBlock = false, items = [], seq = 0;
+  lines.forEach(function(line) {
+    var t = line.trim();
+    if (!t) return;
+    if (SUMMARY_TODO_HEAD_RE.test(t)) { inTodoBlock = true; return; }
+    if (SUMMARY_OTHER_HEAD_RE.test(t)) { inTodoBlock = false; return; }
+    // 글머리표·번호·체크박스 기호 제거
+    var body = t
+      .replace(/^[-*•·○▪▶>]+\s*/, "")
+      .replace(/^\[[ xX]?\]\s*/, "")
+      .replace(/^(\d+[.)]|[□☐☑✅])\s*/, "")
+      .trim();
+    if (!body) return;
+    var explicitBox = /^([-*•·]?\s*\[[ xX]?\]|[□☐☑✅])/.test(t);
+    var isTodo = inTodoBlock || explicitBox || SUMMARY_TODO_TAIL_RE.test(body);
+    var who = "";
+    // "유진: 서류 전달" / "유진 - 서류 전달" → 담당자 + 내용 분리 (명단에 있는 이름일 때만)
+    var m = body.match(/^([가-힣]{2,4})\s*[:：]\s*(.+)$/) || body.match(/^([가-힣]{2,4})\s+[-–—]\s*(.+)$/);
+    if (m && names.indexOf(normalizeStaffName(m[1])) >= 0) {
+      who = normalizeStaffName(m[1]);
+      body = m[2].trim();
+      isTodo = true;   // 담당자를 콕 집었으면 할 일로 본다
+    }
+    if (!who) {
+      for (var i = 0; i < names.length; i++) {
+        if (body.indexOf(names[i]) >= 0) { who = names[i]; break; }
+      }
+    }
+    if (!isTodo) return;
+    items.push({
+      id: "sd" + (++seq),
+      text: body,
+      assignee: who,
+      dueDate: sdExtractDueDate(body, todayStr),
+      selected: true,
+    });
+  });
+  return { commText: String(raw == null ? "" : raw).replace(/\r\n/g, "\n").trim(), items: items };
+}
+
+// 🤖 요약 붙여넣기 미리보기 — 붙여넣은 원문을 "소통내역 + 담당자별 할 일"로 나눠 보여주고,
+// 사람이 확인·수정한 뒤에만 저장한다.
+//   props: { companyId, companyName, staffNames, defaultAssignee, initialText, onSaveComm, onSaved, onClose }
+function SummaryDistributeModal({ companyId, companyName, staffNames, defaultAssignee, initialText, onSaveComm, onSaved, onClose }) {
+  var [text, setText] = useState(initialText || "");
+  var [items, setItems] = useState([]);
+  var [commText, setCommText] = useState(initialText || "");
+  var [analyzed, setAnalyzed] = useState(false);
+  var [saving, setSaving] = useState(false);
+  var [err, setErr] = useState("");
+
+  var today = kstDate();
+
+  var analyze = function() {
+    var r = parseSummaryText(text, staffNames, today);
+    setCommText(r.commText);
+    setItems(r.items.map(function(it) {
+      // 담당자를 못 찾았으면 비워 둔다 — 임의 배정 금지. 사람이 고른다.
+      return Object.assign({}, it);
+    }));
+    setAnalyzed(true);
+    setErr("");
+  };
+
+  var patchItem = function(id, patch) {
+    setItems(function(prev) { return prev.map(function(it) { return it.id === id ? Object.assign({}, it, patch) : it; }); });
+  };
+
+  var chosen = items.filter(function(it) { return it.selected && (it.text || "").trim(); });
+  var missingWho = chosen.filter(function(it) { return !it.assignee; });
+
+  var save = async function() {
+    if (!commText.trim() && chosen.length === 0) { setErr("저장할 내용이 없습니다."); return; }
+    if (missingWho.length > 0) { setErr("담당자를 고르지 않은 할 일이 " + missingWho.length + "건 있습니다. 담당자를 고르거나 체크를 해제해주세요."); return; }
+    setSaving(true); setErr("");
+    var failed = [];
+    try {
+      // 1) 소통내역 — 원문 전체를 남긴다(할 일로 보낸 줄도 빼지 않는다)
+      if (commText.trim()) {
+        var head = "🤖 요약 붙여넣기 · 정리: " + (defaultAssignee || "") + " · " + today;
+        var cr = await onSaveComm(head + "\n" + commText.trim());
+        if (cr && cr.error) { setSaving(false); setErr("소통내역 저장 실패: " + cr.error.message); return; }
+      }
+      // 2) 담당자별 업무노트 — 남의 노트에 쓰므로 반드시 wn_append_todo 경유
+      //    (직접 select 후 update 하면 상대 노트를 못 찾아 같은 날 노트가 두 장 생긴다)
+      for (var i = 0; i < chosen.length; i++) {
+        var it = chosen[i];
+        // 받는 사람 노트에서 어느 업체 건인지 바로 보이게 @업체명 을 앞에 붙인다(기존 @업체 태그 관례).
+        // 이미 업체명이 들어 있으면 겹쳐 붙이지 않는다.
+        var body = it.text.trim();
+        if (companyName && body.indexOf(companyName) < 0) body = "@" + companyName + " " + body;
+        var line = buildItemLine({ checked: false, text: body, dueDate: it.dueDate || "" });
+        var ar = await supabase.rpc("wn_append_todo", {
+          p_assignee: it.assignee, p_note_date: today, p_line: line,
+          p_company_id: companyId || null, p_title: noteAutoTitle(it.assignee, today),
+        });
+        if (ar.error) failed.push(it.assignee + ": " + ar.error.message);
+      }
+    } catch (e) {
+      setSaving(false); setErr("저장 중 오류: " + (e && e.message ? e.message : e)); return;
+    }
+    setSaving(false);
+    if (failed.length > 0) {
+      alert("일부 업무노트 저장에 실패했습니다:\n" + failed.join("\n"));
+    } else {
+      alert("✅ 소통내역 1건" + (chosen.length ? " · 업무노트 " + chosen.length + "건" : "") + " 저장했습니다.");
+    }
+    if (onSaved) onSaved();
+    onClose();
+  };
+
+  var lbl = { display: "block", fontSize: 11, color: "#888", marginBottom: 5, fontWeight: 600 };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      {/* 바깥 클릭으로는 닫지 않는다 — 붙여넣은 내용이 날아간다 */}
+      <div onClick={function(e) { e.stopPropagation(); }}
+        style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 760, maxHeight: "90vh", overflowY: "auto", padding: 20, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <div style={{ fontSize: 15, fontWeight: 800 }}>🤖 요약 붙여넣기 <span style={{ fontSize: 11, fontWeight: 500, color: "#888" }}>· {companyName}</span></div>
+          <button onClick={onClose} disabled={saving} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#888", lineHeight: 1 }}>✕</button>
+        </div>
+        <div style={{ fontSize: 11, color: "#888", marginBottom: 12 }}>
+          제미나이 등에서 받은 요약을 그대로 붙여넣으면 소통내역과 담당자별 할 일로 나눠줍니다. <b>확인 후 저장</b>되며, 담당자는 직접 고릅니다.
+        </div>
+
+        <label style={lbl}>붙여넣기</label>
+        <textarea value={text} onChange={function(e) { setText(e.target.value); setAnalyzed(false); }}
+          placeholder={"예)\n## 통화 요약\n- 대표님이 사업전환 자금 신청 의사를 밝히셨습니다.\n\n## 할 일\n- 유진: 승인신청서 최신 양식 전달\n- 8월 12일 방문 일정 확정"}
+          style={{ width: "100%", minHeight: 150, padding: "11px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.7, resize: "vertical", boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+        <button onClick={analyze} disabled={!text.trim() || saving}
+          style={{ marginTop: 8, padding: "8px 14px", borderRadius: 7, border: "none", cursor: text.trim() ? "pointer" : "not-allowed",
+            background: text.trim() ? "#1A1917" : "#E8E5E0", color: text.trim() ? "#fff" : "#AAA", fontSize: 12, fontWeight: 700 }}>
+          🔍 나눠보기
+        </button>
+
+        {analyzed && (
+          <div style={{ marginTop: 16 }}>
+            <label style={lbl}>① 소통내역에 남길 내용 (원문 그대로 — 고칠 수 있어요)</label>
+            <textarea value={commText} onChange={function(e) { setCommText(e.target.value); }}
+              style={{ width: "100%", minHeight: 90, padding: "10px 12px", border: "1px solid #BAE6FD", borderRadius: 8, fontSize: 12, lineHeight: 1.7,
+                resize: "vertical", boxSizing: "border-box", outline: "none", background: "#F0F9FF", color: "#075985", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
+
+            <label style={Object.assign({}, lbl, { marginTop: 14 })}>
+              ② 담당자별 업무노트로 보낼 할 일 {items.length > 0 ? "(" + chosen.length + "/" + items.length + "건 선택)" : ""}
+            </label>
+            {items.length === 0 ? (
+              <div style={{ fontSize: 12, color: "#888", padding: "10px 12px", background: "#FAFAF8", borderRadius: 8, border: "1px solid #E8E5E0" }}>
+                할 일로 볼 만한 줄을 찾지 못했습니다. 소통내역만 저장됩니다.
+                <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>("할 일" 머리글 아래에 적거나, "- 유진: 서류 전달"처럼 적으면 잘 찾습니다.)</div>
+              </div>
+            ) : (
+              <div style={{ border: "1px solid #E8E5E0", borderRadius: 8, overflow: "hidden" }}>
+                {items.map(function(it) {
+                  return (
+                    <div key={it.id} style={{ display: "flex", gap: 6, alignItems: "center", padding: "7px 9px", borderBottom: "1px solid #F0EEE9", background: it.selected ? "#fff" : "#FAFAF8" }}>
+                      <input type="checkbox" checked={!!it.selected} onChange={function(e) { patchItem(it.id, { selected: e.target.checked }); }}
+                        style={{ width: 15, height: 15, flexShrink: 0, cursor: "pointer" }} />
+                      <select value={it.assignee} onChange={function(e) { patchItem(it.id, { assignee: e.target.value }); }}
+                        style={{ flexShrink: 0, width: 92, padding: "5px 4px", borderRadius: 6, fontSize: 12,
+                          border: "1px solid " + (it.selected && !it.assignee ? "#DC2626" : "#E8E5E0"),
+                          background: it.selected && !it.assignee ? "#FEF2F2" : "#fff" }}>
+                        <option value="">담당자…</option>
+                        {(staffNames || []).map(function(n) { return <option key={n} value={n}>{n}</option>; })}
+                      </select>
+                      <input value={it.text} onChange={function(e) { patchItem(it.id, { text: e.target.value }); }}
+                        style={{ flex: 1, minWidth: 0, padding: "5px 8px", borderRadius: 6, border: "1px solid #E8E5E0", fontSize: 12, outline: "none" }} />
+                      <input type="date" value={it.dueDate || ""} onChange={function(e) { patchItem(it.id, { dueDate: e.target.value }); }}
+                        title="마감일(비워도 됩니다)"
+                        style={{ flexShrink: 0, width: 130, padding: "4px 6px", borderRadius: 6, border: "1px solid #E8E5E0", fontSize: 11, outline: "none" }} />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {missingWho.length > 0 && (
+              <div style={{ fontSize: 11, color: "#B91C1C", marginTop: 6 }}>⚠️ 담당자를 고르지 않은 할 일이 {missingWho.length}건 있습니다.</div>
+            )}
+          </div>
+        )}
+
+        {err && <div style={{ fontSize: 12, color: "#B91C1C", marginTop: 10, background: "#FEF2F2", padding: "8px 10px", borderRadius: 6 }}>{err}</div>}
+
+        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          <button onClick={onClose} disabled={saving}
+            style={{ flex: 1, padding: "10px", borderRadius: 8, border: "1px solid #E8E5E0", background: "#fff", color: "#555", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>취소</button>
+          <button onClick={save} disabled={saving || !analyzed}
+            style={{ flex: 2, padding: "10px", borderRadius: 8, border: "none", cursor: (saving || !analyzed) ? "not-allowed" : "pointer",
+              background: (saving || !analyzed) ? "#E8E5E0" : "#075985", color: (saving || !analyzed) ? "#AAA" : "#F0F9FF", fontSize: 13, fontWeight: 700 }}>
+            {saving ? "저장 중..." : "저장 — 소통내역" + (chosen.length ? " + 업무노트 " + chosen.length + "건" : "")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAgencyRegistered, companies, initialTab, onPatchCompany }) {
   const [tab, setTab] = useState(initialTab || "info");
   const [prevTab, setPrevTab] = useState(initialTab || "info");
@@ -11778,6 +12020,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   const [recSeconds, setRecSeconds] = useState(0);         // 경과 시간(초)
   const [voiceUploading, setVoiceUploading] = useState(false); // 음성 메모 업로드 중
   const [callUploading, setCallUploading] = useState(false);   // 녹음 파일 업로드 중
+  const [showSummaryDist, setShowSummaryDist] = useState(false); // 🤖 요약 붙여넣기 미리보기
   const mediaRecorderRef = useRef(null);
   const recChunksRef = useRef([]);
   const recTimerRef = useRef(null);
@@ -13435,6 +13678,12 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                       {callUploading ? "업로드 중..." : "📁 녹음 파일"}
                       <input type="file" accept=".mp3,.m4a,.wav,.webm,.ogg,audio/*" style={{ display: "none" }} disabled={callUploading} onChange={function(e) { var f = e.target.files && e.target.files[0]; e.target.value = ""; handleCallUpload(f); }} />
                     </label>
+                    {/* 🤖 요약 붙여넣기 — 제미나이 등 외부 요약본을 소통내역 + 담당자별 할 일로 분배 */}
+                    <button onClick={function() { setShowSummaryDist(true); }}
+                      title="제미나이 등에서 받은 요약을 붙여넣으면 소통내역과 담당자별 할 일로 나눠줍니다"
+                      style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11, fontWeight: 700, color: "#7C3AED", background: "#F5F3FF", padding: "4px 9px", borderRadius: 6, border: "none", cursor: "pointer" }}>
+                      🤖 요약 붙여넣기
+                    </button>
                     <div style={{ fontSize: 10, color: "#888" }}>붙여넣기·드래그 가능</div>
                   </div>
                 </div>
@@ -14102,6 +14351,18 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
           </button>
         </div>
       </div>
+      {/* 🤖 요약 붙여넣기 — 소통내역 입력칸에 뭔가 써 있으면 그걸 가져와 시작한다 */}
+      {showSummaryDist && (
+        <SummaryDistributeModal
+          companyId={company.id}
+          companyName={company.name}
+          staffNames={TEAM_MEMBERS.all}
+          defaultAssignee={normalizeStaffName((currentUser && currentUser.name) || "")}
+          initialText={commInput}
+          onSaveComm={insertCommLog}
+          onSaved={function() { setCommInput(""); refreshCommLogs(); }}
+          onClose={function() { setShowSummaryDist(false); }} />
+      )}
     </div>
   );
 }
