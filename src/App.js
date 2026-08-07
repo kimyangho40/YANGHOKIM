@@ -25126,6 +25126,28 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       }
     }
 
+    // 1-b) 이 팀 카드에서 가져간 노트가 없으면, 그 날짜의 "내 업무노트"를 찾아 거기에 붙인다.
+    //    ⚠️ 이 갈래가 없으면 팀 카드마다 노트가 따로 생겨 같은 날에 노트가 여러 장 쌓인다.
+    //       (실측 2026-08-04 유진: "8월4일 업무노트" + "[법인팀] 8월4일 업무" + "[법인팀] 8월3일 업무" 3장)
+    //       db40ee0 이 채팅 저장·통째로 가져가기 3경로만 고치고 항목별 가져가기를 빠뜨린 자리다.
+    //    합치기 기준은 takeToMyNote 와 같다(assignee + note_date, 가장 먼저 만든 카드).
+    if (!existingWorkNoteId) {
+      var mine = await findMergeableWorkNote(assigneeName, todayStr);
+      if (mine) {
+        var mergedContent = (mine.content || "") + ((mine.content || "") ? "\n" : "") + "- [ ] " + encodeItemText(item.text);
+        var mu = await supabase.from("work_notes").update({
+          // 하루치 노트가 되므로 날짜 자동 제목으로 — 담당자가 직접 지은 제목은 보존한다.
+          title: mergedNoteTitle(mine.title, noteAutoTitle(assigneeName, todayStr)),
+          content: mergedContent,
+          updated_at: new Date().toISOString(),
+        }).eq("id", mine.id).select().single();
+        if (mu.error) { alert("내 노트에 합치기 실패: " + mu.error.message); return; }
+        workNoteId = mu.data.id;
+        existingWorkNoteId = mu.data.id;   // 아래 "새로 만들기" 갈래를 타지 않게
+        if (onTakenToMyNote) onTakenToMyNote(mu.data);
+      }
+    }
+
     if (!existingWorkNoteId) {
       // 새 work_notes 생성
       var workNotePayload = {
