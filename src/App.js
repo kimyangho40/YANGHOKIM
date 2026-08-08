@@ -1959,6 +1959,68 @@ function parseStatementNum(raw) {
   return { won: neg ? -n : n, reason: "" };
 }
 
+// ── 결산일(회계기간) 검사 ────────────────────────────────────────────────────
+// 2026-08-08 F그룹 실측에서 (주)더푸른식품이 뚫고 들어왔다.
+//   · 보고기간 2025-01-01 ~ 2025-10-31 (10개월짜리 기중 시산)
+//   · 그런데 5페이지 어디에도 '가결산'·'잠정' 글자가 한 글자도 없다 → is_provisional=false
+//   · 기말재고가 기초+당기제조와 정확히 같아 매출원가가 0으로 떨어져,
+//     대차검산도 영업손익 재검산도 **둘 다 통과**한다(매출 91.8억에 영업이익 79억).
+// 검산으로는 원리상 못 잡는 유형이라 기간으로 막는다.
+//
+// ⚠️ 판단 기준은 "기간 길이"가 아니라 "종료일이 결산일인가"다.
+//    신설법인 1기는 12개월이 아니어도 정상이기 때문(예: 2025-08-01 ~ 2025-12-31).
+//    3월·6월·9월 결산 법인도 있어서 "12월 31일만 허용"으로도 만들면 안 된다.
+function finParseYmd(s) {
+  var m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(s === null || s === undefined ? "" : s).trim());
+  if (!m) return null;
+  var y = +m[1], mo = +m[2], d = +m[3];
+  var dt = new Date(y, mo - 1, d);
+  // 2025-02-30 같은 값은 Date가 조용히 넘겨버리므로 되돌려 비교한다
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+  return { y: y, m: mo, d: d };
+}
+function finIsMonthEnd(p) {
+  return new Date(p.y, p.m, 0).getDate() === p.d;   // 다음 달 0일 = 이 달의 마지막 날
+}
+// → { ran, ok, reason, note }
+//   ok=false 면 전건 차단. note 는 차단까진 아니지만 사람이 볼 만한 메모.
+function finPeriodCheck(startStr, endStr) {
+  var e = finParseYmd(endStr);
+  if (!e) return { ran: false, ok: null, reason: "", note: "" };   // 종료일을 못 읽으면 검사 자체를 못 한다
+  var s = finParseYmd(startStr);
+
+  if (!finIsMonthEnd(e)) {
+    return { ran: true, ok: false, note: "",
+      reason: "회계기간 종료일이 " + endStr + " 로 월말이 아닙니다 — 결산일이 아닌 기중 시점으로 보입니다." };
+  }
+
+  // 시작일 + 1년 − 1일 === 종료일 이면 온전한 한 회계연도
+  var full = false;
+  if (s) {
+    var oneYear = new Date(s.y + 1, s.m - 1, s.d);
+    oneYear.setDate(oneYear.getDate() - 1);
+    full = oneYear.getFullYear() === e.y && (oneYear.getMonth() + 1) === e.m && oneYear.getDate() === e.d;
+  }
+  if (full) return { ran: true, ok: true, reason: "", note: "" };
+
+  // 12월 31일로 끝나면 통과시킨다.
+  // 신설법인 첫 사업연도(2025-08-01~12-31)와 3월결산 법인의 기중 시산(2025-04-01~12-31)은
+  // 날짜만으로 구분이 안 된다. 훨씬 흔한 쪽(신설법인)을 막지 않는 대신 메모로 남긴다.
+  if (e.m === 12 && e.d === 31) {
+    return { ran: true, ok: true, reason: "",
+      note: s ? "1년치가 아닙니다(" + startStr + " ~ " + endStr + ") — 첫 사업연도가 아니라면 확인해주세요" : "" };
+  }
+
+  if (!s) {
+    return { ran: true, ok: false, note: "",
+      reason: "회계기간 종료일이 " + endStr + " 인데 시작일을 읽지 못해 결산일인지 확인할 수 없습니다"
+        + " (3·6·9월 결산 법인이면 정상일 수 있습니다 — 확인 후 직접 입력해주세요)." };
+  }
+  return { ran: true, ok: false, note: "",
+    reason: "회계기간이 " + startStr + " ~ " + endStr + " 로 한 회계연도 전체가 아닙니다"
+      + " — 결산이 끝나지 않은 기중 시산(가결산)으로 보입니다." };
+}
+
 function financialToUpdates(res) {
   var out = {
     ok: false, blockReason: "",
@@ -1985,6 +2047,7 @@ function financialToUpdates(res) {
     notes: String(r.notes || ""),
     isProvisional: !!r.is_provisional,
     provisionalEvidence: String(r.provisional_evidence || ""),
+    periodNote: "",
   };
 
   // ── 전건 차단 사유 (여기서 걸리면 값을 하나도 넣지 않는다) ──
@@ -2001,6 +2064,13 @@ function financialToUpdates(res) {
   if (r.is_provisional) {
     out.blockReason = "가결산 문서입니다 — 확정본만 반영합니다" +
       (out.meta.provisionalEvidence ? " (근거: " + out.meta.provisionalEvidence + ")" : "") + ".";
+    return out;
+  }
+  // 문서에 '가결산' 글자가 없는 기중 시산은 여기서 막는다(위 is_provisional 로는 안 걸린다).
+  var pc = finPeriodCheck(out.meta.periodStart, out.meta.periodEnd);
+  out.meta.periodNote = pc.note || "";
+  if (pc.ran && !pc.ok) {
+    out.blockReason = pc.reason + " 확정된 연간 재무제표만 반영합니다.";
     return out;
   }
   // 비교식인데 당기 열을 못 밝혔으면 어느 해 숫자인지 알 수 없다
@@ -14430,6 +14500,7 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                   <div><b>문서</b> {m.docKindLabel}{m.companyName ? " · " + m.companyName : ""}{m.businessNumber ? " (" + m.businessNumber + ")" : ""}</div>
                   <div><b>기준연도</b> {m.fiscalYear || "—"}{m.periodLabel ? " · " + m.periodLabel : ""}{m.periodStart && m.periodEnd ? " · " + m.periodStart + " ~ " + m.periodEnd : ""}</div>
                   <div><b>단위</b> {m.unitLabel}{m.isComparative ? " · 비교식(당기 열: " + (m.currentColumnLabel || "—") + ")" : ""}</div>
+                  {m.periodNote ? <div style={{ color: "#B45309" }}><b>회계기간</b> {m.periodNote}</div> : null}
                   {m.notes ? <div style={{ color: "#B45309" }}><b>메모</b> {m.notes}</div> : null}
                 </div>
 
