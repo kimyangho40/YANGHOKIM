@@ -3547,9 +3547,16 @@ function SideNavItem({ icon, label, active, onClick, rightSlot }) {
 }
 
 // ── 유틸 ─────────────────────────────────────────────────────────────────────
-const docRate = (docs) => {
-  if (!docs || docs.length === 0) return 0;
-  return Math.round(docs.filter(d => d.received).length / docs.length * 100);
+// 서류 수령률 — 단일 소스는 companies.received_docs 문자열이다(2026-08-08 일원화).
+//  예전엔 documents 테이블을 셌는데, 서류현황 탭의 cycleDoc 은 문자열만 고치고 그 테이블은
+//  건드리지 않아서 목록 배지가 낡은 값을 보여줬다(수령완료: 문자열 156기업 vs 테이블 41행).
+//  ⚠️ DOC_LIST 에 있는 이름만 센다 — 목록에서 빠진 옛 서류명이 분자를 부풀리지 않게.
+const docRate = (company) => {
+  var rec = String((company && company.received_docs) || "")
+    .split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+  if (!DOC_LIST.length) return 0;
+  var hit = DOC_LIST.filter(function(d) { return rec.indexOf(d) >= 0; }).length;
+  return Math.round(hit / DOC_LIST.length * 100);
 };
 
 // ── 메인 앱 ──────────────────────────────────────────────────────────────────
@@ -5490,7 +5497,9 @@ function CRMApp({ profile, session }) {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     const [{ data: cos }, { data: profs }, { data: agencyCases }, pcRes, ssmRes, scRes] = await Promise.all([
-      supabase.from("companies").select("*, documents(*)").is("deleted_at", null).order("created_at", { ascending: false }),
+      // (2026-08-08) documents(*) 조인 제거 — 서류현황 소스가 companies.received_docs 로 일원화됐다.
+      //   4,300여 행을 매번 같이 실어오던 것이라 payload 도 줄어든다.
+      supabase.from("companies").select("*").is("deleted_at", null).order("created_at", { ascending: false }),
       supabase.from("profiles").select("*"),
       supabase.from("agency_cases").select("business_name, region").not("region", "is", null).limit(10000),
       supabase.from("pipeline_cards").select("*"),
@@ -5977,7 +5986,7 @@ function CRMApp({ profile, session }) {
   useEffect(() => {
     const channel = supabase.channel("crm-realtime")
       .on("postgres_changes", { event: "*", schema: "public", table: "companies" }, fetchAll)
-      .on("postgres_changes", { event: "*", schema: "public", table: "documents" }, fetchAll)
+      // (2026-08-08) documents 구독 제거 — 더 이상 읽지도 쓰지도 않는 테이블이라 fetchAll 을 부를 일이 없다.
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [fetchAll]);
@@ -6180,6 +6189,8 @@ function CRMApp({ profile, session }) {
 
   // 회사 저장
   const saveCompany = async (data, prevData) => {
+    // documents 는 이제 fetch 하지 않지만(2026-08-08 일원화), 옛 객체가 흘러들어와도
+    // companies 에 없는 키로 저장이 400 나지 않게 그대로 벗겨 둔다.
     const { documents, ...rest } = data;
     // 숫자 컬럼 안전장치 — 숫자로 못 읽는 값은 그 칸만 빼고 보낸다.
     // (문자열이 numeric 컬럼에 그대로 가면 400이 나면서 저장 전체가 실패했다)
@@ -6406,11 +6417,9 @@ function CRMApp({ profile, session }) {
     else showToast("저장 실패: " + error.message, "error");
   };
 
-  // 서류 토글
-  const toggleDoc = async (docId, current) => {
-    await supabase.from("documents").update({ received: !current, received_at: !current ? kstDate() : null }).eq("id", docId);
-    fetchAll();
-  };
+  // (2026-08-08) toggleDoc 제거 — documents 테이블은 더 이상 서류현황의 소스가 아니다.
+  //   CompanyModal 에 onToggleDoc 으로 넘기고 있었지만 컴포넌트 안에서 쓰이지 않는 죽은 prop 이었다.
+  //   서류 상태 변경은 서류현황 탭의 cycleDoc(companies.received_docs) 하나로만 한다.
 
   // 신규 회사 추가
   const addCompany = async (form) => {
@@ -6497,11 +6506,11 @@ function CRMApp({ profile, session }) {
 
     const { data: co, error } = await supabase.from("companies").insert(insertData).select().single();
     if (!error && co) {
-      // 서류 체크리스트 자동 생성
-      var docsInsert = await supabase.from("documents").insert(DOC_LIST.map(d => ({ company_id: co.id, doc_name: d, received: false }))).select();
+      // (2026-08-08) documents 체크리스트 자동 생성 제거 — 서류현황은 companies.received_docs 하나만 쓴다.
+      //   빈 상태는 received_docs 가 비어 있는 것으로 표현되므로 미리 만들어 둘 행이 없다.
       // 팀은 insert payload 에 이미 담겨 저장된다(아래 newCompany 는 방금 저장된 값을 화면에 바로 보여주기 위한 것).
       var wantTeamA = co.team || form.team || teamByName(form.name);
-      var newCompany = Object.assign({}, co, { documents: docsInsert.data || [], team: wantTeamA });
+      var newCompany = Object.assign({}, co, { team: wantTeamA });
       showToast("신규 업체가 등록됐어요! 상세 정보를 입력하세요.");
       setShowAdd(false);
       // 등록 후 곧바로 기업 상세 화면 자동 오픈 (두 번 일 안 하도록)
@@ -7269,7 +7278,6 @@ function CRMApp({ profile, session }) {
           initialTab={selectedTab}
           onClose={() => { setSelectedCompany(null); setSelectedTab(null); }}
           onSave={saveCompany}
-          onToggleDoc={toggleDoc}
           currentUser={profile}
           onAgencyRegistered={handleAgencyRegistered}
           companies={companies}
@@ -7765,7 +7773,7 @@ function VoiceModeOverlay({ myName, onClose }) {
     if (c.type === "법인" || c.type === "개인") row.type = c.type;
     var r = await supabase.from("companies").insert(row).select().single();
     if (r.error || !r.data) throw new Error(r.error ? r.error.message : "등록 실패");
-    try { await supabase.from("documents").insert(DOC_LIST.map(function(d) { return { company_id: r.data.id, doc_name: d, received: false }; })); } catch (e) {}
+    // (2026-08-08) documents 체크리스트 생성 제거 — 서류현황은 companies.received_docs 하나만 쓴다.
     // (companies 에는 team 컬럼이 없어 저장하지 않는다 — 팀은 업체명 기준 teamOf() 로 계산)
     // 말로 덧붙인 메모는 소통내역으로 남긴다(companies에는 메모 컬럼이 없음)
     if (c.memo && String(c.memo).trim()) {
@@ -10252,7 +10260,7 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
                 {items.map(row => {
                   const co = row.co;
                   const card = row.card;
-                  const docPct = docRate(co.documents);
+                  const docPct = docRate(co);
                   var isSelected = selectedId === card.id;
                   var isDragging = draggingId === card.id;
                   var agColor = agencyColor(card.agency_group);
@@ -12255,7 +12263,7 @@ function SummaryDistributeModal({ companyId, companyName, staffNames, defaultAss
   );
 }
 
-function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAgencyRegistered, companies, initialTab, onPatchCompany }) {
+function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistered, companies, initialTab, onPatchCompany }) {
   const [tab, setTab] = useState(initialTab || "info");
   const [prevTab, setPrevTab] = useState(initialTab || "info");
   var goTab = function(id) { setPrevTab(tab); setTab(id); };
