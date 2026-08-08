@@ -7082,8 +7082,25 @@ function AiSearchModal({ companies, myName, onClose, onSelectCompany }) {
       keys.forEach(function(k) { if (obj[k] != null && obj[k] !== "") out[k] = obj[k]; });
       return out;
     };
+    // 메모/코멘트성 필드는 담당자 자유 입력이라 길이 상한이 없다 → 폭주 방지용 상한만 둔다.
+    // 상한은 실측 최댓값(2026-08-08: 이슈 786 / 차기 421 / 비고 1541자)보다 넉넉히 잡아
+    // 평소엔 한 건도 잘리지 않게 했다. 잘리면 AI가 알 수 있게 꼬리표를 붙인다.
+    var clip = function(v, n) {
+      var s = String(v == null ? "" : v).trim();
+      if (!s) return "";
+      return s.length > n ? s.slice(0, n) + "…(이하 생략)" : s;
+    };
     var companyRows = (companies || []).map(function(c) {
-      return pick(c, ["name", "stage", "agency", "assignee", "region", "industry", "type", "business_type", "credit_score_kcb", "credit_score_nice", "fee_status", "next_contact", "representative", "created_at"]);
+      var row = pick(c, ["name", "stage", "agency", "assignee", "region", "industry", "type", "business_type", "credit_score_kcb", "credit_score_nice", "fee_status", "next_contact", "representative", "created_at"]);
+      // 이슈현황(기업목록 '이슈·액션' 탭의 현재 이슈 / 차기 업무 / 기업정보 비고 메모).
+      // 한글 키로 넣는다 — 사용자가 "이슈현황"이라고 물어보므로 모델이 바로 매칭하도록.
+      var issue = clip(c.issue, 1200);
+      var action = clip(c.next_action, 800);
+      var memo = clip(c.company_info_memo, 2000);
+      if (issue) row.이슈현황 = issue;
+      if (action) row.차기업무 = action;
+      if (memo) row.비고메모 = memo;
+      return row;
     });
     Promise.all([
       supabase.from("agency_cases")
@@ -7124,7 +7141,7 @@ function AiSearchModal({ companies, myName, onClose, onSelectCompany }) {
     }
   };
 
-  var examples = ["이번달 부결 정리해줘", "만기임박(입금 예정) 업체는?", "이번주 신규 등록 업체", "담당자별 진행중 건수", "미입금 정산 목록"];
+  var examples = ["이번달 부결 정리해줘", "만기임박(입금 예정) 업체는?", "이번주 신규 등록 업체", "담당자별 진행중 건수", "미입금 정산 목록", "이슈현황 적힌 업체 정리해줘", "신용점수 관련 이슈 있는 업체는?"];
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
@@ -7141,7 +7158,7 @@ function AiSearchModal({ companies, myName, onClose, onSelectCompany }) {
             <div>
               <div style={{ fontSize: 15, fontWeight: 800, color: "#1A1917" }}>🤖 AI 상담 (전체 검색)</div>
               <div style={{ fontSize: 11, color: "#999", marginTop: 2 }}>
-                {loadingSnap ? "데이터 불러오는 중…" : "업체 " + (snapshot.업체목록.length) + " · 기관진행 " + (snapshot.기관진행.length) + " · 정산 " + (snapshot.정산.length) + "건 기준"}
+                {loadingSnap ? "데이터 불러오는 중…" : "업체 " + (snapshot.업체목록.length) + " · 기관진행 " + (snapshot.기관진행.length) + " · 정산 " + (snapshot.정산.length) + " · 이슈현황 " + (snapshot.업체목록.filter(function(c) { return c.이슈현황; }).length) + "건 기준"}
               </div>
             </div>
           </div>
