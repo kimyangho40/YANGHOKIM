@@ -1868,15 +1868,18 @@ function computeFinanceRatios(company) {
   var op = parseFinanceNum(getCompanyInfoVal(info, "영업이익"));
   var interest = parseFinanceNum(getCompanyInfoVal(info, "이자비용"));
 
-  // 부채비율 = 부채총계 / 자본총계 × 100 (자동). 계산 불가 시 수동입력(debt_ratio) 폴백.
+  // 부채비율 = 부채총계 / 자본총계 × 100.
+  // 우선순위 (2026-08-08 변경): ① 수동입력(debt_ratio) → ② 원자료 자동계산 → ③ 기대출 대용
+  //  ⚠️ 예전에는 ②가 ①보다 우선이었다. 그래서 담당자가 자동값이 틀린 걸 보고 직접 고쳐 넣어도
+  //     화면이 안 바뀌었다("저장이 안 되네") — 사람의 검증 노동이 매번 무효화되는 구조였다.
+  //     재무제표 자동 추출이 붙으면서 자동값이 갱신될 일이 생기므로 사람 입력을 최우선으로 올린다.
+  //     뒤집기 전 실측(2026-08-08): auto·manual 공존 94건 중 값이 실제로 다른 건 0건 → 화면 변화 0건.
   var debtRatio = null, debtText = "데이터 부족", capitalImpaired = false, debtSource = null;
-  if (debt !== null && capital !== null) {
+  var mDebt = parseFloat(company && company.debt_ratio);
+  if (!isNaN(mDebt)) { debtRatio = mDebt; debtText = (Math.round(mDebt * 10) / 10) + "%"; debtSource = "manual"; }
+  if (debtSource === null && debt !== null && capital !== null) {
     if (capital <= 0) { capitalImpaired = true; debtText = "자본잠식"; debtSource = "auto"; }
     else { debtRatio = (debt / capital) * 100; debtText = (Math.round(debtRatio * 10) / 10) + "%"; debtSource = "auto"; }
-  }
-  if (debtSource === null) {
-    var mDebt = parseFloat(company && company.debt_ratio);
-    if (!isNaN(mDebt)) { debtRatio = mDebt; debtText = (Math.round(mDebt * 10) / 10) + "%"; debtSource = "manual"; }
   }
   // 3순위: 기업현황표에 부채총계가 없고 직접입력도 없을 때만 기대출 내역으로 대용.
   // 법인은 '법인대출'만 합산(대표자 개인대출·미분류 제외), 개인사업자는 전체 합계.
@@ -1892,15 +1895,13 @@ function computeFinanceRatios(company) {
       else { debtRatio = (loanDebt / capital) * 100; debtText = (Math.round(debtRatio * 10) / 10) + "%"; debtSource = "loans"; }
     }
   }
-  // 이자보상배율 = 영업이익 / 이자비용 (자동). 계산 불가 시 수동입력(interest_coverage_ratio) 폴백.
+  // 이자보상배율 = 영업이익 / 이자비용. 우선순위는 부채비율과 같다(① 수동입력 → ② 원자료 자동계산).
   var icr = null, icrText = "데이터 부족", noInterest = false, icrSource = null;
-  if (op !== null && interest !== null) {
+  var mIcr = parseFloat(company && company.interest_coverage_ratio);
+  if (!isNaN(mIcr)) { icr = mIcr; icrText = (Math.round(mIcr * 100) / 100) + "배"; icrSource = "manual"; }
+  if (icrSource === null && op !== null && interest !== null) {
     if (interest === 0) { noInterest = true; icrText = "이자비용 0"; icr = op >= 0 ? Infinity : -Infinity; icrSource = "auto"; }
     else { icr = op / interest; icrText = (Math.round(icr * 100) / 100) + "배"; icrSource = "auto"; }
-  }
-  if (icrSource === null) {
-    var mIcr = parseFloat(company && company.interest_coverage_ratio);
-    if (!isNaN(mIcr)) { icr = mIcr; icrText = (Math.round(mIcr * 100) / 100) + "배"; icrSource = "manual"; }
   }
 
   var hasDebtRatio = debtRatio !== null || capitalImpaired;
@@ -1919,6 +1920,213 @@ function computeFinanceRatios(company) {
     debtSource: debtSource, icrSource: icrSource,
     sojinFit: fit(1.0), jungjinFit: fit(1.5),
   };
+}
+
+// ── 재무제표 문서(/api/parse-financial) → 기업정보 반영값 ────────────────────
+//  api/parse-financial.js 는 "추출"만 한다. 단위 환산·검산·가결산 배제는 전부 여기서 코드로 한다.
+//  (여신정보 파서와 같은 이중 방어 구조 — 모델의 판단을 그대로 저장하지 않는다)
+//
+//  2026-07 수동 검증 145건에서 확인된 함정을 그대로 방어한다:
+//   · 가결산본 혼입 → 전건 차단
+//   · 영업손실을 양수로 표기(3건) → 매출총이익 − 판관비로 재검산
+//   · 파일명과 실제 연도 불일치 → 문서 안의 기간만 사용(파서 프롬프트에서 강제)
+//   · 단위 표기 누락 → 환산하지 않고 '확인 필요'로 넘김
+
+const FIN_DOC_LABELS = {
+  standard_certificate: "표준재무제표증명",
+  settlement_report: "결산보고서",
+  tax_confirmation: "세무사 확인서",
+  other_financial: "재무제표",
+  not_financial: "재무제표 아님",
+  unknown: "판별 실패",
+};
+// computeFinanceRatios 가 읽는 라벨. ⚠️ 이 문자열을 바꾸면 자동계산이 끊긴다(App.js 기업현황표 파서와 동일 라벨).
+const FIN_INFO_LABELS = ["부채총계", "자본총계", "영업이익", "이자비용"];
+// 파서가 돌려줄 수 있는 계정과목. ⚠️ api/parse-financial.js 의 ITEM_LABELS 와 같아야 한다.
+const FIN_ITEM_LABELS = ["자산총계", "부채총계", "자본총계", "매출액", "매출총이익", "판매비와관리비", "영업이익", "이자비용"];
+
+// 스키마가 약속한 형태("숫자·소수점·부호만")만 받는다.
+// 한글 단위가 섞여 오면 unit_raw 배수와 두 번 곱해질 수 있으므로 확정하지 않고 사람에게 넘긴다.
+function parseStatementNum(raw) {
+  var s = String(raw === null || raw === undefined ? "" : raw).trim();
+  if (!s) return { won: null, reason: "" };
+  if (/[억만천백조]/.test(s)) return { won: null, reason: "단위 글자가 섞여 있어 확정하지 않음" };
+  var neg = /^[(（△▲\-]/.test(s) || /[)）]$/.test(s);
+  var digits = s.replace(/[^0-9.]/g, "");
+  if (!digits) return { won: null, reason: "숫자를 찾지 못함" };
+  var n = parseFloat(digits);
+  if (isNaN(n)) return { won: null, reason: "숫자를 찾지 못함" };
+  return { won: neg ? -n : n, reason: "" };
+}
+
+function financialToUpdates(res) {
+  var out = {
+    ok: false, blockReason: "",
+    meta: {}, values: {}, rawByLabel: {},
+    checks: { balance: { ran: false }, operating: { ran: false } },
+    issues: [], infoItems: [], revenueKey: "", revenueValue: null,
+  };
+  var r = res || {};
+  var kind = String(r.doc_kind || "unknown");
+
+  out.meta = {
+    docKind: kind,
+    docKindLabel: FIN_DOC_LABELS[kind] || "판별 실패",
+    docKindReason: String(r.doc_kind_reason || ""),
+    companyName: String(r.company_name || ""),
+    businessNumber: String(r.business_number || ""),
+    periodLabel: String(r.period_label || ""),
+    fiscalYear: String(r.fiscal_year || ""),
+    periodStart: String(r.period_start || ""),
+    periodEnd: String(r.period_end || ""),
+    isComparative: !!r.is_comparative,
+    currentColumnLabel: String(r.current_column_label || ""),
+    unitRaw: String(r.unit_raw || ""),
+    notes: String(r.notes || ""),
+    isProvisional: !!r.is_provisional,
+    provisionalEvidence: String(r.provisional_evidence || ""),
+  };
+
+  // ── 전건 차단 사유 (여기서 걸리면 값을 하나도 넣지 않는다) ──
+  if (kind === "not_financial") {
+    out.blockReason = "재무제표가 아닌 문서로 판별되었습니다" +
+      (out.meta.docKindReason ? " (" + out.meta.docKindReason + ")" : "") + ".";
+    return out;
+  }
+  if (kind === "unknown") {
+    out.blockReason = "문서 종류를 확정하지 못했습니다. 재무제표가 맞는지 확인해주세요" +
+      (out.meta.docKindReason ? " — 판단 근거: " + out.meta.docKindReason : "") + ".";
+    return out;
+  }
+  if (r.is_provisional) {
+    out.blockReason = "가결산 문서입니다 — 확정본만 반영합니다" +
+      (out.meta.provisionalEvidence ? " (근거: " + out.meta.provisionalEvidence + ")" : "") + ".";
+    return out;
+  }
+  // 비교식인데 당기 열을 못 밝혔으면 어느 해 숫자인지 알 수 없다
+  if (r.is_comparative && !String(r.current_column_label || "").trim()) {
+    out.blockReason = "비교식 재무제표인데 어느 열이 당기인지 확정하지 못했습니다. 직접 확인해주세요.";
+    return out;
+  }
+
+  var items = Array.isArray(r.items) ? r.items : [];
+  if (!items.length) {
+    out.blockReason = "문서에서 계정과목을 하나도 찾지 못했습니다.";
+    return out;
+  }
+
+  // ── 단위 배수 ──
+  // 표기가 있으면 그 배수를, 없으면 환산하지 않고 원 단위로 읽는다(기존 CREDIT_UNITS 재사용).
+  var u = parseCreditUnit(out.meta.unitRaw);
+  var mult = u.mult == null ? 1 : u.mult;
+  out.meta.unitLabel = u.mult == null ? "표기 없음(원으로 읽음)" : u.label;
+  out.meta.unitKnown = u.mult != null;
+
+  // ── 항목별 숫자화 ──
+  var seen = {};
+  items.forEach(function(it) {
+    var label = String((it && it.label) || "");
+    if (FIN_ITEM_LABELS.indexOf(label) < 0) return;    // 스키마에 없는 라벨은 버린다
+    if (seen[label]) return;                           // 같은 라벨 중복은 첫 번째만
+    seen[label] = true;
+    out.rawByLabel[label] = {
+      raw: String((it && it.raw) || ""),
+      page: Number((it && it.page) || 0),
+      sourceText: String((it && it.source_text) || ""),
+    };
+    var p = parseStatementNum(it && it.raw);
+    if (p.won === null) {
+      if (p.reason) out.issues.push({ label: label, raw: (it && it.raw) || "", reason: p.reason });
+      out.values[label] = null;
+      return;
+    }
+    out.values[label] = p.won * mult;
+  });
+
+  var V = out.values;
+  var tol = Math.max(mult, 1);   // 표기 단위 1칸까지는 반올림 오차로 본다
+
+  // ── 검산 ①: 대차 (자산총계 = 부채총계 + 자본총계) ──
+  //   실패하면 부채·자본을 통째로 버린다 — 둘 중 어느 쪽이 틀렸는지 코드가 알 수 없다.
+  if (V["자산총계"] != null && V["부채총계"] != null && V["자본총계"] != null) {
+    var diff = V["자산총계"] - (V["부채총계"] + V["자본총계"]);
+    var bOk = Math.abs(diff) <= tol;
+    out.checks.balance = {
+      ran: true, ok: bOk, diff: diff,
+      text: "자산 " + Math.round(V["자산총계"]).toLocaleString()
+        + " vs 부채+자본 " + Math.round(V["부채총계"] + V["자본총계"]).toLocaleString(),
+    };
+    if (!bOk) {
+      out.issues.push({
+        label: "부채총계·자본총계", raw: out.checks.balance.text,
+        reason: "대차가 맞지 않습니다(차이 " + Math.round(diff).toLocaleString() + "). 잘못 읽었을 수 있어 두 값 다 반영하지 않습니다",
+      });
+      V["부채총계"] = null; V["자본총계"] = null;
+    }
+  } else if (V["부채총계"] != null && V["자본총계"] != null) {
+    out.checks.balance = { ran: false, ok: null, text: "자산총계를 못 읽어 대차검산을 못 했습니다" };
+  }
+
+  // ── 검산 ②: 영업손익 (매출총이익 − 판관비 = 영업이익) ──
+  //   '영업손실을 양수로 표기'하는 서식을 잡아내는 유일한 장치다.
+  if (V["매출총이익"] != null && V["판매비와관리비"] != null && V["영업이익"] != null) {
+    var expected = V["매출총이익"] - V["판매비와관리비"];
+    var oOk = Math.abs(expected - V["영업이익"]) <= tol;
+    var signFlip = !oOk && Math.abs(expected + V["영업이익"]) <= tol;
+    out.checks.operating = {
+      ran: true, ok: oOk, expected: expected, signFlip: signFlip,
+      text: "매출총이익 − 판관비 = " + Math.round(expected).toLocaleString()
+        + " vs 문서상 영업이익 " + Math.round(V["영업이익"]).toLocaleString(),
+    };
+    if (!oOk) {
+      out.issues.push({
+        label: "영업이익", raw: out.checks.operating.text,
+        reason: signFlip
+          ? "부호가 뒤집혀 있습니다 — 영업손실을 양수로 적은 서식으로 보입니다. 실제 값은 "
+            + Math.round(expected).toLocaleString() + " 입니다. 직접 확인 후 입력해주세요"
+          : "재검산과 맞지 않습니다. 잘못 읽었을 수 있어 반영하지 않습니다",
+      });
+      V["영업이익"] = null;
+    }
+  } else if (V["영업이익"] != null) {
+    out.checks.operating = { ran: false, ok: null, text: "매출총이익·판관비가 없어 영업손익 재검산을 못 했습니다" };
+  }
+
+  // ── 단위 표기가 없는데 금액이 지나치게 작으면 확정하지 않는다 ──
+  //   ('단위: 천원'이 누락된 문서를 원 단위로 읽으면 부채가 1/1000로 들어간다)
+  if (!out.meta.unitKnown) {
+    var scaleRef = V["자산총계"] != null ? Math.abs(V["자산총계"])
+      : (V["부채총계"] != null && V["자본총계"] != null ? Math.abs(V["부채총계"]) + Math.abs(V["자본총계"]) : null);
+    if (scaleRef !== null && scaleRef > 0 && scaleRef < 1e7) {
+      out.issues.push({
+        label: "전체 금액", raw: "자산 규모 " + Math.round(scaleRef).toLocaleString(),
+        reason: "단위 표기가 없는데 금액이 비정상적으로 작습니다(천원 단위 문서 의심). 추측해서 환산하지 않고 반영하지 않습니다",
+      });
+      FIN_INFO_LABELS.forEach(function(k) { V[k] = null; });
+      V["매출액"] = null;
+    }
+  }
+
+  // ── 기업정보(company_info)에 넣을 항목 ──
+  FIN_INFO_LABELS.forEach(function(k) {
+    if (V[k] == null) return;
+    out.infoItems.push({ label: k, value: String(Math.round(V[k])) });
+  });
+  if (out.infoItems.length && out.meta.fiscalYear) {
+    out.infoItems.push({ label: "재무제표 기준연도", value: out.meta.fiscalYear });
+  }
+
+  // ── 매출액 → revenue_YYYY (컬럼이 있는 연도만) ──
+  if (V["매출액"] != null && /^(2023|2024|2025)$/.test(out.meta.fiscalYear)) {
+    out.revenueKey = "revenue_" + out.meta.fiscalYear;
+    out.revenueValue = Math.round(V["매출액"]);
+  }
+
+  out.ok = out.infoItems.length > 0 || out.revenueKey !== "";
+  if (!out.ok && !out.blockReason) {
+    out.blockReason = "검산을 통과한 값이 없습니다. 아래 '확인 필요'를 보고 직접 입력해주세요.";
+  }
+  return out;
 }
 
 // ── 청년창업 탈락기업 6개월 후 재신청 판정 (프론트 날짜 계산만, DB 변경 없음) ──
@@ -12051,6 +12259,9 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
   const [xlsxCommDraft, setXlsxCommDraft] = useState(""); // 업로드 시 소통내역에 넣을 초안(수정 가능)
   const [kakaoLoading, setKakaoLoading] = useState(false); // 카톡 캡처 AI 요약 중
   const [infoSheetLoading, setInfoSheetLoading] = useState(false); // 정보시트 첨부 파싱 중
+  // 📊 재무제표 첨부 — {res(원본), fin(검산결과), fileName}
+  const [finPreview, setFinPreview] = useState(null);
+  const [finBusy, setFinBusy] = useState(false);
   async function handleKakaoImage(file) {
     if (!file || file.type.indexOf("image") !== 0) { alert("이미지 파일만 가능합니다."); return; }
     setKakaoLoading(true);
@@ -12251,6 +12462,86 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
         onChange={function(e) { var fl = e.target.files; var arr = Array.prototype.slice.call(fl || []); e.target.value = ""; handleAttachFiles(arr); }} />
     );
   };
+  // ── 📊 재무제표 첨부 (PDF·이미지) ──────────────────────────────────────────
+  //  파일 → /api/parse-financial(추출만) → financialToUpdates(검산) → 미리보기 → 적용
+  async function handleFinancialAttach(file) {
+    if (!file) return;
+    var mt = file.type || "";
+    if (mt === "image/jpg") mt = "image/jpeg";
+    if (mt !== "application/pdf" && !/^image\/(png|jpeg|gif|webp)$/.test(mt)) {
+      alert("재무제표는 PDF 또는 이미지(PNG·JPG)로 첨부해주세요.\n\n엑셀 현황표는 '📎 자료 첨부' 버튼을 쓰면 됩니다.");
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      alert("25MB 이하만 가능해요 — " + file.name + " (" + (file.size / 1024 / 1024).toFixed(1) + "MB)");
+      return;
+    }
+    setFinBusy(true);
+    try {
+      var buf = await file.arrayBuffer();
+      var bytes = new Uint8Array(buf), bin = "";
+      for (var i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+      var d = await callApiJson("/api/parse-financial", { fileBase64: btoa(bin), mediaType: mt });
+      var fin = financialToUpdates(d.result || {});
+      setFinPreview({ fin: fin, fileName: file.name });
+    } catch (err) {
+      alert("❌ 재무제표 읽기 실패: " + (err && err.message ? err.message : err));
+    } finally {
+      setFinBusy(false);
+    }
+  }
+
+  // 어떤 항목이 이미 차 있는지 — 미리보기와 적용이 같은 판정을 쓰도록 한 곳에서 계산한다.
+  // ⚠️ setData 업데이터 안에서 목록을 모으면 안 된다. React가 updater를 나중에/두 번 실행하면
+  //    집계가 어긋나고, 직후에 읽는 alert 이 빈 목록을 본다(같은 함정 기록: undoAll 주석).
+  function financialSkipPlan(fin, cur) {
+    var ex = Array.isArray(cur && cur.company_info) ? cur.company_info : [];
+    var byLabel = {}; ex.forEach(function(it) { if (it && it.label) byLabel[it.label] = it; });
+    var fill = [], skip = [];
+    (fin.infoItems || []).forEach(function(ni) {
+      var old = byLabel[ni.label];
+      var hasOld = old && String(old.value == null ? "" : old.value).trim() !== "";
+      (hasOld ? skip : fill).push({ label: ni.label, value: ni.value, oldValue: hasOld ? String(old.value) : "" });
+    });
+    var revKey = fin.revenueKey || "";
+    var revLabel = revKey ? (revKey.replace("revenue_", "") + "년 매출") : "";
+    var revOld = revKey ? (cur ? cur[revKey] : null) : null;
+    var revHasOld = revKey && revOld !== null && revOld !== undefined && String(revOld) !== "";
+    if (revKey) {
+      (revHasOld ? skip : fill).push({
+        label: revLabel, value: String(fin.revenueValue), oldValue: revHasOld ? String(revOld) : "", isRevenue: true,
+      });
+    }
+    return { fill: fill, skip: skip, revKey: revKey, revWillFill: !!revKey && !revHasOld };
+  }
+
+  // 적용 정책(2026-08-08 결정): 빈 칸만 채운다. 이미 값이 있는 항목은 절대 덮어쓰지 않는다.
+  function applyFinancialPreview() {
+    if (!finPreview || !finPreview.fin || !finPreview.fin.ok) return;
+    var fin = finPreview.fin;
+    var plan = financialSkipPlan(fin, data);          // ← setData 밖에서 미리 계산
+    var fillInfo = plan.fill.filter(function(x) { return !x.isRevenue; });
+    setData(function(p) {
+      var merged = Object.assign({}, p);
+      var ex = Array.isArray(p.company_info) ? p.company_info.slice() : [];
+      var idx = {}; ex.forEach(function(it, i) { if (it && it.label) idx[it.label] = i; });
+      fillInfo.forEach(function(ni) {
+        var at = idx[ni.label];
+        if (at !== undefined) ex[at] = { label: ni.label, value: ni.value };
+        else ex.push({ label: ni.label, value: ni.value });
+      });
+      merged.company_info = ex;
+      if (plan.revWillFill) merged[plan.revKey] = fin.revenueValue;
+      return merged;
+    });
+    setFinPreview(null);
+    if (plan.skip.length) {
+      alert("적용했습니다.\n\n이미 값이 있어 건드리지 않은 항목: "
+        + plan.skip.map(function(x) { return x.label; }).join(", ")
+        + "\n\n자동 입력은 빈 칸만 채웁니다. 바꾸려면 직접 수정해주세요.");
+    }
+  }
+
   async function applyXlsxPreview() {
     if (!xlsxPreview) return;
     var u = xlsxPreview.updates;
@@ -13233,7 +13524,8 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                     {(function() {
                       var srcBadge = function(src) {
                         if (src === "auto") return <span style={{ marginLeft: 4, fontSize: 9, color: "#15803D", fontWeight: 700 }}>(자동)</span>;
-                        if (src === "manual") return <span style={{ marginLeft: 4, fontSize: 9, color: "#B45309", fontWeight: 700 }}>(수동입력)</span>;
+                        if (src === "manual") return <span title="직접 입력한 값은 자동 계산보다 우선합니다 — 재무제표·기업현황표를 새로 읽어도 이 값을 덮어쓰지 않습니다. 이 칸을 비우면 원자료로 자동 계산됩니다."
+                          style={{ marginLeft: 4, fontSize: 9, color: "#B45309", fontWeight: 700 }}>(수동입력)</span>;
                         if (src === "loans") return <span title={data.type === "법인" ? "기업현황표에 부채총계가 없어 기대출 내역으로 대용 · 법인대출만 합산(대표자 개인대출 제외)" : "기업현황표에 부채총계가 없어 기대출 내역 전체 합계로 대용"}
                           style={{ marginLeft: 4, fontSize: 9, color: "#4338CA", fontWeight: 700 }}>{data.type === "법인" ? "(기대출·법인분)" : "(기대출)"}</span>;
                         if (src === "loans_unsure") return <span title="기대출 금액 중 확정하지 못한 값이 있어 부채비율을 계산하지 않았습니다. 금액을 확인해 입력하면 자동 계산됩니다."
@@ -13294,6 +13586,15 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
                     style={{ display: "flex", alignItems: "center", gap: 4, background: "#FEF3C7", color: "#B45309", border: "none", borderRadius: 7, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
                     📎 자료 첨부
                     {attachInput()}
+                  </label>
+                  {/* 📊 재무제표 — 부채총계·자본총계·영업이익·이자비용을 읽어 재무비율 자동계산에 넣는다.
+                      여신정보 파서와 문서 종류가 달라 버튼을 따로 둔다(자동판별에 맡기면 안전장치가 섞인다). */}
+                  <label title="재무제표(PDF·이미지)를 첨부하면 부채총계·자본총계·영업이익·이자비용을 읽어 재무비율을 자동 계산합니다. 가결산은 반영하지 않습니다."
+                    style={{ display: "flex", alignItems: "center", gap: 4, background: finBusy ? "#E5E7EB" : "#DBEAFE", color: finBusy ? "#888" : "#1D4ED8", border: "none", borderRadius: 7, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: finBusy ? "wait" : "pointer" }}>
+                    {finBusy ? "📊 읽는 중…" : "📊 재무제표"}
+                    <input type="file" accept=".pdf,image/png,image/jpeg,image/webp,image/gif" disabled={finBusy}
+                      onChange={function(e) { var f = e.target.files && e.target.files[0]; e.target.value = ""; handleFinancialAttach(f); }}
+                      style={{ display: "none" }} />
                   </label>
                 </div>
               </div>
@@ -14111,6 +14412,108 @@ function CompanyModal({ company, onClose, onSave, onToggleDoc, currentUser, onAg
             </div>
           )}
         </div>
+
+        {/* 📊 재무제표 자동입력 미리보기 모달 */}
+        {finPreview && (function() {
+          var fin = finPreview.fin, m = fin.meta;
+          var plan = fin.ok ? financialSkipPlan(fin, data) : { fill: [], skip: [] };
+          var won = function(v) { return Number(v).toLocaleString() + "원"; };
+          var row = { display: "flex", gap: 8, fontSize: 12, padding: "5px 10px", borderRadius: 6, alignItems: "baseline" };
+          return (
+            <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+              <div onClick={function(e) { e.stopPropagation(); }} style={{ background: "#fff", borderRadius: 12, maxWidth: 520, width: "100%", maxHeight: "85vh", overflow: "auto", padding: 22, boxSizing: "border-box" }}>
+                <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 3 }}>📊 재무제표 자동 입력 미리보기</div>
+                <div style={{ fontSize: 11, color: "#888", marginBottom: 12 }}>{finPreview.fileName}</div>
+
+                {/* 문서 정보 — 어느 문서의 몇 년도 숫자인지 사람이 먼저 확인한다 */}
+                <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 8, padding: "10px 12px", marginBottom: 12, fontSize: 11.5, lineHeight: 1.75, color: "#334155" }}>
+                  <div><b>문서</b> {m.docKindLabel}{m.companyName ? " · " + m.companyName : ""}{m.businessNumber ? " (" + m.businessNumber + ")" : ""}</div>
+                  <div><b>기준연도</b> {m.fiscalYear || "—"}{m.periodLabel ? " · " + m.periodLabel : ""}{m.periodStart && m.periodEnd ? " · " + m.periodStart + " ~ " + m.periodEnd : ""}</div>
+                  <div><b>단위</b> {m.unitLabel}{m.isComparative ? " · 비교식(당기 열: " + (m.currentColumnLabel || "—") + ")" : ""}</div>
+                  {m.notes ? <div style={{ color: "#B45309" }}><b>메모</b> {m.notes}</div> : null}
+                </div>
+
+                {/* 검산 결과 — 통과했는지 사람이 바로 보이게 */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 12 }}>
+                  {[fin.checks.balance, fin.checks.operating].map(function(c, i) {
+                    var name = i === 0 ? "대차검산 (자산 = 부채+자본)" : "영업손익 재검산 (매출총이익 − 판관비)";
+                    if (!c || (!c.ran && !c.text)) return null;
+                    var okc = c.ran && c.ok;
+                    return (
+                      <div key={i} style={Object.assign({}, row, { background: okc ? "#F0FDF4" : (c.ran ? "#FEF2F2" : "#F7F6F3"), color: okc ? "#15803D" : (c.ran ? "#B91C1C" : "#888") })}>
+                        <span style={{ fontWeight: 700, flexShrink: 0 }}>{okc ? "✓" : (c.ran ? "✕" : "—")}</span>
+                        <span><b>{name}</b>{c.text ? " · " + c.text : ""}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {!fin.ok ? (
+                  <div style={{ padding: "12px 14px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, fontSize: 12.5, color: "#7F1D1D", lineHeight: 1.6 }}>
+                    <b>반영하지 않습니다</b><br />{fin.blockReason}
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#15803D", marginBottom: 6 }}>채울 항목 {plan.fill.length}개 <span style={{ fontWeight: 500, color: "#888" }}>(빈 칸만)</span></div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      {plan.fill.length === 0 && <div style={{ fontSize: 12, color: "#888", padding: "6px 10px" }}>새로 채울 빈 칸이 없습니다.</div>}
+                      {plan.fill.map(function(x, i) {
+                        return (
+                          <div key={i} style={Object.assign({}, row, { background: "#F0FDF4" })}>
+                            <span style={{ color: "#666", width: 108, flexShrink: 0, fontWeight: 600 }}>{x.label}</span>
+                            <b style={{ color: "#15803D" }}>{/^-?\d+$/.test(x.value) ? won(x.value) : x.value}</b>
+                            {fin.rawByLabel[x.label] && fin.rawByLabel[x.label].page > 0
+                              ? <span style={{ color: "#94A3B8", fontSize: 10.5 }}>· {fin.rawByLabel[x.label].page}p “{fin.rawByLabel[x.label].sourceText || fin.rawByLabel[x.label].raw}”</span> : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {plan.skip.length > 0 && (
+                      <div style={{ marginTop: 10 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#B45309", marginBottom: 6 }}>건드리지 않는 항목 {plan.skip.length}개 <span style={{ fontWeight: 500, color: "#888" }}>(이미 값이 있음)</span></div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          {plan.skip.map(function(x, i) {
+                            return (
+                              <div key={i} style={Object.assign({}, row, { background: "#FFFBEB" })}>
+                                <span style={{ color: "#666", width: 108, flexShrink: 0, fontWeight: 600 }}>{x.label}</span>
+                                <span style={{ color: "#92400E" }}>기존 <b>{/^-?\d+$/.test(x.oldValue) ? won(x.oldValue) : x.oldValue}</b> 유지</span>
+                                <span style={{ color: "#94A3B8", fontSize: 10.5 }}>· 문서값 {/^-?\d+$/.test(x.value) ? won(x.value) : x.value}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* ⚠️ 검산에서 걸러진 값 */}
+                {fin.issues.length > 0 && (
+                  <div style={{ marginTop: 12, padding: "10px 12px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#B91C1C", marginBottom: 6 }}>⚠️ 확인 필요 {fin.issues.length}건 — 이 값은 반영하지 않습니다</div>
+                    {fin.issues.map(function(it, i) {
+                      return (
+                        <div key={i} style={{ fontSize: 11.5, color: "#7F1D1D", lineHeight: 1.6, paddingTop: 3 }}>
+                          · <b>{it.label}</b> — {it.reason}
+                          {it.raw ? <span style={{ color: "#991B1B" }}> · {String(it.raw).length > 70 ? String(it.raw).slice(0, 70) + "…" : it.raw}</span> : null}
+                        </div>
+                      );
+                    })}
+                    <div style={{ fontSize: 10.5, color: "#991B1B", marginTop: 6 }}>원본을 직접 열어 확인한 뒤 아래 칸에 입력하면 됩니다.</div>
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
+                  {fin.ok && plan.fill.length > 0 && (
+                    <button onClick={applyFinancialPreview} style={{ flex: 1, background: "#15803D", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>✓ 빈 칸만 채우기</button>
+                  )}
+                  <button onClick={function() { setFinPreview(null); }} style={{ flex: fin.ok && plan.fill.length > 0 ? "none" : 1, background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, padding: "11px 18px", fontSize: 13, cursor: "pointer" }}>닫기</button>
+                </div>
+                {fin.ok && plan.fill.length > 0 && <div style={{ fontSize: 11, color: "#AAA", marginTop: 10, textAlign: "center" }}>적용 후 반드시 저장 버튼을 눌러야 DB에 반영됩니다</div>}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* 기업현황표 자동입력 미리보기 모달 */}
         {xlsxPreview && (
@@ -16163,6 +16566,8 @@ function CreditReportImport({ existingCount, onApply, hideButton, openSignal }) 
               {queue.length > 0 ? <div style={{ fontSize: 11, marginTop: 5 }}>고르시면 남은 {queue.length}개 파일도 이어서 읽습니다.</div> : null}
               {/* "자료 첨부" 하나로 합치면서 — 현황표를 PDF로 넣은 경우를 알려준다(현황표는 엑셀만 읽는다) */}
               <div style={{ fontSize: 11, marginTop: 5 }}>기업현황표·시트지라면 이 창을 닫고 <b>엑셀(.xlsx) 파일</b>로 첨부해주세요.</div>
+              {/* 재무제표는 읽는 규칙이 달라 전용 버튼으로 보낸다(이 파서는 대출 명세만 읽는다) */}
+              <div style={{ fontSize: 11, marginTop: 3 }}>재무제표(표준재무제표증명·결산보고서)라면 이 창을 닫고 기업정보 탭의 <b>📊 재무제표</b> 버튼으로 첨부해주세요.</div>
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
               {Object.keys(DOC_TYPES).map(function(k) {
