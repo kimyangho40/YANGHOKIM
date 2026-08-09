@@ -20786,6 +20786,13 @@ function CalendarView({ companies, onSelectCompany, profile }) {
 }
 const DRIVE_FOLDER_ID = "15noP_C-r-ZTo56xGbjUWFv2gAKDzXMJa";
 const DRIVE_FOLDER_URL = "https://drive.google.com/drive/folders/15noP_C-r-ZTo56xGbjUWFv2gAKDzXMJa";
+// 폴더 이름으로 드라이브 검색을 여는 주소. 자료실 오류 화면의 폴더 바로가기에 쓴다
+// (그 화면은 API 가 실패했을 때만 뜨므로 폴더 ID 를 알 수 없다 — 20260809 링크 버그 수정).
+// type:folder 로 좁혀 같은 이름의 파일이 섞이지 않게 한다.
+function driveFolderSearchUrl(name) {
+  var q = 'title:"' + String(name || "").replace(/"/g, "") + '" type:folder';
+  return "https://drive.google.com/drive/search?q=" + encodeURIComponent(q);
+}
 
 // ── 📂 구글 드라이브 연동 (브라우저 OAuth) ──────────────────────────────────
 //  왜 API 키가 아니라 OAuth 인가:
@@ -22173,7 +22180,14 @@ function ManualView() {
             Drive API 연결을 위한 추가 설정이 필요해요.<br/>
             아래 버튼으로 Drive에 직접 접속해서 파일을 관리하세요.
           </p>
-          {/* 폴더 바로가기 버튼들 */}
+          {/* 폴더 바로가기 버튼들 — 9개가 전부 자료실 루트로 가던 버그를 고쳤다(2026-08-09).
+              path 를 써서 폴더별로 다른 곳으로 보낸다.
+
+              ⚠️ 왜 폴더 ID 가 아니라 드라이브 "검색" 주소인가:
+                 이 화면은 드라이브 API 호출이 실패했을 때만 뜬다 → 그 시점에 폴더 목록이 없어
+                 ID 를 알아낼 방법이 없다. ID 를 소스에 박아 두는 것도 안 된다 —
+                 폴더를 옮기거나 다시 만들면 조용히 죽은 링크가 된다(자료실이 죽었던 원인과 같은 종류).
+                 폴더 이름으로 검색해 보내면 이름만 그대로면 언제든 찾아간다. */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10, marginBottom: 20, textAlign: "left" }}>
             {[
               { name: "📁 기술보증기금", path: "기술보증기금" },
@@ -22186,7 +22200,8 @@ function ManualView() {
               { name: "📁 중진공", path: "중진공" },
               { name: "📁 추가업종 제안서", path: "추가업종 제안서" },
             ].map(folder => (
-              <a key={folder.name} href={DRIVE_FOLDER_URL} target="_blank" rel="noreferrer"
+              <a key={folder.name} href={driveFolderSearchUrl(folder.path)} target="_blank" rel="noreferrer"
+                title={"드라이브에서 '" + folder.path + "' 폴더 찾기"}
                 style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, color: "#333", textDecoration: "none", fontWeight: 500 }}>
                 {folder.name}
               </a>
