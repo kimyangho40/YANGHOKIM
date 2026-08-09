@@ -1088,12 +1088,25 @@ function agencyColor(g) { var f = AGENCY_GROUPS.find(function(x) { return x.id =
 // 특정 시각 이후 경과 일수 (정체 일수 계산)
 function daysSince(iso) { if (!iso) return 0; var ms = Date.now() - new Date(iso).getTime(); return ms > 0 ? Math.floor(ms / 86400000) : 0; }
 
+// ── 정체 판정 헬퍼 ───────────────────────────────────────────────────────────
+// co.stagnant_days / co.stagn_threshold 는 CRMApp 에서 pipeline_cards 기준으로 채워 넣는다(DB 컬럼 아님).
+// 단계별 기준일수가 2~30일로 제각각이라 "며칠 넘었나"가 아니라 "기준의 몇 배인가"로 심각도를 본다.
+function isStagnant(co) { return !!(co && co.stagnant_days > 0); }                 // 기준일수 초과 = 정체
+function stagnRatio(co) {                                                          // 기준 대비 배수 (1.0 = 기준 도달)
+  if (!co || !(co.stagnant_days > 0)) return 0;
+  var th = co.stagn_threshold || 3;
+  return co.stagnant_days / th;
+}
+function isStagnantHard(co) { return stagnRatio(co) >= 2; }                         // 기준 2배 = 경고
+function isStagnantLong(co) { return stagnRatio(co) >= 3; }                         // 기준 3배 = 장기 방치
+
 // ── 계약 단계 방치 방지 ──────────────────────────────────────────────────────
 // 계약서 서명 전후로 멈춰 있는 건(서명 안 함·고민 중·서명완료 후 입금 지연)을
 // 기업목록에서 바로 보이게 한다. 오래 멈춘 건은 전화로 챙기는 게 목적.
 //
 // ⚠️ 정체일수를 컬럼에 저장하지 않는다. 볼 때 daysSince로 계산한다.
-//    companies.stagnant_days가 정확히 그 방식인데 갱신하는 코드가 없어 전 건 0이다.
+//    DB 컬럼 companies.stagnant_days 는 갱신하는 코드가 없어 전 건 0인 죽은 컬럼이다(2026-08-09 확인).
+//    화면이 쓰는 co.stagnant_days 는 CRMApp 이 pipeline_cards.stage_changed_at 로 계산해 덮어쓴 값이다.
 //    pipeline_cards 쪽 정체 판정(stagnRows)이 쓰는 계산 방식을 그대로 따른다.
 //
 // ⚠️ fee_status(미수령·계약금수령·수수료수령완료)와는 축이 다르다.
@@ -5192,12 +5205,59 @@ function CRMApp({ profile, session }) {
       } catch (e) { /* 주소 교체 실패는 이동 자체에 영향 없음 */ }
     }
   };
-  const [companies, setCompanies] = useState([]);
+  const [companiesRaw, setCompanies] = useState([]);
   const [profiles, setProfiles] = useState([]);
   const [pipelineCards, setPipelineCards] = useState([]);   // 파이프라인 조합카드(회사×기관)
   const [statusStageMap, setStatusStageMap] = useState([]); // 기관 상태값 → STEP 매핑
   const [stagnConfig, setStagnConfig] = useState([]);       // 단계별 정체 알림 기준(stage_stagnation_config)
   const [stagnAlertList, setStagnAlertList] = useState([]); // 내 정체 카드 알림함(세션) — 통합 배지에 합산
+
+  // ── 정체 일수 산출 (2026-08-09 재설계) ──────────────────────────────────────
+  // 예전: companies.stagnant_days 컬럼을 읽었는데 갱신하는 코드가 없어 전 건 0 → 정체 표시가 아예 안 떴다.
+  // 대안으로 검토한 companies.stage_updated_at 은 71%가 등록일 그대로고 14%는 등록일보다 과거라 못 믿는다.
+  // 채택: pipeline_cards.stage_changed_at + stage_stagnation_config(단계별 기준일수·on/off).
+  //   · 알림 트리거(stagnRows)가 이미 쓰던 기준과 같은 곳을 보게 해서 "화면 숫자 ≠ 알림 건수"를 없앤다.
+  //   · 모든 단계를 일률 7일로 보지 않는다 — 상담/진단완료처럼 오래 머무는 게 정상인 단계는 config 에서 꺼둔다.
+  //     (일률 7일로 하면 진행중 288곳 중 274곳이 빨간불이 된다. 경보가 전부 켜지면 아무도 안 본다.)
+  // 값: 기준일수를 넘긴 카드가 있을 때만 그 카드의 정체일수를 담고, 아니면 0.
+  //     심각도는 절대일수가 아니라 "기준 대비 몇 배"로 본다(stagnRatio) — 단계마다 기준이 2~30일로 달라서.
+  // ⚠️ DB 컬럼 companies.stagnant_days 는 건드리지 않는다(저장 화이트리스트 allFields 에도 없다).
+  //    여기서 화면용으로 덮어쓸 뿐이라 이 값이 DB로 되돌아가 저장되는 경로는 없다.
+  const stagnByCompany = useMemo(() => {
+    const m = new Map();
+    if (!pipelineCards.length || !stagnConfig.length) return m;
+    const cfgMap = {};
+    stagnConfig.forEach(c => { cfgMap[c.stage] = c; });
+    pipelineCards.forEach(card => {
+      if (!card.agency_group) return;                        // 기관 미지정 카드는 제외
+      if (card.closed_at) return;                            // 종결 카드는 정체 대상 아님
+      if (card.hold_reason) return;                          // 보류(시기상조 등)도 제외
+      const cfg = cfgMap[card.stage];
+      if (!cfg || !cfg.enabled) return;                      // 이 단계는 정체 판정 안 함
+      const th = cfg.threshold_days || 3;
+      const days = daysSince(card.stage_changed_at);
+      if (days < th) return;
+      const prev = m.get(card.company_id);
+      // 한 기업이 여러 기관에 걸려 있으면 가장 심한 카드(기준 대비 배수) 기준으로 표시
+      if (!prev || days / th > prev.days / prev.th) m.set(card.company_id, { days: days, th: th, stage: card.stage });
+    });
+    return m;
+  }, [pipelineCards, stagnConfig]);
+
+  const companies = useMemo(() => {
+    if (!stagnByCompany.size) {
+      // 정체 건이 없으면 굳이 배열을 새로 만들지 않되, DB의 낡은 값(전 건 0)이 새는 일이 없게 0으로 맞춘다.
+      return companiesRaw.map(c => (c.stagnant_days ? Object.assign({}, c, { stagnant_days: 0, stagn_threshold: 0, stagn_stage: null }) : c));
+    }
+    return companiesRaw.map(c => {
+      const hit = stagnByCompany.get(c.id);
+      return Object.assign({}, c, {
+        stagnant_days:   hit ? hit.days : 0,
+        stagn_threshold: hit ? hit.th : 0,
+        stagn_stage:     hit ? hit.stage : null,
+      });
+    });
+  }, [companiesRaw, stagnByCompany]);
   const [loading, setLoading] = useState(true);
   const [selectedCompany, setSelectedCompany] = useState(null);
   // 업체 상세를 열 때 처음 보여줄 탭 (기업목록 "작업" 버튼이 용도별로 지정 · 없으면 기본정보)
@@ -5975,7 +6035,7 @@ function CRMApp({ profile, session }) {
       alertShownRef.current = true;
       const todayStr = kstDate();
       const todayContacts = companies.filter(c => c.next_contact === todayStr);
-      const stagnantList = companies.filter(c => c.stagnant_days >= 7);
+      const stagnantList = companies.filter(isStagnant);
       if (todayContacts.length > 0 || stagnantList.length > 0) {
         setTimeout(() => setShowTodayAlert(true), 800);
       }
@@ -6107,8 +6167,8 @@ function CRMApp({ profile, session }) {
     return matchSearch && matchStage && matchAssignee && matchType && matchAgency && matchTeam && matchCredit;
   }), [companies, search, filterStage, filterAssignee, filterType, filterAgency, filterTeam, creditFilter, creditMode]);
 
-  const stagnant = companies.filter(c => c.stagnant_days >= 7);
-  const assignees = ["전체", ...new Set(profiles.map(p => p.name))];
+  const stagnant = companies.filter(isStagnant);
+  const assignees =["전체", ...new Set(profiles.map(p => p.name))];
 
   // 파이프라인 조합카드 행: pipeline_cards ⨝ companies + 기존 회사필터 동일 적용(단, 단계는 card.stage)
   const companyById = useMemo(() => {
@@ -6657,7 +6717,7 @@ function CRMApp({ profile, session }) {
       {showTodayAlert && (function() {
         const todayStr = kstDate();
         const todayContacts = companies.filter(c => c.next_contact === todayStr);
-        const stagnantList = companies.filter(c => c.stagnant_days >= 7);
+        const stagnantList = companies.filter(isStagnant);
         return (
           <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center" }}
             >
@@ -6706,7 +6766,7 @@ function CRMApp({ profile, session }) {
                         onMouseLeave={e => e.currentTarget.style.background = "#FEF2F2"}>
                         <div>
                           <div style={{ fontSize: 13, fontWeight: 700 }}>{c.name}</div>
-                          <div style={{ fontSize: 11, color: "#888", marginTop: 1 }}>{c.stagnant_days}일 정체 · {c.assignee}</div>
+                          <div style={{ fontSize: 11, color: "#888", marginTop: 1 }}>{c.stagn_stage || c.stage} {c.stagnant_days}일 정체(기준 {c.stagn_threshold}일) · {c.assignee}</div>
                         </div>
                         <Icon name="chevronR" size={14} color="#DC2626" />
                       </div>
@@ -6960,7 +7020,7 @@ function CRMApp({ profile, session }) {
                   <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{workNotesBadge}</span>
                 ) : (id === "chat" && chatUnread > 0) ? (
                   <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{chatUnread}</span>
-                ) : (id === "list" && stagnant.filter(function(c) { return c.stagnant_days >= 14; }).length > 0) ? (
+                ) : (id === "list" && stagnant.filter(isStagnantHard).length > 0) ? (
                   <span style={{ marginLeft: "auto", background: "#B45309", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>⚠</span>
                 ) : null
               } />
@@ -8632,8 +8692,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         var todayItems = scopedCompanies.filter(function(c) { return c.next_contact === today || c.contract_date === today; });
         var tomorrowItems = scopedCompanies.filter(function(c) { return c.next_contact === tomorrow || c.contract_date === tomorrow; });
         var overdue = scopedCompanies.filter(function(c) { return c.next_contact && c.next_contact < today; });
-        var stagnant14 = scopedCompanies.filter(function(c) { return c.stagnant_days >= 14; });
-        var stagnant7 = scopedCompanies.filter(function(c) { return c.stagnant_days >= 7 && c.stagnant_days < 14; });
+        // 단계별 기준일수가 달라 절대 일수(7일·14일)로 나누지 않는다 — 기준의 2배 초과를 '심각'으로 본다.
+        var stagnant14 = scopedCompanies.filter(isStagnantHard);
+        var stagnant7 = scopedCompanies.filter(function(c) { return isStagnant(c) && !isStagnantHard(c); });
         var weekContracts = scopedCompanies.filter(function(c) { return c.contract_date && c.contract_date > today && c.contract_date <= weekLater; });
         // 서류 요청 지연: 요청한 지 3일 넘고 아직 수령 안 된 서류
         var overdueDocs = [];
@@ -8707,14 +8768,14 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
                 <div onClick={function() { setView("stagnant"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
                   <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 700, marginBottom: 4 }}>🔴 심각 정체</div>
                   <div style={{ fontSize: 20, fontWeight: 700, color: "#DC2626" }}>{stagnant14.length}건</div>
-                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>14일 이상 정체</div>
+                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>단계 기준일수 2배 초과</div>
                 </div>
               )}
               {stagnant7.length > 0 && (
                 <div onClick={function() { setView("stagnant"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #B45309" }}>
                   <div style={{ fontSize: 10, color: "#B45309", fontWeight: 700, marginBottom: 4 }}>🟡 정체 주의</div>
                   <div style={{ fontSize: 20, fontWeight: 700, color: "#B45309" }}>{stagnant7.length}건</div>
-                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>7-13일 정체</div>
+                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>단계 기준일수 초과</div>
                 </div>
               )}
               {weekContracts.length > 0 && (
@@ -8889,17 +8950,17 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         </div>
       </div>
 
-      {/* 🚨 장기 방치 알림 (30일 이상 변화 없음) */}
+      {/* 🚨 장기 방치 알림 (단계 기준일수의 3배 초과) */}
       {(function() {
-        var longStale = companies.filter(function(c) { return (c.stagnant_days || 0) >= 30; })
-          .sort(function(a, b) { return (b.stagnant_days || 0) - (a.stagnant_days || 0); });
+        var longStale = companies.filter(isStagnantLong)
+          .sort(function(a, b) { return stagnRatio(b) - stagnRatio(a); });
         if (longStale.length === 0) return null;
         return (
           <div style={{ background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 12, padding: "16px 20px", marginBottom: 22 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
               <span style={{ fontSize: 16 }}>🚨</span>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#B91C1C" }}>장기 방치 업체 {longStale.length}건</div>
-              <div style={{ fontSize: 11, color: "#DC2626" }}>30일 이상 변화 없음 · 즉시 확인 필요</div>
+              <div style={{ fontSize: 11, color: "#DC2626" }}>단계 기준일수의 3배 이상 정체 · 즉시 확인 필요</div>
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
               {longStale.map(function(c) {
@@ -9249,7 +9310,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>담당자별 업무 현황</div>
           {profiles.filter(p => p.role !== "admin").map(p => {
             const mine = companies.filter(c => c.assignee === p.name);
-            const stag = mine.filter(c => c.stagnant_days >= 7);
+            const stag = mine.filter(isStagnant);
             const pct = companies.length ? Math.round(mine.length / companies.length * 100) : 0;
             return (
               <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 9, padding: "8px 10px", background: "#F7F6F3", borderRadius: 8 }}>
@@ -9269,10 +9330,10 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
 
         <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0" }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>오늘 이슈 · 재통화 필요</div>
-          {companies.filter(c => c.stagnant_days >= 7 || (c.next_contact && c.next_contact <= kstDate())).slice(0, 6).map(c => (
+          {companies.filter(c => isStagnant(c) || (c.next_contact && c.next_contact <= kstDate())).slice(0, 6).map(c => (
             <div key={c.id} onClick={() => onSelectCompany(c)}
               style={{ padding: "9px 12px", borderRadius: 8, border: "1px solid #E8E5E0", marginBottom: 7, cursor: "pointer", display: "flex", gap: 10, alignItems: "flex-start" }}>
-              <div style={{ width: 7, height: 7, borderRadius: "50%", background: c.stagnant_days >= 7 ? "#DC2626" : "#F59E0B", marginTop: 5, flexShrink: 0 }} />
+              <div style={{ width: 7, height: 7, borderRadius: "50%", background: isStagnant(c) ? "#DC2626" : "#F59E0B", marginTop: 5, flexShrink: 0 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>{c.name} <span style={{ fontWeight: 400, color: "#888" }}>· {c.assignee}</span></div>
                 <div style={{ fontSize: 11, color: "#888", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.issue}</div>
@@ -9280,7 +9341,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
               <span style={{ fontSize: 10, color: STAGE_COLORS[c.stage]?.text, background: STAGE_COLORS[c.stage]?.bg, padding: "2px 7px", borderRadius: 99, border: `1px solid ${STAGE_COLORS[c.stage]?.border}`, flexShrink: 0, fontWeight: 600 }}>{c.stage}</span>
             </div>
           ))}
-          {companies.filter(c => c.stagnant_days >= 7 || (c.next_contact && c.next_contact <= kstDate())).length === 0 && (
+          {companies.filter(c => isStagnant(c) || (c.next_contact && c.next_contact <= kstDate())).length === 0 && (
             <div style={{ textAlign: "center", color: "#888", fontSize: 13, padding: "30px 0" }}>오늘 이슈가 없어요 👍</div>
           )}
         </div>
@@ -10227,10 +10288,11 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
         {STAGES.map((stage, si) => {
           const c = STAGE_COLORS[stage];
           const items = visibleRows.filter(r => r.card.stage === stage);
-          // 평균 체류 일수 계산 (회사 단위 stagnant_days 근사)
+          // 평균 체류 일수 — 카드가 이 단계에 들어온 시각(stage_changed_at) 기준.
+          // (예전엔 회사 단위 stagnant_days 를 썼는데 그 컬럼이 전 건 0이라 항상 0일로 나왔다)
           var avgStay = 0;
           if (items.length > 0) {
-            var totalStay = items.reduce(function(s, r) { return s + (r.co.stagnant_days || 0); }, 0);
+            var totalStay = items.reduce(function(s, r) { return s + daysSince(r.card.stage_changed_at); }, 0);
             avgStay = Math.round(totalStay / items.length);
           }
           // 다음 단계로의 전환율 (단순화: 현재 단계 + 이후 단계 / 전체)
@@ -11579,7 +11641,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                         <span className="lst-name-text" style={{ minWidth: 0, whiteSpace: "normal", wordBreak: "keep-all", overflowWrap: "anywhere", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", lineHeight: 1.3 }}>{co.name}</span>
                         {(function() { var tm = teamOf(co); return <span title="팀 (저장값 우선 · 없으면 업체명 기준 자동)" style={{ flexShrink: 0, fontSize: 9, padding: "2px 6px", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap", background: tm === "법인팀" ? "#EEF2FF" : "#F0FDF4", color: tm === "법인팀" ? "#4338CA" : "#15803D" }}>{tm}</span>; })()}
                         {co.region ? (function() { var rc = getRegionColor(co.region); return <span className="lst-region-tablet" style={{ display: "none", flexShrink: 0, fontSize: 11, padding: "2px 8px", borderRadius: 6, fontWeight: 600, background: rc.bg, color: rc.text, whiteSpace: "nowrap" }}>{co.region}</span>; })() : null}
-                        {co.stagnant_days >= 7 && <span style={{ fontSize: 10, color: "#DC2626" }}>⚠</span>}
+                        {isStagnant(co) && <span title={(co.stagn_stage || "") + " " + co.stagnant_days + "일째 (기준 " + co.stagn_threshold + "일)"} style={{ fontSize: 10, color: "#DC2626" }}>⚠</span>}
                         {(function() { var yr = youthReapplyStatus(co, (agencyByName[co.name] || []).map(function(x) { return x.product; })); return yr && yr.eligible ? <span title={"청년창업 부결 " + yr.rejectedDate + " · 6개월 경과(재신청 가능일 " + yr.reapplyDate + ")"} style={{ flexShrink: 0, fontSize: 9, padding: "2px 6px", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap", background: "#DCFCE7", color: "#15803D", border: "1px solid #86EFAC" }}>재신청 가능</span> : null; })()}
                         <button onClick={e => { e.stopPropagation(); setEditNameId(co.id); setEditNameVal(co.name); }}
                           style={{ background: "none", border: "none", cursor: "pointer", padding: 2, opacity: 0, transition: "opacity 0.15s" }}
@@ -11798,7 +11860,7 @@ function StagnantView({ stagnant, onSelect }) {
     <>
       <div style={{ marginBottom: 24 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>정체 업체 알림</h1>
-        <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>7일 이상 같은 단계에 머물러 있는 업체</p>
+        <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>단계별 기준일수를 넘겨 같은 단계에 머물러 있는 업체 (기준: 파이프라인 &gt; 매핑 관리 &gt; 정체 기준일수)</p>
       </div>
       {stagnant.length === 0 ? (
         <div style={{ background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 12, padding: "40px", textAlign: "center" }}>
@@ -11807,7 +11869,7 @@ function StagnantView({ stagnant, onSelect }) {
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {stagnant.sort((a, b) => b.stagnant_days - a.stagnant_days).map(co => {
+          {stagnant.slice().sort((a, b) => stagnRatio(b) - stagnRatio(a)).map(co => {
             const sc = STAGE_COLORS[co.stage] || {};
             return (
               <div key={co.id} onClick={() => onSelect(co)}
@@ -11815,6 +11877,7 @@ function StagnantView({ stagnant, onSelect }) {
                 <div style={{ background: "#FEF2F2", borderRadius: 10, padding: "10px 14px", textAlign: "center", flexShrink: 0 }}>
                   <div style={{ fontSize: 22, fontWeight: 800, color: "#DC2626" }}>{co.stagnant_days}</div>
                   <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 600 }}>일 정체</div>
+                  <div style={{ fontSize: 9, color: "#B91C1C", marginTop: 2 }}>기준 {co.stagn_threshold}일</div>
                 </div>
                 <div style={{ flex: 1 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
@@ -11822,7 +11885,7 @@ function StagnantView({ stagnant, onSelect }) {
                     <span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 99, background: sc.bg, color: sc.text, border: `1px solid ${sc.border}`, fontWeight: 600 }}>{co.stage}</span>
                     <span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 99, background: co.type === "법인" ? "#EEF2FF" : "#F0FDF4", color: co.type === "법인" ? "#4338CA" : "#15803D", fontWeight: 600 }}>{co.type}</span>
                   </div>
-                  <div style={{ fontSize: 12, color: "#666", marginBottom: 7 }}>담당: {co.assignee} · {co.agency}</div>
+                  <div style={{ fontSize: 12, color: "#666", marginBottom: 7 }}>담당: {co.assignee} · {co.agency}{co.stagn_stage && co.stagn_stage !== co.stage ? " · 정체 단계: " + co.stagn_stage : ""}</div>
                   {co.issue && <div style={{ fontSize: 12, background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 7, padding: "7px 11px", color: "#92400E", marginBottom: 5 }}><strong>이슈:</strong> {co.issue}</div>}
                   {co.next_action && <div style={{ fontSize: 12, fontWeight: 600 }}>→ {co.next_action}</div>}
                 </div>
@@ -13144,7 +13207,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
               <div style={{ display: "flex", gap: 7, marginBottom: 6, flexWrap: "wrap" }}>
                 <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#fff", color: data.type === "법인" ? "#4338CA" : "#15803D", fontWeight: 700 }}>{data.type}</span>
                 <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: sc.text, color: "#fff", fontWeight: 600 }}>{data.stage}</span>
-                {data.stagnant_days >= 7 && <span style={{ fontSize: 11, color: "#DC2626", fontWeight: 700, background: "#FEF2F2", padding: "2px 8px", borderRadius: 99 }}>⚠ {data.stagnant_days}일 정체</span>}
+                {isStagnant(data) && <span style={{ fontSize: 11, color: "#DC2626", fontWeight: 700, background: "#FEF2F2", padding: "2px 8px", borderRadius: 99 }}>⚠ {data.stagnant_days}일 정체</span>}
                 {(function() { var yr = youthReapplyStatus(data, (agencyCases || []).map(function(x) { return x.product; })); return yr && yr.eligible ? <span title={"부결일 " + yr.rejectedDate + " 기준 6개월 경과 (재신청 가능일 " + yr.reapplyDate + ")"} style={{ fontSize: 11, color: "#15803D", fontWeight: 700, background: "#DCFCE7", border: "1px solid #86EFAC", padding: "2px 8px", borderRadius: 99 }}>🌱 청년창업 재신청 가능 (6개월 경과)</span> : null; })()}
               </div>
               {editingName ? (
