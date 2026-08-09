@@ -1306,6 +1306,116 @@ function normalizeStaffName(rawName) {
   if (s === "최지혜") return "지혜";
   return s;
 }
+
+// ── 서류 요청 방치 판정 ──────────────────────────────────────────────────────
+// 카톡으로 서류를 요청해 놓고 아무도 후속 확인을 안 해 방치되는 걸 막는다.
+// 요청 시점은 companies.doc_request_dates(jsonb, {서류명:"YYYY-MM-DD"})에 이미 쌓이고 있다.
+//
+// ⚠️ daysSince() 를 쓰면 안 된다. daysSince 는 timestamptz 의 밀리초 차이를 보는 함수인데
+//    서류 요청일은 KST 날짜 문자열이라 그대로 넣으면 오전에 하루 밀린다(kstDate 와 같은 함정).
+//    파이프라인 정체 판정이 daysSince 에 물려 있어 그쪽을 고치지도 않는다.
+//
+// ⚠️ 예전에는 아래 계산이 대시보드 2곳(오늘의 할 일 · 후속 위젯)과 서류현황 탭에 똑같이 복붙돼 있었고
+//    임계값 3 이 세 곳에 각각 하드코딩돼 있었다. D+7 을 더하려면 세 곳을 고쳐야 했고
+//    한 곳만 놓치면 화면마다 숫자가 달라졌다. → 판정을 여기 하나로 모은다. 임계값도 여기만 고치면 된다.
+const DOC_ALERT_STEPS = [3, 7, 14];   // D+3 화면 표시 / D+7 담당자 업무노트 / D+14 관리자 요약
+const DOC_WAIT_WARN = DOC_ALERT_STEPS[0];
+
+// "YYYY-MM-DD" → 오늘까지 며칠 지났나 (자정 기준). 값이 이상하면 null.
+function docWaitDays(dateStr) {
+  if (!dateStr) return null;
+  var t = new Date(dateStr);
+  if (isNaN(t.getTime())) return null;
+  return Math.floor((new Date().setHours(0, 0, 0, 0) - t.setHours(0, 0, 0, 0)) / 86400000);
+}
+// 경과일이 넘어선 가장 높은 알림 단계(없으면 0) — 같은 단계로 두 번 알리지 않기 위한 값
+function docAlertStep(days) {
+  var step = 0;
+  for (var i = 0; i < DOC_ALERT_STEPS.length; i++) if (days >= DOC_ALERT_STEPS[i]) step = DOC_ALERT_STEPS[i];
+  return step;
+}
+// 한 기업의 "요청함이지만 아직 못 받은" 서류를 방치 정보와 함께 뽑는다.
+//   old  = 묵은 건(2026-08-10 일괄 봉인). 목록엔 보이지만 알림은 울리지 않는다.
+//   step = 마지막으로 알린 단계
+function docWaitRows(co) {
+  if (!co) return [];
+  var dates = co.doc_request_dates;
+  if (!dates || typeof dates !== "object") return [];
+  var recv = String(co.received_docs || "").split(",").map(function(s) { return s.trim(); });
+  var state = (co.doc_alert_state && typeof co.doc_alert_state === "object") ? co.doc_alert_state : {};
+  var out = [];
+  Object.keys(dates).forEach(function(doc) {
+    if (recv.indexOf(doc) >= 0) return;                    // 이미 수령완료 → 방치 아님
+    var days = docWaitDays(dates[doc]);
+    if (days === null) return;
+    var st = state[doc] || {};
+    out.push({
+      company: co, doc: doc, days: days, at: dates[doc],
+      old: st.old === true, step: st.step || 0, overdue: days >= DOC_WAIT_WARN,
+    });
+  });
+  return out;
+}
+// 대시보드·알림이 쓰는 목록 — 묵은 건은 빼고, 기준을 넘긴 것만. 오래된 순.
+function overdueDocRows(companies) {
+  var out = [];
+  (companies || []).forEach(function(c) {
+    docWaitRows(c).forEach(function(r) { if (r.overdue && !r.old) out.push(r); });
+  });
+  return out.sort(function(a, b) { return b.days - a.days; });
+}
+// 묵은 서류(봉인) 목록 — "묵은 서류 정리" 화면 전용
+function oldDocRows(companies) {
+  var out = [];
+  (companies || []).forEach(function(c) {
+    docWaitRows(c).forEach(function(r) { if (r.old) out.push(r); });
+  });
+  return out.sort(function(a, b) { return b.days - a.days; });
+}
+// 1차 책임자 — assignee 가 "관호, 양호" 처럼 여러 이름인 경우가 많아(방치 건 기준 절반 이상)
+// 알림을 개인에게 보낼 수 없었다. 새 담당 필드를 만들지 않고 "첫 이름 = 1차 책임자"로 정했다(2026-08-10 결정).
+// 규칙이 화면에 보이면 표기가 틀린 건 사람이 고친다. 표기 흔들림(김동일이사 등)은 normalizeStaffName 으로 보정.
+function primaryAssignee(co) {
+  var raw = String((co && co.assignee) || "").split(/[,;/]/)[0].trim();
+  return normalizeStaffName(raw);
+}
+
+// 서류 하나의 상태를 바꿨을 때 companies 에 써야 할 4개 컬럼을 한 번에 계산한다.
+//   action: "request"(미요청→요청함) · "received"(수령완료) · "rerequest"(오늘로 리셋) · "cancel"(요청 취소·되돌림)
+//
+// ⚠️ 기업 상세 모달(화면 state 로 반영 후 저장 버튼)과 '묵은 서류 정리' 화면(DB 직접 저장)이
+//    같은 함수를 쓴다. 두 곳에 복붙하면 한쪽만 고쳐져 요청일과 알림 상태가 어긋난다
+//    (요청일은 리셋됐는데 봉인이 안 풀려 영영 알림을 안 타는 서류가 생긴다).
+function docActionPatch(co, doc, action) {
+  var reqList = String((co && co.requested_docs) || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+  var recList = String((co && co.received_docs) || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+  var srcDates = (co && co.doc_request_dates && typeof co.doc_request_dates === "object") ? co.doc_request_dates : {};
+  var srcState = (co && co.doc_alert_state && typeof co.doc_alert_state === "object") ? co.doc_alert_state : {};
+  var dates = Object.assign({}, srcDates);
+  var state = Object.assign({}, srcState);
+  if (action === "request") {
+    if (reqList.indexOf(doc) < 0) reqList.push(doc);
+    recList = recList.filter(function(d) { return d !== doc; });
+    dates[doc] = kstDate();                       // 요청한 날짜(KST) 기록
+    delete state[doc];                            // 새 요청 → 알림 단계·봉인 초기화
+  } else if (action === "received") {
+    reqList = reqList.filter(function(d) { return d !== doc; });
+    if (recList.indexOf(doc) < 0) recList.push(doc);
+    delete dates[doc]; delete state[doc];         // 받았으면 방치가 아니다
+  } else if (action === "rerequest") {
+    if (reqList.indexOf(doc) < 0) reqList.push(doc);
+    dates[doc] = kstDate();                       // 오늘로 리셋 → 방치 일수 0부터 다시
+    delete state[doc];                            // 봉인·알림 단계 해제 → 다시 D+3 부터 센다
+  } else {                                        // "cancel" — 요청 취소 또는 수령완료 되돌림
+    reqList = reqList.filter(function(d) { return d !== doc; });
+    recList = recList.filter(function(d) { return d !== doc; });
+    delete dates[doc]; delete state[doc];
+  }
+  return {
+    requested_docs: reqList.join(", "), received_docs: recList.join(", "),
+    doc_request_dates: dates, doc_alert_state: state,
+  };
+}
 // 로그인 사용자 → team_notes.team 키("corporate"|"individual"|"all")
 // profiles.team 은 "법인전담"/"개인전담"/"관리자" 라 값이 다르다. 팀이 비어 있으면
 // 이름으로 보정하고, 양쪽 팀에 다 있는 사람(양호·동일)이나 관리자는 "전체(공통)"으로 둔다.
@@ -6120,6 +6230,78 @@ function CRMApp({ profile, session }) {
     })();
   }, [companies, pipelineCards, stagnConfig, stagnRows, profile]);
 
+  // ── 서류 요청 방치 알림 (D+7) ───────────────────────────────────────────────
+  // 카톡으로 서류를 요청해 놓고 아무도 후속 확인을 안 해 방치되는 걸 막는다.
+  // 로그인 후 최초 1회만 검사(폴링 아님) — 정체 카드 알림과 같은 구조.
+  //   · D+3  : 화면 표시만(대시보드 위젯·칩 빨간색). 알림을 울리지 않는다.
+  //   · D+7  : 1차 책임자의 업무노트에 한 줄 + 소리·팝업 1회.
+  //   · D+14 : 대시보드 위젯에서 '장기' 로 따로 센다(별도 알림은 울리지 않는다).
+  // 멱등: doc_alert_state[서류].step 에 마지막으로 알린 단계를 적어 같은 단계로 두 번 울리지 않는다.
+  //       2026-08-10 이전에 쌓인 묵은 건(old:true)은 아예 대상에서 빠진다 → '묵은 서류 정리' 화면에서 처리.
+  // ⚠️ 내가 1차 책임자인 건만 처리한다 → 내 노트에 쓰는 것이라 직접 insert 해도 RLS 에 걸리지 않는다.
+  //    남의 노트에 써야 하는 기능을 새로 만들 거라면 반드시 wn_append_todo 를 쓸 것(CLAUDE.md).
+  const docAlertCheckedRef = useRef(false);
+  useEffect(() => {
+    if (docAlertCheckedRef.current) return;
+    if (!profile?.name) return;
+    if (!companies.length) return;
+    docAlertCheckedRef.current = true;
+    const meName = normalizeStaffName(profile.name);
+    const mine = [];
+    companies.forEach(function(c) {
+      if (primaryAssignee(c) !== meName) return;          // 1차 책임자(첫 이름)만
+      docWaitRows(c).forEach(function(r) {
+        if (r.old) return;                                // 묵은 건(봉인) — 알림 대상 아님
+        const step = docAlertStep(r.days);
+        if (step < 7) return;                             // D+7 미만은 화면 표시만
+        if (r.step >= step) return;                       // 이미 이 단계로 알렸다
+        mine.push(Object.assign({}, r, { nextStep: step }));
+      });
+    });
+    if (!mine.length) return;
+    (async () => {
+      // 같은 기업 서류가 한꺼번에 걸리는 일이 잦아 기업 단위로 묶어 노트 1장으로 만든다
+      const byCompany = new Map();
+      mine.forEach(function(r) {
+        if (!byCompany.has(r.company.id)) byCompany.set(r.company.id, { co: r.company, rows: [] });
+        byCompany.get(r.company.id).rows.push(r);
+      });
+      const done = [];
+      for (const entry of Array.from(byCompany.values())) {
+        const co = entry.co;
+        const content = entry.rows.map(function(r) {
+          return "- [ ] @" + co.name + " " + r.doc + " — " + r.at + " 요청 후 " + r.days + "일째 (받았는지 확인 · 재요청 · 취소)";
+        }).join("\n") + "\n";
+        const title = "서류 방치 확인: " + co.name;
+        try {
+          // company_id 컬럼이 없는 환경 대비 — 정체 알림과 같은 2단 폴백
+          let ins = await supabase.from("work_notes").insert({ assignee: profile.name, title: title, content: content, is_todo: true, is_done: false, created_by: "시스템", note_date: kstDate(), company_id: co.id }).select().single();
+          if (ins.error || !ins.data) await supabase.from("work_notes").insert({ assignee: profile.name, title: title, content: content, is_todo: true, is_done: false, created_by: "시스템", note_date: kstDate() });
+        } catch (e) {}
+        // 알림 단계만 기록한다 — 서류 상태(requested_docs·요청일)는 건드리지 않는다.
+        const nState = Object.assign({}, (co.doc_alert_state && typeof co.doc_alert_state === "object") ? co.doc_alert_state : {});
+        entry.rows.forEach(function(r) {
+          nState[r.doc] = Object.assign({}, nState[r.doc] || {}, { step: r.nextStep, at: kstDate() });
+        });
+        const wr = await writeGuarded({ table: "companies", id: co.id, payload: { doc_alert_state: nState }, label: "서류 방치 알림 상태" });
+        if (wr && wr.ok) done.push({ id: co.id, state: nState });
+      }
+      if (!done.length) return;
+      setCompanies(prev => prev.map(c => {
+        const hit = done.find(d => d.id === c.id);
+        return hit ? Object.assign({}, c, { doc_alert_state: hit.state }) : c;
+      }));
+      if (chatSoundRef.current) playChatSound({ id: "docwait_batch_" + kstDate(), sender: "시스템", reason: "서류 방치 알림" });
+      showGenericBrowserNotif({
+        tag: "docwait-batch",
+        title: "서류 방치 " + mine.length + "건 확인 필요",
+        body: mine.slice(0, 3).map(function(r) { return r.company.name + " " + r.doc + " (" + r.days + "일)"; }).join(", ") + (mine.length > 3 ? " 외" : ""),
+        onClick: function() { goToWorkNotesRef.current(); },
+      });
+      fetchWorkNotesBadge(profile.name);
+    })();
+  }, [companies, profile]);
+
   // 정체 알림 하나 확인 처리(알림함에서 제거). 카드 자체의 alerted_at은 그대로 두어 재알림 안 함.
   const dismissStagnAlert = useCallback(function(cardId) {
     setStagnAlertList(function(prev) { return prev.filter(function(x) { return x.id !== cardId; }); });
@@ -6168,6 +6350,8 @@ function CRMApp({ profile, session }) {
   }), [companies, search, filterStage, filterAssignee, filterType, filterAgency, filterTeam, creditFilter, creditMode]);
 
   const stagnant = companies.filter(isStagnant);
+  // 묵은 서류(2026-08-10 봉인) 잔여 건수 — 메뉴에 표시하고, 0이 되면 메뉴 자체가 사라진다
+  const oldDocCount = useMemo(function() { return oldDocRows(companies).length; }, [companies]);
   const assignees =["전체", ...new Set(profiles.map(p => p.name))];
 
   // 파이프라인 조합카드 행: pipeline_cards ⨝ companies + 기존 회사필터 동일 적용(단, 단계는 card.stage)
@@ -6326,6 +6510,10 @@ function CRMApp({ profile, session }) {
     if (Array.isArray(rest.company_info)) updateObj.company_info = rest.company_info;
     if (rest.company_info_memo !== undefined && rest.company_info_memo !== null) updateObj.company_info_memo = rest.company_info_memo;
     if (rest.doc_request_dates && typeof rest.doc_request_dates === "object") updateObj.doc_request_dates = rest.doc_request_dates;
+    // 서류 방치 알림 상태 — doc_request_dates 와 반드시 같이 저장한다.
+    // 나눠 저장하면 "요청일은 오늘로 리셋됐는데 봉인은 안 풀린" 서류가 생겨 영영 알림을 안 탄다.
+    // (doc_scan 과 달리 화이트리스트에 넣는 이유. 컬럼 생성 전에도 안 깨지도록 값이 있을 때만 보낸다)
+    if (rest.doc_alert_state && typeof rest.doc_alert_state === "object") updateObj.doc_alert_state = rest.doc_alert_state;
     // 진행단계(stage)가 실제로 바뀌면 상태변경일 갱신 → 정체일수·청년창업 6개월 재신청 판정 기준
     if (prevData && rest.stage !== prevData.stage) updateObj.stage_updated_at = kstDate();
     const { error } = await supabase.from("companies").update(updateObj).eq("id", rest.id);
@@ -7052,6 +7240,8 @@ function CRMApp({ profile, session }) {
               })}
               {[
                 { id: "stagnant",    label: "정체 알림",   icon: "alert", badge: stagnant.length },
+                // 묵은 서류가 남아 있을 때만 메뉴에 띄운다 — 다 정리하면 사라지는 1회성 화면
+                ...(oldDocCount > 0 ? [{ id: "olddocs", label: "묵은 서류 정리", icon: "folder", badge: oldDocCount }] : []),
                 { id: "activitylog", label: "활동 로그",   icon: "activity" },
                 { id: "manual",      label: "자료실",      icon: "folder" },
                 { id: "settlement",  label: "정산관리",    icon: "money" },
@@ -7305,6 +7495,7 @@ function CRMApp({ profile, session }) {
             {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={wnIsAdmin(profile?.name)} onSelectCompany={setSelectedCompany} setView={setView} companies={companies} />}
             {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} filterAgency={filterAgency} setFilterAgency={setFilterAgency} filterTeam={filterTeam} setFilterTeam={setFilterTeam} creditFilter={creditFilter} setCreditFilter={setCreditFilter} creditMode={creditMode} setCreditMode={setCreditMode} assignees={assignees} onSelect={openCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
             {view === "stagnant" && <StagnantView stagnant={stagnant} onSelect={setSelectedCompany} />}
+            {view === "olddocs" && <OldDocsView companies={companies} setCompanies={setCompanies} onSelect={setSelectedCompany} />}
             {view === "members" && profile.role === "admin" && <MembersView profiles={profiles} onRefresh={fetchAll} showToast={showToast} />}
             {view === "backup" && <BackupView canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
           </>
@@ -8696,19 +8887,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         var stagnant14 = scopedCompanies.filter(isStagnantHard);
         var stagnant7 = scopedCompanies.filter(function(c) { return isStagnant(c) && !isStagnantHard(c); });
         var weekContracts = scopedCompanies.filter(function(c) { return c.contract_date && c.contract_date > today && c.contract_date <= weekLater; });
-        // 서류 요청 지연: 요청한 지 3일 넘고 아직 수령 안 된 서류
-        var overdueDocs = [];
-        (scopedCompanies || []).forEach(function(c) {
-          var dates = c.doc_request_dates;
-          if (!dates || typeof dates !== "object") return;
-          var recv = (c.received_docs || "").split(",").map(function(s) { return s.trim(); });
-          Object.keys(dates).forEach(function(doc) {
-            if (recv.indexOf(doc) >= 0) return;
-            var dd = Math.floor((new Date().setHours(0,0,0,0) - new Date(dates[doc]).setHours(0,0,0,0)) / 86400000);
-            if (dd >= 3) overdueDocs.push({ company: c, doc: doc, days: dd });
-          });
-        });
-        overdueDocs.sort(function(a, b) { return b.days - a.days; });
+        // 서류 요청 지연 — 판정은 overdueDocRows 한 곳에서만 한다(임계값 복붙 제거, 2026-08-10).
+        // 묵은 건(2026-08-10 봉인)은 여기 안 들어온다 → '묵은 서류 정리' 화면에서 따로 처리.
+        var overdueDocs = overdueDocRows(scopedCompanies);
         var totalCount = todayItems.length + tomorrowItems.length + overdue.length + stagnant14.length + stagnant7.length + weekContracts.length + overdueDocs.length;
         // 내 할일 위젯은 별도로 항상 표시 (work_notes 기반)
         var showCompaniesWidget = totalCount > 0;
@@ -8789,7 +8970,16 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
                 <div style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", borderLeft: "3px solid #DC2626" }}>
                   <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 700, marginBottom: 4 }}>📮 서류 요청 지연</div>
                   <div style={{ fontSize: 20, fontWeight: 700, color: "#DC2626" }}>{overdueDocs.length}건</div>
-                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>요청 3일+ 미수령</div>
+                  {/* 단계별로 나눠 보여준다 — 전부 한 덩어리면 어느 걸 먼저 챙길지 알 수 없다 */}
+                  <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>
+                    요청 3일+ 미수령
+                    {(function() {
+                      var d14 = overdueDocs.filter(function(x) { return x.days >= 14; }).length;
+                      var d7 = overdueDocs.filter(function(x) { return x.days >= 7 && x.days < 14; }).length;
+                      if (!d14 && !d7) return null;
+                      return <span> · {d14 > 0 && <b style={{ color: "#B91C1C" }}>14일+ {d14}건</b>}{d14 > 0 && d7 > 0 ? " · " : ""}{d7 > 0 && <b style={{ color: "#DC2626" }}>7일+ {d7}건</b>}</span>;
+                    })()}
+                  </div>
                 </div>
               )}
             </div>
@@ -8804,6 +8994,8 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
                         <span style={{ fontWeight: 700, color: "#DC2626", minWidth: 44 }}>{od.days}일째</span>
                         <span style={{ fontWeight: 600, flex: "0 0 auto" }}>{od.company.name}</span>
                         <span style={{ color: "#888" }}>— {od.doc}</span>
+                        {/* 1차 책임자(담당자 첫 이름) — 누가 챙길 건지 목록에서 바로 보이게 */}
+                        <span style={{ marginLeft: "auto", fontSize: 11, color: "#9A9A94", whiteSpace: "nowrap" }}>{primaryAssignee(od.company) || "담당 없음"}</span>
                       </div>
                     );
                   })}
@@ -9164,18 +9356,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
           var d = daysUntil(nd);
           return d !== null && d <= 3;
         }).sort(function(a, b) { return daysUntil(nearestActionDate(a.next_action)) - daysUntil(nearestActionDate(b.next_action)); });
-        var docWait = [];
-        (companies || []).forEach(function(c) {
-          var dates = c.doc_request_dates;
-          if (!dates || typeof dates !== "object") return;
-          var recv = (c.received_docs || "").split(",").map(function(s) { return s.trim(); });
-          Object.keys(dates).forEach(function(doc) {
-            if (recv.indexOf(doc) >= 0) return;
-            var dd = Math.floor((new Date().setHours(0,0,0,0) - new Date(dates[doc]).setHours(0,0,0,0)) / 86400000);
-            if (dd >= 3) docWait.push({ company: c, doc: doc, days: dd });
-          });
-        });
-        docWait.sort(function(a, b) { return b.days - a.days; });
+        var docWait = overdueDocRows(companies);   // 판정은 overdueDocRows 한 곳 (2026-08-10 통합)
         if (followup.length === 0 && dueSoon.length === 0 && docWait.length === 0) return null;
 
         var Chip = function(props) {
@@ -11854,6 +12035,131 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
   );
 }
 
+// ── 묵은 서류 정리 ───────────────────────────────────────────────────────────
+// 2026-08-10 이전에 쌓인 방치 서류(요청함 74건 중 68건)를 한 번에 정리하는 화면.
+// 이 건들은 doc_alert_state 에 old:true 로 봉인돼 있어 알림을 울리지 않는다 — 여기서만 보인다.
+// 정리(수령·재요청·취소)하면 봉인이 풀리고, 그 뒤로는 새 건과 똑같이 D+3/D+7 을 탄다.
+//
+// ⚠️ 여기서는 기업 상세 저장 버튼을 거치지 않고 DB에 바로 쓴다.
+//    그래서 서류 4개 컬럼을 docActionPatch 로 한 번에 계산해 한 번의 UPDATE 로 보낸다
+//    (나눠 쓰면 중간에 실패했을 때 요청일과 알림 상태가 어긋난다).
+function OldDocsView({ companies, setCompanies, onSelect }) {
+  const [busy, setBusy] = useState("");        // 처리 중인 "기업id|서류명"
+  const [err, setErr] = useState("");
+
+  const rows = oldDocRows(companies);
+  // 기업 단위로 묶는다 — 한 업체에 5건씩 몰려 있는 경우가 많아 그렇게 봐야 정리가 빠르다
+  const groups = [];
+  const byId = new Map();
+  rows.forEach(function(r) {
+    if (!byId.has(r.company.id)) { const g = { co: r.company, items: [] }; byId.set(r.company.id, g); groups.push(g); }
+    byId.get(r.company.id).items.push(r);
+  });
+  groups.sort(function(a, b) { return b.items[0].days - a.items[0].days; });
+
+  const runAction = async function(co, doc, action) {
+    const key = co.id + "|" + doc;
+    setBusy(key); setErr("");
+    const patch = docActionPatch(co, doc, action);
+    const wr = await writeGuarded({ table: "companies", id: co.id, payload: patch, label: "묵은 서류 정리" });
+    setBusy("");
+    if (!wr || !wr.ok) { setErr("저장하지 못했습니다. 잠시 후 다시 시도해주세요."); return; }
+    setCompanies(function(prev) { return prev.map(function(c) { return c.id === co.id ? Object.assign({}, c, patch) : c; }); });
+  };
+  // 한 업체 것을 통째로 취소 — "이 업체는 결국 안 줬다"가 대부분이라 가장 많이 쓰게 된다
+  const cancelAll = async function(g) {
+    if (!window.confirm(g.co.name + " 의 묵은 서류 " + g.items.length + "건을 모두 '요청 취소'로 정리할까요?\n(미요청 상태로 돌아가며, 나중에 다시 요청할 수 있습니다)")) return;
+    setBusy(g.co.id + "|*"); setErr("");
+    var next = g.co;
+    g.items.forEach(function(r) { next = Object.assign({}, next, docActionPatch(next, r.doc, "cancel")); });
+    const patch = {
+      requested_docs: next.requested_docs, received_docs: next.received_docs,
+      doc_request_dates: next.doc_request_dates, doc_alert_state: next.doc_alert_state,
+    };
+    const wr = await writeGuarded({ table: "companies", id: g.co.id, payload: patch, label: "묵은 서류 일괄 취소" });
+    setBusy("");
+    if (!wr || !wr.ok) { setErr("저장하지 못했습니다. 잠시 후 다시 시도해주세요."); return; }
+    setCompanies(function(prev) { return prev.map(function(c) { return c.id === g.co.id ? Object.assign({}, c, patch) : c; }); });
+  };
+
+  const ActBtn = function(props) {
+    return (
+      <button onClick={props.onClick} disabled={props.disabled} title={props.title || ""}
+        style={{ fontSize: 11, padding: "5px 10px", borderRadius: 99, cursor: props.disabled ? "default" : "pointer",
+          border: "1px solid " + (props.primary ? "#15803D" : "#D1D5DB"),
+          background: props.primary ? "#15803D" : "#fff", color: props.primary ? "#fff" : "#6B7280",
+          fontWeight: props.primary ? 700 : 500, opacity: props.disabled ? 0.5 : 1 }}>
+        {props.children}
+      </button>
+    );
+  };
+
+  return (
+    <div style={{ padding: "20px 24px", maxWidth: 1100 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
+        <h2 style={{ fontSize: 18, fontWeight: 700, color: "#1A1917" }}>🗂 묵은 서류 정리</h2>
+        <span style={{ fontSize: 12, color: "#888" }}>남은 {rows.length}건 · {groups.length}개 업체</span>
+      </div>
+      <div style={{ fontSize: 12, color: "#666", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "10px 13px", marginBottom: 14, lineHeight: 1.6 }}>
+        2026-08-10 이전에 <b>요청함</b>으로 찍힌 뒤 오래 방치된 서류입니다. 이 건들은 <b>알림을 울리지 않게 잠시 꺼둔</b> 상태예요 —
+        전부 빨간불이면 아무도 안 보게 되기 때문입니다. 여기서 한 번 정리하고 나면, 그 뒤로 새로 요청하는 서류는 정상적으로 D+3 · D+7 알림을 탑니다.
+        <div style={{ marginTop: 5, color: "#92400E" }}>업체가 결국 주지 않은 서류는 <b>요청 취소</b>가 맞습니다. 지운다고 기록이 사라지지 않고, 미요청 상태로 돌아갈 뿐입니다.</div>
+      </div>
+      {err && <div style={{ fontSize: 12, color: "#B91C1C", background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 8, padding: "8px 12px", marginBottom: 12 }}>{err}</div>}
+
+      {rows.length === 0 && (
+        <div style={{ fontSize: 13, color: "#15803D", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 10, padding: "18px 20px", textAlign: "center" }}>
+          ✅ 묵은 서류를 전부 정리했습니다. 이제 새로 요청하는 서류만 방치 알림을 탑니다.
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {groups.map(function(g) {
+          var owner = primaryAssignee(g.co);
+          var allBusy = busy === g.co.id + "|*";
+          return (
+            <div key={g.co.id} style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 10, padding: "12px 14px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 9 }}>
+                <button onClick={function() { onSelect && onSelect(g.co); }}
+                  style={{ fontSize: 13.5, fontWeight: 700, color: "#1A1917", background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}>
+                  {g.co.name}
+                </button>
+                <span style={{ fontSize: 11, color: "#888" }}>
+                  {owner ? "1차 책임 " + owner : "담당자 없음"}
+                  {g.co.assignee && String(g.co.assignee).split(/[,;/]/).length > 1 ? " (외 " + (String(g.co.assignee).split(/[,;/]/).length - 1) + "명)" : ""}
+                </span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#B91C1C" }}>{g.items.length}건</span>
+                <button onClick={function() { cancelAll(g); }} disabled={allBusy}
+                  style={{ marginLeft: "auto", fontSize: 11, padding: "4px 10px", borderRadius: 7, border: "1px solid #E8E5E0", background: "#F7F6F3", color: "#6B7280", cursor: allBusy ? "default" : "pointer" }}>
+                  {allBusy ? "정리 중…" : "이 업체 " + g.items.length + "건 모두 요청 취소"}
+                </button>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                {g.items.map(function(r) {
+                  var key = g.co.id + "|" + r.doc;
+                  var b = busy === key || allBusy;
+                  return (
+                    <div key={r.doc} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", background: "#FAFAF8", borderRadius: 8, padding: "8px 11px" }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "#1A1917", minWidth: 200, flex: "1 1 200px" }}>{r.doc}</span>
+                      <span style={{ fontSize: 11, color: "#B91C1C", fontWeight: 700, whiteSpace: "nowrap" }}>{r.days}일째</span>
+                      <span style={{ fontSize: 10.5, color: "#9A9A94", whiteSpace: "nowrap" }}>{r.at} 요청</span>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <ActBtn primary disabled={b} onClick={function() { runAction(g.co, r.doc, "received"); }} title="이미 받은 서류였다면">✓ 수령완료</ActBtn>
+                        <ActBtn disabled={b} onClick={function() { runAction(g.co, r.doc, "rerequest"); }} title="다시 요청했다면. 오늘 날짜로 리셋되고 방치 일수를 0부터 다시 셉니다.">↻ 재요청함</ActBtn>
+                        <ActBtn disabled={b} onClick={function() { runAction(g.co, r.doc, "cancel"); }} title="업체가 주지 않거나 더 이상 필요 없다면. 미요청 상태로 돌아갑니다.">✕ 요청 취소</ActBtn>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── 정체 알림 ─────────────────────────────────────────────────────────────────
 function StagnantView({ stagnant, onSelect }) {
   return (
@@ -12331,6 +12637,8 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
   const [prevTab, setPrevTab] = useState(initialTab || "info");
   var goTab = function(id) { setPrevTab(tab); setTab(id); };
   const [data, setData] = useState({ ...company });
+  // 서류현황 탭에서 액션 줄(수령완료·재요청·요청취소)이 펼쳐진 서류명. 한 번에 하나만 연다.
+  const [openDocAction, setOpenDocAction] = useState(null);
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(company.name || "");
   const [agencyCases, setAgencyCases] = useState([]);
@@ -14011,36 +14319,37 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                 var reqList = (data.requested_docs || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
                 var recList = (data.received_docs || "").split(",").map(function(s) { return s.trim(); }).filter(Boolean);
                 var reqDates = (data.doc_request_dates && typeof data.doc_request_dates === "object") ? data.doc_request_dates : {};
+                var alertState = (data.doc_alert_state && typeof data.doc_alert_state === "object") ? data.doc_alert_state : {};
                 var docStatus = function(doc) { if (recList.indexOf(doc) >= 0) return "received"; if (reqList.indexOf(doc) >= 0) return "requested"; return "none"; };
+                // 서류 상태 변경은 전부 docActionPatch 한 곳에서 계산한다('묵은 서류 정리' 화면과 공용).
+                var applyDocAction = function(doc, action) {
+                  setData(function(p) { return Object.assign({}, p, docActionPatch(p, doc, action)); });
+                };
                 var cycleDoc = function(doc) {
                   var st = docStatus(doc);
-                  var nReq = reqList.slice(), nRec = recList.slice();
-                  var nDates = Object.assign({}, reqDates);
-                  if (st === "none") {
-                    nReq.push(doc);
-                    var t = new Date(); nDates[doc] = t.getFullYear() + "-" + String(t.getMonth() + 1).padStart(2, "0") + "-" + String(t.getDate()).padStart(2, "0"); // 요청한 오늘 날짜 기록
-                  } else if (st === "requested") {
-                    nReq = nReq.filter(function(d) { return d !== doc; }); nRec.push(doc);
-                    delete nDates[doc]; // 수령완료되면 날짜 제거
-                  } else {
-                    nRec = nRec.filter(function(d) { return d !== doc; });
-                    delete nDates[doc];
-                  }
-                  setData(function(p) { return Object.assign({}, p, { requested_docs: nReq.join(", "), received_docs: nRec.join(", "), doc_request_dates: nDates }); });
+                  // 미요청 → 요청함 / 수령완료 → 미요청. (요청함은 칩을 누르면 액션 줄이 열린다)
+                  applyDocAction(doc, st === "none" ? "request" : "cancel");
                 };
+                // ── 요청함을 "끝내는" 세 가지 길 (2026-08-10 추가) ──────────────────────
+                // 예전에는 미요청 → 요청함 → 수령완료 한 방향으로만 돌아서, 못 받은 서류를 정리할 방법이
+                // "수령완료로 잘못 찍었다가 한 번 더 누르기"뿐이었다. 그래서 아무도 안 했고
+                // 요청함 74건이 전부 D+3 초과로 쌓였다(최장 38일). 종료 경로가 없던 게 방치의 진짜 원인이다.
+                var receiveDoc = function(doc) { applyDocAction(doc, "received"); };    // 받았다
+                var reRequestDoc = function(doc) { applyDocAction(doc, "rerequest"); }; // 카톡 다시 보냄 → 오늘로 리셋
+                var cancelDoc = function(doc) { applyDocAction(doc, "cancel"); };       // 업체가 안 줌·불필요
                 // 자동감지 결과를 '수령완료'로 올린다(제안 → 사람이 누른 것만 여기로 온다).
                 // ⚠️ 이미 수령완료인 항목은 건드리지 않는다 — 되돌아가는 조작으로 보이면 안 된다.
                 var applyDocs = function(docs) {
-                  var nReq = reqList.slice(), nRec = recList.slice();
-                  var nDates = Object.assign({}, reqDates);
-                  (docs || []).forEach(function(d) {
-                    if (DOC_LIST.indexOf(d) < 0) return;      // DOC_LIST 밖 이름은 받지 않는다
-                    if (nRec.indexOf(d) >= 0) return;          // 이미 수령완료
-                    nReq = nReq.filter(function(x) { return x !== d; });
-                    delete nDates[d];
-                    nRec.push(d);
+                  setData(function(p) {
+                    var next = p;
+                    (docs || []).forEach(function(d) {
+                      if (DOC_LIST.indexOf(d) < 0) return;    // DOC_LIST 밖 이름은 받지 않는다
+                      var rec = String(next.received_docs || "").split(",").map(function(s) { return s.trim(); });
+                      if (rec.indexOf(d) >= 0) return;         // 이미 수령완료
+                      next = Object.assign({}, next, docActionPatch(next, d, "received"));
+                    });
+                    return next;
                   });
-                  setData(function(p) { return Object.assign({}, p, { requested_docs: nReq.join(", "), received_docs: nRec.join(", "), doc_request_dates: nDates }); });
                 };
                 // 자동감지가 찾아둔 서류인지 — 아래 칩에 📂 를 붙여 "드라이브에 파일이 있다"를 보여준다.
                 var scannedFound = (data.doc_scan && data.doc_scan.found) || {};
@@ -14061,7 +14370,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                         // 이게 없으면 창을 닫았다 열었을 때 결과가 사라진 것처럼 보인다(다시 fetch 하기 전까지).
                         if (onPatchCompany) onPatchCompany(data.id, { doc_scan: scan });
                       }} />
-                    <div style={{ fontSize: 11, color: "#888", marginBottom: 10, background: "#F7F6F3", borderRadius: 6, padding: "8px 11px" }}>💡 서류를 누르면 <b style={{ color: "#6B7280" }}>미요청</b> → <b style={{ color: "#B45309" }}>요청함</b> → <b style={{ color: "#15803D" }}>수령완료</b> 순으로 바뀝니다. 칩의 <b>📂</b> 는 드라이브에서 그 서류로 보이는 파일을 찾았다는 뜻입니다.</div>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 10, background: "#F7F6F3", borderRadius: 6, padding: "8px 11px" }}>💡 <b style={{ color: "#6B7280" }}>미요청</b> 서류를 누르면 <b style={{ color: "#B45309" }}>요청함</b>으로 바뀌고 요청일이 기록됩니다. <b style={{ color: "#B45309" }}>요청함</b> 서류를 누르면 <b>수령완료 · 재요청 · 요청 취소</b> 중에 고를 수 있어요. 칩의 <b>📂</b> 는 드라이브에서 그 서류로 보이는 파일을 찾았다는 뜻입니다.</div>
 
                     {/* 1. 미요청 */}
                     <div style={{ background: "#F9FAFB", borderRadius: 8, padding: "12px 14px", marginBottom: 10, border: "1px solid #E5E7EB" }}>
@@ -14074,23 +14383,60 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                       </div>
                     </div>
 
-                    {/* 2. 요청함(대기) */}
+                    {/* 2. 요청함(대기) — 방치 건은 칩을 누르면 액션 줄이 펼쳐진다(수령/재요청/취소) */}
+                    {(function() {
+                      var waitCount = reqedList.filter(function(d) { var dd = docWaitDays(reqDates[d]); return dd !== null && dd >= DOC_WAIT_WARN; }).length;
+                      var owner = primaryAssignee(data);
+                      return (
                     <div style={{ background: "#FFFBEB", borderRadius: 8, padding: "12px 14px", marginBottom: 10, border: "1px solid #FDE68A" }}>
-                      <div style={{ fontSize: 11, color: "#B45309", marginBottom: 8, fontWeight: 700 }}>📤 요청함 — 요청했으나 아직 못 받은 서류 (클릭 → 수령완료) · {reqedList.length}개</div>
+                      <div style={{ fontSize: 11, color: "#B45309", marginBottom: 8, fontWeight: 700 }}>
+                        📤 요청함 — 요청했으나 아직 못 받은 서류 · {reqedList.length}개
+                        {waitCount > 0 && <span style={{ color: "#B91C1C" }}> · 방치 {waitCount}건</span>}
+                      </div>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                         {reqedList.map(function(doc) {
-                          var reqDate = reqDates[doc];
-                          var days = null;
-                          if (reqDate) {
-                            var diff = Math.floor((new Date().setHours(0,0,0,0) - new Date(reqDate).setHours(0,0,0,0)) / 86400000);
-                            days = diff;
-                          }
-                          var overdue = days !== null && days >= 3;
-                          return <button key={doc} onClick={function() { cycleDoc(doc); }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: overdue ? "1px solid #DC2626" : "1px solid #FBBF24", background: overdue ? "#FEE2E2" : "#FEF3C7", color: overdue ? "#DC2626" : "#B45309", cursor: "pointer", fontWeight: 600 }}>{overdue ? "🔴" : "⏳"} {doc}{scanMark(doc)}{days !== null ? " (" + (days === 0 ? "오늘" : days + "일째") + ")" : ""}</button>;
+                          var days = docWaitDays(reqDates[doc]);
+                          var overdue = days !== null && days >= DOC_WAIT_WARN;
+                          var open = openDocAction === doc;
+                          return <button key={doc} onClick={function() { setOpenDocAction(open ? null : doc); }}
+                            title={overdue ? "누르면 처리 방법을 고를 수 있어요" : "누르면 처리 방법을 고를 수 있어요"}
+                            style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: open ? "1px solid #92400E" : (overdue ? "1px solid #DC2626" : "1px solid #FBBF24"), background: overdue ? "#FEE2E2" : "#FEF3C7", color: overdue ? "#DC2626" : "#B45309", cursor: "pointer", fontWeight: 600, outline: open ? "2px solid #FDE68A" : "none" }}>
+                            {overdue ? "🔴" : "⏳"} {doc}{scanMark(doc)}{days !== null ? " (" + (days === 0 ? "오늘" : days + "일째") + ")" : ""}
+                          </button>;
                         })}
                         {reqedList.length === 0 && <span style={{ fontSize: 11, color: "#888" }}>요청 대기 중인 서류가 없어요</span>}
                       </div>
+                      {/* 액션 줄 — "요청함을 끝내는 길". 이게 없어서 못 받은 서류가 계속 쌓였다. */}
+                      {openDocAction && reqedList.indexOf(openDocAction) >= 0 && (function() {
+                        var d = openDocAction;
+                        var days = docWaitDays(reqDates[d]);
+                        return (
+                          <div style={{ marginTop: 10, paddingTop: 9, borderTop: "1px dashed #FDE68A" }}>
+                            <div style={{ fontSize: 10.5, color: "#92400E", marginBottom: 6 }}>
+                              {days !== null && days >= DOC_WAIT_WARN ? "🔴 " : ""}<b>{d}</b>
+                              {reqDates[d] ? " — " + reqDates[d] + " 요청" : ""}
+                              {days !== null ? " · " + (days === 0 ? "오늘" : days + "일째") : ""}
+                              {owner ? " · 1차 책임 " + owner : " · 담당자 없음"}
+                              {alertState[d] && alertState[d].old === true && <span style={{ color: "#9A9A94" }}> · 묵은 건(알림 꺼짐 — 정리하면 해제)</span>}
+                            </div>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                              <button onClick={function() { receiveDoc(d); setOpenDocAction(null); }}
+                                style={{ fontSize: 11, padding: "5px 10px", borderRadius: 99, border: "1px solid #15803D", background: "#15803D", color: "#fff", cursor: "pointer", fontWeight: 700 }}>✓ 수령완료</button>
+                              <button onClick={function() { reRequestDoc(d); setOpenDocAction(null); }}
+                                title="카톡으로 다시 요청했을 때. 요청일이 오늘로 리셋되고 방치 일수가 0부터 다시 셉니다."
+                                style={{ fontSize: 11, padding: "5px 10px", borderRadius: 99, border: "1px solid #D1D5DB", background: "#fff", color: "#6B7280", cursor: "pointer" }}>↻ 재요청함 — 오늘 날짜로</button>
+                              <button onClick={function() { cancelDoc(d); setOpenDocAction(null); }}
+                                title="업체가 주지 않거나 더 이상 필요 없는 서류. 미요청으로 되돌아가고 방치 목록에서 빠집니다."
+                                style={{ fontSize: 11, padding: "5px 10px", borderRadius: 99, border: "1px solid #D1D5DB", background: "#fff", color: "#6B7280", cursor: "pointer" }}>✕ 요청 취소</button>
+                              <button onClick={function() { setOpenDocAction(null); }}
+                                style={{ fontSize: 11, padding: "5px 10px", borderRadius: 99, border: "1px solid transparent", background: "transparent", color: "#B0AEA8", cursor: "pointer" }}>닫기</button>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
+                      );
+                    })()}
 
                     {/* 3. 수령완료 */}
                     <div style={{ background: "#F0FDF4", borderRadius: 8, padding: "12px 14px", border: "1px solid #BBF7D0" }}>
