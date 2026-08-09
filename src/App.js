@@ -21160,20 +21160,28 @@ const DOC_MATCH_RULES = [
   { doc: "사업자등록증", any: ["사업자등록증", "사업자등록증명", "사업자등록"], score: 3 },
   { doc: "대표자 신분증", any: ["신분증", "주민등록증", "운전면허", "여권사본"], score: 3 },
   { doc: "임대차 계약서", any: ["임대차", "임대계약", "전세계약", "월세계약"], score: 3 },
-  { doc: "회사 소개서 또는 사업계획서", any: ["회사소개", "기업소개", "소개서", "사업계획", "ir자료", "회사개요"], score: 3 },
-  { doc: "대표자 신용점수", any: ["신용점수", "신용평점", "올크레딧", "allcredit", "nice지키미", "크레딧리포트", "신용정보조회", "신용조회"], score: 3 },
-  { doc: "4대보험 명부", any: ["4대보험", "사대보험", "4대사회보험"], score: 3 },
+  // '제품소개서'는 회사소개서가 아니다(포스트케어 실측) — 한정어가 붙으면 뺀다.
+  { doc: "회사 소개서 또는 사업계획서", any: ["회사소개", "기업소개", "소개서", "사업계획", "ir자료", "회사개요"], not: ["제품소개", "상품소개", "서비스소개"], score: 3 },
+  // 크레탑(CRETOP)·나이스디앤비는 실제 폴더에서 반복 등장하는 신용조회 서비스 이름이다(2026-08-09 실측).
+  { doc: "대표자 신용점수", any: ["신용점수", "신용평점", "올크레딧", "allcredit", "nice지키미", "크레딧리포트", "신용정보조회", "신용조회", "크레탑", "cretop", "나이스디앤비"], score: 3 },
+  // ⚠️ '4대보험 완납증명서'는 가입자 명부가 아니라 다른 서류다 — DOC_LIST 에 없으므로 미분류로 둔다.
+  { doc: "4대보험 명부", any: ["4대보험", "사대보험", "4대사회보험"], not: ["완납증명", "납부확인", "완납확인"], score: 3 },
   { doc: "월별 고용보험 가입자 명부", any: ["고용보험"], not: ["4대보험", "사대보험"], score: 3 },
   { doc: "직전연도 상시근로자 수 파악", any: ["상시근로자", "근로자수", "상시종업원", "종업원수"], score: 3 },
   { doc: "최근 1년 수출실적 증명서", any: ["수출실적", "수출증명", "수출확인서"], score: 3 },
   { doc: "특허 및 상표권 관련 자료", any: ["특허", "상표", "실용신안", "디자인등록", "지식재산", "출원"], score: 3 },
-  { doc: "기업 인증 자료 (벤처·이노비즈·연구전담 부서 등)", any: ["벤처기업", "이노비즈", "innobiz", "메인비즈", "mainbiz", "연구전담", "기업부설연구소", "뿌리기업", "가족친화", "iso9001", "iso14001"], score: 3 },
+  { doc: "기업 인증 자료 (벤처·이노비즈·연구전담 부서 등)", any: ["벤처기업", "이노비즈", "innobiz", "메인비즈", "mainbiz", "연구전담", "기업부설연구소", "뿌리기업", "가족친화", "창업기업확인", "iso9001", "iso14001"], score: 3 },
   { doc: "그 외 사업전환 필수 서류", any: ["사업전환"], score: 3 },
-  { doc: "최근 3년치 재무제표 (23년~25년)", any: ["재무제표", "재무상태표", "손익계산서", "대차대조표", "표준재무제표"], score: 3 },
+  // '재무재표'는 현장에서 흔한 오타다 — 파일명·폴더명 양쪽에서 실측됐다(2026-08-09).
+  { doc: "최근 3년치 재무제표 (23년~25년)", any: ["재무제표", "재무재표", "재무상태표", "손익계산서", "대차대조표", "표준재무제표"], score: 3 },
 
   // ── 부가세 — 연도 한정어가 붙으면 그쪽이 이긴다(점수 4 > 3) ──
+  // ⚠️ not 의 다른 연도 목록이 핵심이다. "부가세과세표준증명23년~26년1기" 처럼 여러 해를 묶은
+  //    증명원은 '26년'과 '1기'를 둘 다 갖고 있어 이 규칙을 통과해 버린다(점수 4 = high confidence 오탐).
+  //    23~25년이 같이 적혀 있으면 상반기 단건이 아니라 3년치 증명원이다.
   { doc: "2026년 상반기 부가세 증명원",
-    all: [["부가세", "부가가치세", "과세표준"], ["2026", "26년"], ["상반기", "1기", "예정", "확정"]], score: 4 },
+    all: [["부가세", "부가가치세", "과세표준"], ["2026", "26년"], ["상반기", "1기", "예정", "확정"]],
+    not: ["2023", "23년", "2024", "24년", "2025", "25년"], score: 4 },
   { doc: "최근 3년치 부가세 증명원 (23년~25년)",
     any: ["부가세", "부가가치세", "과세표준증명", "면세사업자수입금액"], score: 3 },
 
@@ -21200,14 +21208,8 @@ function docHasAny(hay, words) {
   return false;
 }
 
-// fileName 은 파일 이름, folderPath 는 업체 폴더 기준 상대 경로(선택).
-// 폴더 이름도 같이 보는 이유: "재무제표/2023.pdf" 처럼 파일명에는 단서가 없고 폴더에만 있는 경우가 흔하다.
-function classifyDocFile(fileName, folderPath) {
-  var nameNorm = docNormFileName(fileName);
-  if (!nameNorm) return null;
-  // 폴더 경로는 파일명 뒤에 붙여 같이 본다(파일명 단서를 우선하려고 순서를 이렇게 둔다).
-  var hay = nameNorm + docNormFileName(String(folderPath || "").replace(/\//g, ""));
-
+// 정규화된 문자열 하나에 DOC_MATCH_RULES 를 걸어 걸린 규칙 목록을 돌려준다.
+function docHitRules(hay) {
   var hits = [];
   for (var i = 0; i < DOC_MATCH_RULES.length; i++) {
     var r = DOC_MATCH_RULES[i];
@@ -21221,23 +21223,56 @@ function classifyDocFile(fileName, folderPath) {
     }
     if (ok) hits.push(r);
   }
+  return hits;
+}
+// 걸린 규칙들 → { best, tied }. tied 가 비어 있지 않으면 최고점이 여러 서류로 갈린 것(= 애매).
+function docResolveHits(hits) {
+  if (!hits.length) return { best: null, tied: [] };
+  var best = hits[0];
+  for (var k = 1; k < hits.length; k++) if (hits[k].score > best.score) best = hits[k];
+  return { best: best, tied: hits.filter(function(h) { return h.score === best.score && h.doc !== best.doc; }) };
+}
+function docConfirmed(rule, why) {
+  return { doc: rule.doc, confidence: rule.score >= 4 ? "high" : "normal", why: why };
+}
+
+// fileName 은 파일 이름, folderPath 는 업체 폴더 기준 상대 경로(선택).
+//
+// ⚠️ 2단계로 본다 — ①파일명만 → ②(못 정하면) 파일명+폴더명.
+//    폴더명을 처음부터 합치면 "재무제표 및 부가세증명원"처럼 두 서류를 함께 담는 폴더가
+//    그 안의 파일을 전부 동점(애매)으로 만들어 버린다. 파일명에 답이 있는데도 그렇다.
+//    (2026-08-09 실측: 이 폴더명이 업체 3곳에서 표준처럼 쓰여 애매 6건이 여기서 나왔다)
+//    폴더명은 "재무제표/2023.pdf"처럼 파일명에 단서가 아예 없을 때만 쓰는 보조 힌트다.
+function classifyDocFile(fileName, folderPath) {
+  var nameNorm = docNormFileName(fileName);
+  if (!nameNorm) return null;
+
+  // ① 파일명만으로 하나로 정해지면 폴더명은 보지 않는다.
+  var byName = docResolveHits(docHitRules(nameNorm));
+  if (byName.best && !byName.tied.length) {
+    return docConfirmed(byName.best, "파일명에서 '" + byName.best.doc + "' 단서를 찾았습니다");
+  }
+  // 파일명만으로 이미 둘로 갈렸다면 폴더명을 더해도 갈림이 풀리지 않는다 — 후보를 그대로 낸다.
+  if (byName.best) {
+    return { doc: null, candidates: [byName.best.doc].concat(byName.tied.map(function(h) { return h.doc; })),
+      why: "파일명이 서류 종류 둘 이상으로 읽혀 하나로 정하지 않았습니다" };
+  }
+
+  // ② 파일명에 단서가 없을 때만 폴더명을 힌트로 더해 다시 본다.
+  var hay = nameNorm + docNormFileName(String(folderPath || "").replace(/\//g, ""));
+  var byPath = docResolveHits(docHitRules(hay));
 
   // 한정어 없는 금융거래확인서 — 3종 중 무엇인지 모른다. 절대 고르지 않는다.
-  if (!hits.length && docHasAny(hay, ["금융거래확인", "금융거래확인서", "부채증명"])) {
+  if (!byPath.best && docHasAny(hay, ["금융거래확인", "금융거래확인서", "부채증명"])) {
     return { doc: null, candidates: DOC_BANK_CERT_ALL.slice(),
       why: "금융거래확인서인데 법인·사업자·개인 구분이 파일명에 없습니다" };
   }
-  if (!hits.length) return null;
-
-  var best = hits[0];
-  for (var k = 1; k < hits.length; k++) if (hits[k].score > best.score) best = hits[k];
-  var tied = hits.filter(function(h) { return h.score === best.score && h.doc !== best.doc; });
-  if (tied.length) {
-    return { doc: null, candidates: [best.doc].concat(tied.map(function(h) { return h.doc; })),
-      why: "서류 종류가 둘 이상으로 읽혀 하나로 정하지 않았습니다" };
+  if (!byPath.best) return null;
+  if (byPath.tied.length) {
+    return { doc: null, candidates: [byPath.best.doc].concat(byPath.tied.map(function(h) { return h.doc; })),
+      why: "폴더명까지 봐도 서류 종류가 둘 이상으로 읽혀 하나로 정하지 않았습니다" };
   }
-  return { doc: best.doc, confidence: best.score >= 4 ? "high" : "normal",
-    why: "파일명/폴더명에서 '" + best.doc + "' 단서를 찾았습니다" };
+  return docConfirmed(byPath.best, "폴더명에서 '" + byPath.best.doc + "' 단서를 찾았습니다");
 }
 
 // 폴더 하나를 훑어 서류 항목별로 정리한다(3단계에서 화면·저장에 그대로 쓸 수 있는 모양).
