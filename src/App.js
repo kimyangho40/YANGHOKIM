@@ -21208,6 +21208,32 @@ function docHasAny(hay, words) {
   return false;
 }
 
+// ── 금융기관 이름 걷어내기 ────────────────────────────────────────────────────
+// 은행 이름은 "어느 은행에서 뗐나"일 뿐, 서류 종류(법인/사업자/개인)와 아무 관계가 없다.
+// ⚠️ 지우지 않으면 "금융거래확인서_IBK기업은행.pdf" 의 '기업'이 '사업자 대출 금융거래 확인서'
+//    한정어로 읽혀 score 5(= confidence "high")로 확정 오탐이 난다.
+//    (2026-08-09 (주)동락포스 실측 — 같은 폴더의 우리·하나·국민은행 3건은 정상적으로 애매 처리됐다)
+// 긴 이름부터 지운다 — "중소기업은행"을 "기업은행"보다 먼저 지워야 '중소'가 남지 않는다.
+// bare '기업'·'국민'처럼 짧고 다른 뜻으로도 쓰이는 토막은 넣지 않는다(멀쩡한 파일명을 깎으면 안 된다).
+const DOC_BANK_NAMES = [
+  "중소기업은행", "한국수출입은행", "수출입은행", "한국산업은행", "산업은행",
+  "기업은행", "국민은행", "우리은행", "신한은행", "하나은행", "외환은행",
+  "농협은행", "수협은행", "축협", "농협", "수협",
+  "sc제일은행", "제일은행", "씨티은행", "시티은행",
+  "새마을금고", "신용협동조합", "신협", "산림조합", "저축은행", "우체국",
+  "카카오뱅크", "케이뱅크", "토스뱅크",
+  "부산은행", "대구은행", "광주은행", "전북은행", "경남은행", "제주은행", "im뱅크",
+  "ibk", "kdb", "kb국민", "nh농협", "keb하나",
+].map(docNormFileName).sort(function(a, b) { return b.length - a.length; });
+
+function docStripBankNames(norm) {
+  var s = norm;
+  for (var i = 0; i < DOC_BANK_NAMES.length; i++) {
+    if (s.indexOf(DOC_BANK_NAMES[i]) >= 0) s = s.split(DOC_BANK_NAMES[i]).join("");
+  }
+  return s;
+}
+
 // 정규화된 문자열 하나에 DOC_MATCH_RULES 를 걸어 걸린 규칙 목록을 돌려준다.
 function docHitRules(hay) {
   var hits = [];
@@ -21244,7 +21270,8 @@ function docConfirmed(rule, why) {
 //    (2026-08-09 실측: 이 폴더명이 업체 3곳에서 표준처럼 쓰여 애매 6건이 여기서 나왔다)
 //    폴더명은 "재무제표/2023.pdf"처럼 파일명에 단서가 아예 없을 때만 쓰는 보조 힌트다.
 function classifyDocFile(fileName, folderPath) {
-  var nameNorm = docNormFileName(fileName);
+  // 규칙을 걸기 전에 금융기관 이름을 먼저 걷어낸다(은행명은 판정 정보가 0이고 오독만 만든다).
+  var nameNorm = docStripBankNames(docNormFileName(fileName));
   if (!nameNorm) return null;
 
   // ① 파일명만으로 하나로 정해지면 폴더명은 보지 않는다.
@@ -21258,8 +21285,8 @@ function classifyDocFile(fileName, folderPath) {
       why: "파일명이 서류 종류 둘 이상으로 읽혀 하나로 정하지 않았습니다" };
   }
 
-  // ② 파일명에 단서가 없을 때만 폴더명을 힌트로 더해 다시 본다.
-  var hay = nameNorm + docNormFileName(String(folderPath || "").replace(/\//g, ""));
+  // ② 파일명에 단서가 없을 때만 폴더명을 힌트로 더해 다시 본다(폴더명에서도 은행명은 뺀다).
+  var hay = nameNorm + docStripBankNames(docNormFileName(String(folderPath || "").replace(/\//g, "")));
   var byPath = docResolveHits(docHitRules(hay));
 
   // 한정어 없는 금융거래확인서 — 3종 중 무엇인지 모른다. 절대 고르지 않는다.
