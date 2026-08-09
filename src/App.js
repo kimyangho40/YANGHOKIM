@@ -20982,6 +20982,228 @@ async function driveListChildFolders(parentId, token) {
   return out;
 }
 
+// ── 📂 [1단계] 업체 폴더 재귀 탐색 ──────────────────────────────────────────
+// 업체 폴더 아래에 하위 폴더(예: "재무제표", "2025년", "국세/지방세")를 파 놓은 곳이 많아
+// 한 겹만 봐서는 서류를 못 찾는다. 폴더를 깊이 우선으로 끝까지 훑어 파일을 평평하게 모은다.
+//
+// driveListFiles 는 "한 폴더 안을 화면에 보여주는" 용도라 페이지네이션이 없다 —
+// 재귀 탐색은 파일이 수백 개가 될 수 있어 페이지를 끝까지 넘기는 별도 함수를 쓴다.
+// (driveListFiles 를 고치면 자료실·서류현황 화면이 같이 영향을 받으므로 건드리지 않는다.)
+//
+// 안전장치 3개 — 드라이브 API 는 호출 수 제한이 있고, 바로가기(shortcut)로 폴더가 서로를
+// 가리키면 무한히 돈다:
+//   · maxDepth  기본 4 — 업체/연도/서류종류/스캔본 정도면 충분하다
+//   · maxFiles  기본 800 — 넘으면 그 시점까지 모은 것에 truncated=true 로 알린다
+//   · seen      이미 들어간 폴더 id 는 다시 안 들어간다(순환·중복 방지)
+// 반환: { files: [{ id,name,mimeType,size,modifiedTime,webViewLink, path, depth }], folders, truncated }
+//   path 는 업체 폴더를 기준으로 한 상대 경로("재무제표/2025") — 분류 힌트로 쓴다.
+async function driveWalkFolder(rootId, token, opts) {
+  var o = opts || {};
+  var maxDepth = typeof o.maxDepth === "number" ? o.maxDepth : 4;
+  var maxFiles = typeof o.maxFiles === "number" ? o.maxFiles : 800;
+  var FOLDER_MIME = "application/vnd.google-apps.folder";
+
+  var files = [], folders = [], truncated = false;
+  var seen = {};
+  var queue = [{ id: rootId, path: "", depth: 0 }];
+  seen[rootId] = true;
+
+  while (queue.length) {
+    var cur = queue.shift();
+    if (files.length >= maxFiles) { truncated = true; break; }
+
+    var pageToken = "", guard = 0, items = [];
+    do {
+      var url = "https://www.googleapis.com/drive/v3/files"
+        + "?q=" + encodeURIComponent("'" + cur.id + "' in parents and trashed=false")
+        + "&fields=" + encodeURIComponent("nextPageToken,files(id,name,mimeType,size,modifiedTime,webViewLink,shortcutDetails)")
+        + "&orderBy=folder,name&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true"
+        + (pageToken ? "&pageToken=" + encodeURIComponent(pageToken) : "");
+      /* eslint-disable-next-line no-await-in-loop */
+      var r = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+      if (r.status === 401 || r.status === 403) { clearDriveToken(); throw new Error("AUTH"); }
+      if (!r.ok) throw new Error("드라이브 조회 실패 (" + r.status + ")");
+      /* eslint-disable-next-line no-await-in-loop */
+      var d = await r.json();
+      items = items.concat(d.files || []);
+      pageToken = d.nextPageToken || "";
+      guard += 1;
+    } while (pageToken && guard < 20);
+
+    for (var i = 0; i < items.length; i++) {
+      var f = items[i];
+      // 바로가기는 가리키는 대상의 종류로 판단한다(폴더 바로가기를 파일로 세지 않게).
+      var sd = f.shortcutDetails || null;
+      var mime = sd && sd.targetMimeType ? sd.targetMimeType : f.mimeType;
+      var realId = sd && sd.targetId ? sd.targetId : f.id;
+
+      if (mime === FOLDER_MIME) {
+        folders.push({ id: realId, name: f.name, path: cur.path });
+        if (cur.depth + 1 > maxDepth) { truncated = true; continue; }
+        if (seen[realId]) continue;
+        seen[realId] = true;
+        queue.push({ id: realId, path: cur.path ? cur.path + "/" + f.name : f.name, depth: cur.depth + 1 });
+        continue;
+      }
+      if (files.length >= maxFiles) { truncated = true; break; }
+      files.push({
+        id: realId, name: f.name, mimeType: mime, size: f.size,
+        modifiedTime: f.modifiedTime, webViewLink: f.webViewLink,
+        path: cur.path, depth: cur.depth,
+      });
+    }
+  }
+  return { files: files, folders: folders, truncated: truncated };
+}
+
+// ── 📂 [2단계] 파일명 → 서류 항목 분류기 ────────────────────────────────────
+// 드라이브 파일 이름(+ 상위 폴더 이름)을 보고 DOC_LIST 의 어느 항목인지 고른다.
+//
+// ⚠️ 설계 원칙: **추측하지 않는다.** 이 프로젝트의 다른 파서(현황표·여신정보)와 같은 규칙이다.
+//    후보가 2개 이상 남으면 하나를 고르지 않고 candidates 로 되돌려 사람이 고르게 한다.
+//    잘못 채운 서류 체크는 "받았다고 착각하고 안 받는" 사고로 이어져 미분류보다 훨씬 나쁘다.
+//
+// 특히 금융거래확인서는 DOC_LIST 에 3종(법인 기업 / 사업자 대출 / 대표자 개인)이 있어
+// 파일명만으로는 못 가르는 경우가 많다 → 한정어가 없으면 반드시 ambiguous 로 남긴다.
+//
+// 반환: { doc, confidence, why }            — 확정 1건
+//       { doc: null, candidates: [...], why } — 후보 여럿(사람 판단 필요)
+//       null                                  — 서류로 안 보이는 파일
+
+// 파일명 정규화 — 확장자·날짜·기호·공백을 털고 소문자로. 전각 문자도 반각으로 맞춘다.
+function docNormFileName(s) {
+  return String(s || "")
+    .replace(/\.[A-Za-z0-9]{1,5}$/, "")                 // 확장자
+    .replace(/[！-～]/g, function(ch) {          // 전각 → 반각
+      return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0);
+    })
+    .replace(/[\s_\-.,()[\]{}'"`~!@#$%^&*+=|\\/:;<>?]/g, "")
+    .toLowerCase();
+}
+
+// 각 서류 항목의 판별 규칙.
+//   any   : 하나라도 있으면 후보
+//   all   : 전부 있어야 후보(부가세처럼 연도로 갈리는 것)
+//   not   : 하나라도 있으면 탈락
+//   score : 같은 점수면 ambiguous. 한정어가 붙은 규칙일수록 점수를 높인다.
+const DOC_MATCH_RULES = [
+  { doc: "사업자등록증", any: ["사업자등록증", "사업자등록증명", "사업자등록"], score: 3 },
+  { doc: "대표자 신분증", any: ["신분증", "주민등록증", "운전면허", "여권사본"], score: 3 },
+  { doc: "임대차 계약서", any: ["임대차", "임대계약", "전세계약", "월세계약"], score: 3 },
+  { doc: "회사 소개서 또는 사업계획서", any: ["회사소개", "기업소개", "소개서", "사업계획", "ir자료", "회사개요"], score: 3 },
+  { doc: "대표자 신용점수", any: ["신용점수", "신용평점", "올크레딧", "allcredit", "nice지키미", "크레딧리포트", "신용정보조회", "신용조회"], score: 3 },
+  { doc: "4대보험 명부", any: ["4대보험", "사대보험", "4대사회보험"], score: 3 },
+  { doc: "월별 고용보험 가입자 명부", any: ["고용보험"], not: ["4대보험", "사대보험"], score: 3 },
+  { doc: "직전연도 상시근로자 수 파악", any: ["상시근로자", "근로자수", "상시종업원", "종업원수"], score: 3 },
+  { doc: "최근 1년 수출실적 증명서", any: ["수출실적", "수출증명", "수출확인서"], score: 3 },
+  { doc: "특허 및 상표권 관련 자료", any: ["특허", "상표", "실용신안", "디자인등록", "지식재산", "출원"], score: 3 },
+  { doc: "기업 인증 자료 (벤처·이노비즈·연구전담 부서 등)", any: ["벤처기업", "이노비즈", "innobiz", "메인비즈", "mainbiz", "연구전담", "기업부설연구소", "뿌리기업", "가족친화", "iso9001", "iso14001"], score: 3 },
+  { doc: "그 외 사업전환 필수 서류", any: ["사업전환"], score: 3 },
+  { doc: "최근 3년치 재무제표 (23년~25년)", any: ["재무제표", "재무상태표", "손익계산서", "대차대조표", "표준재무제표"], score: 3 },
+
+  // ── 부가세 — 연도 한정어가 붙으면 그쪽이 이긴다(점수 4 > 3) ──
+  { doc: "2026년 상반기 부가세 증명원",
+    all: [["부가세", "부가가치세", "과세표준"], ["2026", "26년"], ["상반기", "1기", "예정", "확정"]], score: 4 },
+  { doc: "최근 3년치 부가세 증명원 (23년~25년)",
+    any: ["부가세", "부가가치세", "과세표준증명", "면세사업자수입금액"], score: 3 },
+
+  // ── 금융거래확인서 3종 — 한정어(법인/사업자/개인)가 있어야만 확정한다 ──
+  { doc: "법인 기업 금융거래 확인서",
+    all: [["금융거래확인", "금융거래확인서", "부채증명", "여신거래"], ["법인"]], score: 5 },
+  { doc: "사업자 대출 금융거래 확인서",
+    all: [["금융거래확인", "금융거래확인서", "부채증명", "여신거래"], ["사업자", "기업"]],
+    not: ["법인"], score: 5 },
+  { doc: "대표자 개인 대출 금융거래 확인서",
+    all: [["금융거래확인", "금융거래확인서", "부채증명", "여신거래"], ["개인", "대표자", "대표"]],
+    not: ["법인", "사업자"], score: 5 },
+];
+
+// 한정어 없는 "금융거래확인서.pdf" 는 아래 3개 중 무엇인지 알 수 없다 → 통째로 후보로 낸다.
+const DOC_BANK_CERT_ALL = [
+  "법인 기업 금융거래 확인서",
+  "사업자 대출 금융거래 확인서",
+  "대표자 개인 대출 금융거래 확인서",
+];
+
+function docHasAny(hay, words) {
+  for (var i = 0; i < words.length; i++) if (hay.indexOf(docNormFileName(words[i])) >= 0) return true;
+  return false;
+}
+
+// fileName 은 파일 이름, folderPath 는 업체 폴더 기준 상대 경로(선택).
+// 폴더 이름도 같이 보는 이유: "재무제표/2023.pdf" 처럼 파일명에는 단서가 없고 폴더에만 있는 경우가 흔하다.
+function classifyDocFile(fileName, folderPath) {
+  var nameNorm = docNormFileName(fileName);
+  if (!nameNorm) return null;
+  // 폴더 경로는 파일명 뒤에 붙여 같이 본다(파일명 단서를 우선하려고 순서를 이렇게 둔다).
+  var hay = nameNorm + docNormFileName(String(folderPath || "").replace(/\//g, ""));
+
+  var hits = [];
+  for (var i = 0; i < DOC_MATCH_RULES.length; i++) {
+    var r = DOC_MATCH_RULES[i];
+    if (r.not && docHasAny(hay, r.not)) continue;
+    var ok;
+    if (r.all) {
+      ok = true;
+      for (var j = 0; j < r.all.length; j++) if (!docHasAny(hay, r.all[j])) { ok = false; break; }
+    } else {
+      ok = docHasAny(hay, r.any || []);
+    }
+    if (ok) hits.push(r);
+  }
+
+  // 한정어 없는 금융거래확인서 — 3종 중 무엇인지 모른다. 절대 고르지 않는다.
+  if (!hits.length && docHasAny(hay, ["금융거래확인", "금융거래확인서", "부채증명"])) {
+    return { doc: null, candidates: DOC_BANK_CERT_ALL.slice(),
+      why: "금융거래확인서인데 법인·사업자·개인 구분이 파일명에 없습니다" };
+  }
+  if (!hits.length) return null;
+
+  var best = hits[0];
+  for (var k = 1; k < hits.length; k++) if (hits[k].score > best.score) best = hits[k];
+  var tied = hits.filter(function(h) { return h.score === best.score && h.doc !== best.doc; });
+  if (tied.length) {
+    return { doc: null, candidates: [best.doc].concat(tied.map(function(h) { return h.doc; })),
+      why: "서류 종류가 둘 이상으로 읽혀 하나로 정하지 않았습니다" };
+  }
+  return { doc: best.doc, confidence: best.score >= 4 ? "high" : "normal",
+    why: "파일명/폴더명에서 '" + best.doc + "' 단서를 찾았습니다" };
+}
+
+// 폴더 하나를 훑어 서류 항목별로 정리한다(3단계에서 화면·저장에 그대로 쓸 수 있는 모양).
+// ⚠️ 읽기 전용이다 — DB 에 아무것도 쓰지 않는다(doc_scan 컬럼은 아직 없다).
+async function scanCompanyDriveDocs(folderId, token, opts) {
+  var walked = await driveWalkFolder(folderId, token, opts);
+  var found = {}, ambiguous = [], unknown = [];
+  walked.files.forEach(function(f) {
+    var c = classifyDocFile(f.name, f.path);
+    if (!c) { unknown.push(f); return; }
+    if (!c.doc) { ambiguous.push({ file: f, candidates: c.candidates, why: c.why }); return; }
+    if (!found[c.doc]) found[c.doc] = [];
+    found[c.doc].push({ file: f, confidence: c.confidence });
+  });
+  return {
+    found: found,                                  // { 서류명: [{file, confidence}] }
+    ambiguous: ambiguous,                          // 사람이 골라야 하는 것
+    unknown: unknown,                              // 서류로 안 보이는 파일
+    docs: Object.keys(found),                      // 확정된 서류명 목록
+    fileCount: walked.files.length,
+    truncated: walked.truncated,
+    scannedAt: new Date().toISOString(),
+  };
+}
+
+// 3단계(DB 저장·화면 연결) 전에 실제 폴더로 눈으로 확인하기 위한 콘솔 훅.
+//   브라우저 콘솔: await window.__driveDocScan.scan("<폴더ID>")
+// 읽기 전용이라 눌러도 데이터가 바뀌지 않는다.
+if (typeof window !== "undefined") {
+  window.__driveDocScan = {
+    walk: function(fid, opts) { return driveWalkFolder(fid, getDriveToken(), opts); },
+    classify: classifyDocFile,
+    scan: function(fid, opts) { return scanCompanyDriveDocs(fid, getDriveToken(), opts); },
+  };
+}
+
 // 업체명 정규화 — 법인 표기·괄호 꼬리표·기호·공백을 털어낸다.
 // CRM 이름에는 업무 상태 꼬리표가 붙어 있는 경우가 많다("동진건설_방치", "비에스테크(국세 체납)").
 // 괄호를 통째로 지우는 이유가 이것 — 드라이브 폴더명에는 그런 꼬리표가 없다.
