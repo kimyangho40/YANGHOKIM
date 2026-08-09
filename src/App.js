@@ -14028,19 +14028,47 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                   }
                   setData(function(p) { return Object.assign({}, p, { requested_docs: nReq.join(", "), received_docs: nRec.join(", "), doc_request_dates: nDates }); });
                 };
+                // 자동감지 결과를 '수령완료'로 올린다(제안 → 사람이 누른 것만 여기로 온다).
+                // ⚠️ 이미 수령완료인 항목은 건드리지 않는다 — 되돌아가는 조작으로 보이면 안 된다.
+                var applyDocs = function(docs) {
+                  var nReq = reqList.slice(), nRec = recList.slice();
+                  var nDates = Object.assign({}, reqDates);
+                  (docs || []).forEach(function(d) {
+                    if (DOC_LIST.indexOf(d) < 0) return;      // DOC_LIST 밖 이름은 받지 않는다
+                    if (nRec.indexOf(d) >= 0) return;          // 이미 수령완료
+                    nReq = nReq.filter(function(x) { return x !== d; });
+                    delete nDates[d];
+                    nRec.push(d);
+                  });
+                  setData(function(p) { return Object.assign({}, p, { requested_docs: nReq.join(", "), received_docs: nRec.join(", "), doc_request_dates: nDates }); });
+                };
+                // 자동감지가 찾아둔 서류인지 — 아래 칩에 📂 를 붙여 "드라이브에 파일이 있다"를 보여준다.
+                var scannedFound = (data.doc_scan && data.doc_scan.found) || {};
+                var scanMark = function(doc) {
+                  var fs = scannedFound[doc];
+                  if (!fs || !fs.length) return null;
+                  return <span title={"드라이브에서 찾음: " + fs.map(function(f) { return f.name; }).join(", ")}> 📂</span>;
+                };
                 var noneList = DOC_LIST.filter(function(d) { return docStatus(d) === "none"; });
                 var reqedList = DOC_LIST.filter(function(d) { return docStatus(d) === "requested"; });
                 var recedList = DOC_LIST.filter(function(d) { return docStatus(d) === "received"; });
                 return (
                   <>
-                    <div style={{ fontSize: 11, color: "#888", marginBottom: 10, background: "#F7F6F3", borderRadius: 6, padding: "8px 11px" }}>💡 서류를 누르면 <b style={{ color: "#6B7280" }}>미요청</b> → <b style={{ color: "#B45309" }}>요청함</b> → <b style={{ color: "#15803D" }}>수령완료</b> 순으로 바뀝니다.</div>
+                    <DriveDocScanPanel company={data} docStatus={docStatus} onApply={applyDocs}
+                      onScanned={function(scan) {
+                        setData(function(p) { return Object.assign({}, p, { doc_scan: scan }); });
+                        // 감지 결과는 이미 DB에 썼다(일반 저장 경로를 안 타므로) → 목록 쪽 companies 에도 맞춰준다.
+                        // 이게 없으면 창을 닫았다 열었을 때 결과가 사라진 것처럼 보인다(다시 fetch 하기 전까지).
+                        if (onPatchCompany) onPatchCompany(data.id, { doc_scan: scan });
+                      }} />
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 10, background: "#F7F6F3", borderRadius: 6, padding: "8px 11px" }}>💡 서류를 누르면 <b style={{ color: "#6B7280" }}>미요청</b> → <b style={{ color: "#B45309" }}>요청함</b> → <b style={{ color: "#15803D" }}>수령완료</b> 순으로 바뀝니다. 칩의 <b>📂</b> 는 드라이브에서 그 서류로 보이는 파일을 찾았다는 뜻입니다.</div>
 
                     {/* 1. 미요청 */}
                     <div style={{ background: "#F9FAFB", borderRadius: 8, padding: "12px 14px", marginBottom: 10, border: "1px solid #E5E7EB" }}>
                       <div style={{ fontSize: 11, color: "#6B7280", marginBottom: 8, fontWeight: 700 }}>⬜ 미요청 — 아직 요청 안 한 서류 (클릭 → 요청함) · {noneList.length}개</div>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                         {noneList.map(function(doc) {
-                          return <button key={doc} onClick={function() { cycleDoc(doc); }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: "1px solid #D1D5DB", background: "#fff", color: "#6B7280", cursor: "pointer" }}>{doc}</button>;
+                          return <button key={doc} onClick={function() { cycleDoc(doc); }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: "1px solid #D1D5DB", background: "#fff", color: "#6B7280", cursor: "pointer" }}>{doc}{scanMark(doc)}</button>;
                         })}
                         {noneList.length === 0 && <span style={{ fontSize: 11, color: "#888" }}>모두 요청했어요</span>}
                       </div>
@@ -14058,7 +14086,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                             days = diff;
                           }
                           var overdue = days !== null && days >= 3;
-                          return <button key={doc} onClick={function() { cycleDoc(doc); }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: overdue ? "1px solid #DC2626" : "1px solid #FBBF24", background: overdue ? "#FEE2E2" : "#FEF3C7", color: overdue ? "#DC2626" : "#B45309", cursor: "pointer", fontWeight: 600 }}>{overdue ? "🔴" : "⏳"} {doc}{days !== null ? " (" + (days === 0 ? "오늘" : days + "일째") + ")" : ""}</button>;
+                          return <button key={doc} onClick={function() { cycleDoc(doc); }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: overdue ? "1px solid #DC2626" : "1px solid #FBBF24", background: overdue ? "#FEE2E2" : "#FEF3C7", color: overdue ? "#DC2626" : "#B45309", cursor: "pointer", fontWeight: 600 }}>{overdue ? "🔴" : "⏳"} {doc}{scanMark(doc)}{days !== null ? " (" + (days === 0 ? "오늘" : days + "일째") + ")" : ""}</button>;
                         })}
                         {reqedList.length === 0 && <span style={{ fontSize: 11, color: "#888" }}>요청 대기 중인 서류가 없어요</span>}
                       </div>
@@ -14069,7 +14097,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                       <div style={{ fontSize: 11, color: "#15803D", marginBottom: 8, fontWeight: 700 }}>✅ 수령완료 (클릭 → 미요청으로 되돌림) · {recedList.length}개</div>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                         {recedList.map(function(doc) {
-                          return <button key={doc} onClick={function() { cycleDoc(doc); }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: "1px solid #15803D", background: "#15803D", color: "#fff", cursor: "pointer", fontWeight: 700 }}>✓ {doc}</button>;
+                          return <button key={doc} onClick={function() { cycleDoc(doc); }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: "1px solid #15803D", background: "#15803D", color: "#fff", cursor: "pointer", fontWeight: 700 }}>✓ {doc}{scanMark(doc)}</button>;
                         })}
                         {recedList.length === 0 && <span style={{ fontSize: 11, color: "#888" }}>아직 수령된 서류가 없어요</span>}
                       </div>
@@ -21303,7 +21331,8 @@ function classifyDocFile(fileName, folderPath) {
 }
 
 // 폴더 하나를 훑어 서류 항목별로 정리한다(3단계에서 화면·저장에 그대로 쓸 수 있는 모양).
-// ⚠️ 읽기 전용이다 — DB 에 아무것도 쓰지 않는다(doc_scan 컬럼은 아직 없다).
+// ⚠️ 이 함수 자체는 읽기 전용이다 — DB 에 쓰지 않는다.
+//    결과를 companies.doc_scan 에 저장하는 곳은 DriveDocScanPanel 하나뿐이다.
 async function scanCompanyDriveDocs(folderId, token, opts) {
   var walked = await driveWalkFolder(folderId, token, opts);
   var found = {}, ambiguous = [], unknown = [];
@@ -22156,6 +22185,236 @@ function CompanyDriveFolder({ company, onSaveFolder }) {
               </a>
             );
           })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 서류 자동감지 (3단계) ─────────────────────────────────────────────────────
+// 드라이브 업체 폴더를 훑어 DOC_LIST 항목을 찾아 **제안**만 만든다.
+//
+// ⚠️ 원칙 — received_docs 를 자동으로 바꾸지 않는다.
+//    사람이 [수령완료로 표시]/[전체 적용]을 눌러야만 반영된다.
+//    서류현황은 "받았다고 착각하고 안 받는" 사고가 미분류보다 훨씬 나쁘다(classifyDocFile 과 같은 원칙).
+//    그래서 '전체 적용'은 확정(found)에만 걸고, 애매·미분류는 일괄 대상에 절대 넣지 않는다.
+//
+// ⚠️ companies.doc_scan 을 쓰는 곳은 여기(writeGuarded) 하나뿐이다.
+//    CompanyModal 저장 화이트리스트(allFields)에는 doc_scan 을 넣지 않았다 —
+//    넣으면 일반 저장이 화면에 들고 있던 낡은 스캔 결과를 되쓴다.
+function DriveDocScanPanel({ company, docStatus, onApply, onScanned }) {
+  var [busy, setBusy] = useState(false);
+  var [err, setErr] = useState("");
+  var [needAuth, setNeedAuth] = useState(false);
+  var [showUnknown, setShowUnknown] = useState(false);
+
+  var folderId = (company && company.drive_folder_id) || "";
+  var scan = (company && company.doc_scan) || null;
+  var found = (scan && scan.found) || {};
+  var foundDocs = Object.keys(found);
+  var ambiguous = (scan && scan.ambiguous) || [];
+  // '전체 적용' 대상 = 확정됐는데 아직 수령완료가 아닌 것. 이미 수령완료인 건 건드리지 않는다.
+  var pending = foundDocs.filter(function(d) { return docStatus(d) !== "received"; });
+
+  var slimFile = function(f) {
+    return { id: f.id, name: f.name, path: f.path || "", webViewLink: f.webViewLink || "" };
+  };
+
+  var runScan = async function() {
+    if (!folderId || !company || !company.id) return;
+    var token = getDriveToken();
+    if (!token) { setNeedAuth(true); return; }
+    setBusy(true); setErr(""); setNeedAuth(false);
+    try {
+      var res = await scanCompanyDriveDocs(folderId, token);
+      var slimFound = {};
+      Object.keys(res.found).forEach(function(d) {
+        slimFound[d] = res.found[d].map(function(x) {
+          return Object.assign(slimFile(x.file), { confidence: x.confidence });
+        });
+      });
+      var slim = {
+        scannedAt: res.scannedAt,
+        folderId: folderId,
+        fileCount: res.fileCount,
+        truncated: !!res.truncated,
+        found: slimFound,
+        ambiguous: res.ambiguous.map(function(a) {
+          return Object.assign(slimFile(a.file), { candidates: a.candidates, why: a.why });
+        }),
+        unknownCount: res.unknown.length,
+        unknownNames: res.unknown.slice(0, 50).map(function(f) { return (f.path ? f.path + "/" : "") + f.name; }),
+      };
+      var w = await writeGuarded({ table: "companies", op: "update", id: company.id,
+        payload: { doc_scan: slim }, label: "서류 자동감지" });
+      if (!w.ok) {
+        setErr("저장 실패. 'doc_scan' 컬럼이 없으면 서류자동감지_doc_scan_컬럼추가.sql 을 먼저 실행하세요.");
+        setBusy(false); return;
+      }
+      if (onScanned) onScanned(slim);
+    } catch (e) {
+      if (e && e.message === "AUTH") { clearDriveToken(); setNeedAuth(true); }
+      else setErr((e && e.message) || "감지 실패");
+    }
+    setBusy(false);
+  };
+
+  var applyAll = function() {
+    if (!pending.length) return;
+    if (!window.confirm("자동으로 찾은 서류 " + pending.length + "건을 '수령완료'로 표시할까요?\n\n" +
+      pending.join("\n") + "\n\n(후보가 여럿인 것과 미분류 파일은 포함되지 않습니다. 표시 후 아래 저장 버튼을 눌러야 기록됩니다)")) return;
+    onApply(pending);
+  };
+
+  var box = { background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 10, padding: "12px 14px", marginBottom: 16 };
+  var miniBtn = { fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 6, cursor: "pointer", whiteSpace: "nowrap" };
+
+  if (!folderId) {
+    return (
+      <div style={{ background: "#F8FAFC", border: "1px dashed #E2E8F0", borderRadius: 10, padding: "10px 14px", marginBottom: 16, fontSize: 11.5, color: "#94A3B8" }}>
+        🔍 서류 자동감지는 위에서 드라이브 폴더를 연결한 뒤에 쓸 수 있습니다.
+      </div>
+    );
+  }
+
+  return (
+    <div style={box}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#5B21B6" }}>
+          🔍 서류 자동감지
+          {scan && scan.scannedAt && (
+            <span style={{ fontWeight: 400, color: "#8B7FB8", marginLeft: 8, fontSize: 11 }}>
+              마지막 감지 {String(scan.scannedAt).slice(0, 10)} · 파일 {scan.fileCount}개
+            </span>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {pending.length > 0 && (
+            <button onClick={applyAll} style={Object.assign({}, miniBtn, { background: "#15803D", color: "#fff", border: "none" })}>
+              ✓ 전체 적용 ({pending.length})
+            </button>
+          )}
+          <button onClick={runScan} disabled={busy}
+            style={Object.assign({}, miniBtn, { background: busy ? "#EDE9FE" : "#7C3AED", color: busy ? "#8B7FB8" : "#fff", border: "none" })}>
+            {busy ? "감지 중..." : (scan ? "🔄 다시 감지" : "📂 드라이브에서 자동 감지")}
+          </button>
+        </div>
+      </div>
+
+      {needAuth && (
+        <div style={{ marginTop: 9, fontSize: 11.5, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 6, padding: "8px 10px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <span>구글 계정 연결이 필요합니다(약 1시간마다 재연결).</span>
+          <button onClick={connectGoogleDrive} style={Object.assign({}, miniBtn, { background: "#4338CA", color: "#fff", border: "none" })}>구글 연결</button>
+        </div>
+      )}
+      {err && <div style={{ marginTop: 8, fontSize: 11, color: "#B91C1C", lineHeight: 1.6 }}>{err}</div>}
+
+      {scan && scan.truncated && (
+        <div style={{ marginTop: 8, fontSize: 11, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "7px 10px" }}>
+          ⚠️ 파일이 많아(800개 / 하위 4단계 제한) 폴더 일부만 훑었습니다. 못 본 서류가 있을 수 있습니다.
+        </div>
+      )}
+
+      {!scan && !busy && (
+        <div style={{ marginTop: 8, fontSize: 11.5, color: "#7C6BAF", lineHeight: 1.7 }}>
+          폴더의 파일 이름을 보고 아래 서류 목록 중 어떤 것인지 찾아 <b>제안</b>합니다.
+          서류 상태를 자동으로 바꾸지는 않습니다 — 확인하고 직접 눌러야 수령완료가 됩니다.
+        </div>
+      )}
+
+      {scan && (
+        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+          {/* ① 확정 — 사람이 눌러야 반영된다 */}
+          <div style={{ background: "#fff", border: "1px solid #BBF7D0", borderRadius: 8, padding: "10px 12px" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#15803D", marginBottom: 7 }}>
+              ✅ 찾은 서류 {foundDocs.length}종{pending.length > 0 ? " (미반영 " + pending.length + ")" : " (전부 반영됨)"}
+            </div>
+            {foundDocs.length === 0 && <div style={{ fontSize: 11, color: "#94A3B8" }}>확정할 수 있는 서류를 찾지 못했습니다.</div>}
+            {foundDocs.map(function(d) {
+              var already = docStatus(d) === "received";
+              return (
+                <div key={d} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 0", borderTop: "1px solid #F1F5F9" }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: already ? "#94A3B8" : "#166534" }}>
+                      {already ? "✓ " : ""}{d}
+                    </div>
+                    {found[d].map(function(f) {
+                      return (
+                        <div key={f.id} style={{ fontSize: 10.5, color: "#94A3B8", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {f.webViewLink
+                            ? <a href={f.webViewLink} target="_blank" rel="noreferrer" style={{ color: "#7C3AED", textDecoration: "none" }}>{(f.path ? f.path + "/" : "") + f.name}</a>
+                            : ((f.path ? f.path + "/" : "") + f.name)}
+                          {f.confidence === "high" && <span style={{ marginLeft: 5, color: "#15803D" }}>· 확실</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {!already && (
+                    <button onClick={function() { onApply([d]); }}
+                      style={Object.assign({}, miniBtn, { background: "#F0FDF4", color: "#15803D", border: "1px solid #BBF7D0" })}>수령완료로 표시</button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* ② 애매 — 절대 자동으로 고르지 않는다. 사람이 후보 중 하나를 누른다. */}
+          {ambiguous.length > 0 && (
+            <div style={{ background: "#fff", border: "1px solid #FDE68A", borderRadius: 8, padding: "10px 12px" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#B45309", marginBottom: 7 }}>
+                ❓ 어떤 서류인지 못 정한 파일 {ambiguous.length}개 — 골라주세요 (전체 적용에는 포함되지 않습니다)
+              </div>
+              {ambiguous.map(function(a) {
+                return (
+                  <div key={a.id} style={{ padding: "7px 0", borderTop: "1px solid #F1F5F9" }}>
+                    <div style={{ fontSize: 11.5, color: "#1E293B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {a.webViewLink
+                        ? <a href={a.webViewLink} target="_blank" rel="noreferrer" style={{ color: "#B45309", textDecoration: "none" }}>{(a.path ? a.path + "/" : "") + a.name}</a>
+                        : ((a.path ? a.path + "/" : "") + a.name)}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#94A3B8", margin: "2px 0 5px" }}>{a.why}</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                      {(a.candidates || []).map(function(c) {
+                        var already = docStatus(c) === "received";
+                        return (
+                          <button key={c} disabled={already} onClick={function() { onApply([c]); }}
+                            style={Object.assign({}, miniBtn, { fontWeight: 600, background: already ? "#F1F5F9" : "#FFFBEB", color: already ? "#94A3B8" : "#B45309", border: "1px solid " + (already ? "#E2E8F0" : "#FDE68A") })}>
+                            {already ? "✓ " : ""}{c}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ③ 미분류 — 참고용. 적용 대상 아님 */}
+          {scan.unknownCount > 0 && (
+            <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 8, padding: "8px 12px" }}>
+              <button onClick={function() { setShowUnknown(!showUnknown); }}
+                style={{ fontSize: 11, fontWeight: 700, color: "#64748B", background: "none", border: "none", padding: 0, cursor: "pointer" }}>
+                🗂 서류로 보이지 않는 파일 {scan.unknownCount}개 {showUnknown ? "▲" : "▼"}
+              </button>
+              {showUnknown && (
+                <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 2 }}>
+                  {(scan.unknownNames || []).map(function(n, i) {
+                    return <div key={i} style={{ fontSize: 10.5, color: "#94A3B8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n}</div>;
+                  })}
+                  {scan.unknownCount > (scan.unknownNames || []).length && (
+                    <div style={{ fontSize: 10, color: "#CBD5E1" }}>외 {scan.unknownCount - (scan.unknownNames || []).length}개</div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {pending.length > 0 && (
+            <div style={{ fontSize: 10.5, color: "#7C6BAF" }}>
+              ※ 표시한 내용은 창 아래 <b>저장</b> 버튼을 눌러야 기록됩니다.
+            </div>
+          )}
         </div>
       )}
     </div>
