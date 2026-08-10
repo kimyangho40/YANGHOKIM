@@ -63,6 +63,23 @@
   일반 사용자도 남에게 노트를 만들게 하려면 `.select()`를 빼거나 전용 함수를 만들 것.
 - 함수는 `EXECUTE` 기본값이 PUBLIC이다 → 새로 만들면 **`revoke ... from public, anon` + `grant ... to authenticated`**.
 
+## ✅ `chat_messages` DM 비공개 — 2026-08-10 조치 완료
+(2026-08-02 발견 → 2026-08-10 적용. SQL: `채팅_DM_비공개_RLS.sql` / 되돌리기 `_rollback.sql` / 동작검증 `채팅_DM_비공개_동작검증.sql` 26/26 통과)
+
+예전 문제: 정책 3개의 조건이 `is_approved()`뿐이라 **채널 스코프가 없었다**. 채널 판정은 화면 `canAccessChannel()`뿐이라
+`fetchChatUnread`가 채널 조건 없이 본문까지 1000건을 받아오면서 **승인된 사람 누구나 남의 DM 본문**을 브라우저로 받았고,
+**남의 메시지 수정·삭제도 DB에서는 열려** 있었다(work_notes 개인노트와 같은 계열 — `sender`가 이름 텍스트라 `auth.uid()`와 직접 비교가 안 됨).
+
+**앞으로 chat_messages를 건드릴 때 반드시 지킬 것**
+- 채널 규칙은 **App.js `canAccessChannel`/`CHAT_TEAMS`(App.js:3578)와 SQL `chat_can_access(channel, me)`가 한 쌍**이다.
+  팀 목록은 `profiles.team`이 아니라 **App.js 하드코딩 배열이 원본**(인선은 team='개인전담'이지만 채팅은 corporate).
+  한쪽만 고치면 "화면엔 채널이 있는데 메시지가 안 온다"가 된다. 고쳤으면 동작검증을 다시 돌릴 것.
+- **관리자(양호)도 남의 DM은 못 본다.** work_notes와 달리 전체 열람 예외가 없다(App.js에도 없다).
+  `chat_is_admin()`은 "내가 볼 수 있는 채널에서 남의 메시지 삭제"에만 쓴다.
+- 읽음표시(`read_by`)는 **남의 메시지에 쓰는 게 정상**이라 UPDATE를 본인 것으로 좁힐 수 없다.
+  → 채널까지만 정책으로 막고, 그 안쪽(남의 본문 수정·삭제, sender/channel 바꿔치기)은 **트리거 `trg_chat_protect_update`**가 막는다.
+- 트리거는 `auth.uid() is null`이면 통과시킨다 — service_role·`run-sql.js` 같은 관리 작업을 막지 않기 위해서다.
+
 ## 2-2. DB 테이블을 새로 만들면 — RLS를 같은 커밋에서 켠다
 Supabase는 테이블 기본값이 **"열림"**이라, RLS를 켜지 않으면 비로그인 anon key로 전건이 조회된다.
 과거 `보안_RLS_승인제_SETUP.sql`이 테이블을 **이름으로 나열**하는 방식이라, 그 뒤에 만든 테이블마다

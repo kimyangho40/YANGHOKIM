@@ -3575,6 +3575,9 @@ function dmPartner(channel, me) {
   return parts.find(function(n) { return n !== me; }) || parts[0];
 }
 // 이 채널을 이 사람이 볼 수 있는가
+// ⚠️ SQL `public.chat_can_access(channel, me)`(채팅_DM_비공개_RLS.sql)와 **한 쌍**이다.
+//    한쪽만 고치면 "화면엔 채널이 있는데 DB가 메시지를 안 준다"(또는 그 반대)가 된다.
+//    CHAT_TEAMS 배열을 고쳤으면 SQL 함수의 array[...] 도 같이 고치고 동작검증을 다시 돌릴 것.
 function canAccessChannel(channel, name) {
   if (!channel || !name) return false;
   if (channel === "general") return true;
