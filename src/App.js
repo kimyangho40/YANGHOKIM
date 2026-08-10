@@ -5386,6 +5386,8 @@ function CRMApp({ profile, session }) {
   const [toast, setToast] = useState(null);
   const [showTodayAlert, setShowTodayAlert] = useState(false);
   const [workNotesBadge, setWorkNotesBadge] = useState(0);
+  // 🗂️ 결재함 배지 — 내가 결재자로 지정된 대기 건. 결재자는 uuid 기준(권한 판정이라 이름으로 하면 위험).
+  const [signOffBadge, setSignOffBadge] = useState(0);
   const [chatUnread, setChatUnread] = useState(0);
   const [chatUnreadList, setChatUnreadList] = useState([]); // 안 읽은 채팅 메시지 목록(알림함)
   const [showChatNotif, setShowChatNotif] = useState(false); // 채팅 알림함 드롭다운 열림
@@ -6354,6 +6356,14 @@ function CRMApp({ profile, session }) {
   const oldDocCount = useMemo(function() { return oldDocRows(companies).length; }, [companies]);
   const assignees =["전체", ...new Set(profiles.map(p => p.name))];
 
+  // 🗂️ 결재함 배지 — 화면을 옮길 때마다 다시 센다(승인하면 바로 줄어들게).
+  useEffect(function() {
+    if (!profile?.id) { setSignOffBadge(0); return; }
+    supabase.from("sign_offs").select("id", { count: "exact", head: true })
+      .eq("approver_id", profile.id).eq("status", "pending")
+      .then(function(r) { setSignOffBadge(r.error ? 0 : (r.count || 0)); });
+  }, [profile?.id, view]);
+
   // 파이프라인 조합카드 행: pipeline_cards ⨝ companies + 기존 회사필터 동일 적용(단, 단계는 card.stage)
   const companyById = useMemo(() => {
     const m = new Map();
@@ -7200,11 +7210,14 @@ function CRMApp({ profile, session }) {
             { id: "list",       label: "기업 목록",   icon: "list" },
             { id: "pipeline",   label: "파이프라인",  icon: "pipeline" },
             { id: "cases",      label: "사례집",      icon: "folder" },
+            { id: "signoff",    label: "결재함",      icon: "save" },
             { id: "quicklinks", label: "바로가기",    icon: "link" },
           ].map(({ id, label, icon }) => (
             <SideNavItem key={id} icon={icon} label={label} active={view === id} onClick={() => setView(id)}
               rightSlot={
-                (id === "worknotes" && workNotesBadge > 0) ? (
+                (id === "signoff" && signOffBadge > 0) ? (
+                  <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{signOffBadge}</span>
+                ) : (id === "worknotes" && workNotesBadge > 0) ? (
                   <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{workNotesBadge}</span>
                 ) : (id === "chat" && chatUnread > 0) ? (
                   <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{chatUnread}</span>
@@ -7475,7 +7488,7 @@ function CRMApp({ profile, session }) {
           </div>
         ) : (
           <>
-            {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setFilterAssignee={setFilterAssignee} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} myName={profile?.name} stagnRows={stagnRows} />}
+            {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setFilterAssignee={setFilterAssignee} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} myName={profile?.name} myUid={profile?.id} stagnRows={stagnRows} />}
             {view === "agency" && <AgencyView key={agencyJumpKey} jumpToMonth={agencyJumpMonth} jumpToGroup={agencyJumpGroup} />}
             {view === "dbleads" && <DBLeadsView canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
             {view === "settlement" && <SettlementView profile={profile} />}
@@ -7491,6 +7504,7 @@ function CRMApp({ profile, session }) {
             {view === "quicklinks" && <QuickLinksView />}
             {view === "pipeline" && <PipelineView cardRows={pipelineCardRows} hiddenByList={pipelineCardData.hiddenByList} onClearListFilters={clearListFilters} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setPipelineCards={setPipelineCards} setStagnConfig={setStagnConfig} canEditMapping={profile?.name === "양호"} myName={profile?.name} stagnRows={stagnRows} />}
             {view === "cases" && <ApprovalCasesView profile={profile} />}
+            {view === "signoff" && <SignOffView profile={profile} onBadgeUpdate={setSignOffBadge} />}
             {/* 전체 담당자 보기는 업무노트 열람 권한(wnIsAdmin=양호)과 같은 기준으로. role='admin' 만으로는 DB(RLS)가 남의 노트를 안 준다 */}
             {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={wnIsAdmin(profile?.name)} onSelectCompany={setSelectedCompany} setView={setView} companies={companies} />}
             {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} filterAgency={filterAgency} setFilterAgency={setFilterAgency} filterTeam={filterTeam} setFilterTeam={setFilterTeam} creditFilter={creditFilter} setCreditFilter={setCreditFilter} creditMode={creditMode} setCreditMode={setCreditMode} assignees={assignees} onSelect={openCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
@@ -8717,7 +8731,7 @@ function StagnationAdminWidget({ rows, onSelectCompany, setView }) {
 }
 
 // ── 대시보드 ──────────────────────────────────────────────────────────────────
-function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, setFilterAssignee, setDashboardFilter, onAdd, canExport, myName, stagnRows }) {
+function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, setFilterAssignee, setDashboardFilter, onAdd, canExport, myName, myUid, stagnRows }) {
   const isAdmin = myName === "양호";
   // "나의 오늘" · "오늘의 할 일"이 함께 쓰는 보기 범위. 기본은 본인 기준, 관리자만 팀 전체로 전환 가능.
   const [scope, setScope] = useState("mine");
@@ -8912,6 +8926,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
 
               {/* 📄 시트지(기업현황표) 미작성 현황 */}
               <SheetStatusWidget companies={scopedCompanies} setView={setView} />
+
+              {/* 🗂️ 결재함 — 내 결재 대기 / 승인됨·미실행 (건이 없으면 카드 자체가 안 나온다) */}
+              <SignOffWidget setView={setView} myUid={myUid} />
 
               {/* 📅 차기 업무 마감 요약 (next_action 날짜 자동 집계) */}
               {(function() {
@@ -26150,6 +26167,502 @@ function ApprovalCasesView({ profile }) {
         </div>
       )}
     </div>
+  );
+}
+
+// ========== 🗂️ 결재함 (sign_offs) ==========
+// 비정형·1회성 승인 건만 다룬다. 연차 등 정형 업무는 여기 들어오지 않는다(LeaveView 담당).
+// ⚠️ 이름이 비슷한 ApprovalCasesView(approval_cases)와는 전혀 다른 기능이다 —
+//    그쪽은 "심사 결과 사례집", 이쪽은 "우리 팀 내부 결재".
+// ⚠️ 권한·상태 판정은 전부 DB 트리거가 다시 한 번 강제한다(결재함_sign_offs_테이블추가.sql).
+//    아래 canXxx 는 버튼을 감추기 위한 것일 뿐, 보안 경계가 아니다.
+const SIGN_OFF_CATEGORIES = [
+  { v: "schema",        label: "DB 스키마 변경" },
+  { v: "data_delete",   label: "데이터 삭제" },
+  { v: "profile_merge", label: "중복 프로필 확정" },
+  { v: "permission",    label: "권한 변경" },
+  { v: "etc",           label: "기타" },
+];
+const SIGN_OFF_STATUS = {
+  pending:   { label: "대기", bg: "#FEF3C7", color: "#B45309" },
+  approved:  { label: "승인", bg: "#DCFCE7", color: "#15803D" },
+  rejected:  { label: "반려", bg: "#FEE2E2", color: "#B91C1C" },
+  withdrawn: { label: "회수", bg: "#F3F4F6", color: "#6B7280" },
+};
+const SIGN_OFF_ACTION_LABEL = {
+  created: "결재 요청", edited: "본문 수정", approved: "승인", rejected: "반려",
+  withdrawn: "회수", executed: "실행 완료", commented: "댓글",
+};
+function signOffCategoryLabel(v) {
+  var hit = SIGN_OFF_CATEGORIES.filter(function(c) { return c.v === v; })[0];
+  return hit ? hit.label : (v || "-");
+}
+function SignOffPill({ children, bg, color }) {
+  return <span style={{ display: "inline-block", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 99, background: bg, color: color }}>{children}</span>;
+}
+
+function SignOffView({ profile, onBadgeUpdate }) {
+  const [rows, setRows] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [admins, setAdmins] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState("inbox"); // inbox | unexecuted | mine | all
+  const [selId, setSelId] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState(null);
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // 결재자는 uuid, 작성자·담당자는 정규화된 이름으로 판정한다.
+  // (같은 사람이 계정을 여러 개 쓴다 — A계정으로 올린 걸 B계정으로 봐도 "내가 올린 것"에 걸려야 한다)
+  var myUid = profile?.id || null;
+  var myNorm = normalizeStaffName(profile?.name);
+
+  var fetchRows = async function() {
+    var r = await supabase.from("sign_offs").select("*").order("requested_at", { ascending: false });
+    if (r.error) { alert("결재함을 불러오지 못했습니다: " + r.error.message); setLoading(false); return; }
+    var data = r.data || [];
+    setRows(data);
+    setLoading(false);
+    // 승인·반려 직후 사이드바 배지가 낡은 값으로 남지 않게 여기서 같이 갱신한다
+    // (WorkNotesView 의 onBadgeUpdate 와 같은 패턴)
+    if (onBadgeUpdate) {
+      onBadgeUpdate(data.filter(function(x) { return x.approver_id === myUid && x.status === "pending"; }).length);
+    }
+  };
+  var fetchEvents = async function(id) {
+    if (!id) { setEvents([]); return; }
+    var r = await supabase.from("sign_off_events").select("*").eq("sign_off_id", id).order("id", { ascending: true });
+    setEvents(r.error ? [] : (r.data || []));
+  };
+
+  useEffect(function() {
+    fetchRows();
+    // 결재자 후보 = 승인된 admin. 지금은 양호·정원 2명이지만 admin 이 늘면 목록도 자연히 늘어난다.
+    supabase.from("profiles").select("id,name,team").eq("role", "admin").eq("status", "approved").order("name")
+      .then(function(r) { if (!r.error) setAdmins(r.data || []); });
+  }, []);
+  useEffect(function() { fetchEvents(selId); }, [selId]);
+
+  var isAuthor = function(row) { return !!row && (row.created_by === myUid || row.created_name === myNorm); };
+  var isOwner  = function(row) { return !!row && !!row.owner_name && row.owner_name === myNorm; };
+  var isApprover = function(row) { return !!row && row.approver_id === myUid; };
+
+  var tabRows = useMemo(function() {
+    return {
+      inbox:      rows.filter(function(r) { return r.approver_id === myUid && r.status === "pending"; }),
+      unexecuted: rows.filter(function(r) { return r.status === "approved" && !r.executed_at; }),
+      mine:       rows.filter(function(r) { return r.created_by === myUid || r.created_name === myNorm; }),
+      all:        rows,
+    };
+  }, [rows, myUid, myNorm]);
+
+  var list = tabRows[tab] || [];
+  var sel = rows.filter(function(r) { return r.id === selId; })[0] || null;
+
+  // 목록이 바뀌면 선택이 사라질 수 있다 — 첫 건으로 되돌린다.
+  useEffect(function() {
+    if (list.length === 0) { if (selId !== null) setSelId(null); return; }
+    if (!list.some(function(r) { return r.id === selId; })) setSelId(list[0].id);
+  }, [tab, rows]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 쓰기 공통 — RLS 가 막으면 에러가 아니라 "0행"으로 돌아온다(PostgREST 204).
+  // 그래서 반드시 .select() 로 실제 반영 행수를 확인한다(CLAUDE.md 2-2 판정 함정).
+  var applyWrite = async function(patch, label) {
+    if (busy) return false;
+    setBusy(true);
+    var r = await supabase.from("sign_offs").update(patch).eq("id", selId).select("id");
+    setBusy(false);
+    if (r.error) { alert(label + " 실패\n\n" + r.error.message); return false; }
+    if (!r.data || r.data.length === 0) {
+      alert(label + " 실패\n\n권한이 없거나 이미 처리된 건입니다. 새로고침 후 다시 확인해 주세요.");
+      return false;
+    }
+    await fetchRows(); await fetchEvents(selId);
+    return true;
+  };
+
+  var doApprove = async function() {
+    if (!window.confirm("이 건을 승인할까요?\n승인은 되돌릴 수 없습니다 — 잘못 승인했으면 새 결재를 올려야 합니다.")) return;
+    await applyWrite({ status: "approved" }, "승인");
+  };
+  var doReject = async function() {
+    var why = window.prompt("반려 사유를 입력해 주세요. (필수)");
+    if (why === null) return;
+    if (!why.trim()) { alert("반려 사유는 비워둘 수 없습니다."); return; }
+    await applyWrite({ status: "rejected", decision_note: why.trim() }, "반려");
+  };
+  var doWithdraw = async function() {
+    if (!window.confirm("이 결재를 회수할까요?\n(삭제가 아니라 '회수'로 남습니다)")) return;
+    await applyWrite({ status: "withdrawn" }, "회수");
+  };
+  var doExecute = async function() {
+    var note = window.prompt("실제로 무엇을 했는지 남겨 주세요. (실행한 SQL 파일명 등 · 선택)");
+    if (note === null) return;
+    if (!window.confirm("실행 완료로 표시할까요?\n한 번 표시하면 되돌릴 수 없습니다.")) return;
+    await applyWrite({ executed_at: new Date().toISOString(), execution_note: note.trim() || null }, "실행 완료 표시");
+  };
+  var doComment = async function() {
+    if (!comment.trim() || busy) return;
+    setBusy(true);
+    var r = await supabase.rpc("sign_off_comment", { p_sign_off_id: selId, p_note: comment.trim() });
+    setBusy(false);
+    if (r.error) { alert("댓글 실패\n\n" + r.error.message); return; }
+    setComment("");
+    await fetchEvents(selId);
+  };
+
+  var openNew = function() {
+    setForm({
+      title: "", body: "", category: "etc", risk: "normal",
+      owner_name: myNorm || "", approver_id: (admins[0] && admins[0].id) || "", rollback_ref: "",
+    });
+    setShowForm(true);
+  };
+  var saveNew = async function() {
+    if (!form.title.trim()) { alert("제목은 필수입니다."); return; }
+    if (!form.approver_id) { alert("결재자를 선택해 주세요."); return; }
+    if (busy) return;
+    setBusy(true);
+    // created_by / created_name / approver_name / status 는 트리거가 서버에서 정한다.
+    // (여기서 보내는 값은 무시되지만, INSERT 정책이 created_by = auth.uid() 를 요구하므로 넣어준다)
+    var r = await supabase.from("sign_offs").insert({
+      title: form.title.trim(),
+      body: form.body.trim() || null,
+      category: form.category,
+      risk: form.risk,
+      owner_name: form.owner_name.trim() || null,
+      rollback_ref: form.rollback_ref.trim() || null,
+      approver_id: form.approver_id,
+      approver_name: "",
+      created_by: myUid,
+      created_name: myNorm,
+    }).select("id");
+    setBusy(false);
+    if (r.error) { alert("등록 실패\n\n" + r.error.message); return; }
+    setShowForm(false); setForm(null);
+    await fetchRows();
+    if (r.data && r.data[0]) { setTab("mine"); setSelId(r.data[0].id); }
+  };
+
+  var tabDefs = [
+    { k: "inbox",      label: "내 결재 대기", hot: false },
+    { k: "unexecuted", label: "승인됨·미실행", hot: true },
+    { k: "mine",       label: "내가 올린 것",  hot: false },
+    { k: "all",        label: "전체",          hot: false },
+  ];
+
+  var canApprove  = sel && sel.status === "pending" && isApprover(sel);
+  var canWithdraw = sel && sel.status === "pending" && isAuthor(sel);
+  var canExecute  = sel && sel.status === "approved" && !sel.executed_at && (isAuthor(sel) || isOwner(sel) || isApprover(sel));
+
+  return (
+    <div style={{ maxWidth: 1400 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0 }}>🗂️ 결재함</h1>
+          <div style={{ fontSize: 13, color: "#888", marginTop: 4 }}>
+            비정형·1회성 승인 건을 올리고, 승인받고, <b>실제로 실행됐는지까지</b> 남깁니다
+          </div>
+        </div>
+        <button onClick={openNew}
+          style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+          <Icon name="plus" size={15} color="#F7F6F3" /> 결재 올리기
+        </button>
+      </div>
+
+      {loading ? (
+        <div style={{ padding: 40, textAlign: "center", color: "#888", fontSize: 13 }}>불러오는 중…</div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", gap: 14, alignItems: "start" }}>
+          {/* ── 좌: 탭 + 목록 ── */}
+          <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, padding: 12 }}>
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 10 }}>
+              {tabDefs.map(function(t) {
+                var n = (tabRows[t.k] || []).length;
+                var on = tab === t.k;
+                var hot = t.hot && n > 0;
+                return (
+                  <div key={t.k} onClick={function() { setTab(t.k); }}
+                    style={{
+                      fontSize: 11, padding: "5px 9px", borderRadius: 99, cursor: "pointer", fontWeight: on || hot ? 700 : 400,
+                      background: on ? "#1A1917" : hot ? "#FEE2E2" : "#F7F6F3",
+                      color: on ? "#fff" : hot ? "#B91C1C" : "#6B7280",
+                      border: "1px solid " + (on ? "#1A1917" : hot ? "#FCA5A5" : "#E8E5E0"),
+                    }}>
+                    {t.label} {n > 0 ? n : ""}
+                  </div>
+                );
+              })}
+            </div>
+
+            {list.length === 0 ? (
+              <div style={{ padding: "28px 10px", textAlign: "center", color: "#9A9A94", fontSize: 12 }}>
+                {tab === "inbox" ? "내가 결재할 건이 없습니다." :
+                 tab === "unexecuted" ? "승인 후 실행이 밀린 건이 없습니다. 👍" :
+                 tab === "mine" ? "올린 결재가 없습니다." : "결재 건이 없습니다."}
+              </div>
+            ) : list.map(function(r) {
+              var st = SIGN_OFF_STATUS[r.status] || SIGN_OFF_STATUS.pending;
+              var on = r.id === selId;
+              var waited = (r.status === "approved" && !r.executed_at) ? docWaitDays(r.decided_at) : null;
+              return (
+                <div key={r.id} onClick={function() { setSelId(r.id); }}
+                  style={{
+                    borderBottom: "1px solid #F0EEE9", padding: on ? "9px 4px 9px 8px" : "9px 4px", cursor: "pointer",
+                    display: "flex", flexDirection: "column", gap: 3,
+                    background: on ? "#F4F7F6" : "transparent",
+                    borderLeft: on ? "3px solid #1A1917" : "none",
+                    borderRadius: on ? "0 6px 6px 0" : 0,
+                  }}>
+                  <div style={{ fontWeight: 700, fontSize: 12.5 }}>#{r.seq} {r.title}</div>
+                  <div style={{ fontSize: 10.5, color: "#8A8A85" }}>
+                    {r.created_name} → {r.approver_name} · {String(r.requested_at || "").slice(5, 10).replace("-", "/")}
+                  </div>
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    <SignOffPill bg={st.bg} color={st.color}>{st.label}</SignOffPill>
+                    {r.risk === "irreversible" && <SignOffPill bg="#FDE2DE" color="#A83A2C">되돌리기 불가</SignOffPill>}
+                    {r.status === "approved" && (r.executed_at
+                      ? <SignOffPill bg="#E0E7FF" color="#4338CA">실행 완료</SignOffPill>
+                      : <SignOffPill bg="#FEF3C7" color="#B45309">미실행{waited !== null && waited > 0 ? " " + waited + "일" : ""}</SignOffPill>)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* ── 우: 상세 ── */}
+          {!sel ? (
+            <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, padding: 40, textAlign: "center", color: "#9A9A94", fontSize: 13 }}>
+              왼쪽에서 결재 건을 선택하세요.
+            </div>
+          ) : (
+            <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, padding: 18 }}>
+              <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 6 }}>#{sel.seq} {sel.title}</div>
+              <div style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+                <SignOffPill bg={(SIGN_OFF_STATUS[sel.status] || {}).bg} color={(SIGN_OFF_STATUS[sel.status] || {}).color}>
+                  {(SIGN_OFF_STATUS[sel.status] || {}).label}
+                </SignOffPill>
+                {sel.risk === "irreversible" && <SignOffPill bg="#FDE2DE" color="#A83A2C">되돌리기 불가</SignOffPill>}
+                <span style={{ fontSize: 10.5, color: "#8A8A85" }}>{signOffCategoryLabel(sel.category)}</span>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 8, background: "#F7F6F3", borderRadius: 8, padding: "10px 12px", marginBottom: 12 }}>
+                {[
+                  { k: "작성자", v: sel.created_name },
+                  { k: "담당자", v: sel.owner_name || "-" },
+                  { k: "결재자", v: sel.approver_name },
+                  { k: "요청일", v: String(sel.requested_at || "").slice(0, 10) },
+                  { k: sel.status === "rejected" ? "반려일" : "승인일", v: sel.decided_at ? String(sel.decided_at).slice(0, 10) : "-" },
+                  { k: "되돌리기", v: sel.rollback_ref || "-" },
+                ].map(function(m) {
+                  return (
+                    <div key={m.k}>
+                      <span style={{ display: "block", fontSize: 9.5, color: "#9A9A94", letterSpacing: ".04em" }}>{m.k}</span>
+                      <b style={{ fontSize: 11.5, fontWeight: 600 }}>{m.v}</b>
+                    </div>
+                  );
+                })}
+                <div>
+                  <span style={{ display: "block", fontSize: 9.5, color: "#9A9A94", letterSpacing: ".04em" }}>실행</span>
+                  {sel.status !== "approved" ? <b style={{ fontSize: 11.5, fontWeight: 600 }}>-</b>
+                    : sel.executed_at
+                      ? <b style={{ fontSize: 11.5, fontWeight: 600, color: "#4338CA" }}>{String(sel.executed_at).slice(0, 10)} {sel.executed_name}</b>
+                      : <b style={{ fontSize: 11.5, fontWeight: 700, color: "#B45309" }}>아직 {(function() { var d = docWaitDays(sel.decided_at); return d !== null && d > 0 ? "(" + d + "일 경과)" : ""; })()}</b>}
+                </div>
+              </div>
+
+              {sel.body && (
+                <div style={{ border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, color: "#3F3F3A", whiteSpace: "pre-wrap", lineHeight: 1.7 }}>
+                  {sel.body}
+                </div>
+              )}
+              {sel.status === "rejected" && sel.decision_note && (
+                <div style={{ marginTop: 8, background: "#FEE2E2", borderLeft: "3px solid #B91C1C", borderRadius: "0 8px 8px 0", padding: "9px 12px", fontSize: 12, color: "#7F1D1D" }}>
+                  <b>반려 사유</b> · {sel.decision_note}
+                </div>
+              )}
+              {sel.executed_at && sel.execution_note && (
+                <div style={{ marginTop: 8, background: "#EEF2FF", borderLeft: "3px solid #4338CA", borderRadius: "0 8px 8px 0", padding: "9px 12px", fontSize: 12, color: "#3730A3" }}>
+                  <b>실행 내용</b> · {sel.execution_note}
+                </div>
+              )}
+
+              {/* 이력 — DB 트리거가 자동으로 남긴다. 사람이 지우거나 위조할 수 없다. */}
+              <div style={{ marginTop: 14, borderLeft: "2px solid #E8E5E0", paddingLeft: 12, display: "flex", flexDirection: "column", gap: 9 }}>
+                {events.length === 0 && <div style={{ fontSize: 11, color: "#9A9A94" }}>이력을 불러오는 중…</div>}
+                {events.map(function(e) {
+                  var dot = e.action === "rejected" || e.action === "withdrawn" ? "#A83A2C"
+                          : e.action === "approved" ? "#15803D"
+                          : e.action === "executed" ? "#4338CA" : "#C9C6C0";
+                  return (
+                    <div key={e.id} style={{ position: "relative", fontSize: 11.5 }}>
+                      <span style={{ position: "absolute", left: -17, top: 5, width: 7, height: 7, borderRadius: "50%", background: dot }} />
+                      <b>{e.actor_name}</b> {SIGN_OFF_ACTION_LABEL[e.action] || e.action}
+                      {e.note ? <span style={{ color: "#3F3F3A" }}> — {e.note}</span> : null}
+                      <span style={{ color: "#9A9A94" }}> · {fmtChatTime(e.at)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* 버튼 */}
+              <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+                {canApprove && (
+                  <>
+                    <button onClick={doApprove} disabled={busy}
+                      style={{ padding: "7px 15px", borderRadius: 8, border: "1px solid #15803D", background: "#15803D", color: "#fff", fontSize: 11.5, fontWeight: 700, cursor: busy ? "wait" : "pointer" }}>✓ 승인</button>
+                    <button onClick={doReject} disabled={busy}
+                      style={{ padding: "7px 15px", borderRadius: 8, border: "1px solid #FCA5A5", background: "#fff", color: "#B91C1C", fontSize: 11.5, fontWeight: 700, cursor: busy ? "wait" : "pointer" }}>반려 (사유 필수)</button>
+                  </>
+                )}
+                {canExecute && (
+                  <button onClick={doExecute} disabled={busy}
+                    style={{ padding: "7px 15px", borderRadius: 8, border: "1px solid #4338CA", background: "#4338CA", color: "#fff", fontSize: 11.5, fontWeight: 700, cursor: busy ? "wait" : "pointer" }}>▶ 실행 완료로 표시</button>
+                )}
+                {canWithdraw && (
+                  <button onClick={doWithdraw} disabled={busy}
+                    style={{ padding: "7px 15px", borderRadius: 8, border: "1px solid #E8E5E0", background: "#fff", color: "#6B7280", fontSize: 11.5, fontWeight: 700, cursor: busy ? "wait" : "pointer" }}>회수</button>
+                )}
+                {sel.status === "pending" && !canApprove && (
+                  <div style={{ fontSize: 11.5, color: "#8A8A85", alignSelf: "center" }}>
+                    {sel.approver_name} 님의 결재를 기다리는 중입니다.
+                  </div>
+                )}
+              </div>
+
+              {/* 댓글 */}
+              <div style={{ display: "flex", gap: 6, marginTop: 12, paddingTop: 12, borderTop: "1px dashed #E8E5E0" }}>
+                <input value={comment} onChange={function(e) { setComment(e.target.value); }}
+                  onKeyDown={function(e) { if (e.key === "Enter") doComment(); }}
+                  placeholder="댓글 남기기 (이력에 함께 남습니다)"
+                  style={{ flex: 1, padding: "7px 10px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 12, outline: "none" }} />
+                <button onClick={doComment} disabled={busy || !comment.trim()}
+                  style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid #E8E5E0", background: "#fff", color: comment.trim() ? "#1A1917" : "#B0AEA8", fontSize: 11.5, fontWeight: 700, cursor: comment.trim() ? "pointer" : "default" }}>등록</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── 새 결재 올리기 ── */}
+      {showForm && form && (
+        <div onClick={function(e) { if (e.target === e.currentTarget) setShowForm(false); }}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }}>
+          <div style={{ background: "#fff", borderRadius: 12, padding: 22, width: "100%", maxWidth: 560, maxHeight: "90vh", overflowY: "auto" }}>
+            <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 4 }}>결재 올리기</div>
+            <div style={{ fontSize: 11.5, color: "#8A8A85", marginBottom: 14 }}>
+              되돌리기 어려운 일일수록 <b>무엇을·왜·되돌리는 법</b>을 본문에 적어 주세요.
+            </div>
+
+            {[
+              { k: "title", label: "제목", ph: "예) 중복 계정 6명 정리" },
+              { k: "rollback_ref", label: "되돌리기 파일 (선택)", ph: "예) 계정정리_rollback.sql" },
+            ].map(function(f) {
+              return (
+                <div key={f.k} style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", marginBottom: 4 }}>{f.label}</div>
+                  <input value={form[f.k]} placeholder={f.ph}
+                    onChange={function(e) { var v = e.target.value; setForm(function(p) { var o = Object.assign({}, p); o[f.k] = v; return o; }); }}
+                    style={{ width: "100%", padding: "9px 11px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+                </div>
+              );
+            })}
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", marginBottom: 4 }}>종류</div>
+                <select value={form.category} onChange={function(e) { var v = e.target.value; setForm(function(p) { return Object.assign({}, p, { category: v }); }); }}
+                  style={{ width: "100%", padding: "9px 11px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 13, boxSizing: "border-box" }}>
+                  {SIGN_OFF_CATEGORIES.map(function(c) { return <option key={c.v} value={c.v}>{c.label}</option>; })}
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", marginBottom: 4 }}>위험도</div>
+                <select value={form.risk} onChange={function(e) { var v = e.target.value; setForm(function(p) { return Object.assign({}, p, { risk: v }); }); }}
+                  style={{ width: "100%", padding: "9px 11px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 13, boxSizing: "border-box" }}>
+                  <option value="normal">보통 (되돌릴 수 있음)</option>
+                  <option value="irreversible">되돌리기 불가</option>
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", marginBottom: 4 }}>담당자 (실행할 사람)</div>
+                <select value={form.owner_name} onChange={function(e) { var v = e.target.value; setForm(function(p) { return Object.assign({}, p, { owner_name: v }); }); }}
+                  style={{ width: "100%", padding: "9px 11px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 13, boxSizing: "border-box" }}>
+                  <option value="">지정 안 함</option>
+                  {ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", marginBottom: 4 }}>결재자</div>
+                <select value={form.approver_id} onChange={function(e) { var v = e.target.value; setForm(function(p) { return Object.assign({}, p, { approver_id: v }); }); }}
+                  style={{ width: "100%", padding: "9px 11px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 13, boxSizing: "border-box" }}>
+                  {admins.length === 0 && <option value="">(관리자 없음)</option>}
+                  {admins.map(function(a) { return <option key={a.id} value={a.id}>{a.name}{a.team ? " (" + a.team + ")" : ""}</option>; })}
+                </select>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", marginBottom: 4 }}>본문</div>
+              <textarea value={form.body} onChange={function(e) { var v = e.target.value; setForm(function(p) { return Object.assign({}, p, { body: v }); }); }}
+                placeholder="무엇을 · 왜 · 되돌리는 법 · 확인한 것"
+                style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 13, lineHeight: 1.7, resize: "vertical", minHeight: 120, boxSizing: "border-box", outline: "none", fontFamily: "inherit" }} />
+            </div>
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={function() { setShowForm(false); }}
+                style={{ padding: "10px 18px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>취소</button>
+              <button onClick={saveNew} disabled={busy}
+                style={{ padding: "10px 18px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: busy ? "wait" : "pointer" }}>올리기</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 📋 대시보드 '오늘의 할 일' 카드 2장 — 내 결재 대기 / 승인됨·미실행
+// ⚠️ 종 아이콘의 notifications(work_requests 흐름)와는 다른 테이블·다른 의미다. 섞지 말 것.
+function SignOffWidget({ setView, myUid }) {
+  const [c, setC] = useState({ pending: 0, unexecuted: 0, oldest: null });
+
+  useEffect(function() {
+    async function load() {
+      var r = await supabase.from("sign_offs").select("status,approver_id,executed_at,decided_at");
+      if (r.error || !r.data) return;
+      var pending = r.data.filter(function(x) { return x.status === "pending" && x.approver_id === myUid; }).length;
+      var un = r.data.filter(function(x) { return x.status === "approved" && !x.executed_at; });
+      var oldest = null;
+      un.forEach(function(x) { var d = docWaitDays(x.decided_at); if (d !== null && (oldest === null || d > oldest)) oldest = d; });
+      setC({ pending: pending, unexecuted: un.length, oldest: oldest });
+    }
+    load();
+  }, [myUid]);
+
+  if (!c.pending && !c.unexecuted) return null;
+  return (
+    <>
+      {c.pending > 0 && (
+        <div onClick={function() { setView("signoff"); }}
+          style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #A83A2C" }}>
+          <div style={{ fontSize: 10, color: "#A83A2C", fontWeight: 700, marginBottom: 4 }}>🗂️ 내 결재 대기</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: "#A83A2C" }}>{c.pending}건</div>
+          <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>내가 승인·반려할 건</div>
+        </div>
+      )}
+      {c.unexecuted > 0 && (
+        <div onClick={function() { setView("signoff"); }}
+          style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #B45309" }}>
+          <div style={{ fontSize: 10, color: "#B45309", fontWeight: 700, marginBottom: 4 }}>⏳ 승인됨 · 미실행</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: "#B45309" }}>{c.unexecuted}건</div>
+          <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>
+            승인만 받고 안 한 건{c.oldest !== null && c.oldest > 0 ? " · 최장 " + c.oldest + "일" : ""}
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
