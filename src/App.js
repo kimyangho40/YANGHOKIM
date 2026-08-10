@@ -7792,18 +7792,40 @@ function AiSearchModal({ companies, myName, onClose, onSelectCompany }) {
       return out;
     };
 
+    // ⚠️ PostgREST 는 서버 설정(max-rows)으로 한 번에 1000행까지만 돌려준다.
+    //    `.limit(10000)` 을 걸어도 **조용히 무시**된다 — 에러도 경고도 없다.
+    //    그래서 기관진행 1732건 중 1000건만 올라갔고, AI 가 "소진공 8월 부결 0건"이라고
+    //    답했다(실제 정답 1건 · 칼라스토리). 2026-08-11 발견.
+    //    → 1000건씩 끊어서 전부 가져온다(AgencyView fetchCases 와 같은 방식).
+    //    정렬을 고정하는 이유는 두 가지다: 페이지 경계가 흔들리지 않게 하는 것과,
+    //    매번 같은 순서여야 JSON 바이트가 같아 프롬프트 캐시가 살아 있는 것.
+    var fetchAllRows = async function(table, cols) {
+      var pageSize = 1000, offset = 0, out = [];
+      for (;;) {
+        var r = await supabase.from(table).select(cols)
+          .is("deleted_at", null)
+          .order("created_at", { ascending: true })
+          .order("id", { ascending: true })
+          .range(offset, offset + pageSize - 1);
+        if (r.error) { console.error("[AI스냅샷] " + table + " 로드 실패:", r.error); break; }
+        var rows = r.data || [];
+        out = out.concat(rows);
+        if (rows.length < pageSize) break;   // 마지막 페이지
+        offset += pageSize;
+      }
+      return out;
+    };
+
     Promise.all([
-      supabase.from("agency_cases")
-        .select("business_name, representative, agency_group, agency_sub, status, assignee, region, request_amount, request_fund, result, result_reason, apply_date, month, year, created_at")
-        .is("deleted_at", null).limit(10000),
-      supabase.from("settlement_manual")
-        .select("business_name, agency_group, month, request_amount, contract_fee, commission_fee, received_amount, contract_date, fee_received_date, invoice_issued, fee_received, settlement_notes")
-        .is("deleted_at", null).limit(10000),
-    ]).then(function([r1, r2]) {
+      fetchAllRows("agency_cases",
+        "business_name, representative, agency_group, agency_sub, status, assignee, region, request_amount, request_fund, result, result_reason, apply_date, month, year, created_at"),
+      fetchAllRows("settlement_manual",
+        "business_name, agency_group, month, request_amount, contract_fee, commission_fee, received_amount, contract_date, fee_received_date, invoice_issued, fee_received, settlement_notes"),
+    ]).then(function(res) {
       setSnapshot({
         업체목록: companyRows.map(compact),
-        기관진행: (r1.error ? [] : (r1.data || [])).map(compact),
-        정산: (r2.error ? [] : (r2.data || [])).map(compact),
+        기관진행: (res[0] || []).map(compact),
+        정산: (res[1] || []).map(compact),
       });
       setLoadingSnap(false);
     });
