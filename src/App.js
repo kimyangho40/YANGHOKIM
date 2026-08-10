@@ -4518,6 +4518,12 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
   const channelRef = useRef(channel);
   channelRef.current = channel;
   const markedRef = useRef({}); // 이미 읽음 처리한 메시지 id (중복 update 방지)
+  // 🔎 메시지 전문검색 — 화면에 로드된 것만이 아니라 DB 에서 직접 찾는다(오래된 메시지 포함)
+  const [chatSearchQ, setChatSearchQ] = useState("");
+  const [chatSearchResults, setChatSearchResults] = useState(null); // null=검색 안 함 / []=결과 없음
+  const [chatSearching, setChatSearching] = useState(false);
+  const [jumpMsgId, setJumpMsgId] = useState(null); // 검색 결과에서 점프한 메시지
+  const msgRefs = useRef({});
   const onUnreadRef = useRef(onUnreadChange); // App 재렌더로 콜백이 바뀌어도 effect 재실행 안 되게 고정
   onUnreadRef.current = onUnreadChange;
   const onChannelRef = useRef(onChannelChange);
@@ -4628,10 +4634,70 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
 
   useEffect(function() { refreshUnreadMap(); }, [refreshUnreadMap]);
 
-  // 새 메시지 시 하단으로 스크롤
+  // 메시지 전문검색 — 본문(message)과 작성자(sender)를 DB 에서 직접 찾는다.
+  // ⚠️ 내가 볼 수 있는 채널만 나온다. chat_messages 의 채널 스코프 RLS(채팅_DM_비공개_RLS.sql)가
+  //    서버에서 걸러주므로, 클라이언트에서 따로 안 걸러도 남의 DM 은 절대 결과에 뜨지 않는다.
   useEffect(function() {
+    var q = chatSearchQ.trim();
+    if (q.length < 2) { setChatSearchResults(null); setChatSearching(false); return; }
+    var alive = true;
+    setChatSearching(true);
+    // 타자 중 매 글자마다 쏘지 않도록 잠깐 기다린다
+    var timer = setTimeout(function() {
+      // PostgREST 의 or() 는 콤마·괄호·별표를 문법으로 읽는다 → 검색어에서 걷어내야 쿼리가 안 깨진다
+      var safe = q.replace(/[,()*\\%"]/g, " ").trim();
+      if (!safe) { if (alive) { setChatSearching(false); setChatSearchResults([]); } return; }
+      supabase.from("chat_messages")
+        .select("id, sender, message, channel, created_at")
+        .is("deleted_at", null)
+        .or("message.ilike.*" + safe + "*,sender.ilike.*" + safe + "*")
+        .order("created_at", { ascending: false })
+        .limit(50)
+        .then(function(r) {
+          if (!alive) return;
+          setChatSearching(false);
+          if (r.error) { console.error("채팅 검색 실패:", r.error); setChatSearchResults([]); return; }
+          setChatSearchResults(r.data || []);
+        });
+    }, 300);
+    return function() { alive = false; clearTimeout(timer); };
+  }, [chatSearchQ]);
+
+  // 검색 결과 클릭 → 그 채널로 옮기고 해당 메시지로 스크롤
+  function jumpToMessage(m) {
+    setChatSearchQ("");
+    setChatSearchResults(null);
+    if (m.channel !== channel) setChannel(m.channel);
+    setJumpMsgId(m.id);
+  }
+
+  // 검색어 주변만 잘라 보여준다 — 긴 메시지에서 어디가 걸렸는지 바로 보이게.
+  function searchSnippet(text, q) {
+    var s = String(text || "");
+    var i = s.toLowerCase().indexOf(String(q || "").trim().toLowerCase());
+    if (i < 0) return s.length > 90 ? s.slice(0, 90) + "…" : s;
+    var from = Math.max(0, i - 30);
+    var to = Math.min(s.length, i + q.trim().length + 50);
+    return (from > 0 ? "…" : "") + s.slice(from, to) + (to < s.length ? "…" : "");
+  }
+
+  // 점프 대상이 그려지면 그 위치로 스크롤하고 잠깐 강조한다.
+  // 채널 전환 직후엔 아직 로드 전이라 el 이 없다 → messages 가 바뀔 때 다시 시도된다.
+  useEffect(function() {
+    if (!jumpMsgId) return;
+    var el = msgRefs.current[jumpMsgId];
+    if (!el) return;
+    el.scrollIntoView({ block: "center" });
+    var t = setTimeout(function() { setJumpMsgId(null); }, 2200);
+    return function() { clearTimeout(t); };
+  }, [jumpMsgId, messages]);
+
+  // 새 메시지 시 하단으로 스크롤
+  // ⚠️ 검색 점프 중에는 건너뛴다 — 안 그러면 찾아간 메시지에서 곧바로 맨 아래로 끌려간다.
+  useEffect(function() {
+    if (jumpMsgId) return;
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages]);
+  }, [messages, jumpMsgId]);
 
   // @업체 자동완성 갱신
   function updateMention(val, caret) {
@@ -4815,7 +4881,51 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
 
       {/* 메시지 영역 */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <div style={{ padding: "14px 20px", borderBottom: "1px solid #E8E5E0", fontSize: 15, fontWeight: 700 }}>{title}</div>
+        <div style={{ padding: "10px 20px", borderBottom: "1px solid #E8E5E0", display: "flex", alignItems: "center", gap: 12, position: "relative" }}>
+          <span style={{ fontSize: 15, fontWeight: 700, whiteSpace: "nowrap" }}>{title}</span>
+
+          {/* 🔎 메시지 검색 — 본문 어떤 단어로도(업체명·대표자·기관·상품·작성자) 오래된 것까지 찾는다 */}
+          <div style={{ position: "relative", marginLeft: "auto", width: "min(380px, 55%)" }}>
+            <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }}>
+              <Icon name="search" size={13} color="#AAA" />
+            </span>
+            <input value={chatSearchQ} onChange={function(e) { setChatSearchQ(e.target.value); }}
+              onKeyDown={function(e) { if (e.key === "Escape") { setChatSearchQ(""); setChatSearchResults(null); } }}
+              placeholder="메시지 검색 (업체명 · 대표자 · 기관 · 상품 · 작성자)"
+              style={{ width: "100%", padding: "7px 28px 7px 30px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 12, boxSizing: "border-box", outline: "none", background: "#fff" }} />
+            {chatSearchQ && (
+              <span onClick={function() { setChatSearchQ(""); setChatSearchResults(null); }} title="검색어 지우기 (Esc)"
+                style={{ position: "absolute", right: 9, top: "50%", transform: "translateY(-50%)", cursor: "pointer", color: "#AAA", fontSize: 15, lineHeight: 1 }}>×</span>
+            )}
+          </div>
+
+          {/* 검색 결과 드롭다운 */}
+          {chatSearchResults !== null && (
+            <div style={{ position: "absolute", top: "100%", right: 20, width: "min(460px, 70%)", maxHeight: 380, overflowY: "auto", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.10)", zIndex: 30 }}>
+              <div style={{ padding: "8px 12px", fontSize: 11, color: "#888", borderBottom: "1px solid #F0EDE8", display: "flex", justifyContent: "space-between" }}>
+                <span>{chatSearching ? "찾는 중…" : chatSearchResults.length + "건"}{chatSearchResults.length === 50 ? " (최근 50건만)" : ""}</span>
+                <span>내가 볼 수 있는 채널만</span>
+              </div>
+              {chatSearchResults.length === 0 && !chatSearching ? (
+                <div style={{ padding: "22px 12px", textAlign: "center", color: "#AAA", fontSize: 12 }}>일치하는 메시지가 없어요</div>
+              ) : chatSearchResults.map(function(m) {
+                return (
+                  <div key={m.id} onClick={function() { jumpToMessage(m); }}
+                    style={{ padding: "9px 12px", borderBottom: "1px solid #F7F6F3", cursor: "pointer", fontSize: 12 }}
+                    onMouseEnter={function(e) { e.currentTarget.style.background = "#FAF9F7"; }}
+                    onMouseLeave={function(e) { e.currentTarget.style.background = "transparent"; }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 3 }}>
+                      <span style={{ fontWeight: 700, color: "#1A1917" }}>{chatChannelLabel(m.channel, me)}</span>
+                      <span style={{ color: "#888" }}>{m.sender}</span>
+                      <span style={{ marginLeft: "auto", color: "#AAA", fontSize: 11 }}>{String(m.created_at || "").slice(0, 10)}</span>
+                    </div>
+                    <div style={{ color: "#555", lineHeight: 1.45, wordBreak: "break-word" }}>{searchSnippet(m.message, chatSearchQ)}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
         <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "16px 20px", background: "#F4F2EE" }}>
           {messages.length === 0 ? (
             <div style={{ textAlign: "center", color: "#AAA", fontSize: 13, marginTop: 40 }}>아직 메시지가 없어요. 첫 메시지를 보내보세요 👋</div>
@@ -4826,7 +4936,11 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
             var tagged = deleted ? [] : findTaggedCompanies(msg.message, companiesList);
             var savedArr = Array.isArray(msg.saved_to_activity) ? msg.saved_to_activity : [];
             return (
-              <div key={msg.id} style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", marginBottom: 12 }}>
+              <div key={msg.id}
+                ref={function(el) { if (el) msgRefs.current[msg.id] = el; else delete msgRefs.current[msg.id]; }}
+                style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", marginBottom: 12,
+                  background: jumpMsgId === msg.id ? "#FFF3C4" : "transparent", borderRadius: 10,
+                  padding: jumpMsgId === msg.id ? "6px 8px" : 0, transition: "background 0.5s" }}>
                 {!mine && <div style={{ fontSize: 11, color: "#888", margin: "0 6px 3px", fontWeight: 600 }}>{msg.sender}</div>}
                 <div style={{ display: "flex", alignItems: "flex-end", gap: 6, flexDirection: mine ? "row-reverse" : "row", maxWidth: "78%" }}>
                   {deleted ? (
