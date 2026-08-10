@@ -79,7 +79,15 @@ export default async function handler(req, res) {
       return;
     }
 
-    const system = [
+    // ── 프롬프트 캐싱 ────────────────────────────────────────────────────────
+    // 스냅샷(수십만 토큰)이 질문마다 통째로 다시 올라간다. 캐시를 걸면 두 번째 질문부터
+    // 그 부분의 입력비가 약 1/10 이 된다(쓰기 1.25배 → 읽기 0.1배, 5분 TTL 은 읽을 때마다 갱신).
+    // ⚠️ 캐시는 '바이트 접두사 일치'다. 이 블록보다 앞이 한 글자라도 달라지면 통째로 깨진다:
+    //    · 지시문을 고치면 그날 캐시는 한 번 다시 쓰인다(정상, 한 번이면 끝).
+    //    · today 는 지시문 안에 있어 하루 한 번 바뀐다 — 하루 첫 질문만 캐시 쓰기다.
+    //    · 스냅샷 JSON 의 키 순서가 흔들리면 매번 깨진다 → 프런트 compact() 가 순서를 유지한다.
+    // 질문·대화이력은 messages 로 뒤에 붙으므로 캐시에 영향을 주지 않는다.
+    const instructions = [
       "당신은 정책자금 컨설팅 회사의 내부 CRM에서 동작하는 AI 검색 상담원입니다.",
       "아래 <데이터>는 회사 전체 업체/기관진행/정산 현황의 경량 스냅샷(JSON)입니다.",
       "사용자의 질문에 이 데이터만 근거로 답하세요. 데이터에 없으면 추측하지 말고 없다고 답하세요.",
@@ -95,11 +103,17 @@ export default async function handler(req, res) {
       "이슈/특이사항/문제/진행상황을 묻는 질문은 이 필드들을 근거로 답하고, 인용할 때는 적힌 문장을 그대로 옮기세요.",
       "값 끝에 '…(이하 생략)'이 붙어 있으면 원문이 잘린 것이니, 필요하면 업체 상세에서 전체를 확인하라고 안내하세요.",
       "필드가 비어 있는 업체는 '이슈 없음'이 아니라 '적힌 내용 없음'입니다. 둘을 구분해서 말하세요.",
-      "",
-      "<데이터>",
-      JSON.stringify(snapshot),
-      "</데이터>",
+      "값이 비어 있는 필드는 아예 빠진 채로 옵니다 — 키가 없으면 '그 항목에 적힌 내용이 없다'는 뜻입니다.",
     ].join("\n");
+
+    const system = [
+      { type: "text", text: instructions },
+      {
+        type: "text",
+        text: "<데이터>\n" + JSON.stringify(snapshot) + "\n</데이터>",
+        cache_control: { type: "ephemeral" },
+      },
+    ];
 
     const messages = [];
     if (Array.isArray(history)) {
@@ -140,7 +154,23 @@ export default async function handler(req, res) {
       .join("\n")
       .trim();
 
-    res.status(200).json({ answer: answer });
+    // 캐시가 실제로 먹었는지 확인용. read 가 0 인 채로 계속 write 만 나오면
+    // 접두사가 매번 달라지고 있다는 뜻이다(스냅샷 키 순서·지시문 변경 등).
+    const u = data.usage || {};
+    console.log("[ai-search] usage", JSON.stringify({
+      input: u.input_tokens, output: u.output_tokens,
+      cache_write: u.cache_creation_input_tokens, cache_read: u.cache_read_input_tokens,
+    }));
+
+    res.status(200).json({
+      answer: answer,
+      usage: {
+        input_tokens: u.input_tokens,
+        output_tokens: u.output_tokens,
+        cache_creation_input_tokens: u.cache_creation_input_tokens,
+        cache_read_input_tokens: u.cache_read_input_tokens,
+      },
+    });
   } catch (err) {
     res.status(500).json({ error: "서버 오류: " + (err && err.message ? err.message : String(err)) });
   }

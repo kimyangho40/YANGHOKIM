@@ -7770,6 +7770,28 @@ function AiSearchModal({ companies, myName, onClose, onSelectCompany }) {
       if (memo) row.비고메모 = memo;
       return row;
     });
+    // 스냅샷 경량화 — 값이 빈 필드는 통째로 빼고, 타임스탬프는 날짜까지만 남긴다.
+    //   빈 필드는 모델에게 아무 정보도 안 주면서 키 이름만큼 토큰을 먹는다.
+    //   실측(2026-08-11): 기관진행 607KB→392KB(-35%), 업체목록 193KB→148KB(-23%), 합계 -32%.
+    // ⚠️ 키 순서를 바꾸면 안 된다 — 프롬프트 캐시는 '바이트 접두사 일치'라 순서가 흔들리면
+    //    질문마다 캐시가 깨져 오히려 손해다. Object.keys 순서(원본 그대로)를 유지한다.
+    var compact = function(obj) {
+      var out = {};
+      Object.keys(obj).forEach(function(k) {
+        var v = obj[k];
+        if (v == null) return;                       // null/undefined 는 뺀다 (0·false 는 남긴다)
+        if (typeof v === "string") {
+          var s = v.trim();
+          if (!s) return;                            // 빈 문자열도 뺀다
+          // 2026-08-10T07:15:23.123456+00:00 → 2026-08-10 (시각까지 묻는 질문은 없다)
+          out[k] = /^\d{4}-\d{2}-\d{2}T/.test(s) ? s.slice(0, 10) : s;
+          return;
+        }
+        out[k] = v;
+      });
+      return out;
+    };
+
     Promise.all([
       supabase.from("agency_cases")
         .select("business_name, representative, agency_group, agency_sub, status, assignee, region, request_amount, request_fund, result, result_reason, apply_date, month, year, created_at")
@@ -7779,9 +7801,9 @@ function AiSearchModal({ companies, myName, onClose, onSelectCompany }) {
         .is("deleted_at", null).limit(10000),
     ]).then(function([r1, r2]) {
       setSnapshot({
-        업체목록: companyRows,
-        기관진행: (r1.error ? [] : (r1.data || [])),
-        정산: (r2.error ? [] : (r2.data || [])),
+        업체목록: companyRows.map(compact),
+        기관진행: (r1.error ? [] : (r1.data || [])).map(compact),
+        정산: (r2.error ? [] : (r2.data || [])).map(compact),
       });
       setLoadingSnap(false);
     });
