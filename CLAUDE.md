@@ -80,6 +80,30 @@
   → 채널까지만 정책으로 막고, 그 안쪽(남의 본문 수정·삭제, sender/channel 바꿔치기)은 **트리거 `trg_chat_protect_update`**가 막는다.
 - 트리거는 `auth.uid() is null`이면 통과시킨다 — service_role·`run-sql.js` 같은 관리 작업을 막지 않기 위해서다.
 
+## 2-3. 세션 수명 제한은 pg_cron 이 대신한다 (2026-08-11)
+Supabase 정식 기능(`sessions_timebox`/`sessions_inactivity_timeout`)은 **Pro 플랜 전용**이라
+무료 플랜에선 Management API 가 **402** 를 준다. 그래서 `auth.sessions` 를 직접 청소한다.
+- cron 작업 `sweep-stale-sessions` — 매일 UTC 18:00(KST 03:00), 생성 30일 초과 또는 14일 미갱신 세션 삭제.
+  SQL: `세션수명제한_pg_cron_자동청소.sql` / 해제 `_rollback.sql`
+- `auth.refresh_tokens.session_id` 가 **ON DELETE CASCADE** 라 세션을 지우면 리프레시 토큰도 사라진다
+  (실측: 세션 30→17 일 때 토큰 822→306). 다만 액세스 토큰은 살아 있어 **최대 1시간 뒤** 로그아웃된다.
+- ⚠️ **즉시 차단이 필요하면 이걸 쓰지 말 것** — 그건 `profiles.status='rejected'` 담당이다.
+  비활성화하면 세션은 살아 있어도 데이터·API 가 전부 즉시 막힌다(실증 9/9, `퇴사자_세션차단_실증.sql`).
+  단 그 UPDATE 는 `trg_protect_profile` 때문에 **관리자 컨텍스트에서만** 먹는다(아래 2-4).
+
+## 2-4. `profiles.role`/`status` 변경은 관리자 컨텍스트에서만 먹는다
+`trg_protect_profile` → `protect_profile_privileges()` 가
+`if not public.is_admin() then new.role := old.role; new.status := old.status; end if;` 다.
+`scripts/run-sql.js` 는 `auth.uid()` 가 없어 `is_admin()`=false → **에러 없이 조용히 되돌린다.**
+커밋은 성공하는데 값은 그대로라 "됐다"고 오판하기 딱 좋다. 반드시 이렇게 감쌀 것:
+```sql
+set request.jwt.claims = '{"sub":"<admin uuid>","role":"authenticated"}';
+set role authenticated;
+update public.profiles set status = '...' where ...;
+reset role;
+```
+(`is_admin()` = uid 가 `role='admin' and status='approved'`. 현재 양호·정원만 해당.)
+
 ## 2-2. DB 테이블을 새로 만들면 — RLS를 같은 커밋에서 켠다
 Supabase는 테이블 기본값이 **"열림"**이라, RLS를 켜지 않으면 비로그인 anon key로 전건이 조회된다.
 과거 `보안_RLS_승인제_SETUP.sql`이 테이블을 **이름으로 나열**하는 방식이라, 그 뒤에 만든 테이블마다
