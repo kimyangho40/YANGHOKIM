@@ -23355,14 +23355,28 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     { key: "other",      label: "기타",        color: "#6B7280", bg: "#F3F4F6" },
   ];
 
+  // 검색 판정 한 곳 — 업체명 · 대표자명 · 사업자등록번호.
+  // 사업자번호는 표기가 제각각이라("123-45-67890" / "1234567890" / 공백 섞임)
+  // 양쪽 다 숫자만 남겨 비교한다. 숫자 3자리 미만은 번호 검색으로 치지 않는다
+  // (업체명에 든 숫자와 우연히 겹쳐 엉뚱한 게 걸리는 걸 막는다).
+  function matchesQuery(c, q, qDigits) {
+    if (!q) return true;
+    if ((c.business_name || "").toLowerCase().indexOf(q) >= 0) return true;
+    if ((c.representative || "").toLowerCase().indexOf(q) >= 0) return true;
+    if (qDigits.length >= 3) {
+      var bn = (c.business_number || "").replace(/[^0-9]/g, "");
+      if (bn && bn.indexOf(qDigits) >= 0) return true;
+    }
+    return false;
+  }
+
   var filtered = useMemo(function() {
     var q = (searchQ || "").trim().toLowerCase();
+    var qDigits = (searchQ || "").replace(/[^0-9]/g, "");
     var list = cases.filter(function(c) {
       var matchMonth = activeMonth === "all" ? true : Number(c.month) === Number(activeMonth);
       var matchStatus = statusFilter === "all" ? true : groupOf(c.status) === statusFilter;
-      var matchSearch = !q
-        || (c.business_name || "").toLowerCase().indexOf(q) >= 0
-        || (c.representative || "").toLowerCase().indexOf(q) >= 0;
+      var matchSearch = matchesQuery(c, q, qDigits);
       return c.agency_group === activeGroup
         && matchMonth
         && Number(c.year) === currentYear
@@ -23397,6 +23411,30 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       return (a.created_at || "").localeCompare(b.created_at || "");
     });
   }, [cases, activeGroup, activeMonth, filterAssignee, currentYear, statusFilter, searchQ]);
+
+  // 검색은 "지금 보고 있는 기관 탭 + 월" 안에서만 걸린다.
+  // 그래서 다른 탭/월에 있는 업체를 찾으면 화면상 0건이라 "검색이 안 된다"고 오해하기 쉽다.
+  //   (실제로 '프라이빗'은 소진공·기타·신용보증재단 3개 탭, 3·4·6·8월에 흩어져 있다)
+  // → 밖에 걸리는 게 있으면 어디에 몇 건 있는지 알려주고, 눌러서 바로 이동하게 한다.
+  var otherMatches = useMemo(function() {
+    var q = (searchQ || "").trim().toLowerCase();
+    if (!q) return [];
+    var qDigits = (searchQ || "").replace(/[^0-9]/g, "");
+    var byPlace = {};
+    cases.forEach(function(c) {
+      if (c.deleted_at) return;
+      if (Number(c.year) !== currentYear) return;
+      if (!matchesQuery(c, q, qDigits)) return;
+      var inView = c.agency_group === activeGroup
+        && (activeMonth === "all" || Number(c.month) === Number(activeMonth));
+      if (inView) return;
+      var k = c.agency_group + "|" + Number(c.month);
+      if (!byPlace[k]) byPlace[k] = { group: c.agency_group, month: Number(c.month), n: 0 };
+      byPlace[k].n += 1;
+    });
+    return Object.keys(byPlace).map(function(k) { return byPlace[k]; })
+      .sort(function(a, b) { return a.group === b.group ? a.month - b.month : a.group.localeCompare(b.group); });
+  }, [cases, searchQ, activeGroup, activeMonth, currentYear]);
 
   var trashedCases = useMemo(function() {
     return cases.filter(function(c) { return !!c.deleted_at; });
@@ -23856,13 +23894,31 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
           <Icon name="search" size={15} color="#AAA" />
         </span>
         <input value={searchQ} onChange={function(e) { setSearchQ(e.target.value); }}
-          placeholder="업체명 · 대표자명 검색"
+          placeholder="업체명 · 대표자명 · 사업자번호 검색"
           style={{ width: "100%", padding: "10px 36px 10px 38px", border: "1px solid #E8E5E0", borderRadius: 10, fontSize: 13, boxSizing: "border-box", outline: "none", background: "#fff" }} />
         {searchQ && (
           <span onClick={function() { setSearchQ(""); }} title="검색어 지우기"
             style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", cursor: "pointer", color: "#AAA", fontSize: 16, lineHeight: 1 }}>×</span>
         )}
       </div>
+
+      {/* 다른 탭·월에 걸린 결과 안내 — 현재 탭에서 0건일 때 "검색이 고장났다"는 오해를 막는다 */}
+      {searchQ && otherMatches.length > 0 && (
+        <div style={{ marginTop: -8, marginBottom: 14, fontSize: 12, color: "#8A6D3B", background: "#FFF9E8", border: "1px solid #F3E4BC", borderRadius: 8, padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span>다른 기관·월에도 <b>{otherMatches.reduce(function(s, m) { return s + m.n; }, 0)}건</b> 있어요:</span>
+          {otherMatches.slice(0, 6).map(function(m) {
+            return (
+              <span key={m.group + m.month}
+                onClick={function() { setActiveGroup(m.group); setActiveMonth(m.month); setStatusFilter("all"); setFilterAssignee([]); }}
+                title="눌러서 이동"
+                style={{ cursor: "pointer", background: "#fff", border: "1px solid #E8D9AE", borderRadius: 99, padding: "2px 9px", fontWeight: 600 }}>
+                {m.group} {m.month}월 {m.n}건
+              </span>
+            );
+          })}
+          {otherMatches.length > 6 && <span>외 {otherMatches.length - 6}곳</span>}
+        </div>
+      )}
 
       {/* 기관 탭 */}
       <div style={{ display: "flex", gap: 6, marginBottom: 18, flexWrap: "wrap" }}>
@@ -23996,9 +24052,22 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       {/* 테이블 */}
       {filtered.length === 0 ? (
         <div style={{ background: "#fff", borderRadius: 10, padding: "60px 20px", textAlign: "center", color: "#AAA", fontSize: 14, border: "1px solid #E8E5E0" }}>
-          <div style={{ fontSize: 36, marginBottom: 12 }}>📋</div>
-          {activeGroup} {activeMonth}월 데이터가 없습니다<br />
-          <span style={{ fontSize: 12 }}>기업 목록에서 기관과 신청월을 설정하고 "기관별현황에 등록" 버튼을 눌러주세요</span>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>{searchQ ? "🔍" : "📋"}</div>
+          {searchQ ? (
+            <>
+              {activeGroup} {activeMonth === "all" ? "전체" : activeMonth + "월"}에 "<b>{searchQ}</b>" 검색 결과가 없습니다<br />
+              <span style={{ fontSize: 12 }}>
+                {otherMatches.length > 0
+                  ? "위 안내에서 다른 기관·월로 이동해 보세요"
+                  : "업체명 · 대표자명 · 사업자번호로 찾을 수 있어요"}
+              </span>
+            </>
+          ) : (
+            <>
+              {activeGroup} {activeMonth}월 데이터가 없습니다<br />
+              <span style={{ fontSize: 12 }}>기업 목록에서 기관과 신청월을 설정하고 "기관별현황에 등록" 버튼을 눌러주세요</span>
+            </>
+          )}
         </div>
       ) : (
         <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #E8E5E0", overflow: "hidden" }}>
