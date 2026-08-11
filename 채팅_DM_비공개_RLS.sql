@@ -48,7 +48,7 @@ as $$
   select case
     when coalesce(p_me, '') = '' or coalesce(p_channel, '') = '' then false
     when p_channel = 'general'    then true
-    when p_channel = 'corporate'  then p_me = any (array['양호','동일','유진','인선','미현'])
+    when p_channel = 'corporate'  then p_me = any (array['양호','동일','유진','인선','미현','정원'])
     when p_channel = 'individual' then p_me = any (array['양호','동일','관호','현애','지혜','정원'])
     when p_channel like 'dm:%'    then p_me = any (string_to_array(substr(p_channel, 4), '|'))
     else false
