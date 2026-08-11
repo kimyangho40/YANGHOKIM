@@ -3955,6 +3955,20 @@ function MobileApp({ profile, session }) {
   // 🎙 운전 중 음성 전용 모드
   const [showVoice, setShowVoice] = useState(false);
 
+  // 📩📋 업무요청 · 요청현황 (2026-08-11 신설 — 그 전까지 모바일엔 업무요청 기능이 아예 없었다)
+  //   데스크톱 WorkNotesView 의 모달을 재사용할 수 없다(그 컴포넌트는 모바일에서 렌더되지 않는다)
+  //   → 보내기 경로만 데스크톱과 **완전히 동일하게** 맞춘다: wn_append_todo RPC → work_requests → 푸시.
+  //      (직접 select 후 update 하면 남의 노트를 못 찾아 같은 날 노트가 두 장 생긴다 — CLAUDE.md)
+  const [mReqOpen, setMReqOpen] = useState(false);
+  const [mReqStatusOpen, setMReqStatusOpen] = useState(false);
+  const [mReqTab, setMReqTab] = useState("received");
+  const [mReqTo, setMReqTo] = useState("");
+  const [mReqText, setMReqText] = useState("");
+  const [mReqUrgent, setMReqUrgent] = useState(false);
+  const [mReqSending, setMReqSending] = useState(false);
+  const [mIncoming, setMIncoming] = useState([]);
+  const [mSent, setMSent] = useState([]);
+
   // 업체 검색
   const [q, setQ] = useState("");
   const [selCompany, setSelCompany] = useState(null);
@@ -3999,6 +4013,72 @@ function MobileApp({ profile, session }) {
     setLoading(false);
   };
   useEffect(function() { if (myName) loadAll(); }, [myName]);
+
+  // 📩 받은/보낸 요청 로드 (배지·요청현황 공용)
+  var loadMRequests = async function() {
+    if (!myName) return;
+    var inc = await supabase.from("work_requests").select("*").eq("request_to", myName)
+      .order("created_at", { ascending: false }).limit(200);
+    if (inc.error) return;                       // 테이블 미생성/접근불가 → 조용히 비활성
+    setMIncoming(inc.data || []);
+    var snt = await supabase.from("work_requests").select("*").eq("request_from", myName)
+      .order("created_at", { ascending: false }).limit(200);
+    if (!snt.error) setMSent(snt.data || []);
+  };
+  useEffect(function() { if (myName) loadMRequests(); }, [myName]);
+
+  var mPendingReq = useMemo(function() {
+    return (mIncoming || []).filter(function(r) { return r.status === "pending"; });
+  }, [mIncoming]);
+  var mReplyUnread = useMemo(function() {
+    return (mSent || []).filter(function(r) { return r.reply_unread; });
+  }, [mSent]);
+
+  // 요청현황을 열면 받은 미확인 요청을 읽음 처리 (데스크톱이 업무노트를 열 때 하는 것과 같은 처리)
+  var openMReqStatus = async function(tabKey) {
+    setMReqTab(tabKey || "received");
+    setMReqStatusOpen(true);
+    var pend = (mIncoming || []).filter(function(r) { return r.status === "pending"; });
+    if (pend.length) {
+      var ids = pend.map(function(r) { return r.id; });
+      setMIncoming(function(prev) { return (prev || []).map(function(r) { return ids.indexOf(r.id) >= 0 ? Object.assign({}, r, { status: "read" }) : r; }); });
+      try { await supabase.from("work_requests").update({ status: "read", read_at: new Date().toISOString() }).in("id", ids); } catch (e) {}
+    }
+    if (tabKey === "sent" && mReplyUnread.length) {
+      setMSent(function(prev) { return (prev || []).map(function(r) { return r.reply_unread ? Object.assign({}, r, { reply_unread: false }) : r; }); });
+      try { await supabase.from("work_requests").update({ reply_unread: false }).eq("request_from", myName).eq("reply_unread", true); } catch (e) {}
+    }
+  };
+
+  // 📩 요청 보내기 — 데스크톱 sendRequest 와 같은 경로(업무노트 항목 + work_requests + 푸시)
+  var sendMRequest = async function() {
+    var to = mReqTo, text = (mReqText || "").trim();
+    if (!to) { alert("받는 사람을 선택하세요."); return; }
+    if (!text) { alert("요청 내용을 입력하세요."); return; }
+    if (mReqSending) return;
+    setMReqSending(true);
+    try {
+      var today = kstDate();
+      var itemLine = buildItemLine({ checked: false, text: "📩 " + myName + " 요청: " + text });
+      // 🔒 개인노트 비공개(RLS) — 받는 사람 노트는 조회가 안 되므로 서버 함수가 찾아서 합치거나 새로 만든다.
+      var rq = await supabase.rpc("wn_append_todo", {
+        p_assignee: to, p_note_date: today, p_line: itemLine,
+        p_company_id: null, p_title: noteAutoTitle(to, today),
+      });
+      if (rq.error) { alert("요청 노트 생성 실패: " + rq.error.message); return; }
+      var reqRow = { request_from: myName, request_to: to, content: text, urgent: mReqUrgent, note_id: rq.data || null, status: "pending" };
+      var rr = await supabase.from("work_requests").insert(reqRow).select().single();
+      if (!rr.error && rr.data) setMSent(function(prev) { return [rr.data].concat(prev || []); });
+      if (to !== myName) {
+        try { await sendPushToUser(to, { title: (mReqUrgent ? "🚨 긴급 " : "📩 ") + "업무 요청", body: myName + ": " + text, url: window.location.origin + "?view=worknotes" }); } catch (e) {}
+      }
+      if (to === myName) loadAll();               // 나에게 보낸 건은 내 노트 목록에 바로 보이게
+      setMReqTo(""); setMReqText(""); setMReqUrgent(false); setMReqOpen(false);
+      alert("📩 '" + to + "'님에게 요청을 보냈어요.");
+    } finally {
+      setMReqSending(false);
+    }
+  };
 
   var todayStr = kstDate();
   var todayLabel = (function() {
@@ -4120,8 +4200,127 @@ function MobileApp({ profile, session }) {
         <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "-0.02em" }}>
           {tab === "home" ? "홈" : tab === "notes" ? "업무노트" : tab === "team" ? "팀업무" : tab === "search" ? "업체검색" : "내정보"}
         </div>
-        <div style={{ fontSize: 13, opacity: 0.9 }}>{myName} 님</div>
+        {/* 📩📋 업무요청 · 요청현황 — 어느 탭에 있든 상단에서 바로 (2026-08-11) */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={function() { setMReqTo(""); setMReqText(""); setMReqUrgent(false); setMReqOpen(true); }} className="m-tap"
+            title="팀원에게 업무 요청 보내기"
+            style={{ position: "relative", background: "rgba(255,255,255,0.18)", border: "none", borderRadius: 10, color: "#fff", fontSize: 18, padding: "6px 10px", cursor: "pointer", lineHeight: 1 }}>
+            📩
+            {mPendingReq.length > 0 && (
+              <span style={{ position: "absolute", top: -4, right: -4, minWidth: 18, height: 18, background: "#DC2626", borderRadius: 99, fontSize: 10, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }}>{mPendingReq.length}</span>
+            )}
+          </button>
+          <button onClick={function() { openMReqStatus(mReplyUnread.length > 0 ? "sent" : "received"); }} className="m-tap"
+            title="보낸/받은 요청 현황"
+            style={{ position: "relative", background: "rgba(255,255,255,0.18)", border: "none", borderRadius: 10, color: "#fff", fontSize: 18, padding: "6px 10px", cursor: "pointer", lineHeight: 1 }}>
+            📋
+            {mReplyUnread.length > 0 && (
+              <span style={{ position: "absolute", top: -4, right: -4, minWidth: 18, height: 18, background: "#7C3AED", borderRadius: 99, fontSize: 10, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }}>{mReplyUnread.length}</span>
+            )}
+          </button>
+          <div style={{ fontSize: 13, opacity: 0.9, whiteSpace: "nowrap" }}>{myName} 님</div>
+        </div>
       </div>
+
+      {/* 📩 업무 요청 보내기 (모바일) */}
+      {mReqOpen && (
+        <div onClick={function() { if (!mReqSending) setMReqOpen(false); }}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 200, display: "flex", alignItems: "flex-end" }}>
+          <div onClick={function(e) { e.stopPropagation(); }}
+            style={{ background: "#fff", width: "100%", borderRadius: "18px 18px 0 0", padding: 18, maxHeight: "88vh", overflowY: "auto" }}>
+            <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 14 }}>📩 업무 요청 보내기</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#555", marginBottom: 6 }}>받는 사람</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 14 }}>
+              {ASSIGNEES.filter(function(a) { return a !== myName; }).map(function(a) {
+                var on = mReqTo === a;
+                return (
+                  <button key={a} onClick={function() { setMReqTo(a); }} className="m-tap"
+                    style={{ padding: "9px 15px", borderRadius: 99, border: "1px solid " + (on ? "#15803D" : "#E8E5E0"), background: on ? "#15803D" : "#fff", color: on ? "#fff" : "#555", fontSize: 14, fontWeight: on ? 700 : 400, cursor: "pointer" }}>
+                    {a}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#555", marginBottom: 6 }}>요청 내용</div>
+            <textarea value={mReqText} onChange={function(e) { setMReqText(e.target.value); }} rows={4}
+              placeholder="예: 대한상사 사업자등록증 받아주세요"
+              style={{ width: "100%", border: "1px solid #E8E5E0", borderRadius: 10, padding: 12, fontSize: 15, boxSizing: "border-box", outline: "none", resize: "vertical", marginBottom: 12 }} />
+            <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, fontSize: 14, color: "#B45309", fontWeight: 700 }}>
+              <input type="checkbox" checked={mReqUrgent} onChange={function(e) { setMReqUrgent(e.target.checked); }} style={{ width: 18, height: 18 }} />
+              🚨 긴급으로 보내기
+            </label>
+            <div style={{ fontSize: 12, color: "#888", marginBottom: 14, lineHeight: 1.5 }}>
+              보내면 상대방의 <b>오늘 업무노트</b>에 체크 항목으로 들어가고 알림이 갑니다.
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={function() { setMReqOpen(false); }} disabled={mReqSending} className="m-tap"
+                style={{ flex: 1, padding: "14px", borderRadius: 12, border: "1px solid #E8E5E0", background: "#fff", color: "#888", fontSize: 15, fontWeight: 600, cursor: "pointer" }}>취소</button>
+              <button onClick={sendMRequest} disabled={mReqSending} className="m-tap"
+                style={{ flex: 2, padding: "14px", borderRadius: 12, border: "none", background: mReqSending ? "#9CA3AF" : "#15803D", color: "#fff", fontSize: 15, fontWeight: 800, cursor: "pointer" }}>
+                {mReqSending ? "보내는 중…" : "보내기"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 📋 요청 현황 (모바일) — 받은/보낸 2탭 읽기 전용 */}
+      {mReqStatusOpen && (
+        <div onClick={function() { setMReqStatusOpen(false); }}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 200, display: "flex", alignItems: "flex-end" }}>
+          <div onClick={function(e) { e.stopPropagation(); }}
+            style={{ background: "#fff", width: "100%", borderRadius: "18px 18px 0 0", maxHeight: "88vh", display: "flex", flexDirection: "column" }}>
+            <div style={{ padding: "16px 18px 0" }}>
+              <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 12 }}>📋 요청 현황</div>
+              <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                {[{ id: "received", label: "받은 요청 " + (mIncoming || []).length }, { id: "sent", label: "보낸 요청 " + (mSent || []).length }].map(function(t) {
+                  var on = mReqTab === t.id;
+                  return (
+                    <button key={t.id} onClick={function() { openMReqStatus(t.id); }} className="m-tap"
+                      style={{ flex: 1, padding: "11px 6px", borderRadius: 10, border: "1px solid " + (on ? "#15803D" : "#E8E5E0"), background: on ? "#15803D" : "#fff", color: on ? "#fff" : "#888", fontSize: 14, fontWeight: on ? 800 : 500, cursor: "pointer" }}>
+                      {t.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div style={{ padding: "0 18px 18px", overflowY: "auto" }}>
+              {(function() {
+                var list = mReqTab === "sent" ? (mSent || []) : (mIncoming || []);
+                if (!list.length) return <div style={{ padding: "44px 0", textAlign: "center", color: "#AAA", fontSize: 14 }}>{mReqTab === "sent" ? "보낸 요청이 없어요." : "받은 요청이 없어요."}</div>;
+                return list.map(function(r) {
+                  var badge = r.status === "done" ? { t: "완료", bg: "#DCFCE7", c: "#15803D" }
+                            : r.status === "read" ? { t: "확인함", bg: "#EEF2FF", c: "#4338CA" }
+                            : { t: "대기", bg: "#FEF3C7", c: "#B45309" };
+                  var replies = Array.isArray(r.replies) ? r.replies : [];
+                  return (
+                    <div key={r.id} style={{ border: "1px solid #E8E5E0", borderRadius: 12, padding: 13, marginBottom: 9, background: r.urgent ? "#FFFBEB" : "#fff" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 6, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 13, fontWeight: 800, color: "#15803D" }}>{mReqTab === "sent" ? "→ " + (r.request_to || "") : "← " + (r.request_from || "")}</span>
+                        {r.urgent && <span style={{ fontSize: 11, fontWeight: 800, color: "#DC2626" }}>🚨 긴급</span>}
+                        <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 99, background: badge.bg, color: badge.c }}>{badge.t}</span>
+                      </div>
+                      <div style={{ fontSize: 15, lineHeight: 1.45, marginBottom: 6 }}>{r.content}</div>
+                      <div style={{ fontSize: 11, color: "#BBB" }}>{String(r.created_at || "").slice(0, 16).replace("T", " ")}</div>
+                      {replies.length > 0 && (
+                        <div style={{ marginTop: 8, borderTop: "1px dashed #E8E5E0", paddingTop: 8 }}>
+                          {replies.map(function(rp, i) {
+                            return <div key={i} style={{ fontSize: 13, color: "#555", marginBottom: 4 }}><b style={{ color: "#4338CA" }}>{rp.by}</b> {rp.text}</div>;
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+            <div style={{ padding: "0 18px 18px" }}>
+              <button onClick={function() { setMReqStatusOpen(false); }} className="m-tap"
+                style={{ width: "100%", padding: "14px", borderRadius: 12, border: "1px solid #E8E5E0", background: "#fff", color: "#555", fontSize: 15, fontWeight: 700, cursor: "pointer" }}>닫기</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={{ padding: 14 }}>
         {loading ? (
@@ -5609,6 +5808,11 @@ function CRMApp({ profile, session }) {
   const [reqAlertList, setReqAlertList] = useState([]);        // 나에게 온 미확인(pending) 업무 요청
   const [teamAlertList, setTeamAlertList] = useState([]);      // 내 팀 미확인(read_by에 내가 없는) 공지
   const [sentReplyAlertList, setSentReplyAlertList] = useState([]); // 내가 보낸 요청 중 새 답장(reply_unread)
+  // 📩📋 사이드바 전역 버튼 → 업무노트 화면에 "이 모달을 열어라"고 넘기는 1회성 신호.
+  //    값: null | "request"(요청 보내기) | "reqstatus"(요청 현황·받은탭) | "reqstatus-sent"(요청 현황·보낸탭)
+  //    ⚠ 상태를 끌어올리지 않는 이유: 요청 보내기·답장·완료 처리가 업무노트의 노트 상태와 얽혀 있어
+  //       전역으로 옮기면 업무노트 전체가 회귀 사정권에 들어간다(CLAUDE.md 1절). 신호만 넘기고 소비하면 지운다.
+  const [pendingWnAction, setPendingWnAction] = useState(null);
   const extraSeenRef = useRef({});   // 요청/팀노트 알림음 이미 처리한 이벤트 키 (초기로드·재구독 오탐 방지)
   const goToWorkNotesRef = useRef(function() {});
   const [chatPendingChannel, setChatPendingChannel] = useState(null); // 알림 클릭 시 이동할 채널
@@ -7522,6 +7726,25 @@ function CRMApp({ profile, session }) {
             style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "9px 6px", marginBottom: 6, background: "linear-gradient(135deg,#0B1020,#312E81)", border: "1px solid #4338CA", borderRadius: 6, color: "#fff", fontSize: 11.5, cursor: "pointer", fontWeight: 700 }}>
             🎙 음성 모드
           </button>
+          {/* 📩📋 업무요청 · 요청현황 — 어느 화면에 있든 누를 수 있게 사이드바에 고정(2026-08-11).
+              누르면 업무노트로 이동하면서 해당 모달이 바로 열린다(pendingWnAction 신호 → WorkNotesView 가 소비).
+              배지는 알림함이 이미 들고 있는 목록을 그대로 쓴다 — 새 쿼리·새 폴링 없음. */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+            <button onClick={function() { setPendingWnAction("request"); setView("worknotes"); }} title="팀원에게 업무 요청 보내기"
+              style={{ position: "relative", flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "7px 6px", background: "#B45309", border: "none", borderRadius: 6, color: "#fff", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>
+              📩 업무요청
+              {reqAlertList.length > 0 && (
+                <span style={{ position: "absolute", top: -3, right: -3, minWidth: 16, height: 16, background: "#DC2626", borderRadius: 99, fontSize: 9, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }} title="받은 미확인 요청">{reqAlertList.length}</span>
+              )}
+            </button>
+            <button onClick={function() { setPendingWnAction(sentReplyAlertList.length > 0 ? "reqstatus-sent" : "reqstatus"); setView("worknotes"); }} title="보낸/받은 요청 현황"
+              style={{ position: "relative", flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "7px 6px", background: "#4338CA", border: "none", borderRadius: 6, color: "#fff", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>
+              📋 요청현황
+              {sentReplyAlertList.length > 0 && (
+                <span style={{ position: "absolute", top: -3, right: -3, minWidth: 16, height: 16, background: "#7C3AED", borderRadius: 99, fontSize: 9, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }} title="새 답장">{sentReplyAlertList.length}</span>
+              )}
+            </button>
+          </div>
           <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
             <button onClick={() => { setQuickMemoText(""); setQuickMemoCompany(null); setQuickMemoQuery(""); setQuickMemoSaved(0); setQuickMemo(true); }}
               style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "7px 6px", background: "#4338CA", border: "none", borderRadius: 6, color: "#fff", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>
@@ -7731,7 +7954,8 @@ function CRMApp({ profile, session }) {
             {view === "dbleads" && <DBLeadsView canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
             {view === "settlement" && <SettlementView profile={profile} />}
             {view === "activitylog" && <ActivityLogView />}
-            {view === "worknotes" && <WorkNotesView profile={profile} onBadgeUpdate={function() { fetchWorkNotesBadge(profile?.name); }} />}
+            {view === "worknotes" && <WorkNotesView profile={profile} onBadgeUpdate={function() { fetchWorkNotesBadge(profile?.name); }}
+              openAction={pendingWnAction} onActionConsumed={function() { setPendingWnAction(null); }} />}
             {view === "chat" && <ChatView profile={profile} onUnreadChange={function() { fetchChatUnread(profile?.name); }}
               pendingChannel={chatPendingChannel} onJumpConsumed={function() { setChatPendingChannel(null); }}
               onChannelChange={function(ch) { activeChatChannelRef.current = ch; }} />}
@@ -17820,7 +18044,7 @@ async function sendPushToUser(userName, payload) {
   }
 }
 
-function WorkNotesView({ profile, onBadgeUpdate }) {
+function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed }) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterAssignee, setFilterAssignee] = useState("전체");
@@ -18510,6 +18734,21 @@ function WorkNotesView({ profile, onBadgeUpdate }) {
     if (onBadgeUpdate) onBadgeUpdate(); // 읽음 처리 반영 → 사이드바 배지 갱신
   };
   useEffect(function() { if (!loading && profile?.name) loadRequests(); }, [loading, profile]);
+
+  // 📩📋 사이드바(또는 모바일 상단바) 전역 버튼에서 온 신호를 받아 해당 모달을 연다.
+  //    화면 이동과 모달 열기가 한 번에 되도록 하는 것이 전부다 — 요청 로직 자체는 건드리지 않는다.
+  //    소비 후 부모에게 알려 신호를 지운다(안 지우면 업무노트로 돌아올 때마다 모달이 다시 뜬다).
+  useEffect(function() {
+    if (!openAction) return;
+    if (openAction === "request") {
+      setShowRequest(true);
+    } else if (openAction === "reqstatus" || openAction === "reqstatus-sent") {
+      if (openAction === "reqstatus-sent") { setReqTab("sent"); clearSentReplyUnread(); }
+      else { setReqTab("received"); }
+      setShowReqStatus(true);
+    }
+    if (onActionConsumed) onActionConsumed();
+  }, [openAction]); // eslint-disable-line react-hooks/exhaustive-deps
 
   var sendRequest = async function() {
     var from = profile?.name || "";
