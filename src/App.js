@@ -579,15 +579,20 @@ function StorageAudio({ url, style }) {
 
 // ── 상수 ─────────────────────────────────────────────────────────────────────
 // 파이프라인 보드 단계(12). "추가 진행 예정/중"은 2026-07-26 폐지 → 카드의 '새 기관 추가 신청' 버튼으로 대체.
-const STAGES = ["상담/진단완료", "필수서류 및 인증서요청", "기관신청대기/방문예정", "스크립트 전달 완료", "기관신청완료/방문완료", "심사중/실태조사대기", "실태조사완료/약정완료", "자금집행완료", "수수료대기 및 입금요청", "입금완료/사후관리", "부결/반려", "기타"];
+// 2026-08-11: STEP2 "계약금입금완료" 신설 · "스크립트 전달 완료" 폐지(카드 0건·기업 0건·기관상태 0건이라 이동 대상 없음).
+const STAGES = ["상담/진단완료", "계약금입금완료", "필수서류 및 인증서요청", "기관신청대기/방문예정", "기관신청완료/방문완료", "심사중/실태조사대기", "실태조사완료/약정완료", "자금집행완료", "수수료대기 및 입금요청", "입금완료/사후관리", "부결/반려", "기타"];
+// ⚠️ STEP2 의 이름은 companies.contract_status 의 값 "계약금입금완료"(CONTRACT_STATUSES)와 **일부러 같게** 뒀다.
+//    같은 글자면 같이 움직여야 혼동이 없다 → syncContractStageLink() 가 둘을 한 쌍으로 유지한다.
+//    (계약상태를 켜면 카드가 STEP2 로 전진 · 카드를 STEP2 로 옮기면 계약상태가 켜짐. 뒤로는 절대 안 옮긴다.)
+const CONTRACT_PAID_STAGE = "계약금입금완료";
 // 폐지된 단계 — companies.stage(구 데이터)에는 아직 남아 있어 목록 필터/편집 셀렉트에서만 노출
 const RETIRED_STAGES = ["추가 진행 예정", "추가 진행 중"];
 const COMPANY_STAGES = STAGES.concat(RETIRED_STAGES);
 const STAGE_COLORS = {
   "상담/진단완료":           { bg: "#EEF2FF", text: "#4338CA", border: "#C7D2FE" },
+  "계약금입금완료":          { bg: "#F0FDF4", text: "#15803D", border: "#BBF7D0" },
   "필수서류 및 인증서요청":  { bg: "#FFF7ED", text: "#C2410C", border: "#FED7AA" },
   "기관신청대기/방문예정":   { bg: "#FFF1F2", text: "#BE123C", border: "#FECDD3" },
-  "스크립트 전달 완료":       { bg: "#F0FDF4", text: "#15803D", border: "#BBF7D0" },
   "기관신청완료/방문완료":   { bg: "#ECFDF5", text: "#047857", border: "#A7F3D0" },
   "심사중/실태조사대기":     { bg: "#FFFBEB", text: "#B45309", border: "#FDE68A" },
   "실태조사완료/약정완료":   { bg: "#FEF3C7", text: "#92400E", border: "#FCD34D" },
@@ -9358,7 +9363,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         {[
           { label: "전체 관리 업체", value: companies.length, sub: "법인 " + companies.filter(c=>c.type==="법인").length + " · 개인 " + companies.filter(c=>c.type==="개인").length, color: "#4338CA", viewId: "list" },
           { label: "계약 완료", value: contracted + "건", sub: "수수료 완납 " + contractDone + "건", color: "#15803D", viewId: "settlement" },
-          { label: "대기 건", value: companies.filter(c=>["상담/진단완료","필수서류 및 인증서요청","기관신청대기/방문예정","스크립트 전달 완료"].includes(c.stage)).length + "건", sub: "신청 전 단계", color: "#B45309", viewId: "pipeline" },
+          { label: "대기 건", value: companies.filter(c=>["상담/진단완료","계약금입금완료","필수서류 및 인증서요청","기관신청대기/방문예정"].includes(c.stage)).length + "건", sub: "신청 전 단계", color: "#B45309", viewId: "pipeline" },
           { label: "진행중", value: companies.filter(c=>["기관신청완료/방문완료","심사중/실태조사대기","실태조사완료/약정완료","자금집행완료"].includes(c.stage)).length + "건", sub: "기관 신청 이후", color: "#7C3AED", viewId: "agency" },
         ].map((k, i) => (
           <div key={i} onClick={() => setView(k.viewId)}
