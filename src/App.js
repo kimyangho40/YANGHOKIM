@@ -1288,8 +1288,12 @@ const WN_SHARE_GROUPS = [["미현", "인선"]]; // 서로 노트 열람 가능
 // 🧑‍🤝‍🧑 팀 구성 — 팀 공지 "확인" 대상 명단 (팀별로 확인 인원이 다름)
 const TEAM_MEMBERS = {
   individual: ["양호", "동일", "관호", "현애", "지혜", "정원"], // 개인팀
-  corporate: ["양호", "동일", "유진", "인선", "미현"],          // 법인팀
+  corporate: ["양호", "동일", "유진", "인선", "미현", "정원"],  // 법인팀
 };
+// ⚠️ 이 명단은 채팅 채널(CHAT_TEAMS)과 **별개 개념**이다 — 여기는 "팀 공지 확인 대상".
+//    둘 다 하드코딩이라 사람이 바뀌면 양쪽을 따로 챙겨야 한다.
+//    정원은 profiles.team 이 '법인전담'인데 이 명단엔 개인팀에만 있었다(명단이 옛날 값).
+//    양팀 모두에 두면 법인·개인 공지를 다 받는다 — 현재 의도한 상태다. (2026-08-11)
 // 전체(공통) = 두 팀 합집합(중복 제거)
 TEAM_MEMBERS.all = TEAM_MEMBERS.individual.concat(TEAM_MEMBERS.corporate.filter(function(n) { return TEAM_MEMBERS.individual.indexOf(n) < 0; }));
 function teamRoster(teamKey) { return TEAM_MEMBERS[teamKey] || TEAM_MEMBERS.all; }
