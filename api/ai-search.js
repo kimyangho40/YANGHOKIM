@@ -55,6 +55,211 @@ async function denyUnauthorized(req, res) {
 
 const MODEL = "claude-sonnet-5";
 
+// ── 집계는 DB 에 맡긴다 (2026-08-11) ─────────────────────────────────────────
+// 스냅샷을 프롬프트에 통째로 실어도 모델은 29만 토큰 JSON 위에서 전수 필터·집계를 못 한다.
+// 실측: "소진공 8월 부결 건수" → 0건 (정답 1건·칼라스토리). 데이터는 들어 있는데도 틀렸다.
+// 조회형(특정 업체 상태)은 잘 맞으니 스냅샷은 그대로 두고, **세는 일만 DB 로 넘긴다.**
+// 모델이 `데이터조회` 도구로 필터 조건을 뱉으면 여기서 PostgREST 로 실제 count 를 받아 돌려준다.
+//
+// ⚠️ 보안 — 모델이 부르는 도구다. 임의 쿼리를 만들게 두면 안 된다:
+//   · 테이블·칼럼은 아래 화이트리스트에 있는 것만. 비밀번호·인증서·주민번호·계좌(jsonb)는 뺐다.
+//   · 조회는 **사용자 본인 JWT** 로 나간다 → RLS 가 그대로 적용된다(service_role 키 안 씀).
+//   · `deleted_at is null` 은 모델이 못 건드리게 서버가 항상 강제한다.
+const TABLES = {
+  "기관진행": {
+    table: "agency_cases",
+    cols: ["business_name", "representative", "agency_group", "agency_sub", "status", "result", "result_reason",
+      "assignee", "region", "branch", "request_amount", "request_fund", "fund_product", "approval_amount",
+      "approval_date", "apply_date", "contract_date", "contract_fee", "commission_fee", "received_amount",
+      "invoice_issued", "invoice_date", "fee_received", "fee_received_date", "settlement_notes", "notes",
+      "extra_notes", "credit_score", "employee_count", "industry", "year", "month", "created_at", "updated_at",
+      "script_delivered", "phone_education_done"],
+    alias: {},
+  },
+  "업체목록": {
+    table: "companies",
+    cols: ["name", "type", "representative", "stage", "assignee", "agency", "agency_list", "region", "industry",
+      "business_type", "last_contact", "next_contact", "call_count", "fee", "fee_status", "contract_status",
+      "contract_status_at", "contract_date", "fund_plan", "received_docs", "requested_docs", "issue",
+      "next_action", "company_info_memo", "stagnant_days", "stage_updated_at", "employee_count",
+      "credit_score", "credit_score_kcb", "credit_score_nice", "founded_year", "founded_month",
+      "application_month", "revenue_2023", "revenue_2024", "revenue_2025", "revenue_2026_h1",
+      "approved_amount", "import_ratio", "debt_ratio", "interest_coverage_ratio", "innovation_field",
+      "social_enterprise", "referrer", "lead_source", "team", "created_at", "updated_at"],
+    // 스냅샷이 쓰는 한글 키를 그대로 받아준다(모델이 <데이터>에서 본 이름으로 물어보므로).
+    alias: { "이슈현황": "issue", "차기업무": "next_action", "비고메모": "company_info_memo" },
+  },
+  "정산": {
+    table: "settlement_manual",
+    cols: ["business_name", "agency_group", "assignee", "year", "month", "request_amount", "contract_fee",
+      "commission_fee", "received_amount", "approval_amount", "approval_date", "contract_date",
+      "invoice_issued", "invoice_date", "fee_received", "fee_received_date", "settlement_notes",
+      "created_at", "updated_at"],
+    alias: {},
+  },
+};
+
+const OPS = {
+  eq: "eq", neq: "neq", gt: "gt", gte: "gte", lt: "lt", lte: "lte",
+  contains: "ilike", starts: "ilike", in: "in", is_null: "is", not_null: "not.is",
+};
+
+// PostgREST 값 인용. or=(...) / in.(...) 안에서는 콤마·괄호·점이 구분자라 반드시 감싸야 한다.
+// ⚠️ 인용 후 **반드시 URL 인코딩**한다. ilike 패턴의 `%` 를 날것으로 두면 URL 이스케이프로 읽혀
+//    값이 깨진다(예: "%AB%" → 0xAB 바이트). 구분자(따옴표·점·콤마·괄호)는 밖에 두고 값만 인코딩한다.
+function pgQuote(v) {
+  var s = String(v).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return '"' + encodeURIComponent(s) + '"';
+}
+// op + 값 → PostgREST 조건 문자열 (예: eq."부결", ilike."%양호%", in.("A","B"))
+function pgCond(op, value) {
+  if (op === "is_null") return "is.null";
+  if (op === "not_null") return "not.is.null";
+  if (op === "in") {
+    var arr = Array.isArray(value) ? value : [value];
+    return "in.(" + arr.map(pgQuote).join(",") + ")";
+  }
+  if (op === "contains") return "ilike." + pgQuote("%" + value + "%");
+  if (op === "starts") return "ilike." + pgQuote(value + "%");
+  if (typeof value === "boolean" || value === "true" || value === "false") return OPS[op] + "." + String(value);
+  if (typeof value === "number") return OPS[op] + "." + value;
+  return OPS[op] + "." + pgQuote(value);
+}
+
+// 도구 실행: 필터를 검증해 PostgREST 로 진짜 세어 온다.
+// 반환값이 {error:...} 면 모델에게 그대로 돌려줘 스스로 고쳐 다시 부르게 한다.
+// (named export 는 테스트용. Vercel 은 default export 만 본다.)
+export async function runQuery(input, creds) {
+  var spec = TABLES[input && input.table];
+  if (!spec) return { error: "table 은 " + Object.keys(TABLES).join(" / ") + " 중 하나여야 합니다." };
+
+  var resolve = function(f) {
+    var name = spec.alias[f] || f;
+    return spec.cols.indexOf(name) >= 0 ? name : null;
+  };
+  var params = ["deleted_at=is.null"]; // 모델이 못 바꾸는 고정 조건
+
+  var filters = Array.isArray(input.filters) ? input.filters : [];
+  for (var i = 0; i < filters.length; i++) {
+    var f = filters[i] || {};
+    var col = resolve(f.field);
+    if (!col) return { error: "'" + f.field + "' 는 " + input.table + " 에 없는(또는 조회할 수 없는) 필드입니다. 쓸 수 있는 필드: " + spec.cols.join(", ") };
+    if (!OPS[f.op]) return { error: "op 는 " + Object.keys(OPS).join(" / ") + " 중 하나여야 합니다." };
+    params.push(encodeURIComponent(col) + "=" + pgCond(f.op, f.value));
+  }
+
+  // any_of: OR 묶음 하나. (예: status='부결' 또는 result='부결')
+  var anyOf = Array.isArray(input.any_of) ? input.any_of : [];
+  if (anyOf.length) {
+    var parts = [];
+    for (var j = 0; j < anyOf.length; j++) {
+      var a = anyOf[j] || {};
+      var ac = resolve(a.field);
+      if (!ac) return { error: "'" + a.field + "' 는 " + input.table + " 에 없는(또는 조회할 수 없는) 필드입니다. 쓸 수 있는 필드: " + spec.cols.join(", ") };
+      if (!OPS[a.op]) return { error: "op 는 " + Object.keys(OPS).join(" / ") + " 중 하나여야 합니다." };
+      parts.push(ac + "." + pgCond(a.op, a.value));
+    }
+    params.push("or=(" + parts.join(",") + ")");
+  }
+
+  var headers = { apikey: creds.anonKey, Authorization: "Bearer " + creds.token };
+  var base = SUPABASE_URL + "/rest/v1/" + spec.table + "?";
+
+  // ── 그룹별 집계: 그 칼럼만 전건 받아 JS 로 센다 (PostgREST 는 GROUP BY 가 없다) ──
+  var groups = null, groupNote = "";
+  var gcol = input.group_by ? resolve(input.group_by) : null;
+  if (input.group_by && !gcol) {
+    return { error: "'" + input.group_by + "' 는 " + input.table + " 에 없는(또는 조회할 수 없는) 필드입니다. 쓸 수 있는 필드: " + spec.cols.join(", ") };
+  }
+  if (gcol) {
+    var tally = {}, offset = 0, guard = 0;
+    // assignee 는 "양호, 미현, 인선" 처럼 콤마로 여러 명이 들어 있다 → 1인씩 쪼개 센다.
+    var split = gcol === "assignee";
+    for (;;) {
+      // ⚠️ order 를 안 걸면 Range 페이징이 흔들려 같은 행을 두 번 세거나 빠뜨린다
+      //    (agency_cases 는 1732건이라 실제로 페이징된다). id 로 순서를 고정한다.
+      var gr = await fetch(base + params.join("&") + "&select=" + encodeURIComponent(gcol) + "&order=id.asc",
+        { headers: Object.assign({}, headers, { Range: offset + "-" + (offset + 999) }) });
+      if (!gr.ok) return { error: "조회 실패: " + (await gr.text()).slice(0, 200) };
+      var grows = await gr.json();
+      if (!Array.isArray(grows)) return { error: "조회 실패: 예기치 않은 응답" };
+      for (var k = 0; k < grows.length; k++) {
+        var raw = grows[k][gcol];
+        var keys = raw == null || raw === "" ? ["(값 없음)"]
+          : split ? String(raw).split(/[,、·\/]/).map(function(s) { return s.trim(); }).filter(Boolean)
+          : [String(raw)];
+        for (var m = 0; m < keys.length; m++) tally[keys[m]] = (tally[keys[m]] || 0) + 1;
+      }
+      if (grows.length < 1000) break;
+      offset += 1000;
+      if (++guard > 20) break;
+    }
+    groups = Object.keys(tally).sort(function(a, b) { return tally[b] - tally[a]; })
+      .slice(0, 60).map(function(key) { return { 값: key, 건수: tally[key] }; });
+    if (split) groupNote = " (담당자는 공동담당이 콤마로 묶여 있어 1인씩 나눠 셌습니다 — 합계는 건수 총합보다 클 수 있습니다.)";
+  }
+
+  // ── 건수 + 표본 행 ────────────────────────────────────────────────────────
+  // ⚠️ `parseInt(...) || 40` 로 쓰면 limit:0(건수만) 이 40 으로 되살아난다 — 명시적으로 판정한다.
+  var rawLimit = input.limit == null ? 40 : parseInt(input.limit, 10);
+  if (!isFinite(rawLimit)) rawLimit = 40;
+  var limit = Math.min(Math.max(rawLimit, 0), 200);
+  var selCols = Array.isArray(input.select) && input.select.length
+    ? input.select.map(resolve).filter(Boolean)
+    : null;
+  var sel = selCols && selCols.length ? selCols : spec.cols;
+  var ordCol = input.order_by ? resolve(input.order_by) : null;
+  var order = (ordCol || "created_at") + "." + (input.order_desc === false ? "asc" : "desc") + ".nullslast";
+
+  var r = await fetch(base + params.join("&") + "&select=" + encodeURIComponent(sel.join(",")) + "&order=" + order, {
+    headers: Object.assign({}, headers, { Range: "0-" + Math.max(limit - 1, 0), Prefer: "count=exact" }),
+  });
+  if (!r.ok) return { error: "조회 실패: " + (await r.text()).slice(0, 200) };
+  var rows = await r.json();
+  if (!Array.isArray(rows)) return { error: "조회 실패: 예기치 않은 응답" };
+
+  // Content-Range: "0-39/1732" 또는 "*/0"
+  var cr = r.headers.get("content-range") || "";
+  var total = parseInt((cr.split("/")[1] || ""), 10);
+  if (!isFinite(total)) total = rows.length;
+
+  // 빈 값은 빼서 토큰을 아낀다(스냅샷 compact 와 같은 규칙). 한글 키는 되돌려 준다.
+  var rev = {};
+  Object.keys(spec.alias).forEach(function(kr) { rev[spec.alias[kr]] = kr; });
+  var slim = limit === 0 ? [] : rows.map(function(row) {
+    var out = {};
+    Object.keys(row).forEach(function(kk) {
+      var v = row[kk];
+      if (v == null || v === "") return;
+      if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v)) v = v.slice(0, 10);
+      out[rev[kk] || kk] = v;
+    });
+    return out;
+  });
+
+  return {
+    table: input.table,
+    건수: total,
+    그룹별: groups,
+    표본: slim,
+    안내: (limit === 0 ? "행은 요청하지 않았습니다. " : total > slim.length ? "총 " + total + "건 중 " + slim.length + "건만 실었습니다. 더 필요하면 limit 을 올리거나 필터를 좁히세요. " : "")
+      + "이 '건수'는 DB 에서 직접 센 값이라 정확합니다." + groupNote,
+  };
+}
+
+// 스냅샷에서 실제 쓰이는 값 목록을 뽑아 프롬프트에 넣는다.
+// 하드코딩하면 값이 늘 때 조용히 어긋난다 — 데이터에서 뽑으면 항상 최신이다.
+function vocab(rows, field, cap, split) {
+  var set = {};
+  (rows || []).forEach(function(r) {
+    var v = r && r[field];
+    if (typeof v !== "string" || !v.trim()) return;
+    var list = split ? v.split(/[,、·\/]/) : [v];
+    list.forEach(function(s) { s = s.trim(); if (s) set[s] = 1; });
+  });
+  return Object.keys(set).sort().slice(0, cap);
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "POST 요청만 허용됩니다." });
@@ -104,7 +309,81 @@ export default async function handler(req, res) {
       "값 끝에 '…(이하 생략)'이 붙어 있으면 원문이 잘린 것이니, 필요하면 업체 상세에서 전체를 확인하라고 안내하세요.",
       "필드가 비어 있는 업체는 '이슈 없음'이 아니라 '적힌 내용 없음'입니다. 둘을 구분해서 말하세요.",
       "값이 비어 있는 필드는 아예 빠진 채로 옵니다 — 키가 없으면 '그 항목에 적힌 내용이 없다'는 뜻입니다.",
+      "",
+      "■ 건수·목록을 물으면 반드시 `데이터조회` 도구를 쓰세요 (가장 중요).",
+      "<데이터>는 양이 많아 눈으로 훑어 세면 틀립니다. 실제로 '0건'이라고 답했다가 정답이 1건이었던 사고가 있었습니다.",
+      "  · '몇 건', '전부/모두', '정리해줘', '목록', '담당자별/기관별/월별' → 도구로 세고, 도구가 준 '건수'를 그대로 답하세요.",
+      "  · 도구를 쓰지 않고 스냅샷만 보고 건수를 말하지 마세요. 세어 보기 전에는 '없다'고 단정하지 마세요.",
+      "  · 특정 업체 한 곳의 상태·메모처럼 조회형 질문은 <데이터>만으로 답해도 됩니다.",
+      "  · 도구가 error 를 주면 안내에 맞춰 필드·연산자를 고쳐 다시 부르세요.",
+      "",
+      "필터 값을 고를 때 주의할 점:",
+      "  · 사용자는 줄임말로 말합니다. 기관명은 아래 '실제 값' 목록에서 골라 쓰세요.",
+      "    예: '소진공' → agency_group 은 '소상공인시장진흥공단' 입니다. 확실치 않으면 contains 로 부분 일치시키세요.",
+      "  · assignee(담당자)는 '양호, 미현, 인선' 처럼 공동담당이 한 칸에 콤마로 들어 있습니다.",
+      "    담당자로 거를 때는 eq 가 아니라 반드시 contains 를 쓰세요 (eq 로 세면 크게 누락됩니다).",
+      "  · '부결'처럼 결과를 뜻하는 말은 status 에도 result 에도 들어갑니다 → any_of 로 두 필드를 함께 보세요.",
+      "  · 금액 필드(request_amount 등)는 문자열이라 크기 비교(gt/lt)가 부정확합니다. 합계·대소 비교는 피하고 값을 그대로 인용하세요.",
+      "  · 기관진행/정산의 기간은 year·month(정수) 입니다. '이번달'은 오늘 날짜 기준 year·month 로 거세요.",
+      "",
+      "실제 값 목록(데이터에서 뽑은 것):",
+      "  기관진행.agency_group: " + vocab(snapshot.기관진행, "agency_group", 40).join(" | "),
+      "  기관진행.status: " + vocab(snapshot.기관진행, "status", 60).join(" | "),
+      "  기관진행.result: " + vocab(snapshot.기관진행, "result", 40).join(" | "),
+      "  정산.agency_group: " + vocab(snapshot.정산, "agency_group", 40).join(" | "),
+      "  업체목록.stage: " + vocab(snapshot.업체목록, "stage", 40).join(" | "),
+      "  업체목록.fee_status: " + vocab(snapshot.업체목록, "fee_status", 20).join(" | "),
+      "  담당자(1인 단위): " + vocab((snapshot.기관진행 || []).concat(snapshot.업체목록 || []), "assignee", 40, true).join(" | "),
     ].join("\n");
+
+    const tools = [{
+      name: "데이터조회",
+      description: [
+        "CRM 데이터베이스에서 조건에 맞는 건수를 실제로 세고 표본 행을 가져옵니다.",
+        "건수·목록·그룹별 집계 질문에는 반드시 이 도구를 쓰세요. 여기서 나온 '건수'가 정답입니다.",
+        "삭제된 건은 자동으로 제외됩니다. 필요하면 조건을 바꿔 여러 번 불러도 됩니다.",
+        "filters 는 AND 로, any_of 는 그들끼리 OR 로 묶인 뒤 filters 와 AND 됩니다.",
+        "쓸 수 있는 필드는 table 마다 다릅니다 — 틀리면 error 로 목록을 돌려줍니다.",
+      ].join(" "),
+      input_schema: {
+        type: "object",
+        properties: {
+          table: { type: "string", enum: Object.keys(TABLES), description: "조회할 대상" },
+          filters: {
+            type: "array",
+            description: "AND 로 묶이는 조건들",
+            items: {
+              type: "object",
+              properties: {
+                field: { type: "string", description: "필드명" },
+                op: { type: "string", enum: Object.keys(OPS), description: "contains=부분일치(대소문자 무시), starts=접두일치, in=여러 값 중 하나, is_null/not_null=값 유무" },
+                value: { description: "비교할 값. in 이면 배열, is_null/not_null 이면 생략" },
+              },
+              required: ["field", "op"],
+            },
+          },
+          any_of: {
+            type: "array",
+            description: "이들끼리는 OR. 예: status 나 result 중 하나라도 '부결'",
+            items: {
+              type: "object",
+              properties: {
+                field: { type: "string" },
+                op: { type: "string", enum: Object.keys(OPS) },
+                value: {},
+              },
+              required: ["field", "op"],
+            },
+          },
+          group_by: { type: "string", description: "이 필드 값별로 건수를 나눠 셉니다(담당자별·기관별·월별 등). assignee 는 공동담당을 1인씩 나눠 셉니다." },
+          select: { type: "array", items: { type: "string" }, description: "표본 행에 담을 필드. 생략하면 전부. 답변에 쓸 것만 고르면 응답이 가벼워집니다." },
+          limit: { type: "integer", description: "표본 행 수 (기본 40, 최대 200). 건수만 필요하면 0." },
+          order_by: { type: "string", description: "표본 정렬 기준 필드 (기본 created_at)" },
+          order_desc: { type: "boolean", description: "내림차순 여부 (기본 true)" },
+        },
+        required: ["table"],
+      },
+    }];
 
     const system = [
       { type: "text", text: instructions },
@@ -125,30 +404,85 @@ export default async function handler(req, res) {
     }
     messages.push({ role: "user", content: String(question) });
 
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 3072,
-        thinking: { type: "disabled" },
-        system: system,
-        messages: messages,
-      }),
-    });
+    // 도구 조회는 **사용자 본인 토큰**으로 나간다 → RLS 가 그대로 걸린다.
+    // (denyUnauthorized 는 5개 엔드포인트에 같은 내용으로 복사돼 있어 시그니처를 건드리지 않았다.)
+    const creds = {
+      token: (req.headers.authorization || "").slice(7),
+      anonKey: req.headers["x-supabase-anon"] || "",
+    };
 
-    const data = await r.json();
-    if (!r.ok) {
-      const msg = (data && data.error && data.error.message) || "AI 검색 요청 실패";
-      res.status(r.status).json({ error: msg });
-      return;
+    // ── 도구 루프 ────────────────────────────────────────────────────────────
+    // 모델이 `데이터조회` 를 부르면 실제로 세어 결과를 돌려주고 다시 묻는다.
+    // tools/system 은 messages 보다 앞이라 캐시 접두사 안이다 → 루프를 돌아도 캐시는 살아 있다.
+    const MAX_ROUNDS = 6;
+    const usageTotal = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+    let data = null, toolCalls = 0;
+
+    // toolChoice=none 이면 도구를 못 부르고 반드시 글로 답한다 (마지막 마무리용).
+    const ask = async function(toolChoice) {
+      const r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify(Object.assign({
+          model: MODEL,
+          // ⚠️ thinking 을 끄면(sonnet-5) **도구를 잘 안 부른다** — 공식 문서에 명시된 성질이다.
+          //    이 기능은 "모델이 데이터조회를 부르는 것"이 전부라, 끄면 예전처럼 눈대중으로 답해 버린다.
+          //    그래서 adaptive 로 켜고 effort 로 깊이만 낮춰 비용을 잡는다(질문당 출력 약간 증가).
+          //    도구를 자꾸 안 부르면 effort 를 high 로 올릴 것. 반대로 비용이 부담이면 low.
+          thinking: { type: "adaptive" },
+          output_config: { effort: "medium" },
+          // max_tokens 는 사고+답변 **합계** 상한이다. 3072 이면 사고가 먹고 답이 잘린다.
+          max_tokens: 8192,
+          system: system,
+          tools: tools,
+          messages: messages,
+        }, toolChoice ? { tool_choice: toolChoice } : {})),
+      });
+      const d = await r.json();
+      if (!r.ok) return { ok: false, status: r.status, msg: (d && d.error && d.error.message) || "AI 검색 요청 실패" };
+      const u0 = d.usage || {};
+      usageTotal.input_tokens += u0.input_tokens || 0;
+      usageTotal.output_tokens += u0.output_tokens || 0;
+      usageTotal.cache_creation_input_tokens += u0.cache_creation_input_tokens || 0;
+      usageTotal.cache_read_input_tokens += u0.cache_read_input_tokens || 0;
+      return { ok: true, data: d };
+    };
+
+    for (let round = 0; round <= MAX_ROUNDS; round++) {
+      // 바퀴를 다 썼는데도 도구를 더 부르려 하면, 있는 것만으로 답하게 강제한다.
+      const resp = await ask(round === MAX_ROUNDS ? { type: "none" } : null);
+      if (!resp.ok) { res.status(resp.status).json({ error: resp.msg }); return; }
+      data = resp.data;
+
+      const uses = (data.content || []).filter(function (b) { return b.type === "tool_use"; });
+      if (data.stop_reason !== "tool_use" || uses.length === 0) break;
+
+      messages.push({ role: "assistant", content: data.content });
+      const results = [];
+      for (const use of uses) {
+        toolCalls++;
+        let out;
+        try {
+          out = await runQuery(use.input || {}, creds);
+        } catch (e) {
+          out = { error: "조회 중 오류: " + (e && e.message ? e.message : String(e)) };
+        }
+        console.log("[ai-search] tool", JSON.stringify({ input: use.input, 건수: out && out.건수, error: out && out.error }));
+        results.push({
+          type: "tool_result",
+          tool_use_id: use.id,
+          content: JSON.stringify(out),
+          is_error: !!(out && out.error),
+        });
+      }
+      messages.push({ role: "user", content: results });
     }
 
-    const answer = (data.content || [])
+    const answer = ((data && data.content) || [])
       .filter(function (b) { return b.type === "text"; })
       .map(function (b) { return b.text; })
       .join("\n")
@@ -156,20 +490,11 @@ export default async function handler(req, res) {
 
     // 캐시가 실제로 먹었는지 확인용. read 가 0 인 채로 계속 write 만 나오면
     // 접두사가 매번 달라지고 있다는 뜻이다(스냅샷 키 순서·지시문 변경 등).
-    const u = data.usage || {};
-    console.log("[ai-search] usage", JSON.stringify({
-      input: u.input_tokens, output: u.output_tokens,
-      cache_write: u.cache_creation_input_tokens, cache_read: u.cache_read_input_tokens,
-    }));
+    console.log("[ai-search] usage", JSON.stringify(Object.assign({ tool_calls: toolCalls }, usageTotal)));
 
     res.status(200).json({
       answer: answer,
-      usage: {
-        input_tokens: u.input_tokens,
-        output_tokens: u.output_tokens,
-        cache_creation_input_tokens: u.cache_creation_input_tokens,
-        cache_read_input_tokens: u.cache_read_input_tokens,
-      },
+      usage: Object.assign({ tool_calls: toolCalls }, usageTotal),
     });
   } catch (err) {
     res.status(500).json({ error: "서버 오류: " + (err && err.message ? err.message : String(err)) });
