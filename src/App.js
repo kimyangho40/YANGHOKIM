@@ -2398,6 +2398,94 @@ function expectedFee(company) {
   if (isNaN(rate) || rate <= 0) rate = 5;
   return Math.round(amt * rate / 100);
 }
+
+// ── 💰 계약금·수수료율 → 정산 자동 반영 (2026-08-11) ──────────────────────────
+// 기업정보 탭의 [계약금 · 수수료율] 두 값을, 아래 둘 중 **하나라도** 참이면 정산으로 옮긴다:
+//   · companies.contract_status === "계약금입금완료"
+//   · companies.fee_status      === "수수료수령완료"
+//
+// ⚠️ 절대 건드리지 않는 것: settlement_manual.commission_fee (수수료 "금액").
+//    사람이 직접 입력하는 칸이라 자동으로 덮어쓰면 안 된다. 이 함수는 그 키를 아예 쓰지 않는다.
+//    반영 대상은 contract_fee(계약금) 과 commission_rate(수수료율) 둘뿐이다.
+//
+// 대상 행: 같은 업체명(business_name)의 **수동 정산행 중 가장 최근 1건**.
+//    없으면 새로 만든다(사용자 결정). 자동행(agency_cases)은 대상이 아니다 — 수수료율 컬럼도 없다.
+async function syncSettlementFromCompany(co) {
+  if (!co || !co.name) return { skipped: "no-company" };
+  var triggered = (co.contract_status === "계약금입금완료") || (co.fee_status === "수수료수령완료");
+  if (!triggered) return { skipped: "not-triggered" };
+
+  var rawAmt = co.contract_amount;
+  var amount = (rawAmt === "" || rawAmt === null || rawAmt === undefined)
+    ? null : (parseInt(String(rawAmt).replace(/[^0-9]/g, ""), 10) || null);
+  var rawRate = co.fee;
+  var rate = (rawRate === "" || rawRate === null || rawRate === undefined)
+    ? null : (parseFloat(rawRate));
+  if (rate != null && (isNaN(rate) || rate <= 0)) rate = null;
+  // 넣을 값이 하나도 없으면 아무것도 하지 않는다(빈 행을 만들거나 기존 값을 지우지 않기 위해)
+  if (amount == null && rate == null) return { skipped: "no-values" };
+
+  var patch = {};
+  if (amount != null) patch.contract_fee = String(amount); // contract_fee 는 text 컬럼("300만" 같은 표기도 들어온다)
+  if (rate != null) patch.commission_rate = rate;
+
+  var q = await supabase.from("settlement_manual").select("id")
+    .eq("business_name", co.name).is("deleted_at", null)
+    .order("created_at", { ascending: false }).limit(1);
+  if (q.error) return { error: q.error.message };
+
+  if (q.data && q.data.length) {
+    var r = await supabase.from("settlement_manual")
+      .update(Object.assign({}, patch, { updated_at: new Date().toISOString() }))
+      .eq("id", q.data[0].id);
+    if (r.error) return { error: r.error.message };
+    return { mode: "update", id: q.data[0].id, amount: amount, rate: rate };
+  }
+
+  // 정산행이 없으면 이번 달 수동행으로 새로 만든다.
+  //  · 월/연은 KST 기준(정산관리 화면이 월 탭으로 끊어 보므로 UTC 로 계산하면 월말에 한 달 어긋난다)
+  //  · .select() 를 붙이지 않는다 — insert 한 행이 SELECT 정책에 걸리면 0건이 아니라 42501 에러가 난다(CLAUDE.md)
+  var ks = kstDate();
+  var row = Object.assign({
+    year: parseInt(ks.slice(0, 4), 10),
+    month: parseInt(ks.slice(5, 7), 10),
+    business_name: co.name,
+    assignee: co.assignee || null,
+    settlement_notes: "기업정보에서 자동 생성",
+  }, patch);
+  var ins = await supabase.from("settlement_manual").insert(row);
+  if (ins.error) return { error: ins.error.message };
+  return { mode: "insert", amount: amount, rate: rate };
+}
+
+// ── 📌 계약상태 ↔ 파이프라인 STEP2 연동 ──────────────────────────────────────
+// STAGES 의 "계약금입금완료"(STEP2)와 contract_status 의 "계약금입금완료"는 일부러 같은 이름이다.
+// 계약 상태를 켜면 그 업체의 열린 카드를 STEP2 로 **앞으로만** 옮긴다.
+//   · 이미 STEP2 를 지난 카드(심사중 등)는 건드리지 않는다 — 뒤로 끌어내리면 진행이 후퇴한다.
+//   · 부결/반려·기타는 STAGES 뒤쪽이라 이 조건에서 자동으로 빠진다.
+//   · 드래그 이동과 같은 의미가 되도록 sync_mode='manual' 로 고정한다
+//     (안 그러면 다음 기관상태 자동 동기화가 단계를 되돌려 놓는다).
+async function advanceCardsToContractPaid(companyId) {
+  if (!companyId) return { moved: 0 };
+  var target = STAGES.indexOf(CONTRACT_PAID_STAGE);
+  if (target < 0) return { moved: 0 };
+  var q = await supabase.from("pipeline_cards").select("id, stage")
+    .eq("company_id", companyId).is("closed_at", null);
+  if (q.error || !q.data) return { moved: 0 };
+  var movers = (q.data || []).filter(function(c) {
+    var i = STAGES.indexOf(c.stage);
+    return i >= 0 && i < target;
+  });
+  if (!movers.length) return { moved: 0 };
+  var nowIso = new Date().toISOString();
+  var r = await supabase.from("pipeline_cards")
+    .update({ stage: CONTRACT_PAID_STAGE, sync_mode: "manual", needs_mapping: false,
+              stage_changed_at: nowIso, alerted_at: null, updated_at: nowIso })
+    .in("id", movers.map(function(c) { return c.id; }));
+  if (r.error) return { moved: 0, error: r.error.message };
+  return { moved: movers.length };
+}
+
 // (구 매트릭스 방식 신보 한도표 제거 — 매출 기반 계산으로 대체, SinboCalc 참고)
 
 // ── 중진공 정책우선도 배점표(선택형) ─────────────────────────────────────────────
@@ -6611,6 +6699,8 @@ function CRMApp({ profile, session }) {
       team: rest.team,
       // 신규 기능용 컬럼
       approved_amount: rest.approved_amount ? (parseInt(String(rest.approved_amount).replace(/[^0-9]/g, "")) || null) : null,
+      // 계약금(원) — 기업정보 탭 '계약금 · 수수료율' 칸. 정산 자동반영의 원본 값이다.
+      contract_amount: rest.contract_amount ? (parseInt(String(rest.contract_amount).replace(/[^0-9]/g, "")) || null) : null,
       import_ratio: (rest.import_ratio === "" || rest.import_ratio === null || rest.import_ratio === undefined) ? null : (parseFloat(rest.import_ratio) || 0),
       debt_ratio: (rest.debt_ratio === "" || rest.debt_ratio === null || rest.debt_ratio === undefined) ? null : (parseFloat(rest.debt_ratio) || 0),
       interest_coverage_ratio: (rest.interest_coverage_ratio === "" || rest.interest_coverage_ratio === null || rest.interest_coverage_ratio === undefined) ? null : (parseFloat(rest.interest_coverage_ratio) || 0),
@@ -6657,6 +6747,28 @@ function CRMApp({ profile, session }) {
       // 팀 값은 위 updateObj 에 함께 담아 한 번에 저장한다.
       //   (예전에는 저장 뒤 companies.team 을 따로 UPDATE 했는데, 컬럼이 없어 매번 400 이 났고 try/catch 로 삼켜졌다.
       //    2026-08-05 에 컬럼을 만들고 → 별도 호출을 없애 일반 저장에 합쳤다. 기업_팀컬럼_추가.sql)
+      // 💰📌 계약금·수수료율 → 정산 자동 반영 + 계약상태 ↔ 파이프라인 STEP2 연동
+      //   매 저장마다 밀어넣지 않는다 — 정산관리에서 사람이 고쳐 둔 계약금을 덮어쓰지 않기 위해서다.
+      //   (a) 반영 조건이 이번 저장에서 새로 참이 됐거나, (b) 이미 참인데 계약금·수수료율 값 자체가 바뀐 경우만 보낸다.
+      //   (계약 상태 버튼은 즉시 저장이라 setContractStatus 에서 이미 처리한다 — 여기서는 수수료 현황 쪽이 주 경로다)
+      try {
+        var prevTrig = !!(prevData && (prevData.contract_status === "계약금입금완료" || prevData.fee_status === "수수료수령완료"));
+        var nowTrig = (rest.contract_status === "계약금입금완료") || (rest.fee_status === "수수료수령완료");
+        var s0 = function(v) { return (v === null || v === undefined) ? "" : String(v); };
+        var valChanged = !!(prevData && (s0(prevData.contract_amount) !== s0(rest.contract_amount)
+                                      || s0(prevData.fee) !== s0(rest.fee)));
+        if (nowTrig && (!prevTrig || valChanged)) {
+          var sres = await syncSettlementFromCompany(rest);
+          if (sres && sres.error) console.warn("정산 자동반영 실패:", sres.error);
+          else if (sres && (sres.mode === "insert" || sres.mode === "update") && typeof showToast === "function") {
+            showToast("💰 정산에 계약금·수수료율을 반영했어요" + (sres.mode === "insert" ? " (새 행 생성)" : "") + ".", "success");
+          }
+        }
+        if (rest.contract_status === "계약금입금완료" && prevData && prevData.contract_status !== "계약금입금완료") {
+          await advanceCardsToContractPaid(rest.id);
+        }
+      } catch (autoSettleErr) { console.warn("정산 자동반영 중 오류:", autoSettleErr); }
+
       // 🆕 stage가 "부결/반려"로 새로 바뀌면 → 사례집 자동 초안 생성
       if (rest.stage === "부결/반려" && prevData && prevData.stage !== "부결/반려") {
         try {
@@ -7628,7 +7740,7 @@ function CRMApp({ profile, session }) {
             {view === "calendar" && <CalendarView companies={companies} onSelectCompany={setSelectedCompany} profile={profile} />}
             {view === "manual" && <ManualView />}
             {view === "quicklinks" && <QuickLinksView />}
-            {view === "pipeline" && <PipelineView cardRows={pipelineCardRows} hiddenByList={pipelineCardData.hiddenByList} onClearListFilters={clearListFilters} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setPipelineCards={setPipelineCards} setStagnConfig={setStagnConfig} canEditMapping={profile?.name === "양호"} myName={profile?.name} stagnRows={stagnRows} />}
+            {view === "pipeline" && <PipelineView cardRows={pipelineCardRows} hiddenByList={pipelineCardData.hiddenByList} onClearListFilters={clearListFilters} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setPipelineCards={setPipelineCards} setCompanies={setCompanies} setStagnConfig={setStagnConfig} canEditMapping={profile?.name === "양호"} myName={profile?.name} stagnRows={stagnRows} />}
             {view === "cases" && <ApprovalCasesView profile={profile} />}
             {view === "signoff" && <SignOffView profile={profile} onBadgeUpdate={setSignOffBadge} />}
             {/* 전체 담당자 보기는 업무노트 열람 권한(wnIsAdmin=양호)과 같은 기준으로. role='admin' 만으로는 DB(RLS)가 남의 노트를 안 준다 */}
@@ -10056,7 +10168,7 @@ function normPipeSearchName(s) {
 }
 function onlyDigits(s) { return String(s == null ? "" : s).replace(/[^0-9]/g, ""); }
 
-function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssignee, setFilterAssignee, assignees, onSelect, setPipelineCards, setStagnConfig, canEditMapping, myName, stagnRows }) {
+function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssignee, setFilterAssignee, assignees, onSelect, setPipelineCards, setCompanies, setStagnConfig, canEditMapping, myName, stagnRows }) {
   // 파이프라인 탭 진입 시 카드 최신화 (기관현황 자동동기화 결과 반영)
   useEffect(function() {
     var alive = true;
@@ -10408,6 +10520,22 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
     if (r.error) { alert("단계 변경 실패: " + r.error.message); return; }
     // 수동 이동 → 이번 정체구간 알림 해제(연결 업무노트 완료 처리)
     if (row.card.alert_note_id) { try { await supabase.from("work_notes").update({ is_done: true }).eq("id", row.card.alert_note_id); } catch (e3) {} }
+    // 📌 STEP2(계약금입금완료)로 옮기면 계약 상태도 같이 켠다 — 이름이 같은 값이면 같이 움직여야 혼동이 없다.
+    //    이어서 계약금·수수료율이 있으면 정산에도 반영한다(기업정보에서 켠 것과 완전히 같은 경로).
+    if (newStage === CONTRACT_PAID_STAGE && row.card.company_id && row.co && row.co.contract_status !== "계약금입금완료") {
+      try {
+        var cAt = new Date().toISOString();
+        var cr = await supabase.from("companies")
+          .update({ contract_status: "계약금입금완료", contract_status_at: cAt })
+          .eq("id", row.card.company_id);
+        if (cr.error) { console.warn("계약 상태 반영 실패:", cr.error.message); }
+        else {
+          if (setCompanies) setCompanies(function(prev) { return (prev || []).map(function(x) { return x.id === row.card.company_id ? Object.assign({}, x, { contract_status: "계약금입금완료", contract_status_at: cAt }) : x; }); });
+          var sres3 = await syncSettlementFromCompany(Object.assign({}, row.co, { contract_status: "계약금입금완료" }));
+          if (sres3 && sres3.error) console.warn("정산 자동반영 실패:", sres3.error);
+        }
+      } catch (eCS) { console.warn("계약 상태 연동 중 오류:", eCS); }
+    }
     // 팀 활동 로그에 남김 (대시보드 '우리 팀 활동 로그')
     try {
       await supabase.from("activity_logs").insert({
@@ -12854,9 +12982,20 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
     var value = (cur === next) ? null : next;              // 같은 버튼을 다시 누르면 "없음"으로 해제
     var at = value ? new Date().toISOString() : null;      // 상태가 바뀐 시각 = 정체일수 기준
     setContractSaving(true);
+    // 계약금입금완료로 켤 때는 화면의 계약금·수수료율도 같은 UPDATE 에 실어 보낸다.
+    //   버튼은 즉시 저장인데 두 칸은 '저장' 버튼을 눌러야 저장되므로, 안 실으면
+    //   "정산에는 반영됐는데 기업정보에는 저장이 안 된" 상태가 만들어진다(아래 정산 반영은 화면 값을 쓴다).
+    var payload = { contract_status: value, contract_status_at: at };
+    if (value === "계약금입금완료") {
+      var ca = (data.contract_amount === "" || data.contract_amount == null)
+        ? null : (parseInt(String(data.contract_amount).replace(/[^0-9]/g, ""), 10) || null);
+      var fr = (data.fee === "" || data.fee == null) ? null : (parseFloat(data.fee));
+      if (ca != null) payload.contract_amount = ca;
+      if (fr != null && !isNaN(fr)) payload.fee = fr;
+    }
     var r = await writeGuarded({
       table: "companies", op: "update", id: data.id,
-      payload: { contract_status: value, contract_status_at: at },
+      payload: payload,
       label: "계약 상태 " + ((data.name || "") + " " + (value || "없음")).trim(),
     });
     setContractSaving(false);
@@ -12868,8 +13007,22 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
       }
       return;                                              // 실패 시 화면 값을 바꾸지 않는다(저장된 것처럼 보이면 안 됨)
     }
-    setData(function(p) { return Object.assign({}, p, { contract_status: value, contract_status_at: at }); });
-    if (onPatchCompany) onPatchCompany(data.id, { contract_status: value, contract_status_at: at });
+    setData(function(p) { return Object.assign({}, p, payload); });
+    if (onPatchCompany) onPatchCompany(data.id, payload);
+    // 💰📌 계약금입금완료로 켰을 때만 — 정산 자동 반영 + 파이프라인 카드 STEP2 전진.
+    //    해제(다시 눌러 '미정')는 되돌리지 않는다: 이미 넘어간 정산 값을 지우면 사람이 고친 걸 덮게 된다.
+    if (value === "계약금입금완료") {
+      var co = Object.assign({}, data, { contract_status: value });
+      var s = await syncSettlementFromCompany(co);
+      if (s && s.error) alert("정산 반영 실패: " + s.error);
+      var mv = await advanceCardsToContractPaid(data.id);
+      if (s && (s.mode === "insert" || s.mode === "update")) {
+        alert("💰 정산" + (s.mode === "insert" ? "에 새 행을 만들어 " : "에 ") + "계약금·수수료율을 반영했어요."
+          + (mv && mv.moved ? "\n📌 파이프라인 카드 " + mv.moved + "장을 STEP2(계약금입금완료)로 옮겼습니다." : ""));
+      } else if (mv && mv.moved) {
+        alert("📌 파이프라인 카드 " + mv.moved + "장을 STEP2(계약금입금완료)로 옮겼습니다.");
+      }
+    }
   };
 
   const [commInput, setCommInput] = useState("");
@@ -14072,16 +14225,19 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                   ))}
                 </div>
               </div>
-              {/* 💰 수수료 계산기 (기능5) */}
+              {/* 💰 계약금 · 수수료율 — 직접 입력 2칸. (2026-08-11: 승인금액 × 수수료율 자동계산 UI 폐지)
+                  아래 '계약 상태'가 계약금입금완료가 되거나 '수수료 현황'이 수수료수령완료가 되면
+                  이 두 값이 정산(settlement_manual)의 계약금·수수료율로 자동 반영된다.
+                  ⚠ 정산의 '수수료 금액'(commission_fee)은 사람이 직접 넣는 칸이라 절대 건드리지 않는다. */}
               <div style={{ background: "#F0FDF4", borderRadius: 10, padding: "13px 15px", marginBottom: 10, border: "1px solid #BBF7D0" }}>
-                <div style={{ fontSize: 13, fontWeight: 800, color: "#15803D", marginBottom: 10 }}>💰 수수료 계산기</div>
-                <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: "#15803D", marginBottom: 10 }}>💰 계약금 · 수수료율</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <div style={{ flex: 2, minWidth: 140 }}>
-                    <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>승인(예상) 금액 (원)</div>
-                    <input type="number" value={data.approved_amount == null ? "" : data.approved_amount} placeholder="예: 100000000"
-                      onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { approved_amount: v }); }); }}
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>계약금 (원)</div>
+                    <input type="number" value={data.contract_amount == null ? "" : data.contract_amount} placeholder="예: 3000000"
+                      onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { contract_amount: v }); }); }}
                       style={{ width: "100%", fontSize: 13, padding: "7px 9px", border: "1px solid #E8E5E0", borderRadius: 6, outline: "none", boxSizing: "border-box" }} />
-                    {data.approved_amount ? <div style={{ fontSize: 10, color: "#15803D", marginTop: 3, fontWeight: 700 }}>{wonToKor(parseInt(String(data.approved_amount).replace(/[^0-9]/g, ""), 10) || 0)} 원</div> : null}
+                    {data.contract_amount ? <div style={{ fontSize: 10, color: "#15803D", marginTop: 3, fontWeight: 700 }}>{wonToKor(parseInt(String(data.contract_amount).replace(/[^0-9]/g, ""), 10) || 0)} 원</div> : null}
                   </div>
                   <div style={{ flex: 1, minWidth: 90 }}>
                     <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>수수료율 (%)</div>
@@ -14090,9 +14246,8 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                       style={{ width: "100%", fontSize: 13, padding: "7px 9px", border: "1px solid #E8E5E0", borderRadius: 6, background: "#fff", outline: "none", boxSizing: "border-box" }} />
                   </div>
                 </div>
-                <div style={{ background: "#fff", borderRadius: 8, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>예상 수수료</span>
-                  <span style={{ fontSize: 20, fontWeight: 800, color: "#15803D" }}>{expectedFee(data) > 0 ? expectedFee(data).toLocaleString() + " 원" : "-"}</span>
+                <div style={{ fontSize: 10, color: "#AAA", marginTop: 8 }}>
+                  계약 상태를 <b style={{ color: "#15803D" }}>계약금입금완료</b>로 바꾸거나 수수료 현황을 <b style={{ color: "#15803D" }}>수수료수령완료</b>로 바꾸면 정산관리에 자동 반영됩니다
                 </div>
               </div>
               {/* 📝 계약 상태 — 수수료 현황(정산)과 별개 축. 누르는 즉시 저장되고 그 시각이 정체일수 기준이 된다. */}
@@ -14956,6 +15111,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                           {[
                             { label: "신청금액", value: s.request_amount, color: "#333" },
                             { label: "계약금", value: s.contract_fee, color: "#333" },
+                            { label: "수수료율", value: (s.commission_rate || s.commission_rate === 0) ? s.commission_rate + "%" : null, color: "#7C3AED" },
                             { label: "수수료", value: s.commission_fee, color: "#7C3AED" },
                             { label: "입금금액", value: s.received_amount, color: "#047857" },
                             { label: "계약일", value: s.contract_date, color: "#555" },
@@ -20366,10 +20522,16 @@ function SettlementView({ profile }) {
       settlement_notes: editData.settlement_notes || null,
       updated_at: new Date().toISOString(),
     };
-    var approvalFields = { approval_amount: editData.approval_amount || null, approval_date: editData.approval_date || null };
+    // 승인 2칸 + 수수료율은 나중에 추가된 컬럼이라, 미생성 환경에서도 나머지가 저장되도록 따로 뺀다.
+    var approvalFields = {
+      approval_amount: editData.approval_amount || null,
+      approval_date: editData.approval_date || null,
+      commission_rate: (editData.commission_rate === "" || editData.commission_rate == null)
+        ? null : (parseFloat(editData.commission_rate) || 0),
+    };
     var updates = Object.assign({}, base, approvalFields);
     var r = await supabase.from("settlement_manual").update(updates).eq("id", editData.id);
-    // 승인 컬럼 미생성(SQL 미실행) 시 → 승인 필드 빼고 재시도
+    // 승인/수수료율 컬럼 미생성(SQL 미실행) 시 → 그 필드 빼고 재시도
     if (r.error) r = await supabase.from("settlement_manual").update(base).eq("id", editData.id);
     if (!r.error) {
       setManuals(function(prev) { return prev.map(function(m) { return m.id === editData.id ? Object.assign({}, m, updates) : m; }); });
@@ -20391,7 +20553,7 @@ function SettlementView({ profile }) {
 
   // 수동 신규 등록
   var openAddManual = function() {
-    setNewManual({ year: 2026, month: activeMonth, business_name: "", agency_group: "", assignee: "", request_amount: "", contract_fee: "", approval_amount: "", approval_date: "", commission_fee: "", received_amount: "", contract_date: "", invoice_issued: false, fee_received: false, fee_received_date: "", settlement_notes: "" });
+    setNewManual({ year: 2026, month: activeMonth, business_name: "", agency_group: "", assignee: "", request_amount: "", contract_fee: "", commission_rate: "", approval_amount: "", approval_date: "", commission_fee: "", received_amount: "", contract_date: "", invoice_issued: false, fee_received: false, fee_received_date: "", settlement_notes: "" });
     setShowAddManual(true);
   };
 
@@ -20401,12 +20563,14 @@ function SettlementView({ profile }) {
       contract_date: newManual.contract_date || null,
       approval_date: newManual.approval_date || null,
       fee_received_date: newManual.fee_received_date || null,
+      commission_rate: (newManual.commission_rate === "" || newManual.commission_rate == null)
+        ? null : (parseFloat(newManual.commission_rate) || 0),
     });
     var r = await supabase.from("settlement_manual").insert(dataToSave).select().single();
-    // 승인 컬럼 미생성(SQL 미실행) 시 → 승인 필드 빼고 재시도
+    // 승인/수수료율 컬럼 미생성(SQL 미실행) 시 → 그 필드 빼고 재시도
     if (r.error) {
       var fallback = Object.assign({}, dataToSave);
-      delete fallback.approval_amount; delete fallback.approval_date;
+      delete fallback.approval_amount; delete fallback.approval_date; delete fallback.commission_rate;
       r = await supabase.from("settlement_manual").insert(fallback).select().single();
     }
     if (!r.error && r.data) {
@@ -20461,6 +20625,15 @@ function SettlementView({ profile }) {
         </td>
         <td style={{ padding: "6px 8px" }}>
           <input value={editData.contract_fee || ""} placeholder="계약금" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { contract_fee: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
+        </td>
+        <td style={{ padding: "6px 8px" }}>
+          {/* 수수료율(%) — 수동 건에만 있는 칸(agency_cases 에는 컬럼이 없다).
+              기업정보의 '계약금 · 수수료율'에서 자동 반영되지만 여기서 직접 고칠 수도 있다. */}
+          {isManual
+            ? <input type="number" step="0.1" min="0" value={editData.commission_rate == null ? "" : editData.commission_rate} placeholder="%"
+                onChange={function(e) { var v = e.target.value; setEditData(function(p) { return Object.assign({}, p, { commission_rate: v }); }); }}
+                style={{ width: 55, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
+            : <span style={{ fontSize: 11, color: "#AAA" }}>-</span>}
         </td>
         <td style={{ padding: "6px 8px" }}>
           <input value={editData.approval_amount || ""} placeholder="승인금액" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { approval_amount: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #FCD34D", background: "#FFFBEB", borderRadius: 4, fontSize: 12 }} />
@@ -20520,6 +20693,11 @@ function SettlementView({ profile }) {
         <td style={{ padding: "9px 8px", fontSize: 12, color: "#555" }}>{row.request_amount || "-"}</td>
         <td style={{ padding: "9px 8px" }}>
           {row.contract_fee ? <span style={{ fontSize: 12, fontWeight: 700, color: "#333" }}>{row.contract_fee}</span> : <span style={{ fontSize: 11, color: "#888" }}>미입력</span>}
+        </td>
+        <td style={{ padding: "9px 8px" }}>
+          {(row.commission_rate || row.commission_rate === 0)
+            ? <span style={{ fontSize: 12, fontWeight: 700, color: "#7C3AED" }}>{row.commission_rate}%</span>
+            : <span style={{ fontSize: 11, color: "#888" }}>{isManual ? "미입력" : "-"}</span>}
         </td>
         <td style={{ padding: "9px 8px" }}>
           {row.approval_amount ? <span style={{ fontSize: 12, fontWeight: 700, color: "#B45309" }}>{row.approval_amount}</span> : <span style={{ fontSize: 11, color: "#888" }}>미입력</span>}
@@ -20662,7 +20840,7 @@ function SettlementView({ profile }) {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ background: "#F7F6F3", borderBottom: "2px solid #E8E5E0" }}>
-                  {["#","사업자명","팀","기관","담당자","신청금액","계약금","승인금액","승인일시","수수료","입금금액","계약일","세금계산서","입금완료","입금일","비고","작업"].map(function(h) {
+                  {["#","사업자명","팀","기관","담당자","신청금액","계약금","수수료율","승인금액","승인일시","수수료","입금금액","계약일","세금계산서","입금완료","입금일","비고","작업"].map(function(h) {
                     var isApproval = h === "승인금액" || h === "승인일시";
                     return <th key={h} style={{ textAlign: "left", padding: "10px 8px", fontWeight: isApproval ? 700 : 600, color: isApproval ? "#B45309" : "#888", fontSize: 11, whiteSpace: "nowrap" }}>{h}</th>;
                   })}
@@ -20721,6 +20899,14 @@ function SettlementView({ profile }) {
                     </div>
                   );
                 })}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 13 }}>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>수수료율 (%)</label>
+                  <input type="number" step="0.1" min="0" value={newManual.commission_rate == null ? "" : newManual.commission_rate} placeholder="예: 5"
+                    onChange={function(e) { var v = e.target.value; setNewManual(function(p) { return Object.assign({}, p, { commission_rate: v }); }); }}
+                    style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+                </div>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 13 }}>
                 <div>
