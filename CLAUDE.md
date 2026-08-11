@@ -134,6 +134,13 @@ Supabase는 테이블 기본값이 **"열림"**이라, RLS를 켜지 않으면 �
 - [ ] `alter table public.<t> enable row level security;`
 - [ ] `is_approved()` 기반 정책 부여(승인된 로그인 사용자만). **`to public` / `to anon` 정책은 만들지 않는다.**
 - [ ] anon 권한 회수: `revoke all on public.<t> from anon;`
+- [ ] **TRUNCATE 회수**: `revoke truncate on public.<t> from authenticated, anon;`
+      TRUNCATE 는 **RLS 도 행 트리거도 우회한다** — 승인된 토큰 하나로 테이블을 통째로 비울 수 있다.
+      2026-08-11에 26개 테이블에서 일괄 회수했다(`authenticated_TRUNCATE_회수.sql`, 26→0 확인).
+      `postgres` 소유 기본권한에서도 뺐으니 `run-sql.js` 로 만든 테이블엔 다시 안 붙는다.
+      ⚠ 다만 **`supabase_admin` 소유 기본권한은 아직 `arwdDxtm`(D=TRUNCATE) 그대로**다 —
+      `postgres` 가 그 롤의 멤버가 아니라 여기서 못 고친다. supabase_admin 이 만든 테이블에는
+      다시 붙을 수 있으니 **새 테이블마다 위 한 줄을 실행하고 카탈로그로 확인할 것.**
 - [ ] 옛 정책이 남아 있지 않은지 확인 — PERMISSIVE 정책은 **OR로 합쳐져서**,
       `{anon} USING(true)` 하나만 남아도 새 정책이 무력화된다.
       **같은 역할(`authenticated`)끼리도 마찬가지다.** 정책을 "추가"하면 조이는 게 아니라 **푸는** 결과가 된다.
