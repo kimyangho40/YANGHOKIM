@@ -80,6 +80,28 @@
   → 채널까지만 정책으로 막고, 그 안쪽(남의 본문 수정·삭제, sender/channel 바꿔치기)은 **트리거 `trg_chat_protect_update`**가 막는다.
 - 트리거는 `auth.uid() is null`이면 통과시킨다 — service_role·`run-sql.js` 같은 관리 작업을 막지 않기 위해서다.
 
+## ⚠️ `team_notes` 는 work_notes·DM 과 **같은 계열이 아니다** — 2026-08-11 확인
+(SQL: `팀노트_사칭변조_방지.sql` / 되돌리기 `_rollback.sql` / 동작검증 `_동작검증.sql` 8/8 통과)
+
+**팀 구분은 "접근 권한"이 아니라 "분류"다.** App.js `TeamNotesSection` 은 `activeTab` 으로
+법인/개인/전체 탭을 전환해 **누구나 모든 팀 노트를 본다**(App.js:27541). 화면과 DB 가 이미 일치한다.
+→ **RLS 를 팀 스코프로 조이면 화면이 통째로 깨진다. 조이지 말 것.**
+(`teamRoster`/`TEAM_MEMBERS` 는 "공지 확인 대상 명단"이지 열람 권한이 아니다. `teamKeyOfProfile` 은
+팀 업무 저장 팝업의 기본값 전용이다. 셋 다 열람 필터가 아니다 — 헷갈리기 쉬우니 주의.)
+
+열람 쪽 실측: RLS on / 정책은 `p_team_notes_all` 하나(`to authenticated`, using·with_check 둘 다
+`is_approved()`) / anon 권한 0건. 비로그인 노출 없음.
+
+그래서 막은 것은 열람이 아니라 **쓰기 쪽 사칭·변조**다(chat 의 `trg_chat_protect_update` 와 같은 계열):
+- `trg_team_notes_protect` — INSERT 시 `posted_by` 를 본인으로 강제, UPDATE 시 `posted_by`·`team` 을 조용히 원복.
+  ⚠ 확인(`read_by`)·가져가기·완료(`status`)·체크리스트·내용수정·soft delete 는 **전부 통과**한다.
+  남의 노트에 쓰는 게 정상인 기능이라 UPDATE 를 본인 것으로 좁힐 수 없다(chat 과 같은 이유).
+- `trg_team_notes_no_hard_delete` — 하드 DELETE 차단(앱은 전부 `deleted_at` soft delete). 관리자도 못 지운다.
+- 두 트리거 모두 `auth.uid() is null` 이면 통과 — service_role·`run-sql.js` 관리 작업을 막지 않기 위해서다.
+
+**앞으로 team_notes 를 건드릴 때**: `posted_by`·`team` 을 바꾸는 UPDATE 경로나 하드 DELETE 경로를
+새로 만들면 트리거에 막힌다. 정말 필요하면 트리거를 같이 고치고 동작검증을 다시 돌릴 것.
+
 ## 2-3. 세션 수명 제한은 pg_cron 이 대신한다 (2026-08-11)
 Supabase 정식 기능(`sessions_timebox`/`sessions_inactivity_timeout`)은 **Pro 플랜 전용**이라
 무료 플랜에선 Management API 가 **402** 를 준다. 그래서 `auth.sessions` 를 직접 청소한다.
