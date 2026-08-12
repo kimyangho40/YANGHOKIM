@@ -26035,32 +26035,69 @@ function assignDbColWidth(name) {
   return 86;
 }
 
+// 2단계(2026-08-12): 기본 경로는 **Supabase 스냅샷**이다.
+//   구글시트 → Apps Script(설치형 onChange + 10분 안전망) → /api/assign-db-sync → assign_db_snapshot
+//   → 이 화면. 팀원은 **구글 연결이 전혀 필요 없다**(1단계에서 시트 소유자 계정이 아니면 막히던 문제 해결).
+//   시트가 바뀌면 Realtime 으로 화면이 알아서 따라간다(채팅과 같은 postgres_changes 방식).
+// 구글 직접 읽기는 **비상용으로만** 남겼다 — 동기화가 멈췄을 때 권한 있는 사람이 확인하는 용도.
 function AssignDbView() {
   const [headers, setHeaders] = useState([]);
   const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
-  const [needAuth, setNeedAuth] = useState(false);
-  const [fetchedAt, setFetchedAt] = useState(null);
+  const [notSynced, setNotSynced] = useState(false);  // 스냅샷 행이 아직 없음(Apps Script 미설치)
+  const [syncedAt, setSyncedAt] = useState(null);
+  const [source, setSource] = useState("");           // "snapshot" | "google"
   const [q, setQ] = useState("");
-  const [openRow, setOpenRow] = useState(null);   // 긴 칸을 펼쳐 둔 행 index
+  const [openRow, setOpenRow] = useState(null);       // 긴 칸을 펼쳐 둔 행 index
+  const [googleBusy, setGoogleBusy] = useState(false);
+  const [googleErr, setGoogleErr] = useState("");
 
-  var load = async function() {
+  // 시트 격자 → 표. 스냅샷이든 구글 직접 읽기든 **같은 함수**를 통과한다(1단계에서 18/18 검증한 코드).
+  var applyGrid = function(grid, from, at) {
+    var t = buildAssignDbTable(grid || []);
+    setHeaders(t.headers); setRows(t.rows);
+    setSource(from); setSyncedAt(at ? new Date(at) : new Date());
+  };
+
+  var loadSnapshot = async function(quiet) {
+    if (!quiet) setLoading(true);
+    setErr("");
+    var r = await supabase.from("assign_db_snapshot")
+      .select("grid, row_count, synced_at, sheet_name").eq("id", "default").maybeSingle();
+    if (!quiet) setLoading(false);
+    if (r.error) { setErr("스냅샷을 불러오지 못했습니다: " + r.error.message); return; }
+    if (!r.data || !Array.isArray(r.data.grid) || !r.data.grid.length) { setNotSynced(true); return; }
+    setNotSynced(false);
+    applyGrid(r.data.grid, "snapshot", r.data.synced_at);
+  };
+  useEffect(function() { loadSnapshot(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 시트가 수정되면 Apps Script 가 이 행을 갱신한다 → 그 순간 화면이 따라 바뀐다(폴링 없음).
+  useEffect(function() {
+    var ch = supabase.channel("assign-db-snapshot")
+      .on("postgres_changes", { event: "*", schema: "public", table: "assign_db_snapshot" },
+        function() { loadSnapshot(true); })
+      .subscribe();
+    return function() { supabase.removeChannel(ch); };
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 🆘 비상용 — 동기화가 멈췄을 때만. 시트 접근 권한이 있는 구글 계정이어야 한다.
+  var loadFromGoogle = async function() {
     var token = getDriveToken();
-    if (!token) { setNeedAuth(true); setErr(""); return; }
-    setLoading(true); setErr(""); setNeedAuth(false);
+    if (!token) { connectGoogleDrive(); return; }
+    setGoogleBusy(true); setGoogleErr("");
     try {
-      var t = buildAssignDbTable(await fetchAssignDbGrid(token));
-      setHeaders(t.headers); setRows(t.rows); setFetchedAt(new Date());
+      applyGrid(await fetchAssignDbGrid(token), "google", null);
+      setNotSynced(false);
     } catch (e) {
       var m = (e && e.message) || "";
-      if (m === "AUTH") { setNeedAuth(true); setErr(""); }
-      else if (m === "NOACCESS") setErr("이 구글 계정으로는 시트를 열 수 없습니다.\n시트 소유자에게 보기 권한을 요청하거나, 권한이 있는 구글 계정으로 다시 연결해 주세요.");
-      else setErr(m || "불러오지 못했습니다.");
+      if (m === "AUTH") setGoogleErr("구글 연결이 만료됐습니다. 버튼을 한 번 더 눌러 다시 연결해 주세요.");
+      else if (m === "NOACCESS") setGoogleErr("이 구글 계정은 시트 접근 권한이 없습니다. 시트 소유자 계정으로 연결해야 합니다.");
+      else setGoogleErr(m || "불러오지 못했습니다.");
     }
-    setLoading(false);
+    setGoogleBusy(false);
   };
-  useEffect(function() { load(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   var nq = q.trim().toLowerCase();
   var shown = nq ? rows.filter(function(r) { return r.some(function(v) { return v.toLowerCase().indexOf(nq) >= 0; }); }) : rows;
@@ -26071,7 +26108,7 @@ function AssignDbView() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>배정DB</h1>
           <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>
-            구글시트 <b style={{ color: "#555" }}>배정DB_김동일 이사님</b> 을 그대로 보여줍니다 ·{" "}
+            구글시트 <b style={{ color: "#555" }}>배정DB_김동일 이사님</b> 이 수정되면 자동으로 반영됩니다 ·{" "}
             <span style={{ color: "#B45309", fontWeight: 600 }}>조회 전용</span> — 수정은 시트에서 해주세요
           </p>
         </div>
@@ -26080,7 +26117,7 @@ function AssignDbView() {
             style={{ padding: "7px 12px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 13, background: "#fff", fontWeight: 600, color: "#15803D", textDecoration: "none" }}>
             📄 시트에서 열기 ↗
           </a>
-          <button onClick={load} disabled={loading}
+          <button onClick={function() { loadSnapshot(); }} disabled={loading}
             style={{ padding: "7px 14px", border: "none", borderRadius: 7, fontSize: 13, fontWeight: 700,
               background: loading ? "#C7D2FE" : "#4338CA", color: "#fff", cursor: loading ? "default" : "pointer" }}>
             {loading ? "불러오는 중…" : "🔄 새로고침"}
@@ -26088,26 +26125,31 @@ function AssignDbView() {
         </div>
       </div>
 
-      {needAuth ? (
-        <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, padding: "40px 24px", textAlign: "center" }}>
-          <div style={{ fontSize: 32, marginBottom: 10 }}>🔗</div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "#1A1917", marginBottom: 6 }}>구글 계정 연결이 필요합니다</div>
-          <div style={{ fontSize: 12.5, color: "#888", lineHeight: 1.7, marginBottom: 18 }}>
-            시트를 읽으려면 본인 구글 계정으로 한 번 연결해 주세요. 읽기 전용 권한만 사용합니다.<br />
-            연결은 이 브라우저에만 저장되고 약 1시간 뒤 만료됩니다(만료되면 다시 눌러주세요).
+      {notSynced ? (
+        <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, padding: "36px 24px", textAlign: "center" }}>
+          <div style={{ fontSize: 32, marginBottom: 10 }}>⏳</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#1A1917", marginBottom: 6 }}>아직 시트가 동기화되지 않았습니다</div>
+          <div style={{ fontSize: 12.5, color: "#888", lineHeight: 1.8, marginBottom: 18 }}>
+            시트에 <b style={{ color: "#555" }}>Apps Script 설치</b>가 끝나면 여기에 표가 나타납니다.<br />
+            설치 후에는 시트를 고칠 때마다 자동으로 반영되고, 팀원은 구글 연결 없이 바로 볼 수 있습니다.
           </div>
-          <button onClick={connectGoogleDrive}
-            style={{ padding: "10px 22px", border: "none", borderRadius: 8, fontSize: 13.5, fontWeight: 700, background: "#4338CA", color: "#fff", cursor: "pointer" }}>
-            구글 연결
+          <button onClick={loadFromGoogle} disabled={googleBusy}
+            style={{ padding: "8px 18px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 12.5, fontWeight: 700, background: "#fff", color: "#666", cursor: googleBusy ? "default" : "pointer" }}>
+            {googleBusy ? "불러오는 중…" : "🆘 구글에서 직접 읽기 (시트 권한 있는 계정만)"}
           </button>
+          {googleErr && <div style={{ marginTop: 12, fontSize: 12, color: "#B91C1C", fontWeight: 600, whiteSpace: "pre-line" }}>⚠ {googleErr}</div>}
         </div>
       ) : err ? (
         <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 12, padding: "18px 20px", fontSize: 13, color: "#B91C1C", fontWeight: 600, whiteSpace: "pre-line", lineHeight: 1.7 }}>
           ⚠ {err}
-          <div style={{ marginTop: 12 }}>
-            <button onClick={connectGoogleDrive}
+          <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+            <button onClick={function() { loadSnapshot(); }}
               style={{ padding: "6px 14px", border: "1px solid #FECACA", borderRadius: 7, fontSize: 12, fontWeight: 700, background: "#fff", color: "#B91C1C", cursor: "pointer" }}>
-              다른 구글 계정으로 연결
+              다시 시도
+            </button>
+            <button onClick={loadFromGoogle} disabled={googleBusy}
+              style={{ padding: "6px 14px", border: "1px solid #FECACA", borderRadius: 7, fontSize: 12, fontWeight: 700, background: "#fff", color: "#B91C1C", cursor: "pointer" }}>
+              🆘 구글에서 직접 읽기
             </button>
           </div>
         </div>
@@ -26122,12 +26164,29 @@ function AssignDbView() {
             <span style={{ fontSize: 12, color: "#888" }}>
               {nq ? <><b style={{ color: "#4338CA" }}>{shown.length}</b>건 검색 / 전체 {rows.length}건</> : <>전체 <b style={{ color: "#1A1917" }}>{rows.length}</b>건</>}
             </span>
-            {fetchedAt && (
-              <span style={{ marginLeft: "auto", fontSize: 11.5, color: "#AAA" }}>
-                마지막 갱신 {fetchedAt.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}
+            {source === "google" && (
+              <span title="동기화된 스냅샷이 아니라, 지금 이 브라우저가 구글에서 직접 읽은 내용입니다. 다른 팀원에게는 보이지 않습니다."
+                style={{ fontSize: 11, fontWeight: 700, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 99, padding: "3px 9px" }}>
+                🆘 구글에서 직접 읽음 (이 화면에만)
               </span>
             )}
+            <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+              {syncedAt && (
+                <span title={source === "snapshot" ? "시트가 수정되면 자동으로 갱신됩니다" : ""} style={{ fontSize: 11.5, color: "#AAA" }}>
+                  {source === "snapshot" ? "마지막 동기화 " : "읽은 시각 "}
+                  {syncedAt.toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                </span>
+              )}
+              <button onClick={loadFromGoogle} disabled={googleBusy}
+                title="동기화가 멈춘 것 같을 때만 쓰세요. 시트 접근 권한이 있는 구글 계정이 필요합니다."
+                style={{ fontSize: 11, fontWeight: 600, color: "#AAA", background: "none", border: "1px solid #E8E5E0", borderRadius: 6, padding: "3px 8px", cursor: googleBusy ? "default" : "pointer" }}>
+                {googleBusy ? "읽는 중…" : "🆘 직접 읽기"}
+              </button>
+            </span>
           </div>
+          {googleErr && (
+            <div style={{ padding: "8px 14px", background: "#FEF2F2", borderBottom: "1px solid #FECACA", fontSize: 11.5, color: "#B91C1C", fontWeight: 600, whiteSpace: "pre-line" }}>⚠ {googleErr}</div>
+          )}
 
           <div style={{ overflowX: "auto", maxHeight: "calc(100vh - 300px)", overflowY: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
@@ -26173,7 +26232,8 @@ function AssignDbView() {
           </div>
 
           <div style={{ padding: "9px 14px", borderTop: "1px solid #F0EEE9", background: "#FAFAF8", fontSize: 11, color: "#999", lineHeight: 1.6 }}>
-            컬럼은 시트의 헤더 행을 그대로 따라갑니다 — 이사님이 컬럼을 바꾸거나 행을 추가하셔도 여기서 자동으로 반영됩니다.
+            시트가 수정되면 자동으로 반영됩니다(즉시 · 놓치면 10분 안에). 컬럼은 시트의 헤더 행을 그대로 따라가므로
+            이사님이 컬럼을 바꾸거나 행을 추가하셔도 그대로 나옵니다.
             {" "}긴 내용은 두 줄까지 보이고, 줄을 클릭하면 전부 펼쳐집니다. 시트 탭이 여러 개면 <b>첫 번째 탭</b>만 표시됩니다.
           </div>
         </div>

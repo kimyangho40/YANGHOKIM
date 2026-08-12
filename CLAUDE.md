@@ -176,9 +176,37 @@ DB 변경 0건. 사이드바 `더보기 → 배정DB`(`view === "assigndb"`, `As
   힌트(`ASSIGN_DB_HEADER_HINTS`)가 하나도 안 맞아도(=컬럼명을 전부 바꿔도) 동작한다.
 - 토큰은 기존 `getDriveToken()`/`connectGoogleDrive()` 그대로 — 브라우저 localStorage, 약 1시간 만료.
   서버에 refresh token 을 저장하지 않는다(2026-07-27 사고 이후 `google_oauth_tokens` 잠긴 채 유지).
-- **열람 제약**: 브라우저가 본인 구글 계정으로 직접 읽으므로 **시트 접근 권한이 있는 사람만** 내용이 보인다.
-  메뉴는 전원에게 보이고, 권한이 없으면 "다른 구글 계정으로 연결" 안내가 뜬다.
-  전원이 보게 하려면 2단계(Apps Script → Supabase 캐시)로 가야 한다 — 그때 이 제약이 사라진다.
+
+### 2단계 — Apps Script → Supabase 캐시 (2026-08-12, 지금 이게 기본 경로)
+(SQL: `배정DB_스냅샷_테이블.sql` / `_rollback` / `_검증` 8/8 · 엔드포인트 `api/assign-db-sync.js` 검사 19/19)
+
+1단계는 **브라우저가 본인 구글 계정으로 직접 읽어서**, 시트 소유자 계정이 아니면 막혔다.
+2단계는 그 제약을 없앤다 — 팀원은 **CRM 로그인만 하면 되고 구글 연결이 아예 필요 없다.**
+
+```
+구글시트 → Apps Script(설치형 onChange + 10분 안전망) → /api/assign-db-sync → assign_db_snapshot → 화면(Realtime)
+```
+
+- **테이블은 `assign_db_snapshot` 1행뿐이고 `grid jsonb` 에 시트 2차원 배열을 가공 없이 넣는다.**
+  ⚠️ 컬럼을 고정 스키마로 펼치지 말 것 — 펼치는 순간 "시트를 고쳐도 CRM 은 안 고친다"가 깨진다.
+  헤더 판정은 **Apps Script 도 서버도 아니고 App.js `buildAssignDbTable()` 한 곳**에서만 한다.
+  1단계 직접 읽기와 2단계 스냅샷이 **같은 함수를 통과**하므로 결과가 갈라지지 않는다.
+- **쓰기 정책을 만들지 않았다.** `authenticated` 는 SELECT 권한만 있다(INSERT/UPDATE/DELETE 회수).
+  쓰기는 service_role 로 서버리스 함수만 한다 → 사람은 아무도 못 쓴다.
+- ⚠️ **`api/assign-db-sync.js` 는 다른 5개 엔드포인트와 인증 방식이 다르다.**
+  기계(Apps Script)가 부르므로 사람 JWT 가 없어 `denyUnauthorized()` 를 쓸 수 없다.
+  대신 공유키(`ASSIGN_DB_SYNC_SECRET`) 상수시간 비교. **이 키로 할 수 있는 일은 스냅샷 1행 갱신뿐**이다.
+  service_role 키를 구글에 두지 않는 이유: 시트 편집 권한자가 스크립트를 열면 RLS 를 통째로
+  우회하는 DB 마스터키를 보게 된다. service_role 은 Vercel 환경변수에만 둔다.
+- 안전장치: **행 0건은 반영하지 않는다**(시트 사고로 데이터가 날아가도 스냅샷은 보존 — 시트가 원본이라
+  다음 정상 동기화 때 복구된다). 40만 칸 초과는 413.
+- Apps Script 는 내용이 그대로면 전송을 생략한다(md5 지문) → 10분 안전망이 돌아도 헛일을 안 한다.
+- 필요한 환경변수(Vercel): `ASSIGN_DB_SYNC_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`.
+  **둘 중 하나라도 없으면 500 + 어느 값이 없는지 알려준다** — 설치 중 원인을 못 찾는 게 더 위험해서 일부러 그렇게 했다.
+- 시트 쪽 코드 원본: `apps-script/배정DB_동기화.gs` (저장소엔 참고용, 실제로는 시트 안에서 돈다).
+  트리거를 고치면 `setupAssignDbSync()` 를 다시 실행해야 반영된다.
+- 구글 직접 읽기는 **비상용 버튼으로만** 남겼다(동기화가 멈췄을 때 권한 있는 사람이 확인). 이때는
+  "🆘 구글에서 직접 읽음 (이 화면에만)" 배지가 뜬다 — 남에게는 안 보이는 내용이라는 표시다.
 
 ## ⚠️ 파이프라인 카드 일괄 이동 · 삭제(휴지통) — 2026-08-12 신설
 (SQL: `파이프라인_카드삭제_휴지통.sql` / `_rollback` / `_검증` 8/8)
