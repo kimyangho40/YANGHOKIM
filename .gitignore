@@ -26,6 +26,9 @@ yarn-error.log*
 
 .vercel
 
+# 병렬 세션 작업용 git worktree 폴더 (작업 사본 — 커밋 금지)
+/.worktrees/
+
 # 업무지시서 / 케이스 데이터 (로컬 작업용)
 /신규등록_업무지시.txt
 /신규등록_업무지시서.xlsx
