@@ -7695,6 +7695,7 @@ function CRMApp({ profile, session }) {
                 { id: "leave", label: "연차/휴가", icon: "calendar" },
                 { id: "partners", label: "협업 담당자", icon: "users" },
                 { id: "dbleads", label: "DB리스트", icon: "phone" },
+                { id: "assigndb", label: "배정DB", icon: "list" },
                 { id: "calendar", label: "캘린더", icon: "calendar" },
               ].map(function({ id, label, icon }) {
                 return (
@@ -7960,6 +7961,7 @@ function CRMApp({ profile, session }) {
             {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setFilterAssignee={setFilterAssignee} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} myName={profile?.name} myUid={profile?.id} stagnRows={stagnRows} />}
             {view === "agency" && <AgencyView key={agencyJumpKey} jumpToMonth={agencyJumpMonth} jumpToGroup={agencyJumpGroup} />}
             {view === "dbleads" && <DBLeadsView canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
+            {view === "assigndb" && <AssignDbView />}
             {view === "settlement" && <SettlementView profile={profile} />}
             {view === "activitylog" && <ActivityLogView />}
             {view === "worknotes" && <WorkNotesView profile={profile} onBadgeUpdate={function() { fetchWorkNotesBadge(profile?.name); }}
@@ -25921,6 +25923,264 @@ const LEAD_STATUS_COLORS = {
   "미연락": { bg: "#F7F6F3", text: "#888" },
   "계약": { bg: "#ECFDF5", text: "#047857" },
 };
+
+// ── 📋 배정DB — 구글시트 조회 전용 (2026-08-12) ───────────────────────────────
+// 김동일 이사님이 쓰시는 "배정DB_김동일 이사님" 시트를 CRM에서 **읽기만** 한다.
+// 시트가 원본이고 CRM 은 거울이다 — 여기서 고치는 기능은 일부러 만들지 않았다(사용자 결정).
+//
+// 읽는 방식: Drive API 로 시트를 xlsx 로 내보내(export) 기존 엑셀 파서로 읽는다.
+//   · Drive API 는 이미 쓰고 있고 스코프도 drive.readonly 그대로라 **추가 동의창이 없다.**
+//   · Sheets API 를 쓰면 Google Cloud 콘솔에서 API 사용설정을 따로 켜야 한다(안 켜면 403).
+//   · 메모·진행방향 칸에 줄바꿈과 쉼표가 섞여 있어 CSV 로 받으면 파싱이 위험하다 → xlsx 가 안전.
+//   ⚠️ export 는 **첫 번째 시트 탭만** 준다. 지금은 탭이 하나뿐이라 문제없지만
+//      탭이 늘어나면 첫 탭만 보인다 — 그래서 화면 하단에 그 사실을 적어 둔다.
+//
+// ⚠️ 컬럼을 코드에 박지 않는다 — 헤더 행을 **매번 시트에서 찾아** 그 순서 그대로 그린다.
+//    이사님이 컬럼을 추가·이동·이름변경하거나 행을 늘려도 CRM 코드는 고칠 필요가 없다.
+//    (이게 이 화면의 설계 목적이다. 컬럼을 상수로 박는 순간 그 목적이 깨진다.)
+const ASSIGN_DB_SHEET_ID = "1LQ_BF9vU-4J-PpX-r-HWj213ftZA4GjZkbFcrnU8A-g";
+const ASSIGN_DB_SHEET_URL = "https://docs.google.com/spreadsheets/d/" + ASSIGN_DB_SHEET_ID + "/edit";
+const ASSIGN_DB_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+// 헤더 행 판별 힌트. 하나도 안 맞으면 "가장 많이 찬 행"으로 떨어지므로 이름이 바뀌어도 동작한다.
+const ASSIGN_DB_HEADER_HINTS = ["배정날짜", "대표자", "회사명", "연락처", "미팅날짜"];
+
+async function fetchAssignDbGrid(token) {
+  var url = "https://www.googleapis.com/drive/v3/files/" + ASSIGN_DB_SHEET_ID
+    + "/export?mimeType=" + encodeURIComponent(ASSIGN_DB_XLSX_MIME);
+  var r = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+  if (r.status === 401) { clearDriveToken(); throw new Error("AUTH"); }
+  if (r.status === 403 || r.status === 404) throw new Error("NOACCESS");
+  if (!r.ok) throw new Error("시트를 가져오지 못했습니다 (" + r.status + ")");
+  var buf = await r.arrayBuffer();
+  var XLSX = await ensureXLSX();
+  var wb = await readUploadedWorkbook(buf, { type: "array", cellDates: true });
+  var ws = wb.Sheets[wb.SheetNames[0]];
+  if (!ws) throw new Error("시트에 내용이 없습니다.");
+  // raw:false → 시트 화면에 보이는 표기 그대로(₩500,000 · 2025-09-22). 거울이므로 서식을 따른다.
+  return XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: false, blankrows: false });
+}
+
+// 한 행이 "머리글다운" 정도를 점수로 매긴다.
+//   · 힌트 이름 일치가 가장 강하고(×20),
+//   · 힌트가 하나도 안 맞아도(=이사님이 컬럼명을 전부 바꾼 경우) **짧은 글자 칸이 많고
+//     숫자·날짜·금액 칸이 없는 행**이 머리글이다.
+//   ⚠️ 찬 칸 수만 세면 안 된다 — 머리글 행은 A열(순번)이 비어 있어서 데이터 행보다 한 칸 적고,
+//      그러면 첫 데이터 행이 머리글로 잡혀 표가 통째로 한 줄 밀린다. (실제로 그렇게 틀렸었다)
+function assignDbHeaderScore(row) {
+  var filled = 0, hint = 0, texty = 0, numy = 0;
+  for (var j = 0; j < (row || []).length; j++) {
+    var raw = String(row[j] == null ? "" : row[j]).trim();
+    if (!raw) continue;
+    filled++;
+    var v = raw.replace(/\s+/g, "");
+    if (ASSIGN_DB_HEADER_HINTS.indexOf(v) >= 0) hint++;
+    if (/^[₩￦$]?[0-9][0-9,./\-:()]*$/.test(v)) numy++;   // 숫자·금액·날짜·전화번호
+    else if (raw.length <= 12) texty++;                     // 짧은 글자 = 머리글다움
+  }
+  return filled + hint * 20 + texty * 2 - numy * 3;
+}
+// 헤더 행 찾기 — 앞쪽 6행 중 점수가 가장 높은 행.
+// 1행이 제목("DB / 김동일 이사님")이고 2행이 실제 헤더인 지금 구조를 자동으로 맞춘다.
+function findAssignDbHeaderRow(grid) {
+  var best = 0, bestScore = -Infinity;
+  var limit = Math.min(grid.length, 6);
+  for (var i = 0; i < limit; i++) {
+    var score = assignDbHeaderScore(grid[i] || []);
+    if (score > bestScore) { bestScore = score; best = i; }
+  }
+  return best;
+}
+
+// 시트 2차원 배열 → { headers, rows }. 헤더도 데이터도 없는 빈 열은 빼고, 나머지는 순서 그대로.
+function buildAssignDbTable(grid) {
+  if (!grid || !grid.length) return { headers: [], rows: [], headerRowNo: 0 };
+  var h = findAssignDbHeaderRow(grid);
+  var rawHeaders = grid[h] || [];
+  var body = grid.slice(h + 1);
+  var width = rawHeaders.length;
+  body.forEach(function(r) { if (r && r.length > width) width = r.length; });
+  var keep = [];
+  for (var c = 0; c < width; c++) {
+    var hv = String(rawHeaders[c] == null ? "" : rawHeaders[c]).trim();
+    var any = !!hv;
+    if (!any) {
+      for (var k = 0; k < body.length; k++) {
+        var cell = body[k] && body[k][c];
+        if (cell != null && String(cell).trim()) { any = true; break; }
+      }
+    }
+    if (any) keep.push(c);
+  }
+  var headers = keep.map(function(c) {
+    // 헤더 셀 안의 줄바꿈은 공백으로("기업\n현황표" → "기업 현황표")
+    return String(rawHeaders[c] == null ? "" : rawHeaders[c]).replace(/\s*\n\s*/g, " ").trim();
+  });
+  var rows = [];
+  body.forEach(function(r) {
+    var cells = keep.map(function(c) { return String((r && r[c]) == null ? "" : r[c]); });
+    if (cells.some(function(v) { return v.trim(); })) rows.push(cells);   // 통째로 빈 행은 버림
+  });
+  return { headers: headers, rows: rows, headerRowNo: h + 1 };
+}
+
+// 컬럼 폭 — 헤더 이름으로 추정한다(컬럼이 고정이 아니므로 이름 기반이 유일한 단서).
+function assignDbColWidth(name) {
+  var n = String(name || "");
+  if (/메모|진행방향|비고|내용/.test(n)) return 300;
+  if (/회사명|업체|상호/.test(n)) return 130;
+  if (/연락처|전화/.test(n)) return 115;
+  if (/지역|기관/.test(n)) return 100;
+  if (/날짜|일자/.test(n)) return 95;
+  if (!n) return 46;                    // 순번처럼 이름 없는 열
+  return 86;
+}
+
+function AssignDbView() {
+  const [headers, setHeaders] = useState([]);
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const [needAuth, setNeedAuth] = useState(false);
+  const [fetchedAt, setFetchedAt] = useState(null);
+  const [q, setQ] = useState("");
+  const [openRow, setOpenRow] = useState(null);   // 긴 칸을 펼쳐 둔 행 index
+
+  var load = async function() {
+    var token = getDriveToken();
+    if (!token) { setNeedAuth(true); setErr(""); return; }
+    setLoading(true); setErr(""); setNeedAuth(false);
+    try {
+      var t = buildAssignDbTable(await fetchAssignDbGrid(token));
+      setHeaders(t.headers); setRows(t.rows); setFetchedAt(new Date());
+    } catch (e) {
+      var m = (e && e.message) || "";
+      if (m === "AUTH") { setNeedAuth(true); setErr(""); }
+      else if (m === "NOACCESS") setErr("이 구글 계정으로는 시트를 열 수 없습니다.\n시트 소유자에게 보기 권한을 요청하거나, 권한이 있는 구글 계정으로 다시 연결해 주세요.");
+      else setErr(m || "불러오지 못했습니다.");
+    }
+    setLoading(false);
+  };
+  useEffect(function() { load(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  var nq = q.trim().toLowerCase();
+  var shown = nq ? rows.filter(function(r) { return r.some(function(v) { return v.toLowerCase().indexOf(nq) >= 0; }); }) : rows;
+
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18, flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>배정DB</h1>
+          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>
+            구글시트 <b style={{ color: "#555" }}>배정DB_김동일 이사님</b> 을 그대로 보여줍니다 ·{" "}
+            <span style={{ color: "#B45309", fontWeight: 600 }}>조회 전용</span> — 수정은 시트에서 해주세요
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <a href={ASSIGN_DB_SHEET_URL} target="_blank" rel="noreferrer"
+            style={{ padding: "7px 12px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 13, background: "#fff", fontWeight: 600, color: "#15803D", textDecoration: "none" }}>
+            📄 시트에서 열기 ↗
+          </a>
+          <button onClick={load} disabled={loading}
+            style={{ padding: "7px 14px", border: "none", borderRadius: 7, fontSize: 13, fontWeight: 700,
+              background: loading ? "#C7D2FE" : "#4338CA", color: "#fff", cursor: loading ? "default" : "pointer" }}>
+            {loading ? "불러오는 중…" : "🔄 새로고침"}
+          </button>
+        </div>
+      </div>
+
+      {needAuth ? (
+        <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, padding: "40px 24px", textAlign: "center" }}>
+          <div style={{ fontSize: 32, marginBottom: 10 }}>🔗</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#1A1917", marginBottom: 6 }}>구글 계정 연결이 필요합니다</div>
+          <div style={{ fontSize: 12.5, color: "#888", lineHeight: 1.7, marginBottom: 18 }}>
+            시트를 읽으려면 본인 구글 계정으로 한 번 연결해 주세요. 읽기 전용 권한만 사용합니다.<br />
+            연결은 이 브라우저에만 저장되고 약 1시간 뒤 만료됩니다(만료되면 다시 눌러주세요).
+          </div>
+          <button onClick={connectGoogleDrive}
+            style={{ padding: "10px 22px", border: "none", borderRadius: 8, fontSize: 13.5, fontWeight: 700, background: "#4338CA", color: "#fff", cursor: "pointer" }}>
+            구글 연결
+          </button>
+        </div>
+      ) : err ? (
+        <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 12, padding: "18px 20px", fontSize: 13, color: "#B91C1C", fontWeight: 600, whiteSpace: "pre-line", lineHeight: 1.7 }}>
+          ⚠ {err}
+          <div style={{ marginTop: 12 }}>
+            <button onClick={connectGoogleDrive}
+              style={{ padding: "6px 14px", border: "1px solid #FECACA", borderRadius: 7, fontSize: 12, fontWeight: 700, background: "#fff", color: "#B91C1C", cursor: "pointer" }}>
+              다른 구글 계정으로 연결
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, overflow: "hidden" }}>
+          <div style={{ padding: "10px 14px", borderBottom: "1px solid #F0EEE9", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+              <span style={{ position: "absolute", left: 9, fontSize: 12, color: "#AAA", pointerEvents: "none" }}>🔍</span>
+              <input value={q} onChange={function(e) { setQ(e.target.value); }} placeholder="모든 칸에서 검색 (대표자·회사명·지역·메모 …)"
+                style={{ padding: "6px 10px 6px 28px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 12, width: 300, outline: "none" }} />
+            </div>
+            <span style={{ fontSize: 12, color: "#888" }}>
+              {nq ? <><b style={{ color: "#4338CA" }}>{shown.length}</b>건 검색 / 전체 {rows.length}건</> : <>전체 <b style={{ color: "#1A1917" }}>{rows.length}</b>건</>}
+            </span>
+            {fetchedAt && (
+              <span style={{ marginLeft: "auto", fontSize: 11.5, color: "#AAA" }}>
+                마지막 갱신 {fetchedAt.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
+          </div>
+
+          <div style={{ overflowX: "auto", maxHeight: "calc(100vh - 300px)", overflowY: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr>
+                  {headers.map(function(h, i) {
+                    return (
+                      <th key={i} title={h}
+                        style={{ position: "sticky", top: 0, zIndex: 2, background: "#FAFAF8", textAlign: "left",
+                          padding: "9px 8px", fontWeight: 700, color: "#666", fontSize: 11, whiteSpace: "nowrap",
+                          borderBottom: "2px solid #E8E5E0", minWidth: assignDbColWidth(h) }}>{h}</th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map(function(r, ri) {
+                  var open = openRow === ri;
+                  return (
+                    <tr key={ri} onClick={function() { setOpenRow(open ? null : ri); }}
+                      title={open ? "클릭하면 접습니다" : "클릭하면 메모 등 긴 내용을 모두 펼칩니다"}
+                      style={{ borderBottom: "1px solid #F5F4F1", cursor: "pointer", background: open ? "#F7F6F3" : "#fff" }}>
+                      {r.map(function(v, ci) {
+                        return (
+                          <td key={ci} style={{ padding: "7px 8px", color: "#333", verticalAlign: "top" }}>
+                            <div style={Object.assign({ whiteSpace: "pre-line", lineHeight: 1.5, wordBreak: "break-word" },
+                              open ? {} : { display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" })}>
+                              {v}
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+                {shown.length === 0 && (
+                  <tr><td colSpan={Math.max(headers.length, 1)} style={{ padding: "40px 0", textAlign: "center", color: "#CCC", fontSize: 13 }}>
+                    {loading ? "불러오는 중…" : nq ? "검색 결과가 없습니다." : "표시할 내용이 없습니다."}
+                  </td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ padding: "9px 14px", borderTop: "1px solid #F0EEE9", background: "#FAFAF8", fontSize: 11, color: "#999", lineHeight: 1.6 }}>
+            컬럼은 시트의 헤더 행을 그대로 따라갑니다 — 이사님이 컬럼을 바꾸거나 행을 추가하셔도 여기서 자동으로 반영됩니다.
+            {" "}긴 내용은 두 줄까지 보이고, 줄을 클릭하면 전부 펼쳐집니다. 시트 탭이 여러 개면 <b>첫 번째 탭</b>만 표시됩니다.
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
 
 function DBLeadsView({ canExport }) {
   const [leads, setLeads] = useState([]);
