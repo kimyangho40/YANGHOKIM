@@ -1199,6 +1199,11 @@ async function syncPipelineFromCase(c) {
     var cr = await q;
     var card = (cr.data || [])[0];
     if (card) {
+      // 🗑 휴지통 카드는 조용히 지나간다 — 되살리지도, 새로 만들지도 않는다.
+      //    ⚠️ 위 2)의 조회에 deleted_at 필터를 걸면 안 된다. "카드 없음"으로 판단해
+      //    아래 insert 로 내려가는데, 삭제된 카드가 (회사×기관) unique 슬롯을 점유하고 있어
+      //    unique 위반 에러가 난다. 조회는 삭제분까지 포함해서 하고 여기서 끊는 게 맞다.
+      if (card.deleted_at) return;
       if (card.sync_mode === "manual") return; // 수동 고정 → 자동 덮어쓰기 안 함
       if (stage) {
         var changed = card.stage !== stage;
@@ -1226,7 +1231,7 @@ async function syncPipelineFromCase(c) {
 // 각 회사×기관의 "최신 월" 상태를 매핑에 다시 통과시켜 stage/needs_mapping 갱신.
 async function resyncAutoCards() {
   var res = await Promise.all([
-    supabase.from("pipeline_cards").select("*").eq("sync_mode", "auto"),
+    supabase.from("pipeline_cards").select("*").eq("sync_mode", "auto").is("deleted_at", null), // 🗑 휴지통 카드 제외
     supabase.from("agency_cases").select("id,company_id,business_name,agency_group,status,year,month,created_at,updated_at,deleted_at"),
     supabase.from("status_stage_map").select("agency_group,status_value,stage"),
   ]);
@@ -2470,7 +2475,7 @@ async function advanceCardsToContractPaid(companyId) {
   var target = STAGES.indexOf(CONTRACT_PAID_STAGE);
   if (target < 0) return { moved: 0 };
   var q = await supabase.from("pipeline_cards").select("id, stage")
-    .eq("company_id", companyId).is("closed_at", null);
+    .eq("company_id", companyId).is("closed_at", null).is("deleted_at", null); // 🗑 휴지통 카드는 옮기지 않는다
   if (q.error || !q.data) return { moved: 0 };
   var movers = (q.data || []).filter(function(c) {
     var i = STAGES.indexOf(c.stage);
@@ -5752,6 +5757,7 @@ function CRMApp({ profile, session }) {
     const cfgMap = {};
     stagnConfig.forEach(c => { cfgMap[c.stage] = c; });
     pipelineCards.forEach(card => {
+      if (card.deleted_at) return;                           // 🗑 휴지통 카드는 정체 표시 대상 아님
       if (!card.agency_group) return;                        // 기관 미지정 카드는 제외
       if (card.closed_at) return;                            // 종결 카드는 정체 대상 아님
       if (card.hold_reason) return;                          // 보류(시기상조 등)도 제외
@@ -6092,7 +6098,7 @@ function CRMApp({ profile, session }) {
       supabase.from("companies").select("*").is("deleted_at", null).order("created_at", { ascending: false }),
       supabase.from("profiles").select("*"),
       supabase.from("agency_cases").select("business_name, region").not("region", "is", null).limit(10000),
-      supabase.from("pipeline_cards").select("*"),
+      supabase.from("pipeline_cards").select("*").is("deleted_at", null),  // 🗑 휴지통 카드는 상태에 담지 않는다(보드·정체알림·대시보드 전부 이 상태를 본다)
       supabase.from("status_stage_map").select("*"),
       supabase.from("stage_stagnation_config").select("*"),
     ]);
@@ -6591,6 +6597,7 @@ function CRMApp({ profile, session }) {
     (companies || []).forEach(c => coMap.set(c.id, c));
     const out = [];
     pipelineCards.forEach(card => {
+      if (card.deleted_at) return;                           // 🗑 휴지통 카드는 알림 대상 아님
       if (!card.agency_group) return;                        // 기관 미지정 카드는 제외
       if (card.closed_at) return;                            // 종결 처리한 카드는 정체 대상 아님
       if (card.hold_reason) return;                          // 보류(시기상조 등)도 정체 알림 대상 아님
@@ -6795,6 +6802,7 @@ function CRMApp({ profile, session }) {
     const s = search.toLowerCase();
     const sDigits = s.replace(/[^0-9]/g, "");
     const all = (pipelineCards || [])
+      .filter(card => !card.deleted_at)   // 🗑 휴지통 카드는 보드·집계에서 제외 (로드 단계에서도 거르지만 이중 방어)
       .map(card => { const co = companyById.get(card.company_id); return co ? { card, co } : null; })
       .filter(Boolean);
     const passList = ({ card, co }) => {
@@ -9282,7 +9290,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
     supabase.from("agency_cases").select("*").is("deleted_at", null).limit(10000).then(function(r) {
       if (!r.error) setAgencyCases(r.data || []);
     });
-    supabase.from("pipeline_cards").select("stage,closed_at").then(function(r) {
+    supabase.from("pipeline_cards").select("stage,closed_at").is("deleted_at", null).then(function(r) {
       if (!r.error) setPipeCards(r.data || []);
     });
     supabase.from("kpi_goals").select("*").eq("year", thisYear).eq("month", thisMonth).then(function(r) {
@@ -10144,7 +10152,7 @@ function MappingModal({ onClose, setPipelineCards, setStagnConfig, canEdit }) {
     setBusy(true);
     try {
       var n = await resyncAutoCards();
-      var fresh = await supabase.from("pipeline_cards").select("*");
+      var fresh = await supabase.from("pipeline_cards").select("*").is("deleted_at", null);
       if (fresh.data && setPipelineCards) setPipelineCards(fresh.data);
       alert("자동카드 " + n + "개 재동기화 완료");
     } catch (e) { alert("재동기화 실패: " + (e && e.message)); }
@@ -10396,7 +10404,7 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
   // 파이프라인 탭 진입 시 카드 최신화 (기관현황 자동동기화 결과 반영)
   useEffect(function() {
     var alive = true;
-    supabase.from("pipeline_cards").select("*").then(function(r) {
+    supabase.from("pipeline_cards").select("*").is("deleted_at", null).then(function(r) {
       if (alive && r.data && setPipelineCards) setPipelineCards(r.data);
     });
     return function() { alive = false; };
@@ -10406,6 +10414,26 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
   const [dragOverStage, setDragOverStage] = useState(null); // 드롭 대상 stage (하이라이트)
   const [selectedId, setSelectedId] = useState(null); // 클릭으로 선택한 카드 (색상 표시)
   const [showMapping, setShowMapping] = useState(false); // 상태→STEP 매핑 관리 모달
+
+  // ── ☑ 다중 선택 → 일괄 이동 / 일괄 삭제 ─────────────────────────────────────
+  // 기존 🧹 일괄 정리 모드(진행/보류/종결)와는 **별개**다. 그쪽은 한 줄 목록 UI,
+  // 이쪽은 보드 위에서 카드를 골라 단계를 옮기거나 휴지통으로 보내는 용도.
+  const [selectMode, setSelectMode] = useState(false);   // 켜면 카드 클릭 = 선택 토글
+  const [selectedIds, setSelectedIds] = useState({});    // { cardId: true }
+  const [moveTarget, setMoveTarget] = useState("");      // 일괄 이동 드롭다운 값
+  const [bulkBusy, setBulkBusy] = useState(false);       // 일괄 처리 중(버튼 잠금)
+
+  // ── 🗑 휴지통 (기업목록 휴지통과 같은 방식: soft delete → 복구 / 영구 삭제) ──
+  const [showTrash, setShowTrash] = useState(false);
+  const [trashedCards, setTrashedCards] = useState([]);
+  const [trashCount, setTrashCount] = useState(0);
+  useEffect(function() {
+    var alive = true;
+    supabase.from("pipeline_cards").select("id", { count: "exact", head: true })
+      .not("deleted_at", "is", null)
+      .then(function(r) { if (alive && !r.error) setTrashCount(r.count || 0); });
+    return function() { alive = false; };
+  }, []);
 
   // ── 🛰 관제탑 필터/정렬 ─────────────────────────────────────────────────────
   const [fAgency, setFAgency] = useState("전체");    // 기관별 보기 ("__none__"=기관 미지정)
@@ -10607,17 +10635,30 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
   };
 
   // 같은 회사에 이미 그 기관 카드가 있는지 (필터로 화면에서 빠졌을 수도 있어 DB로 확인)
+  // 🗑 휴지통에 있는 카드도 찾는다 — (회사×기관) unique 슬롯을 계속 점유하므로 새로 만들면 막힌다.
+  //    그래서 "이미 있다"가 아니라 "휴지통에 있으니 복구하세요"로 안내해야 한다.
   var findDupCard = async function(card, agencyId) {
-    var q = supabase.from("pipeline_cards").select("id").eq("agency_group", agencyId);
+    var q = supabase.from("pipeline_cards").select("id, stage, deleted_at").eq("agency_group", agencyId);
     q = card.company_id ? q.eq("company_id", card.company_id) : q.eq("business_name", card.business_name);
     var r = await q;
-    return (r.data || []).length > 0;
+    return (r.data || [])[0] || null;
+  };
+  // 중복 카드 안내 문구 — 살아있는 카드 / 휴지통 카드를 구분해 알려준다.
+  var dupAlert = function(dup, name, agencyId) {
+    if (dup.deleted_at) {
+      alert("'" + name + " · " + agencyLabel(agencyId) + "' 카드는 휴지통에 있습니다.\n"
+        + "(" + String(dup.deleted_at).slice(0, 10) + " 삭제 · 당시 단계 '" + dup.stage + "')\n\n"
+        + "새로 만들지 말고 상단 🗑️ 휴지통에서 복구해 주세요. 그래야 이력이 한 장으로 유지됩니다.");
+    } else {
+      alert("'" + name + " · " + agencyLabel(agencyId) + "' 카드가 이미 있습니다.");
+    }
   };
 
   // ① 새 기관 추가 신청 — 같은 회사 + 새 기관 조합 카드를 STEP1로 생성 (폐지된 STEP11/12 대체)
   var addAgencyCard = async function(row, agencyId) {
     var card = row.card;
-    if (await findDupCard(card, agencyId)) { alert("'" + row.co.name + " · " + agencyLabel(agencyId) + "' 카드가 이미 있습니다."); return; }
+    var dup = await findDupCard(card, agencyId);
+    if (dup) { dupAlert(dup, row.co.name, agencyId); return; }
     var nowIso = new Date().toISOString();
     var ins = await supabase.from("pipeline_cards").insert({
       company_id: card.company_id || null, business_name: card.business_name || row.co.name || "",
@@ -10632,7 +10673,8 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
   // ② 기관 미지정 카드에 기관 지정
   var assignAgency = async function(row, agencyId) {
     var card = row.card;
-    if (await findDupCard(card, agencyId)) { alert("'" + row.co.name + " · " + agencyLabel(agencyId) + "' 카드가 이미 있어요. 이 미지정 카드는 삭제하거나 다른 기관을 골라 주세요."); return; }
+    var dup2 = await findDupCard(card, agencyId);
+    if (dup2) { dupAlert(dup2, row.co.name, agencyId); return; }
     var upd = { agency_group: agencyId, updated_at: new Date().toISOString() };
     var r = await supabase.from("pipeline_cards").update(upd).eq("id", card.id);
     if (r.error) { alert("기관 지정 실패: " + r.error.message); return; }
@@ -10721,7 +10763,83 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
     if (dragOverStage === stage) setDragOverStage(null);
   };
 
-  // 컬럼에 drop — 수동 이동. pipeline_cards.stage 변경 + '수동 고정'(sync_mode=manual)
+  // 📌 STEP2(계약금입금완료) 연동 — 카드를 STEP2로 옮기면 계약 상태도 같이 켠다.
+  //    이름이 같은 값이면 같이 움직여야 혼동이 없다(CLAUDE.md). 이어서 계약금·수수료율이 있으면
+  //    정산에도 반영한다 — 기업정보에서 켠 것과 완전히 같은 경로.
+  //    ⚠️ 루프 안에서 클로저를 만들지 않으려고 함수로 뺐다(같은 회사가 여러 장 걸려도 회사당 1회만 호출).
+  var applyContractPaid = async function(row) {
+    var cid = row.card.company_id;
+    if (!cid || !row.co || row.co.contract_status === "계약금입금완료") return;
+    try {
+      var cAt = new Date().toISOString();
+      var cr = await supabase.from("companies")
+        .update({ contract_status: "계약금입금완료", contract_status_at: cAt })
+        .eq("id", cid);
+      if (cr.error) { console.warn("계약 상태 반영 실패:", cr.error.message); return; }
+      if (setCompanies) setCompanies(function(prev) { return (prev || []).map(function(x) { return x.id === cid ? Object.assign({}, x, { contract_status: "계약금입금완료", contract_status_at: cAt }) : x; }); });
+      var sres3 = await syncSettlementFromCompany(Object.assign({}, row.co, { contract_status: "계약금입금완료" }));
+      if (sres3 && sres3.error) console.warn("정산 자동반영 실패:", sres3.error);
+    } catch (eCS) { console.warn("계약 상태 연동 중 오류:", eCS); }
+  };
+
+  // ── 단계 이동 공용 로직 (개별 드래그 · 일괄 이동이 같은 함수를 쓴다) ──────────
+  // 두 벌로 두면 반드시 어긋나므로 반영 로직은 여기 하나뿐이다. 확인창만 호출부에서 따로 띄운다.
+  //  · 카드마다 출발 단계가 달라 정리 필드(기타 사유 / 부결 종결 해제 / 재배치 확인)가 제각각이라
+  //    한 방 UPDATE 로 묶지 않고 카드별로 보낸다. 실패한 카드는 건너뛰고 끝에 모아서 보고한다.
+  //  · STEP2 연동은 **회사 단위로 중복 제거**해 회사당 1회만 실행한다(정산에 같은 값을 여러 번 밀지 않기 위해).
+  var moveCards = async function(rows, newStage) {
+    var targets = (rows || []).filter(function(r) { return r && r.card && r.card.stage !== newStage; });
+    if (!targets.length) return { moved: 0, failed: [] };
+    var nowIso = new Date().toISOString();
+    var moved = [], failed = [];
+    for (var i = 0; i < targets.length; i++) {
+      var row = targets[i], card = row.card, oldStage = card.stage;
+      var upd = { stage: newStage, sync_mode: "manual", needs_mapping: false, stage_changed_at: nowIso, alerted_at: null, updated_at: nowIso };
+      // 단계를 벗어나면 그 단계 전용 표시는 정리 — 기타 사유 / 부결 종결 / 재배치 확인
+      if (oldStage === "기타" && newStage !== "기타") { upd.other_reason = null; upd.other_reason_note = null; upd.other_reason_at = null; }
+      if (oldStage === "부결/반려" && newStage !== "부결/반려") { upd.closed_at = null; upd.closed_by = null; }
+      if (card.needs_review) { upd.needs_review = false; upd.needs_review_note = null; }
+      var r = await supabase.from("pipeline_cards").update(upd).eq("id", card.id);
+      if (r.error) { failed.push(row.co.name + " — " + r.error.message); continue; }
+      // 수동 이동 → 이번 정체구간 알림 해제(연결 업무노트 완료 처리)
+      if (card.alert_note_id) { try { await supabase.from("work_notes").update({ is_done: true }).eq("id", card.alert_note_id); } catch (e3) {} }
+      moved.push({ row: row, oldStage: oldStage, upd: upd });
+    }
+    // 📌 STEP2 연동 — 회사 중복 제거 후 회사당 1회
+    if (newStage === CONTRACT_PAID_STAGE) {
+      var seenCo = {};
+      for (var j = 0; j < moved.length; j++) {
+        var mrow = moved[j].row;
+        var mcid = mrow.card.company_id;
+        if (!mcid || seenCo[mcid]) continue;
+        seenCo[mcid] = true;
+        await applyContractPaid(mrow);
+      }
+    }
+    // 팀 활동 로그에 남김 (대시보드 '우리 팀 활동 로그') — 일괄이면 한 번에 넣는다
+    if (moved.length) {
+      try {
+        await supabase.from("activity_logs").insert(moved.map(function(m) {
+          return {
+            company_id: m.row.card.company_id || null, business_name: m.row.co.name || m.row.card.business_name || "",
+            agency_group: m.row.card.agency_group || null, assignee: m.row.co.assignee || null,
+            log_type: "pipeline_move", logged_by: myName || null,
+            memo: agencyLabel(m.row.card.agency_group) + " 카드를 '" + m.oldStage + "' → '" + newStage + "'(으)로 이동",
+          };
+        }));
+      } catch (e4) {}
+      if (setPipelineCards) {
+        var updById = {};
+        moved.forEach(function(m) { updById[m.row.card.id] = m.upd; });
+        setPipelineCards(function(prev) {
+          return prev.map(function(x) { return updById[x.id] ? Object.assign({}, x, updById[x.id], { alert_note_id: null }) : x; });
+        });
+      }
+    }
+    return { moved: moved.length, failed: failed };
+  };
+
+  // 컬럼에 drop — 수동 이동. 반영은 moveCards 가 담당한다(일괄 이동과 동일 경로).
   var handleDrop = async function(e, newStage) {
     e.preventDefault();
     var droppedId = draggingId;
@@ -10734,49 +10852,107 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
     if (!row) return;
     var label = row.co.name + " · " + agencyLabel(row.card.agency_group);
     if (!confirm("'" + label + "' 단계를 '" + oldStage + "' → '" + newStage + "'(으)로 변경할까요?\n(수동 이동 → 이후 기관현황이 바뀌어도 자동으로 덮어쓰지 않습니다)")) return;
+    var res = await moveCards([row], newStage);
+    if (res.failed.length) alert("단계 변경 실패: " + res.failed[0]);
+  };
+
+  // ── ☑ 다중 선택 ─────────────────────────────────────────────────────────────
+  // 대상은 **화면에 보이는 카드(visibleRows)** 로 한정한다. 필터로 가려진 카드까지 움직이면
+  // "내가 안 본 카드가 옮겨졌다"가 되므로, 선택했다가 필터로 사라진 건은 대상에서 빼고 그 수를 알려준다.
+  var selectedRows = (visibleRows || []).filter(function(r) { return selectedIds[r.card.id]; });
+  var selectedTotal = Object.keys(selectedIds).length;
+  var hiddenSelCount = Math.max(0, selectedTotal - selectedRows.length);
+  var toggleSelect = function(id) {
+    setSelectedIds(function(p) {
+      var n = Object.assign({}, p);
+      if (n[id]) delete n[id]; else n[id] = true;
+      return n;
+    });
+  };
+  var clearSelection = function() { setSelectedIds({}); setMoveTarget(""); };
+  // 확인창에 보여줄 대상 목록 — 너무 길어지지 않게 5건까지만
+  var previewList = function(rows) {
+    return rows.slice(0, 5).map(function(r) { return " · " + r.co.name + " · " + agencyLabel(r.card.agency_group); }).join("\n")
+      + (rows.length > 5 ? "\n … 외 " + (rows.length - 5) + "건" : "");
+  };
+
+  // 일괄 이동 — 확인창에서 몇 건인지·무엇인지 보여주고, STEP2면 정산 반영까지 미리 알린다.
+  var doBulkMove = async function(newStage) {
+    if (!newStage || bulkBusy) return;
+    var movable = selectedRows.filter(function(r) { return r.card.stage !== newStage; });
+    if (!movable.length) { alert("옮길 카드가 없습니다.\n(선택한 카드가 이미 '" + newStage + "' 단계입니다)"); return; }
+    var skipped = selectedRows.length - movable.length;
+    var msg = movable.length + "건을 '" + newStage + "'(으)로 옮길까요?\n\n" + previewList(movable)
+      + (skipped ? "\n\n(이미 그 단계인 " + skipped + "건은 제외됩니다)" : "")
+      + "\n\n수동 이동으로 기록됩니다 — 이후 기관현황이 바뀌어도 자동으로 덮어쓰지 않습니다.";
+    if (newStage === CONTRACT_PAID_STAGE) {
+      var coIds = {};
+      movable.forEach(function(r) { if (r.card.company_id && r.co && r.co.contract_status !== "계약금입금완료") coIds[r.card.company_id] = true; });
+      var nCo = Object.keys(coIds).length;
+      if (nCo) msg += "\n\n⚠ '" + CONTRACT_PAID_STAGE + "'로 옮기면 " + nCo + "개 업체의 계약 상태가 켜지고,\n"
+        + "   계약금·수수료율이 정산현황에도 자동 반영됩니다.";
+    }
+    if (!window.confirm(msg)) return;
+    setBulkBusy(true);
+    var res = await moveCards(movable, newStage);
+    setBulkBusy(false);
+    clearSelection();
+    if (res.failed.length) alert(res.moved + "건 이동 · " + res.failed.length + "건 실패\n\n" + res.failed.slice(0, 5).join("\n"));
+  };
+
+  // ── 🗑 휴지통으로 이동 (soft delete) ────────────────────────────────────────
+  // 카드 = (회사 × 기관) 조합이라, 지워지는 것은 그 기업의 그 기관 신청 건 하나뿐이다.
+  // companies(기업)·agency_cases(기관현황 원본)는 건드리지 않는다.
+  var deleteCards = async function(rows) {
+    if (!rows || !rows.length || bulkBusy) return;
+    var msg = "아래 " + rows.length + "건을 휴지통으로 옮길까요?\n\n" + previewList(rows)
+      + "\n\n· 휴지통에서 다시 복구할 수 있습니다."
+      + "\n· 기업 정보와 기관현황(신청 내역)은 지워지지 않습니다."
+      + "\n· 이 기업의 해당 기관 진행 카드만 보드에서 사라집니다.";
+    if (!window.confirm(msg)) return;
+    setBulkBusy(true);
     var nowIso = new Date().toISOString();
-    var upd = { stage: newStage, sync_mode: "manual", needs_mapping: false, stage_changed_at: nowIso, alerted_at: null, updated_at: nowIso };
-    // 단계를 벗어나면 그 단계 전용 표시는 정리 — 기타 사유 / 부결 종결 / 재배치 확인
-    if (oldStage === "기타" && newStage !== "기타") { upd.other_reason = null; upd.other_reason_note = null; upd.other_reason_at = null; }
-    if (oldStage === "부결/반려" && newStage !== "부결/반려") { upd.closed_at = null; upd.closed_by = null; }
-    if (row.card.needs_review) { upd.needs_review = false; upd.needs_review_note = null; }
-    var r = await supabase.from("pipeline_cards").update(upd).eq("id", droppedId);
-    if (r.error) { alert("단계 변경 실패: " + r.error.message); return; }
-    // 수동 이동 → 이번 정체구간 알림 해제(연결 업무노트 완료 처리)
-    if (row.card.alert_note_id) { try { await supabase.from("work_notes").update({ is_done: true }).eq("id", row.card.alert_note_id); } catch (e3) {} }
-    // 📌 STEP2(계약금입금완료)로 옮기면 계약 상태도 같이 켠다 — 이름이 같은 값이면 같이 움직여야 혼동이 없다.
-    //    이어서 계약금·수수료율이 있으면 정산에도 반영한다(기업정보에서 켠 것과 완전히 같은 경로).
-    if (newStage === CONTRACT_PAID_STAGE && row.card.company_id && row.co && row.co.contract_status !== "계약금입금완료") {
-      try {
-        var cAt = new Date().toISOString();
-        var cr = await supabase.from("companies")
-          .update({ contract_status: "계약금입금완료", contract_status_at: cAt })
-          .eq("id", row.card.company_id);
-        if (cr.error) { console.warn("계약 상태 반영 실패:", cr.error.message); }
-        else {
-          if (setCompanies) setCompanies(function(prev) { return (prev || []).map(function(x) { return x.id === row.card.company_id ? Object.assign({}, x, { contract_status: "계약금입금완료", contract_status_at: cAt }) : x; }); });
-          var sres3 = await syncSettlementFromCompany(Object.assign({}, row.co, { contract_status: "계약금입금완료" }));
-          if (sres3 && sres3.error) console.warn("정산 자동반영 실패:", sres3.error);
-        }
-      } catch (eCS) { console.warn("계약 상태 연동 중 오류:", eCS); }
-    }
-    // 팀 활동 로그에 남김 (대시보드 '우리 팀 활동 로그')
-    try {
-      await supabase.from("activity_logs").insert({
-        company_id: row.card.company_id || null, business_name: row.co.name || row.card.business_name || "",
-        agency_group: row.card.agency_group || null, assignee: row.co.assignee || null,
-        log_type: "pipeline_move", logged_by: myName || null,
-        memo: agencyLabel(row.card.agency_group) + " 카드를 '" + oldStage + "' → '" + newStage + "'(으)로 이동",
-      });
-    } catch (e4) {}
-    if (setPipelineCards) {
-      setPipelineCards(function(prev) {
-        return prev.map(function(x) {
-          if (x.id === droppedId) return Object.assign({}, x, upd, { alert_note_id: null });
-          return x;
-        });
-      });
-    }
+    var ids = rows.map(function(r) { return r.card.id; });
+    var r2 = await supabase.from("pipeline_cards")
+      .update({ deleted_at: nowIso, deleted_by: myName || null, updated_at: nowIso })
+      .in("id", ids);
+    setBulkBusy(false);
+    if (r2.error) { alert("삭제 실패: " + r2.error.message); return; }
+    if (setPipelineCards) setPipelineCards(function(prev) { return prev.filter(function(x) { return ids.indexOf(x.id) < 0; }); });
+    setTrashCount(function(n) { return n + ids.length; });
+    clearSelection();
+  };
+
+  var fetchTrashedCards = async function() {
+    var r = await supabase.from("pipeline_cards").select("*")
+      .not("deleted_at", "is", null).order("deleted_at", { ascending: false });
+    if (r.error) { alert("휴지통을 불러오지 못했습니다: " + r.error.message); return; }
+    setTrashedCards(r.data || []);
+    setTrashCount((r.data || []).length);
+  };
+  var openTrash = function() { fetchTrashedCards(); setShowTrash(true); };
+
+  // 복구 — deleted_at 을 비우고 보드로 되돌린다. (회사×기관) 유니크 슬롯을 계속 쥐고 있었으므로 항상 성공한다.
+  var restoreCard = async function(c) {
+    var r = await supabase.from("pipeline_cards")
+      .update({ deleted_at: null, deleted_by: null, updated_at: new Date().toISOString() }).eq("id", c.id);
+    if (r.error) { alert("복구 실패: " + r.error.message); return; }
+    setTrashedCards(function(p) { return p.filter(function(x) { return x.id !== c.id; }); });
+    setTrashCount(function(n) { return Math.max(0, n - 1); });
+    // 화면 상태에도 되살린다. 기업이 휴지통에 가 있으면 보드에는 안 뜨는데(회사 매칭 실패) 그건 기업목록 쪽 문제라 그대로 둔다.
+    if (setPipelineCards) setPipelineCards(function(prev) {
+      if (prev.some(function(x) { return x.id === c.id; })) return prev;
+      return prev.concat([Object.assign({}, c, { deleted_at: null, deleted_by: null })]);
+    });
+  };
+
+  var purgeCard = async function(c) {
+    if (!window.confirm("'" + (c.business_name || "이름 없음") + " · " + agencyLabel(c.agency_group) + "' 카드를 영구 삭제합니다.\n"
+      + "복구할 수 없습니다.\n\n(기업 정보와 기관현황은 지워지지 않습니다)")) return;
+    var r = await supabase.from("pipeline_cards").delete().eq("id", c.id);
+    if (r.error) { alert("영구 삭제 실패: " + r.error.message); return; }
+    setTrashedCards(function(p) { return p.filter(function(x) { return x.id !== c.id; }); });
+    setTrashCount(function(n) { return Math.max(0, n - 1); });
   };
 
   // 카드 동기화 모드 토글: 자동↔수동. 수동→자동 전환 시 최신 기관상태로 단계 재조정.
@@ -10801,7 +10977,7 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
       var latest = null;
       (lc.data || []).forEach(function(s) { if (isNewerCase(s, latest)) latest = s; });
       if (latest) await syncPipelineFromCase({ company_id: card.company_id, business_name: card.business_name, agency_group: card.agency_group, status: latest.status, year: latest.year, month: latest.month });
-      var fresh = await supabase.from("pipeline_cards").select("*");
+      var fresh = await supabase.from("pipeline_cards").select("*").is("deleted_at", null);
       if (fresh.data && setPipelineCards) setPipelineCards(fresh.data);
     }
   };
@@ -10811,10 +10987,13 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 22 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>파이프라인</h1>
-          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>회사+기관 조합 카드 · <span style={{ color: "#4338CA", fontWeight: 600 }}>카드를 드래그해서 단계 변경</span></p>
+          <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>회사+기관 조합 카드 · <span style={{ color: "#4338CA", fontWeight: 600 }}>카드를 드래그해서 단계 변경</span> · <span style={{ color: "#4338CA", fontWeight: 600 }}>☑ 선택</span>으로 여러 장 한 번에 이동·삭제</p>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{ fontSize: 12, color: "#888" }}>표시 <b style={{ color: "#1A1917" }}>{visibleRows.length}</b> / 전체 {(cardRows || []).length}장</span>
+          <button onClick={openTrash} title="삭제한 카드 보기 · 복구 (기업 정보와 기관현황은 지워지지 않습니다)"
+            style={{ padding: "7px 12px", border: "1px solid " + (trashCount ? "#E5E7EB" : "#E8E5E0"), borderRadius: 7, fontSize: 13, background: "#fff", cursor: "pointer", fontWeight: 600, color: "#6B7280" }}>
+            🗑️ 휴지통{trashCount ? " (" + trashCount + ")" : ""}</button>
           <button onClick={function() { setShowMapping(true); }}
             style={{ padding: "7px 12px", border: "1px solid #E8E5E0", borderRadius: 7, fontSize: 13, background: "#fff", cursor: "pointer", fontWeight: 600, color: "#4338CA" }}>⚙ 상태매핑</button>
         </div>
@@ -10868,6 +11047,10 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
           { on: holdOnly, set: setHoldOnly, label: "⏸ 보류만" + (holdCount ? " (" + holdCount + ")" : ""), title: "보류로 정리한 카드만 모아보기 (정체 알림 대상에서 제외됩니다)", disabled: false, c: "#0369A1", bg: "#E0F2FE", bd: "#BAE6FD" },
           { on: showClosed, set: setShowClosed, label: "🗄 종결 포함" + (closedCount ? " (" + closedCount + ")" : ""), title: "종결 처리한 카드도 보드에 표시", disabled: false, c: "#6B7280", bg: "#F3F4F6", bd: "#D1D5DB" },
           { on: bulkMode, set: setBulkMode, label: "🧹 일괄 정리", title: "카드를 한 줄 목록으로 놓고 클릭·숫자키만으로 진행/보류/종결 처리", disabled: false, c: "#15803D", bg: "#F0FDF4", bd: "#BBF7D0" },
+          // 선택 모드를 끄면 선택도 같이 비운다 — 안 지우면 "안 보이는데 선택돼 있는" 상태가 남는다.
+          { on: selectMode, set: function(fn) { setSelectMode(function(p) { var n = fn(p); if (!n) clearSelection(); return n; }); },
+            label: "☑ 선택", title: "카드를 여러 개 골라 한 번에 단계 이동 / 휴지통으로 삭제 (평소에도 Ctrl+클릭으로 선택할 수 있습니다)",
+            disabled: bulkMode, c: "#4338CA", bg: "#EEF2FF", bd: "#C7D2FE" },
         ].map(function(t, i) {
           return (
             <button key={i} title={t.title} disabled={t.disabled} onClick={function() { t.set(function(p) { return !p; }); }}
@@ -10891,6 +11074,46 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
           style={{ marginLeft: "auto", padding: "6px 11px", borderRadius: 7, fontSize: 12, border: "1px solid #E8E5E0", background: "#F7F6F3", color: "#666", cursor: "pointer", fontWeight: 600 }}>필터 초기화</button>}
       </div>
 
+      {/* ── ☑ 선택 액션바 — 고른 카드를 한 번에 옮기거나 휴지통으로 보낸다 ────────── */}
+      {!bulkMode && (selectMode || selectedTotal > 0) && (
+        <div style={{ position: "sticky", top: 0, zIndex: 30, background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 12,
+          padding: "10px 14px", marginBottom: 14, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13, fontWeight: 800, color: "#4338CA" }}>
+            ☑ {selectedRows.length}건 선택됨
+          </span>
+          {hiddenSelCount > 0 && (
+            <span title="선택한 뒤 필터·검색이 바뀌어 화면에서 사라진 카드입니다. 보이지 않는 카드는 움직이지 않습니다."
+              style={{ fontSize: 11, fontWeight: 700, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 99, padding: "3px 9px" }}>
+              화면 밖 {hiddenSelCount}건 제외
+            </span>
+          )}
+          {selectedRows.length === 0 ? (
+            <span style={{ fontSize: 12, color: "#6366F1" }}>카드를 눌러 고르세요. (선택 모드를 꺼도 <b>Ctrl+클릭</b>으로 고를 수 있습니다)</span>
+          ) : (
+            <>
+              <select value={moveTarget} onChange={function(e) { setMoveTarget(e.target.value); }} disabled={bulkBusy}
+                title="선택한 카드를 옮길 단계"
+                style={{ padding: "6px 10px", border: "1px solid #C7D2FE", borderRadius: 7, fontSize: 12, background: "#fff", cursor: "pointer", fontWeight: 600 }}>
+                <option value="">단계 선택…</option>
+                {STAGES.map(function(s, si) { return <option key={s} value={s}>{"STEP " + (si + 1) + " · " + s}</option>; })}
+              </select>
+              <button onClick={function() { doBulkMove(moveTarget); }} disabled={!moveTarget || bulkBusy}
+                title={moveTarget ? "선택한 카드를 '" + moveTarget + "'(으)로 옮깁니다" : "먼저 옮길 단계를 고르세요"}
+                style={{ padding: "6px 13px", borderRadius: 7, fontSize: 12, fontWeight: 700, border: "none",
+                  background: (!moveTarget || bulkBusy) ? "#C7D2FE" : "#4338CA", color: "#fff", cursor: (!moveTarget || bulkBusy) ? "default" : "pointer" }}>
+                {bulkBusy ? "처리 중…" : "→ 이동"}
+              </button>
+              <button onClick={function() { deleteCards(selectedRows); }} disabled={bulkBusy}
+                title="선택한 카드를 휴지통으로 보냅니다 (복구 가능 · 기업 정보와 기관현황은 그대로)"
+                style={{ padding: "6px 13px", borderRadius: 7, fontSize: 12, fontWeight: 700, border: "1px solid #FECACA",
+                  background: "#fff", color: "#DC2626", cursor: bulkBusy ? "default" : "pointer" }}>🗑 삭제</button>
+            </>
+          )}
+          <button onClick={clearSelection}
+            style={{ marginLeft: "auto", padding: "6px 11px", borderRadius: 7, fontSize: 12, fontWeight: 600, border: "1px solid #C7D2FE", background: "#fff", color: "#4338CA", cursor: "pointer" }}>모두 해제</button>
+        </div>
+      )}
+
       {hiddenByList > 0 && (
         <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 12, padding: "10px 14px", marginBottom: 14, display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "#92400E", fontWeight: 600 }}>
           <span>🔎 기업목록 화면의 필터(검색·단계·유형·기관·팀·신용점수)가 켜져 있어 카드 <b>{hiddenByList}장</b>이 이 보드에서 빠져 있습니다.</span>
@@ -10903,6 +11126,50 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
         onPick={function(agId) { return agencyPick.mode === "add" ? addAgencyCard(agencyPick.row, agId) : assignAgency(agencyPick.row, agId); }} />}
       {reasonEdit && <OtherReasonModal row={reasonEdit} onClose={function() { setReasonEdit(null); }}
         onSave={function(rid, note) { return saveOtherReason(reasonEdit, rid, note); }} />}
+
+      {/* 🗑️ 파이프라인 휴지통 — 기업목록 휴지통과 같은 UX(복구 / 영구삭제) */}
+      {showTrash && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 14, width: 680, maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+            <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff" }}>
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>🗑️ 파이프라인 휴지통 ({trashedCards.length}건)</h2>
+              <button onClick={function() { setShowTrash(false); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#888" }}>✕</button>
+            </div>
+            <div style={{ padding: "12px 24px 0", fontSize: 11.5, color: "#888", lineHeight: 1.6 }}>
+              삭제된 것은 <b style={{ color: "#555" }}>카드(기업 × 기관 조합)</b>뿐입니다 — 기업 정보와 기관현황(신청 내역)은 그대로 남아 있습니다.<br />
+              같은 조합이 다시 필요하면 새로 만들지 말고 여기서 <b style={{ color: "#4338CA" }}>복구</b>하세요. 그래야 진행 이력이 한 장으로 유지됩니다.
+            </div>
+            <div style={{ padding: "16px 24px" }}>
+              {trashedCards.length === 0 ? (
+                <div style={{ padding: "40px 0", textAlign: "center", color: "#888", fontSize: 13 }}>휴지통이 비어 있습니다</div>
+              ) : (
+                trashedCards.map(function(c) {
+                  var delAt = c.deleted_at ? new Date(c.deleted_at).toLocaleDateString("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+                  return (
+                    <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderBottom: "1px solid #F0EDE8", gap: 10 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: 14, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                          <span>{c.business_name || "(이름 없음)"}</span>
+                          <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 99,
+                            background: c.agency_group ? (agencyColor(c.agency_group) + "1A") : "#FEF3C7",
+                            color: c.agency_group ? agencyColor(c.agency_group) : "#B45309" }}>{agencyLabel(c.agency_group)}</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: "#AAA", marginTop: 3 }}>
+                          삭제일: {delAt}{c.deleted_by ? " · " + c.deleted_by : ""} · 삭제 당시 단계: <b style={{ color: "#888" }}>{c.stage}</b>
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                        <button onClick={function() { restoreCard(c); }} style={{ background: "#EEF2FF", color: "#4338CA", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>복구</button>
+                        <button onClick={function() { purgeCard(c); }} style={{ background: "#FEE2E2", color: "#DC2626", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>영구삭제</button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {searchActive && visibleRows.length === 0 && (
         <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 12, padding: "14px 16px", marginBottom: 14, fontSize: 13, color: "#B91C1C", fontWeight: 600 }}>
           🔍 '<b>{q.trim()}</b>' 와(과) 일치하는 카드가 없습니다. 검색어를 바꾸거나 <b>×</b>(또는 Esc)로 초기화하세요.
@@ -11053,21 +11320,25 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
                   var dormant = isDormantCard(card);          // 폐업·연락두절 6개월 경과 → 흐리게
                   var isClosed = !!card.closed_at;            // 종결 처리된 부결/반려
                   var needsReview = !!card.needs_review;      // 폐지 단계에서 옮겨온 카드
+                  var isChecked = !!selectedIds[card.id];     // ☑ 다중 선택됨
                   return (
                     <div key={card.id}
-                      draggable={true}
+                      draggable={!selectMode}
                       onDragStart={function(e) { handleDragStart(e, row); }}
                       onDragEnd={handleDragEnd}
                       onClick={function(e) {
                         // 드래그 직후 onClick 무시
                         if (draggingId === card.id) return;
+                        // 선택 모드이거나 Ctrl/⌘+클릭이면 상세를 열지 않고 선택만 토글한다
+                        if (selectMode || e.ctrlKey || e.metaKey) { e.preventDefault(); toggleSelect(card.id); return; }
                         setSelectedId(card.id);
                         onSelect(co);
                       }}
                       style={{
-                        background: isSelected ? "#EEF2FF" : (stagnHot ? "#FEF2F2" : (isUnassigned ? "#FFFBEB" : "#F7F6F3")),
-                        borderRadius: 10, padding: "10px 12px", cursor: isDragging ? "grabbing" : "grab",
-                        border: isSelected ? "2px solid #4338CA"
+                        background: isChecked ? "#E0E7FF" : (isSelected ? "#EEF2FF" : (stagnHot ? "#FEF2F2" : (isUnassigned ? "#FFFBEB" : "#F7F6F3"))),
+                        borderRadius: 10, padding: "10px 12px", cursor: selectMode ? "pointer" : (isDragging ? "grabbing" : "grab"),
+                        border: isChecked ? "2px solid #4338CA"
+                          : isSelected ? "2px solid #4338CA"
                           : needsReview ? "2px solid #F87171"
                           : isUnassigned ? "2px solid #F59E0B"          // 기관 미지정 → 눈에 띄는 노란 테두리
                           : (stagnHot ? "1px solid #FECACA" : "1px solid transparent"),
@@ -11078,10 +11349,15 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
                         transition: "opacity 0.15s, transform 0.15s, border 0.15s, background 0.15s",
                         userSelect: "none",
                       }}
-                      onMouseEnter={e => { if (!isSelected && !isDragging) e.currentTarget.style.background = stagnHot ? "#FEE2E2" : "#EDEDE9"; }}
-                      onMouseLeave={e => { if (!isSelected && !isDragging) e.currentTarget.style.background = stagnHot ? "#FEF2F2" : "#F7F6F3"; }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: "#1A1917", lineHeight: 1.3 }}>{co.name}</span>
+                      onMouseEnter={e => { if (!isSelected && !isChecked && !isDragging) e.currentTarget.style.background = stagnHot ? "#FEE2E2" : "#EDEDE9"; }}
+                      onMouseLeave={e => { if (!isSelected && !isChecked && !isDragging) e.currentTarget.style.background = stagnHot ? "#FEF2F2" : "#F7F6F3"; }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4, gap: 4 }}>
+                        {selectMode && (
+                          <input type="checkbox" checked={isChecked} readOnly
+                            onClick={function(e) { e.stopPropagation(); toggleSelect(card.id); }}
+                            style={{ marginTop: 2, cursor: "pointer", flexShrink: 0, accentColor: "#4338CA" }} />
+                        )}
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "#1A1917", lineHeight: 1.3, flex: 1 }}>{co.name}</span>
                         {stagnWarn && <span title={"현재 단계 " + stagnDays + "일째 정체"} style={{ fontSize: 9, color: stagnHot ? "#DC2626" : "#B45309", fontWeight: 800, background: stagnHot ? "#FEE2E2" : "#FEF3C7", padding: "2px 5px", borderRadius: 4, flexShrink: 0, marginLeft: 4 }}>{(stagnHot ? "⚠ " : "") + stagnDays + "일째"}</span>}
                       </div>
                       <div style={{ display: "flex", gap: 5, marginBottom: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -11157,6 +11433,15 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
                           <button title="보드에서 숨기고 기업 상세 이력으로만 남깁니다 (재도전 여지가 있으면 그대로 두세요)" onClick={function(e) { toggleClosed(e, row); }}
                             style={{ fontSize: 9, fontWeight: 700, color: "#DC2626", background: "#fff", border: "1px solid #FECACA", borderRadius: 5, padding: "3px 7px", cursor: "pointer" }}>종결 처리</button>
                         ))}
+
+                        {/* 🗑 이 카드만 휴지통으로 — (회사 × 기관) 조합 한 장이다.
+                            기업 정보(companies)도 기관현황(agency_cases)도 지워지지 않는다.
+                            '종결 처리'와 다름: 종결은 진행 결과를 남기는 업무 상태, 이건 카드를 치우는 것. */}
+                        <button title="이 카드를 휴지통으로 보냅니다 (복구 가능 · 기업 정보와 기관현황은 지워지지 않습니다)"
+                          onClick={function(e) { e.stopPropagation(); deleteCards([row]); }}
+                          onMouseEnter={function(e) { e.currentTarget.style.color = "#DC2626"; e.currentTarget.style.background = "#FEF2F2"; e.currentTarget.style.borderColor = "#FECACA"; }}
+                          onMouseLeave={function(e) { e.currentTarget.style.color = "#B8B5AE"; e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "transparent"; }}
+                          style={{ marginLeft: "auto", fontSize: 10, fontWeight: 700, color: "#B8B5AE", background: "transparent", border: "1px solid transparent", borderRadius: 5, padding: "3px 6px", cursor: "pointer" }}>🗑</button>
                       </div>
                     </div>
                   );
@@ -13680,7 +13965,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
       supabase.from("agency_cases").select("*").eq("business_name", company.name).order("created_at", { ascending: false }),
       supabase.from("settlement_manual").select("*").eq("business_name", company.name).is("deleted_at", null).order("created_at", { ascending: false }),
       supabase.from("activity_logs").select("*").eq("company_id", company.id).is("deleted_at", null).order("created_at", { ascending: false }),
-      supabase.from("pipeline_cards").select("*").eq("company_id", company.id),
+      supabase.from("pipeline_cards").select("*").eq("company_id", company.id).is("deleted_at", null),
     ]).then(function([r1, r2, r3, r4]) {
       if (!r1.error) setAgencyCases(r1.data || []);
       if (!r2.error) setSettlements(r2.data || []);

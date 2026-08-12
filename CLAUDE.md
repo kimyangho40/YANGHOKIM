@@ -156,6 +156,41 @@ reset role;
 같이 지운 것: `status_stage_map` 규칙 1건(남기면 그 상태가 되는 순간 보드에 없는 단계로 카드가 날아가 **화면에서 사라진다**),
 `stage_stagnation_config` 행 1건. 새 단계 정체 기준은 `enabled=false` 로 넣었다(알림을 임의로 늘리지 않기 위해).
 
+## ⚠️ 파이프라인 카드 일괄 이동 · 삭제(휴지통) — 2026-08-12 신설
+(SQL: `파이프라인_카드삭제_휴지통.sql` / `_rollback` / `_검증` 8/8)
+
+**카드 1행 = (회사 × 기관) 조합**이다. 카드를 지워도 `companies`(기업)도 `agency_cases`(기관현황 원본)도
+건드리지 않는다 — 그 기업의 그 기관 신청 건 하나만 사라진다. 반대 방향만 연결돼 있다
+(`company_id ... on delete cascade` → 기업을 **영구삭제**하면 카드도 같이 사라짐).
+
+**⚠️ 최대 함정: 삭제한 카드가 되살아난다.**
+`syncPipelineFromCase()`(App.js:1196)는 기관현황을 저장할 때마다 (회사×기관) 카드를 찾고 **없으면 새로 만든다.**
+그래서 카드 조회에 **`deleted_at` 필터를 걸면 안 된다** — "카드 없음"으로 오판해 insert 로 내려가는데,
+삭제된 카드가 unique 슬롯을 쥐고 있어 **unique 위반 에러**가 난다.
+→ 조회는 삭제분까지 포함해서 하고, `if (card.deleted_at) return;` 으로 **조용히 끊는다**(`sync_mode==='manual'` 과 같은 자리).
+실측으로 확인함: 삭제 후 `deleted` 포함 조회 1건 / 제외 조회 0건 / 그 상태 insert → `unique_violation`.
+
+**unique index 는 일부러 완화하지 않았다.** `pipeline_cards_company_agency_uniq` 를 `where deleted_at is null` 로
+바꾸면 같은 조합 카드가 보드와 휴지통에 동시에 생겨 **복구 시점에 충돌**한다. 지금은 삭제 카드가 슬롯을
+계속 점유해서 복구가 **항상 성공**한다. 대신 같은 조합을 새로 만들려 하면 막히므로,
+`findDupCard` 가 삭제분도 찾아 "휴지통에서 복구하세요"로 안내한다(`dupAlert`).
+
+**카드를 상태에 담는 모든 경로는 `.is("deleted_at", null)` 로 거른다** — 보드·정체알림·대시보드가 전부
+`pipelineCards` 상태 하나를 본다. 거른 지점: 메인 로드(6100)·파이프라인 진입(10405)·재동기화(10153·10810)·
+대시보드 단계 카운트(9291)·기업상세(13689)·`resyncAutoCards`·`advanceCardsToContractPaid`.
+`pipelineCardData`·정체 계산에도 이중 방어를 넣었다. **예외는 `syncPipelineFromCase` 하나뿐**(위 이유).
+
+**단계 이동 로직은 `moveCards()` 하나뿐이다.** 개별 드래그(`handleDrop`)와 일괄 이동(`doBulkMove`)이
+같은 함수를 부른다. 두 벌로 두면 반드시 어긋나므로 **새 이동 경로를 만들 때도 이 함수를 경유할 것.**
+- 카드마다 출발 단계가 달라 정리 필드(기타 사유/부결 종결 해제/재배치 확인)가 제각각이라 **카드별 UPDATE** 다.
+  한 방 UPDATE 로 묶으면 안 된다. 실패 건은 건너뛰고 끝에 모아 보고한다.
+- **STEP2 연동은 회사 단위로 중복 제거**해 회사당 1회만 실행한다(`applyContractPaid`).
+  안 그러면 같은 회사 카드가 여러 장일 때 정산에 같은 값을 여러 번 민다.
+- 일괄 대상은 **화면에 보이는 카드(`visibleRows`)로 한정**한다. 선택 후 필터가 바뀌어 사라진 건은
+  대상에서 빼고 "화면 밖 N건 제외"로 알린다 — 안 보이는 카드가 움직이면 사고다.
+
+**삭제 권한은 승인된 팀원 전원**(기업목록 휴지통과 동일). 복구·영구삭제도 같다.
+
 ## ⚠️ 업무요청·요청현황 버튼은 "신호"로 연다 — 2026-08-11
 사이드바(데스크톱)·상단바(모바일)의 📩📋 버튼은 **상태를 전역으로 끌어올린 게 아니다.**
 `pendingWnAction`(App) → `WorkNotesView` 의 `openAction` prop → useEffect 가 `setShowRequest`/`setShowReqStatus`
