@@ -250,6 +250,21 @@ async function writeGuarded(spec) {
     if (spec.op === "insert") {
       r = await supabase.from(spec.table).insert(spec.payload).select("id");
     } else {
+      // ⚠️ 대상 id 가 비어 있으면 **보내기 전에 끊는다.**
+      //    `.eq("id", undefined|null|"")` 는 URL 이 `id=eq.undefined` / `id=eq.null` 이 되고,
+      //    PostgREST 는 이걸 uuid 로 캐스팅하다 실패해 **400 invalid input syntax for type uuid** 를 준다
+      //    (2026-08-14 실측: undefined·null·빈문자 셋 다 400. id 가 정상이면 0행이어도 200 이다).
+      //    그냥 두면 더 나쁜 일이 벌어진다 — failWrite 가 `rowId: spec.id || null` 로 큐에 넣고
+      //    retryFailedSaves 가 같은 `id=eq.null` 을 무한 재시도해서, "지금 다시 시도"를 아무리 눌러도
+      //    절대 성공할 수 없는 알림이 화면에 영구히 남는다.
+      //    → 재시도 큐에 넣지 않고(retry:false), 사람이 할 수 있는 행동을 알려준다.
+      if (spec.id === undefined || spec.id === null || spec.id === "") {
+        return failWrite(
+          Object.assign({}, spec, { retry: false }),
+          { kind: "server", text: "저장 대상을 찾지 못했습니다(대상 id 없음). 창을 닫고 목록에서 다시 열어 주세요" },
+          new Error("writeGuarded: " + spec.table + " update 에 id 가 없습니다")
+        );
+      }
       var q = supabase.from(spec.table).update(spec.payload).eq("id", spec.id);
       if (spec.expectedUpdatedAt) q = q.eq("updated_at", spec.expectedUpdatedAt);
       r = await q.select("id");
@@ -364,6 +379,16 @@ async function retryFailedSaves() {
     for (var i = 0; i < q.length; i++) {
       var e = q[i];
       var ok = false;
+      // 대상 id 가 없는 update 는 **재시도해도 영원히 400** 이다(위 writeGuarded 주석 참고).
+      // 이 가드가 생기기 전에 큐에 들어간 항목이 localStorage 에 남아 있을 수 있으므로 여기서 걷어낸다.
+      // (left 에 넣지 않으니 큐에서 사라지고, 알림은 "왜 안 되는지"로 바꿔 남긴다)
+      if (e.op !== "insert" && !e.rowId) {
+        dismissSaveAlert(e.id);
+        pushSaveAlert({ id: "bad" + e.id, level: "error", label: e.label,
+          text: "저장 대상을 찾지 못해 재시도를 멈췄습니다(대상 id 없음). 창을 닫고 목록에서 다시 열어 저장해 주세요",
+          kind: "server", retryable: false });
+        continue;
+      }
       try {
         var r = e.op === "insert"
           ? await supabase.from(e.table).insert(e.payload).select("id")
