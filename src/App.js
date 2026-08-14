@@ -17,6 +17,56 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   },
 });
 
+// ── 1000행 상한 우회 공용 조회 ────────────────────────────────────────────────
+// ⚠️ PostgREST 는 서버 설정(max-rows)으로 한 번에 **1000행까지만** 준다.
+//    `.limit(10000)` 을 걸어도 에러도 경고도 없이 **조용히 무시**된다.
+//    그래서 화면은 멀쩡한데 숫자만 틀리는, 가장 알아채기 어려운 방식으로 고장난다.
+//    (2026-08-11 실제 사고: 기관진행 1732건 중 1000건만 올라가 AI 가 "소진공 8월 부결 0건"
+//     이라고 답했다. 정답은 1건 · 칼라스토리.)
+//
+//    → 전체를 받아야 하는 조회는 **반드시 이 함수를 쓴다.** `.limit(1000 초과)` 는 금지어다.
+//    2026-08-12 실측 기준 1000행을 넘는 테이블: activity_logs 2,323 · agency_cases 2,222.
+//    나머지는 아직 여유가 있지만, 넘는 순간 같은 함정에 조용히 빠지므로
+//    "전체를 받는" 성격의 조회라면 지금 안 넘더라도 이 함수를 쓰는 편이 안전하다.
+//
+//    반환값은 supabase 응답과 **같은 모양**(`{ data, error }`)이다 —
+//    기존 호출부의 `.then(function(r) { r.data ... })` 를 그대로 두고 바꿔 끼울 수 있다.
+//
+//    opts.build   : 필터를 얹는 콜백. (q) => q.is("deleted_at", null).eq(...)
+//    opts.orderBy : 페이지 경계 고정용 정렬 컬럼 (기본 "created_at")
+//    opts.ascending / opts.tieBreak / opts.label 은 각각 정렬방향 · 동점기준 · 로그이름.
+//
+//    ⚠️ 정렬을 고정하는 이유는 두 가지다. 페이지 경계가 흔들려 행이 중복·누락되는 것을 막고,
+//       매번 같은 순서여야 JSON 바이트가 같아 AI 프롬프트 캐시가 살아 있다.
+//       그래서 `orderBy` 만으로는 부족하고 `tieBreak`(기본 id)까지 걸어 전순서를 만든다.
+const PG_MAX_ROWS = 1000;   // PostgREST 가 한 번에 주는 최대 행 수(서버 설정)
+async function fetchAllRows(table, cols, opts) {
+  var o = opts || {};
+  var offset = 0, out = [], guard = 0;
+  for (;;) {
+    var q = supabase.from(table).select(cols);
+    if (o.build) q = o.build(q);
+    q = q.order(o.orderBy || "created_at", { ascending: o.ascending !== false });
+    if (o.tieBreak !== null) q = q.order(o.tieBreak || "id", { ascending: true });
+    var r = await q.range(offset, offset + PG_MAX_ROWS - 1);
+    if (r.error) {
+      console.error("[fetchAllRows] " + (o.label || table) + " 로드 실패:", r.error);
+      // 여기서 out 을 같이 돌려주지 않는다 — 반쪽 데이터를 성공처럼 쓰면
+      // 1000행 절단과 똑같은 "조용히 틀린 숫자"가 된다. 호출부가 error 로 판단하게 한다.
+      return { data: null, error: r.error };
+    }
+    var rows = r.data || [];
+    out = out.concat(rows);
+    if (rows.length < PG_MAX_ROWS) break;        // 마지막 페이지
+    offset += PG_MAX_ROWS;
+    if (++guard > 100) {                          // 10만행 안전장치(무한루프 방지)
+      console.warn("[fetchAllRows] " + (o.label || table) + " 10만행 초과 — 중단");
+      break;
+    }
+  }
+  return { data: out, error: null };
+}
+
 // ── /api/* 호출 공통 ─────────────────────────────────────────────────────────
 // 서버리스 함수(api/_auth.mjs)가 세션을 검사하므로 토큰과 anon key를 항상 함께 보낸다.
 // 이 헤더가 빠지면 401/403이 난다. (2026-07-28 보안조치 8 — 비로그인 호출로 API 요금이 새는 것 차단)
@@ -1232,7 +1282,9 @@ async function syncPipelineFromCase(c) {
 async function resyncAutoCards() {
   var res = await Promise.all([
     supabase.from("pipeline_cards").select("*").eq("sync_mode", "auto").is("deleted_at", null), // 🗑 휴지통 카드 제외
-    supabase.from("agency_cases").select("id,company_id,business_name,agency_group,status,year,month,created_at,updated_at,deleted_at"),
+    // 2,222행(삭제분 포함) — 1000행 상한을 넘는다. 잘리면 재동기화가 1,222건을 못 보고 지나간다.
+    fetchAllRows("agency_cases", "id,company_id,business_name,agency_group,status,year,month,created_at,updated_at,deleted_at",
+      { label: "재동기화 기관현황" }),
     supabase.from("status_stage_map").select("agency_group,status_value,stage"),
   ]);
   var cards = res[0].data || [], cases = res[1].data || [], maps = res[2].data || [];
@@ -6097,7 +6149,10 @@ function CRMApp({ profile, session }) {
       //   4,300여 행을 매번 같이 실어오던 것이라 payload 도 줄어든다.
       supabase.from("companies").select("*").is("deleted_at", null).order("created_at", { ascending: false }),
       supabase.from("profiles").select("*"),
-      supabase.from("agency_cases").select("business_name, region").not("region", "is", null).limit(10000),
+      // 지역이 채워진 현황 1,680행 — `.limit(10000)` 은 무시돼 1000행만 오고 있었다.
+      // (같은 업체가 여러 건이면 나중 것이 이긴다. 정렬이 created_at 오름차순이라 "최신 지역"이 남는다.)
+      fetchAllRows("agency_cases", "business_name, region",
+        { build: function(q) { return q.not("region", "is", null); }, label: "지역 자동동기화" }),
       supabase.from("pipeline_cards").select("*").is("deleted_at", null),  // 🗑 휴지통 카드는 상태에 담지 않는다(보드·정체알림·대시보드 전부 이 상태를 본다)
       supabase.from("status_stage_map").select("*"),
       supabase.from("stage_stagnation_config").select("*"),
@@ -6375,8 +6430,10 @@ function CRMApp({ profile, session }) {
     //    → Realtime 재연결/재구독으로 기존 메시지가 다시 들어오거나(redeliver),
     //      초기 로드 목록이 이벤트로 흘러들어와도 chatSeenRef 에서 걸러져 절대 소리 안 남.
     //    실제로 이 시점 이후 새로 INSERT되는 메시지만 seen 에 없으므로 알림 대상이 된다.
-    supabase.from("chat_messages").select("id")
-      .order("created_at", { ascending: false }).limit(2000)
+    //    ⚠️ "이미 존재하는 **모든**" 이 이 로직의 전부라 상한을 걸면 안 된다.
+    //       예전 `.limit(2000)` 은 1000행에서 조용히 잘렸다(지금은 366건이라 피해가 없었을 뿐).
+    //       1000건을 넘는 순간 오래된 메시지가 seen 에서 빠져 재구독 때 헛알림이 울린다.
+    fetchAllRows("chat_messages", "id", { label: "채팅 seen 등록" })
       .then(function(r) {
         if (cancelled || r.error || !r.data) return;
         r.data.forEach(function(m) { chatSeenRef.current[m.id] = true; });
@@ -8147,40 +8204,24 @@ function AiSearchModal({ companies, myName, onClose, onSelectCompany }) {
       return out;
     };
 
-    // ⚠️ PostgREST 는 서버 설정(max-rows)으로 한 번에 1000행까지만 돌려준다.
-    //    `.limit(10000)` 을 걸어도 **조용히 무시**된다 — 에러도 경고도 없다.
-    //    그래서 기관진행 1732건 중 1000건만 올라갔고, AI 가 "소진공 8월 부결 0건"이라고
-    //    답했다(실제 정답 1건 · 칼라스토리). 2026-08-11 발견.
-    //    → 1000건씩 끊어서 전부 가져온다(AgencyView fetchCases 와 같은 방식).
-    //    정렬을 고정하는 이유는 두 가지다: 페이지 경계가 흔들리지 않게 하는 것과,
-    //    매번 같은 순서여야 JSON 바이트가 같아 프롬프트 캐시가 살아 있는 것.
-    var fetchAllRows = async function(table, cols) {
-      var pageSize = 1000, offset = 0, out = [];
-      for (;;) {
-        var r = await supabase.from(table).select(cols)
-          .is("deleted_at", null)
-          .order("created_at", { ascending: true })
-          .order("id", { ascending: true })
-          .range(offset, offset + pageSize - 1);
-        if (r.error) { console.error("[AI스냅샷] " + table + " 로드 실패:", r.error); break; }
-        var rows = r.data || [];
-        out = out.concat(rows);
-        if (rows.length < pageSize) break;   // 마지막 페이지
-        offset += pageSize;
-      }
-      return out;
-    };
-
+    // 1000행 절단 방지 — 공용 fetchAllRows 사용(파일 상단).
+    //   2026-08-11 사고의 원인이 여기였다: 기관진행 1732건 중 1000건만 올라가
+    //   AI 가 "소진공 8월 부결 0건"이라고 답했다(정답 1건 · 칼라스토리).
+    //   정렬(created_at→id 오름차순)은 공용 함수의 기본값이며, 매번 같은 순서여야
+    //   JSON 바이트가 같아 **프롬프트 캐시가 살아 있다** — 기본값을 바꾸지 말 것.
+    var onlyLive = function(q) { return q.is("deleted_at", null); };
     Promise.all([
       fetchAllRows("agency_cases",
-        "business_name, representative, agency_group, agency_sub, status, assignee, region, request_amount, request_fund, result, result_reason, apply_date, month, year, created_at"),
+        "business_name, representative, agency_group, agency_sub, status, assignee, region, request_amount, request_fund, result, result_reason, apply_date, month, year, created_at",
+        { build: onlyLive, label: "AI스냅샷 기관진행" }),
       fetchAllRows("settlement_manual",
-        "business_name, agency_group, month, request_amount, contract_fee, commission_fee, received_amount, contract_date, fee_received_date, invoice_issued, fee_received, settlement_notes"),
+        "business_name, agency_group, month, request_amount, contract_fee, commission_fee, received_amount, contract_date, fee_received_date, invoice_issued, fee_received, settlement_notes",
+        { build: onlyLive, label: "AI스냅샷 정산" }),
     ]).then(function(res) {
       setSnapshot({
         업체목록: companyRows.map(compact),
-        기관진행: (res[0] || []).map(compact),
-        정산: (res[1] || []).map(compact),
+        기관진행: ((res[0] && res[0].data) || []).map(compact),
+        정산: ((res[1] && res[1].data) || []).map(compact),
       });
       setLoadingSnap(false);
     });
@@ -8723,7 +8764,11 @@ function VoiceModeOverlay({ myName, onClose }) {
     (async function() {
       var r = await Promise.all([
         supabase.from("profiles").select("name,team"),
-        supabase.from("companies").select("id,name").is("deleted_at", null).limit(3000),
+        // 음성 명령이 업체명을 맞히려면 전체가 있어야 한다.
+        //   ⚠️ 예전 `.limit(3000)` 은 어차피 1000에서 잘린다(살아있는 업체가 397건이라 아직 피해는 없었다).
+        //   업체가 1000을 넘는 순간 못 맞히는 이름이 조용히 생기므로 미리 바꿔 둔다.
+        fetchAllRows("companies", "id,name",
+          { build: function(q) { return q.is("deleted_at", null); }, label: "음성 업체목록" }),
       ]);
       if (!aliveRef.current) return;
       var profs = (!r[0].error && r[0].data) ? r[0].data : [];
@@ -9289,7 +9334,9 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
   const thisYear = 2026;
 
   useEffect(function() {
-    supabase.from("agency_cases").select("*").is("deleted_at", null).limit(10000).then(function(r) {
+    // 1,734행 — 대시보드 집계 전체가 이 배열을 본다. 잘리면 모든 위젯 숫자가 조용히 틀린다.
+    fetchAllRows("agency_cases", "*",
+      { build: function(q) { return q.is("deleted_at", null); }, label: "대시보드 기관현황" }).then(function(r) {
       if (!r.error) setAgencyCases(r.data || []);
     });
     supabase.from("pipeline_cards").select("stage,closed_at").is("deleted_at", null).then(function(r) {
@@ -10080,7 +10127,9 @@ function MappingModal({ onClose, setPipelineCards, setStagnConfig, canEdit }) {
     setLoading(true);
     var r = await Promise.all([
       supabase.from("status_stage_map").select("*"),
-      supabase.from("agency_cases").select("agency_group,status").is("deleted_at", null),
+      // 1,734행 — 잘리면 매핑표에 "DB에 있는 상태값"이 일부 안 보여 규칙을 못 만든다.
+      fetchAllRows("agency_cases", "agency_group,status",
+        { build: function(q) { return q.is("deleted_at", null); }, label: "매핑표 상태목록" }),
       supabase.from("stage_stagnation_config").select("*"),
     ]);
     setMaps(r[0].data || []);
@@ -12407,7 +12456,9 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
   // 기관별 현황(agency_cases) 자체 로드 → 업체명별 매핑 (기업목록 한 곳에서 신청기관 현황 표시)
   const [agencyByName, setAgencyByName] = useState({});
   useEffect(function() {
-    supabase.from("agency_cases").select("business_name, agency_group, status, month, year, product").is("deleted_at", null).limit(10000).then(function(r) {
+    // 1,734행 — 잘리면 기업목록의 기관 배지·필터가 일부 업체에서 통째로 빈다.
+    fetchAllRows("agency_cases", "business_name, agency_group, status, month, year, product",
+      { build: function(q) { return q.is("deleted_at", null); }, label: "기업목록 기관배지" }).then(function(r) {
       if (!r.error && r.data) {
         var map = {};
         r.data.forEach(function(c) {
@@ -16617,7 +16668,9 @@ function ActivityLogView() {
   var fetchAll = async function() {
     setLoading(true);
     var r1 = await supabase.from("activity_logs").select("*").is("deleted_at", null).order("created_at", { ascending: false }).limit(200);
-    var r2 = await supabase.from("agency_cases").select("id,business_name,agency_group,assignee").is("deleted_at", null).limit(10000);
+    // 1,734행 — 잘리면 소통내역 작성 시 업체명 자동완성에서 일부 업체가 안 나온다.
+    var r2 = await fetchAllRows("agency_cases", "id,business_name,agency_group,assignee",
+      { build: function(q) { return q.is("deleted_at", null); }, label: "소통내역 업체자동완성" });
     if (!r1.error) setLogs(r1.data || []);
     if (!r2.error) setCases(r2.data || []);
     setLoading(false);
@@ -24080,26 +24133,12 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
 
   var fetchCases = async function() {
     setLoading(true);
-    // Supabase 1000건 기본 limit 우회: range로 페이징
-    var allData = [];
-    var pageSize = 1000;
-    var offset = 0;
-    while (true) {
-      var result = await supabase.from("agency_cases")
-        .select("*")
-        .order("created_at", { ascending: true })
-        .range(offset, offset + pageSize - 1);
-      if (result.error) {
-        console.error("fetchCases error:", result.error);
-        break;
-      }
-      if (!result.data || result.data.length === 0) break;
-      allData = allData.concat(result.data);
-      if (result.data.length < pageSize) break;
-      offset += pageSize;
-      if (offset > 50000) break; // 안전장치
-    }
-    setCases(allData);
+    // 1000행 절단 방지 — 공용 fetchAllRows 사용(파일 상단).
+    // ⚠️ 여기는 일부러 `deleted_at` 을 거르지 않는다 — 기관별 현황 화면은 삭제분까지 보여준다.
+    //    (2,222행 전체. 거르면 화면에서 행이 사라지므로 필터를 추가하지 말 것.)
+    var r = await fetchAllRows("agency_cases", "*", { label: "기관별 현황" });
+    // 실패하면 기존 목록을 그대로 둔다 — 빈 화면으로 덮으면 "데이터가 날아간 것"처럼 보인다.
+    if (!r.error) setCases(r.data || []);
     setLoading(false);
   };
 
