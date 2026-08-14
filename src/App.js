@@ -27986,11 +27986,22 @@ function GlobalSearchModal({ companies, query, setQuery, onClose, onSelectCompan
   useEffect(function() {
     if (inputRef.current) inputRef.current.focus();
     (async function() {
-      var nRes = await supabase.from("work_notes").select("id,title,content,assignee").is("deleted_at", null).limit(200);
+      // ⚠️ 여기는 "최근 N건만 보여주는" 목록이 아니라 **검색 대상 전체**다.
+      //    상한을 걸면 그 뒤 행은 아무리 정확히 입력해도 영영 안 나온다 — 화면엔 아무 표시도
+      //    안 나므로 "그런 업체 없나 보다"로 오해하게 된다. 그래서 fetchAllRows 로 전건을 받는다.
+      //    (2026-08-14 실측: agency_cases 1,743행인데 `.limit(500)` 이라 1,243건이 검색에서 빠져 있었다.
+      //     work_notes 475행 / `.limit(200)` → 275건. approval_cases 26행은 아직 안 잘렸지만 같이 예방.)
+      //    work_notes 는 RLS 가 열람범위를 이미 좁힌다(wnViewable 과 동일) — 상한만 없앤 것이지
+      //    남의 노트가 새로 보이는 게 아니다.
+      var onlyLive = function(q) { return q.is("deleted_at", null); };
+      var nRes = await fetchAllRows("work_notes", "id,title,content,assignee",
+        { build: onlyLive, label: "통합검색 업무노트" });
       if (!nRes.error) setNotes(nRes.data || []);
-      var aRes = await supabase.from("agency_cases").select("id,business_name,representative,agency_group,assignee,month,year,status,notes").is("deleted_at", null).limit(500);
+      var aRes = await fetchAllRows("agency_cases", "id,business_name,representative,agency_group,assignee,month,year,status,notes",
+        { build: onlyLive, label: "통합검색 기관현황" });
       if (!aRes.error) setAgencyCases(aRes.data || []);
-      var pRes = await supabase.from("approval_cases").select("id,business_name,agency_group,product,result,initial_issue,resolution,key_point,tags").is("deleted_at", null).limit(200);
+      var pRes = await fetchAllRows("approval_cases", "id,business_name,agency_group,product,result,initial_issue,resolution,key_point,tags",
+        { build: onlyLive, label: "통합검색 사례집" });
       if (!pRes.error) setApprovalCases(pRes.data || []);
     })();
   }, []);
