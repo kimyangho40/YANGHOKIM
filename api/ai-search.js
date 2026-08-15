@@ -104,26 +104,48 @@ const OPS = {
   contains: "ilike", starts: "ilike", in: "in", is_null: "is", not_null: "not.is",
 };
 
-// PostgREST 값 인용. or=(...) / in.(...) 안에서는 콤마·괄호·점이 구분자라 반드시 감싸야 한다.
-// ⚠️ 인용 후 **반드시 URL 인코딩**한다. ilike 패턴의 `%` 를 날것으로 두면 URL 이스케이프로 읽혀
-//    값이 깨진다(예: "%AB%" → 0xAB 바이트). 구분자(따옴표·점·콤마·괄호)는 밖에 두고 값만 인코딩한다.
-function pgQuote(v) {
+// PostgREST 값 표기.
+//
+// ⚠️⚠️ 큰따옴표를 쓰는 자리와 쓰면 안 되는 자리가 **다르다.** (2026-08-15 실측으로 확정)
+//   · 최상위 조건 `col=op.값`  → **따옴표를 붙이면 안 된다.** 붙이면 따옴표째 값으로 취급돼
+//                                항상 0건이 된다. 에러가 아니라 200 + 0건이라 알아채기 어렵다.
+//   · `in.(...)` / `or=(...)` 안 → 콤마·괄호가 구분자라 **따옴표로 감싸야** 안전하다(감싸도 정상 동작).
+//
+//   실측 (같은 토큰·같은 조건으로 PostgREST 에 직접 질의):
+//     companies  name=eq."(주)엘케이네스트코리아"          → 0건   ❌
+//     companies  name=eq.(주)엘케이네스트코리아            → 1건   ✅
+//     agency_cases agency_group=eq."소상공인시장진흥공단"  → 0건   ❌
+//     agency_cases agency_group=eq.소상공인시장진흥공단    → 767건 ✅
+//     agency_cases status=eq."부결" → 0건 ❌ / status=eq.부결 → 301건 ✅
+//     in.("부결","진행 중") → 416건 ✅ (따옴표 있어도 정상)
+//     or=(status.eq."부결",result.eq."부결") → 303건 ✅ (따옴표 있어도 정상)
+//
+//   이 버그 때문에 AI 상담의 **모든 문자열 필터가 언제나 0건**이었다. 그래서 특정 업체를
+//   물으면 모델이 필터를 바꿔가며 헛돌다 글 없이 끝나 화면에 "(빈 응답)"이 떴다.
+//   집계도 실제로는 0건을 받고 있었다("집계를 DB 에 위임"이 사실상 동작하지 않았다).
+//
+// ⚠️ 인코딩은 따옴표와 무관하게 **항상** 한다. ilike 패턴의 `%` 를 날것으로 두면 URL 이스케이프로
+//    읽혀 값이 깨진다(예: "%AB%" → 0xAB 바이트). 구분자(점·콤마·괄호)는 밖에 두고 값만 인코딩한다.
+function pgVal(v, quoted) {
   var s = String(v).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  return '"' + encodeURIComponent(s) + '"';
+  var enc = encodeURIComponent(s);
+  return quoted ? '"' + enc + '"' : enc;
 }
-// op + 값 → PostgREST 조건 문자열 (예: eq."부결", ilike."%양호%", in.("A","B"))
-function pgCond(op, value) {
+// op + 값 → PostgREST 조건 문자열.
+// quoted=true 는 `or=(...)` 안에 넣을 때만 준다(구분자 충돌 방지). 최상위 조건은 false.
+function pgCond(op, value, quoted) {
   if (op === "is_null") return "is.null";
   if (op === "not_null") return "not.is.null";
   if (op === "in") {
+    // in.(...) 목록은 콤마가 구분자라 **항상** 따옴표로 감싼다(감싸도 정상 동작함을 실측).
     var arr = Array.isArray(value) ? value : [value];
-    return "in.(" + arr.map(pgQuote).join(",") + ")";
+    return "in.(" + arr.map(function(v) { return pgVal(v, true); }).join(",") + ")";
   }
-  if (op === "contains") return "ilike." + pgQuote("%" + value + "%");
-  if (op === "starts") return "ilike." + pgQuote(value + "%");
+  if (op === "contains") return "ilike." + pgVal("%" + value + "%", quoted);
+  if (op === "starts") return "ilike." + pgVal(value + "%", quoted);
   if (typeof value === "boolean" || value === "true" || value === "false") return OPS[op] + "." + String(value);
   if (typeof value === "number") return OPS[op] + "." + value;
-  return OPS[op] + "." + pgQuote(value);
+  return OPS[op] + "." + pgVal(value, quoted);
 }
 
 // ── 업체명 흔들림 흡수 (2026-08-15) ─────────────────────────────────────────
@@ -209,7 +231,7 @@ export async function runQuery(input, creds, hints) {
     var col = resolve(f.field);
     if (!col) return { error: "'" + f.field + "' 는 " + input.table + " 에 없는(또는 조회할 수 없는) 필드입니다. 쓸 수 있는 필드: " + spec.cols.join(", ") };
     if (!OPS[f.op]) return { error: "op 는 " + Object.keys(OPS).join(" / ") + " 중 하나여야 합니다." };
-    var piece = encodeURIComponent(col) + "=" + pgCond(f.op, f.value);
+    var piece = encodeURIComponent(col) + "=" + pgCond(f.op, f.value, false); // 최상위 → 따옴표 금지
     params.push(piece);
     if (!isDateCol(col)) paramsNoDate.push(piece);
     if (isNameCol(col) && typeof f.value === "string" && f.value.trim()) nameTried.push(f.value.trim());
@@ -224,7 +246,7 @@ export async function runQuery(input, creds, hints) {
       var ac = resolve(a.field);
       if (!ac) return { error: "'" + a.field + "' 는 " + input.table + " 에 없는(또는 조회할 수 없는) 필드입니다. 쓸 수 있는 필드: " + spec.cols.join(", ") };
       if (!OPS[a.op]) return { error: "op 는 " + Object.keys(OPS).join(" / ") + " 중 하나여야 합니다." };
-      parts.push(ac + "." + pgCond(a.op, a.value));
+      parts.push(ac + "." + pgCond(a.op, a.value, true));  // or=(...) 안 → 따옴표 필요
       if (isNameCol(ac) && typeof a.value === "string" && a.value.trim()) nameTried.push(a.value.trim());
     }
     params.push("or=(" + parts.join(",") + ")");

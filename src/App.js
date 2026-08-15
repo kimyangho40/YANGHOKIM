@@ -13679,6 +13679,15 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
       table: "companies", op: "update", id: data.id,
       payload: payload,
       label: "계약 상태 " + ((data.name || "") + " " + (value || "없음")).trim(),
+      // ⚠️ 이 저장은 **재시도 큐에 넣지 않는다(retry:false).**
+      //    큐의 재시도는 payload 를 그대로 다시 보내는 **순수 UPDATE** 라, 이 아래에 딸린
+      //    후속 연동(syncSettlementFromCompany 정산 반영 · advanceCardsToContractPaid 카드 전진)을
+      //    재현하지 못한다. 실제로 그렇게 됐다 — 2026-08-15: 큐가 뒤늦게 성공해 계약 상태는
+      //    켜졌는데 정산에는 아무것도 안 넘어가, 겉보기엔 정상인데 정산만 비는 상태가 만들어졌다.
+      //    (게다가 3일 전 payload 라 contract_status_at 도 과거 시각으로 들어가 정체일수가 어긋난다.)
+      //    → 실패하면 큐에 숨기지 말고 사람에게 알려 **버튼을 다시 누르게** 한다.
+      //       그래야 정산 반영까지 한 묶음으로 다시 실행된다.
+      retry: false,
     });
     setContractSaving(false);
     if (!r.ok) {
