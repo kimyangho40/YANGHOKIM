@@ -18527,8 +18527,7 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
   const newDraft = useDraft("업무노트", "새글", showAdd ? composeNoteDraftText(newNote) : "",
     { enabled: !!showAdd, label: "새 업무노트" });
   const [filterType, setFilterType] = useState("전체"); // 전체 / 메모 / 할일
-  const [replyId, setReplyId] = useState(null);
-  const [replyText, setReplyText] = useState("");
+  // (업무노트 답장용 replyId/replyText 는 2026-08-15 제거 — 아래 addReply 주석 참고)
   const [showTrash, setShowTrash] = useState(false);
   const [trashedNotes, setTrashedNotes] = useState([]);
   // 📅 캘린더 뷰 관련 state
@@ -19365,19 +19364,14 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
     }
   };
 
-  var addReply = async function(noteId) {
-    if (!replyText.trim()) return;
-    var note = notes.find(function(n) { return n.id === noteId; });
-    var replies = [];
-    try { replies = JSON.parse(note.replies || "[]"); } catch(e) { replies = []; }
-    replies.push({ by: profile?.name || "", text: replyText.trim(), at: new Date().toISOString() });
-    var rp = await writeGuarded({ table: "work_notes", op: "update", id: noteId,
-      payload: { replies: JSON.stringify(replies) }, label: "노트 답장" });
-    if (!rp.ok) return; // 실패하면 입력창을 비우지 않는다 — 쓴 내용이 남아 있어야 다시 보낼 수 있다
-    setNotes(function(prev) { return prev.map(function(n) { return n.id === noteId ? Object.assign({}, n, { replies: JSON.stringify(replies) }) : n; }); });
-    setReplyId(null);
-    setReplyText("");
-  };
+  // ⚠️ 업무노트 답장(addReply)은 2026-08-15에 제거했다. 되살리지 말 것.
+  //    · `work_notes` 에 `replies` 컬럼이 **없다**(20개 컬럼 중 없음) → 저장하면 PGRST204 다.
+  //    · 게다가 그 함수는 **어디에서도 호출되지 않았다**(호출부 0곳). 답장 입력창도 버튼도 없었다.
+  //      = 미완성인 채 남은 잔재였고, 화면에서 도달할 수 없어 아무도 못 알아챘다.
+  //    · 답장 기능은 이미 **업무요청(`work_requests.replies` jsonb)** 에 구현돼 실사용 중이다
+  //      (2026-08-15 기준 6건). `addRequestReply` 를 쓸 것.
+  //    · 업무노트에 답장이 정말 필요해지면 컬럼 추가 전에 CLAUDE.md 의 work_notes RLS 규칙부터
+  //      볼 것 — 남의 노트에 쓰는 경로라 열람/쓰기 정책과 얽힌다.
 
   // 대기 사유 변경 (일반/응답대기/서류대기) — 대기 상태로 바뀌면 wait_since 기록, 일반으로 풀면 초기화
   var setNoteWaitReason = async function(note, reason) {
