@@ -50,7 +50,20 @@ async function fetchAllRows(table, cols, opts) {
     if (o.tieBreak !== null) q = q.order(o.tieBreak || "id", { ascending: true });
     var r = await q.range(offset, offset + PG_MAX_ROWS - 1);
     if (r.error) {
-      console.error("[fetchAllRows] " + (o.label || table) + " 로드 실패:", r.error);
+      // ⚠️ 예전엔 console.error 한 줄만 남기고 끝이었다. 그런데 호출부는 대부분
+      //    `if (!r.error && r.data) { ... }` 라 **아무 일도 안 일어난 것처럼** 지나가고,
+      //    화면은 "원래 데이터가 없는 것"처럼 보인다.
+      //    (2026-08-15: agency_cases 에 없는 컬럼 `product` 를 select 해 400 → 기업목록
+      //     기관 배지가 통째로 비었는데 아무 표시도 없었다.)
+      //    → ① 콘솔에 무엇을/왜 실패했는지 다 적고 ② 화면에도 "로드 실패"를 띄운다.
+      var detail = [r.error.message, r.error.details, r.error.hint, r.error.code]
+        .filter(Boolean).join(" · ");
+      console.error("[fetchAllRows] " + (o.label || table) + " 로드 실패\n" +
+        "  table : " + table + "\n" +
+        "  select: " + cols + "\n" +
+        "  사유  : " + (detail || "(내용 없음)") + "\n" +
+        "  ↳ 없는 컬럼명일 가능성이 큽니다. `node scripts/audit-select-columns.mjs` 로 확인하세요.", r.error);
+      pushLoadFailure(o.label || table, table, detail);
       // 여기서 out 을 같이 돌려주지 않는다 — 반쪽 데이터를 성공처럼 쓰면
       // 1000행 절단과 똑같은 "조용히 틀린 숫자"가 된다. 호출부가 error 로 판단하게 한다.
       return { data: null, error: r.error };
@@ -199,6 +212,23 @@ function dismissSaveAlert(id) {
   notifySaveState();
 }
 function getSaveAlerts() { return saveAlerts; }
+
+// ── 데이터 로드 실패 알림 (fetchAllRows 전용) ────────────────────────────────
+// 저장 실패와 성격이 다르다: 재시도 큐도, 사람이 고칠 값도 없다. "지금 이 화면의 숫자·배지를
+// 믿으면 안 된다"를 알리는 게 목적이다. fetchAllRows 한 곳만 거치면 모든 전체조회가 덮이므로
+// 호출부(100곳 가까이)를 건드리지 않고 한 번에 드러낼 수 있다.
+var loadFailures = [];
+function pushLoadFailure(label, table, detail) {
+  var key = label + "|" + table;
+  loadFailures = loadFailures.filter(function(x) { return x.key !== key; })
+    .concat([{ key: key, label: label, table: table, detail: detail, at: Date.now() }]).slice(-5);
+  notifySaveState();
+}
+function dismissLoadFailure(key) {
+  loadFailures = loadFailures.filter(function(x) { return x.key !== key; });
+  notifySaveState();
+}
+function getLoadFailures() { return loadFailures; }
 
 // 활동 로그에 쓸 작성자 이름 — CRMApp/MobileApp이 로그인 후 채워준다.
 var currentActorName = "";
@@ -569,8 +599,9 @@ function SaveGuardBar() {
 
   var alerts = getSaveAlerts();
   var queued = readFailQ();
+  var loadFails = getLoadFailures();
   var showStale = !staleHidden && stale.length > 0;
-  if (online && alerts.length === 0 && queued.length === 0 && !showStale) return null;
+  if (online && alerts.length === 0 && queued.length === 0 && loadFails.length === 0 && !showStale) return null;
 
   var box = { borderRadius: 10, padding: "10px 14px", marginBottom: 8, boxShadow: "0 4px 14px rgba(0,0,0,0.10)" };
   return (
@@ -581,6 +612,31 @@ function SaveGuardBar() {
           <div style={{ fontSize: 11, marginTop: 3, opacity: 0.85 }}>지금 저장을 누르면 이 기기에 보관했다가 연결되면 자동으로 저장됩니다.</div>
         </div>
       )}
+      {/* 📛 데이터 로드 실패 — 이 화면의 숫자·배지를 믿으면 안 된다는 표시.
+          "원래 데이터가 없는 것"처럼 조용히 비어 보이는 사고(2026-08-15 기관 배지)를 막는다. */}
+      {loadFails.map(function(f) {
+        return (
+          <div key={f.key} style={Object.assign({}, box, { background: "#FEF2F2", border: "1px solid #F87171" })}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+              <span style={{ fontSize: 15 }}>📛</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: "#B91C1C" }}>데이터를 불러오지 못했습니다</div>
+                <div style={{ fontSize: 11.5, color: "#7F1D1D", marginTop: 3, lineHeight: 1.5 }}>
+                  {f.label} — 이 화면의 관련 숫자·배지가 <b>비어 있거나 틀릴 수 있습니다.</b>
+                </div>
+                <div style={{ fontSize: 10.5, color: "#991B1B", marginTop: 4, wordBreak: "break-all" }}>
+                  {f.table}: {f.detail || "원인 불명"}
+                </div>
+                <div style={{ fontSize: 10.5, color: "#991B1B", marginTop: 4 }}>
+                  새로고침해도 계속 뜨면 관리자에게 알려주세요.
+                </div>
+              </div>
+              <span onClick={function() { dismissLoadFailure(f.key); }}
+                style={{ cursor: "pointer", color: "#B91C1C", fontSize: 15, lineHeight: 1 }}>×</span>
+            </div>
+          </div>
+        );
+      })}
       {alerts.map(function(a) {
         var err = a.level === "error";
         return (
@@ -12516,7 +12572,12 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
   const [agencyByName, setAgencyByName] = useState({});
   useEffect(function() {
     // 1,734행 — 잘리면 기업목록의 기관 배지·필터가 일부 업체에서 통째로 빈다.
-    fetchAllRows("agency_cases", "business_name, agency_group, status, month, year, product",
+    // ⚠️ 상품명 컬럼은 `fund_product` 다. `product` 는 **사례집(case_studies)** 의 컬럼 이름이라
+    //    agency_cases 에는 없다. 없는 컬럼을 select 하면 PostgREST 가 400 을 주는데,
+    //    fetchAllRows 는 실패 시 data:null 을 주므로 **기업목록의 기관 배지가 통째로 비어 버린다**
+    //    (2026-08-15 확인: 콘솔 "[fetchAllRows] 기업목록 기관배지 로드 실패" + 400).
+    //    화면이 "배지가 원래 없는 업체"처럼 보여서 알아채기 어렵다 — 컬럼명을 바꾸지 말 것.
+    fetchAllRows("agency_cases", "business_name, agency_group, status, month, year, fund_product",
       { build: function(q) { return q.is("deleted_at", null); }, label: "기업목록 기관배지" }).then(function(r) {
       if (!r.error && r.data) {
         var map = {};
@@ -12759,7 +12820,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                         {(function() { var tm = teamOf(co); return <span title="팀 (저장값 우선 · 없으면 업체명 기준 자동)" style={{ flexShrink: 0, fontSize: 9, padding: "2px 6px", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap", background: tm === "법인팀" ? "#EEF2FF" : "#F0FDF4", color: tm === "법인팀" ? "#4338CA" : "#15803D" }}>{tm}</span>; })()}
                         {co.region ? (function() { var rc = getRegionColor(co.region); return <span className="lst-region-tablet" style={{ display: "none", flexShrink: 0, fontSize: 11, padding: "2px 8px", borderRadius: 6, fontWeight: 600, background: rc.bg, color: rc.text, whiteSpace: "nowrap" }}>{co.region}</span>; })() : null}
                         {isStagnant(co) && <span title={(co.stagn_stage || "") + " " + co.stagnant_days + "일째 (기준 " + co.stagn_threshold + "일)"} style={{ fontSize: 10, color: "#DC2626" }}>⚠</span>}
-                        {(function() { var yr = youthReapplyStatus(co, (agencyByName[co.name] || []).map(function(x) { return x.product; })); return yr && yr.eligible ? <span title={"청년창업 부결 " + yr.rejectedDate + " · 6개월 경과(재신청 가능일 " + yr.reapplyDate + ")"} style={{ flexShrink: 0, fontSize: 9, padding: "2px 6px", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap", background: "#DCFCE7", color: "#15803D", border: "1px solid #86EFAC" }}>재신청 가능</span> : null; })()}
+                        {(function() { var yr = youthReapplyStatus(co, (agencyByName[co.name] || []).map(function(x) { return x.fund_product; })); return yr && yr.eligible ? <span title={"청년창업 부결 " + yr.rejectedDate + " · 6개월 경과(재신청 가능일 " + yr.reapplyDate + ")"} style={{ flexShrink: 0, fontSize: 9, padding: "2px 6px", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap", background: "#DCFCE7", color: "#15803D", border: "1px solid #86EFAC" }}>재신청 가능</span> : null; })()}
                         <button onClick={e => { e.stopPropagation(); setEditNameId(co.id); setEditNameVal(co.name); }}
                           style={{ background: "none", border: "none", cursor: "pointer", padding: 2, opacity: 0, transition: "opacity 0.15s" }}
                           onMouseEnter={e => e.currentTarget.style.opacity = 1}
@@ -14477,7 +14538,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                 <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: "#fff", color: data.type === "법인" ? "#4338CA" : "#15803D", fontWeight: 700 }}>{data.type}</span>
                 <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, background: sc.text, color: "#fff", fontWeight: 600 }}>{data.stage}</span>
                 {isStagnant(data) && <span style={{ fontSize: 11, color: "#DC2626", fontWeight: 700, background: "#FEF2F2", padding: "2px 8px", borderRadius: 99 }}>⚠ {data.stagnant_days}일 정체</span>}
-                {(function() { var yr = youthReapplyStatus(data, (agencyCases || []).map(function(x) { return x.product; })); return yr && yr.eligible ? <span title={"부결일 " + yr.rejectedDate + " 기준 6개월 경과 (재신청 가능일 " + yr.reapplyDate + ")"} style={{ fontSize: 11, color: "#15803D", fontWeight: 700, background: "#DCFCE7", border: "1px solid #86EFAC", padding: "2px 8px", borderRadius: 99 }}>🌱 청년창업 재신청 가능 (6개월 경과)</span> : null; })()}
+                {(function() { var yr = youthReapplyStatus(data, (agencyCases || []).map(function(x) { return x.fund_product; })); return yr && yr.eligible ? <span title={"부결일 " + yr.rejectedDate + " 기준 6개월 경과 (재신청 가능일 " + yr.reapplyDate + ")"} style={{ fontSize: 11, color: "#15803D", fontWeight: 700, background: "#DCFCE7", border: "1px solid #86EFAC", padding: "2px 8px", borderRadius: 99 }}>🌱 청년창업 재신청 가능 (6개월 경과)</span> : null; })()}
               </div>
               {editingName ? (
                 <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 2 }}>
