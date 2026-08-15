@@ -209,7 +209,17 @@ var dirtyMarks = {};
 function markDirty(key, on) { if (on) dirtyMarks[key] = 1; else delete dirtyMarks[key]; }
 function hasDirtyInput() { return Object.keys(dirtyMarks).length > 0; }
 
-// 실패 사유 구분: 네트워크 / 권한(로그인) / 서버
+// 재시도해도 절대 성공할 수 없는 실패인가 — 값의 형식·스키마가 어긋난 경우.
+// 큐에 남은 옛 항목(이 판정이 생기기 전에 쌓인 것)도 text 로 알아볼 수 있게 문구로 판정한다.
+function isPermanentWriteMsg(msg) {
+  return /invalid input syntax|numeric field overflow|value too long|out of range|violates check constraint|violates not-null constraint|violates foreign key|Could not find the .* column|invalid input value for enum/i.test(String(msg || ""));
+}
+function isPermanentFailEntry(e) {
+  if (e && e.permanent) return true;
+  return isPermanentWriteMsg(e && e.text);
+}
+
+// 실패 사유 구분: 네트워크 / 권한(로그인) / 값형식(재시도 불가) / 서버
 function classifyWriteFail(err, rowCount) {
   if (typeof navigator !== "undefined" && navigator.onLine === false) {
     return { kind: "network", text: "인터넷 연결이 끊겨 저장되지 않았습니다" };
@@ -224,6 +234,16 @@ function classifyWriteFail(err, rowCount) {
   }
   if (/row-level security|permission denied/i.test(msg) || code === "42501") {
     return { kind: "permission", text: "저장 권한이 없습니다. 관리자 승인이 필요합니다" };
+  }
+  // ⚠️ 값의 형식/스키마가 안 맞아 거절된 것은 **재시도해도 영원히 같은 실패**다.
+  //    2026-08-15 사고: companies.fee 가 integer 인데 수수료율 4.8 을 보내
+  //      invalid input syntax for type integer: "4.8"
+  //    로 거절됐고, 큐가 이걸 계속 재시도해 **421번 실패**하며 경고 띠가 영구히 남았다.
+  //    (payload 를 그대로 다시 보내는 재시도라 값이 바뀌지 않으니 성공할 수가 없다.)
+  //    → permanent 로 표시해 큐에 넣지 않고, 사람이 할 수 있는 행동을 알려준다.
+  if (isPermanentWriteMsg(msg) || code === "22P02" || code === "22003" || code === "PGRST204") {
+    return { kind: "data", permanent: true,
+      text: "값의 형식이 맞지 않아 저장되지 않았습니다: " + msg + " (값을 고쳐 다시 저장해 주세요)" };
   }
   if (!err && rowCount === 0) {
     // ⚠️ 이번 사고의 그 경로 — 에러가 아니라 "0행 갱신"으로 온다
@@ -336,7 +356,9 @@ function failWrite(spec, info, rawErr) {
     table: spec.table, op: spec.op || "update", rowId: spec.id || null,
     payload: spec.payload, label: spec.label || spec.table,
     kind: info.kind, text: info.text, tries: 0,
-    retry: spec.retry !== false,
+    permanent: !!info.permanent,
+    // 값 형식 오류는 재시도 대상이 아니다(위 classifyWriteFail 주석 참고)
+    retry: spec.retry !== false && !info.permanent,
   };
   if (entry.retry) writeFailQ(readFailQ().concat([entry]));
   pushSaveAlert({ id: entry.id, level: "error", label: entry.label, text: info.text, kind: info.kind, retryable: entry.retry });
@@ -387,6 +409,18 @@ async function retryFailedSaves() {
         pushSaveAlert({ id: "bad" + e.id, level: "error", label: e.label,
           text: "저장 대상을 찾지 못해 재시도를 멈췄습니다(대상 id 없음). 창을 닫고 목록에서 다시 열어 저장해 주세요",
           kind: "server", retryable: false });
+        continue;
+      }
+      // 값 형식이 어긋난 실패도 **같은 payload 를 다시 보내는 것**이라 영원히 실패한다.
+      // (2026-08-15: 수수료율 4.8 → integer 컬럼, 421회 재시도 후에도 실패)
+      // 이 판정이 생기기 전에 쌓인 항목이 localStorage 에 남아 있으므로 여기서 걷어낸다.
+      // left 에 넣지 않으니 큐에서 사라지고, "왜 안 되는지 + 뭘 하면 되는지"로 바꿔 남긴다.
+      if (isPermanentFailEntry(e)) {
+        dismissSaveAlert(e.id);
+        pushSaveAlert({ id: "perm" + e.id, level: "error", label: e.label,
+          text: "값의 형식이 맞지 않아 재시도를 멈췄습니다 — " + (e.text || "") +
+                " · 해당 화면에서 값을 확인하고 다시 저장해 주세요",
+          kind: "data", retryable: false });
         continue;
       }
       try {

@@ -126,10 +126,66 @@ function pgCond(op, value) {
   return OPS[op] + "." + pgQuote(value);
 }
 
+// ── 업체명 흔들림 흡수 (2026-08-15) ─────────────────────────────────────────
+// 사람은 업체명을 매번 조금씩 다르게 친다: "주식회사 엘케이에네스트코리아" vs
+// 실제 이름 "(주)엘케이네스트코리아". `ilike '%...%'` 는 이걸 못 잡아 **0건**이 되고,
+// 모델은 "없다"고 답하는 대신 필터를 바꿔가며 계속 재조회해 라운드를 통째로 태운다
+// (2026-08-15 실측: 도구 12회 호출 → 라운드 소진 → 빈 응답).
+// → 0건일 때 **비슷한 이름 후보를 같이 돌려줘** 모델이 한 번에 제 이름을 찾게 한다.
+//
+// ⚠️ 후보는 조회 대상 자체를 바꾸지 않는다 — 어디까지나 "이 이름 아니었나요?" 힌트다.
+//    조회 결과를 임의로 넓히면 모델이 엉뚱한 업체를 그 업체라고 단정할 수 있다.
+const CORP_WORDS = /\(주\)|\(유\)|㈜|㈐|주식회사|유한회사|유한책임회사|합자회사|합명회사|농업회사법인|영농조합법인|사회적협동조합|협동조합|사단법인|재단법인/g;
+function normName(s) {
+  return String(s == null ? "" : s).replace(CORP_WORDS, "")
+    .replace(/[\s\-_.,·'"()[\]{}/\\]/g, "").toLowerCase();
+}
+// 문자 단위 편집거리. 업체명은 짧아(대개 20자 이내) 이 정도면 충분히 빠르다.
+function editDistance(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  var prev = new Array(b.length + 1);
+  for (var j = 0; j <= b.length; j++) prev[j] = j;
+  for (var i = 1; i <= a.length; i++) {
+    var cur = [i];
+    for (var k = 1; k <= b.length; k++) {
+      cur[k] = Math.min(prev[k] + 1, cur[k - 1] + 1, prev[k - 1] + (a[i - 1] === b[k - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+// 정규화 후 편집거리로 후보를 고른다. 한쪽이 다른 쪽을 통째로 포함하면 강한 후보로 본다.
+// (named export 는 테스트용. Vercel 은 default export 만 본다.)
+export function similarNames(q, names, cap) {
+  var nq = normName(q);
+  if (nq.length < 2) return [];
+  var out = [];
+  for (var i = 0; i < (names || []).length; i++) {
+    var nn = normName(names[i]);
+    if (!nn) continue;
+    var score;
+    if (nn === nq) score = 1;
+    else if (nn.indexOf(nq) >= 0 || nq.indexOf(nn) >= 0) score = 0.92;
+    else score = 1 - editDistance(nq, nn) / Math.max(nq.length, nn.length);
+    if (score >= 0.62) out.push({ name: names[i], score: score });
+  }
+  out.sort(function(a, b) { return b.score - a.score; });
+  var seen = {}, picked = [];
+  for (var m = 0; m < out.length && picked.length < (cap || 8); m++) {
+    if (seen[out[m].name]) continue;
+    seen[out[m].name] = 1;
+    picked.push(out[m].name);
+  }
+  return picked;
+}
+
 // 도구 실행: 필터를 검증해 PostgREST 로 진짜 세어 온다.
 // 반환값이 {error:...} 면 모델에게 그대로 돌려줘 스스로 고쳐 다시 부르게 한다.
+// hints.names[table] = 그 표에 실제로 있는 이름 목록(스냅샷에서 뽑음) — 0건일 때만 쓴다.
 // (named export 는 테스트용. Vercel 은 default export 만 본다.)
-export async function runQuery(input, creds) {
+export async function runQuery(input, creds, hints) {
   var spec = TABLES[input && input.table];
   if (!spec) return { error: "table 은 " + Object.keys(TABLES).join(" / ") + " 중 하나여야 합니다." };
 
@@ -139,13 +195,24 @@ export async function runQuery(input, creds) {
   };
   var params = ["deleted_at=is.null"]; // 모델이 못 바꾸는 고정 조건
 
+  // 0건일 때 "왜 0건인지" 힌트를 만들려고 두 가지를 따로 기억해 둔다.
+  //   · nameTried  — 이름으로 거른 값들(비슷한 이름 후보를 뽑을 재료)
+  //   · paramsNoDate — 기간(year/month/각종 date) 조건만 뺀 조건들(기간 때문인지 확인용)
+  var nameTried = [];
+  var paramsNoDate = ["deleted_at=is.null"];
+  var isNameCol = function(c) { return c === "name" || c === "business_name" || c === "representative"; };
+  var isDateCol = function(c) { return c === "year" || c === "month" || /_date$|^apply_|^approval_/.test(c); };
+
   var filters = Array.isArray(input.filters) ? input.filters : [];
   for (var i = 0; i < filters.length; i++) {
     var f = filters[i] || {};
     var col = resolve(f.field);
     if (!col) return { error: "'" + f.field + "' 는 " + input.table + " 에 없는(또는 조회할 수 없는) 필드입니다. 쓸 수 있는 필드: " + spec.cols.join(", ") };
     if (!OPS[f.op]) return { error: "op 는 " + Object.keys(OPS).join(" / ") + " 중 하나여야 합니다." };
-    params.push(encodeURIComponent(col) + "=" + pgCond(f.op, f.value));
+    var piece = encodeURIComponent(col) + "=" + pgCond(f.op, f.value);
+    params.push(piece);
+    if (!isDateCol(col)) paramsNoDate.push(piece);
+    if (isNameCol(col) && typeof f.value === "string" && f.value.trim()) nameTried.push(f.value.trim());
   }
 
   // any_of: OR 묶음 하나. (예: status='부결' 또는 result='부결')
@@ -158,8 +225,10 @@ export async function runQuery(input, creds) {
       if (!ac) return { error: "'" + a.field + "' 는 " + input.table + " 에 없는(또는 조회할 수 없는) 필드입니다. 쓸 수 있는 필드: " + spec.cols.join(", ") };
       if (!OPS[a.op]) return { error: "op 는 " + Object.keys(OPS).join(" / ") + " 중 하나여야 합니다." };
       parts.push(ac + "." + pgCond(a.op, a.value));
+      if (isNameCol(ac) && typeof a.value === "string" && a.value.trim()) nameTried.push(a.value.trim());
     }
     params.push("or=(" + parts.join(",") + ")");
+    paramsNoDate.push("or=(" + parts.join(",") + ")"); // any_of 는 기간 조건으로 잘 안 쓰므로 그대로 둔다
   }
 
   var headers = { apikey: creds.anonKey, Authorization: "Bearer " + creds.token };
@@ -237,13 +306,67 @@ export async function runQuery(input, creds) {
     return out;
   });
 
+  // ── 0건이면 "왜 0건인지"를 같이 준다 ──────────────────────────────────────
+  // 그냥 0건만 돌려주면 모델이 필터를 바꿔가며 계속 재조회해 라운드를 태우고,
+  // 끝내 글 답변 없이 끝나 화면에 "(빈 응답)"이 뜬다(2026-08-15 장애의 실제 경로).
+  // 여기서 **다음에 뭘 해야 하는지**를 알려주면 대개 한 번 더 부르는 것으로 끝난다.
+  var zero = null;
+  if (total === 0) {
+    zero = {};
+    // (1) 이름이 조금 달라서 0건인가 — 비슷한 이름 후보
+    var pool = (hints && hints.names && hints.names[input.table]) || [];
+    var cand = [];
+    for (var t = 0; t < nameTried.length; t++) {
+      cand = cand.concat(similarNames(nameTried[t], pool, 8));
+    }
+    cand = cand.filter(function(v, idx) { return cand.indexOf(v) === idx; }).slice(0, 8);
+    if (cand.length) zero.비슷한_이름 = cand;
+    // (2) 기간 때문에 0건인가 — 기간 조건만 빼고 다시 세어 본다
+    if (paramsNoDate.length < params.length) {
+      try {
+        var r2 = await fetch(base + paramsNoDate.join("&") + "&select=" + encodeURIComponent(sel.join(",")) +
+          "&order=" + order, { headers: Object.assign({}, headers, { Range: "0-9", Prefer: "count=exact" }) });
+        if (r2.ok) {
+          var cr2 = r2.headers.get("content-range") || "";
+          var t2 = parseInt((cr2.split("/")[1] || ""), 10);
+          if (isFinite(t2) && t2 > 0) {
+            zero.기간조건_빼면 = t2;
+            var rows2 = await r2.json();
+            if (Array.isArray(rows2)) {
+              zero.기간조건_뺀_표본 = rows2.slice(0, 10).map(function(row) {
+                var o = {};
+                Object.keys(row).forEach(function(kk) {
+                  var v = row[kk];
+                  if (v == null || v === "") return;
+                  if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v)) v = v.slice(0, 10);
+                  o[rev[kk] || kk] = v;
+                });
+                return o;
+              });
+            }
+          }
+        }
+      } catch (e) { /* 힌트는 실패해도 본 조회 결과에 영향을 주지 않는다 */ }
+    }
+    if (!Object.keys(zero).length) zero = null;
+  }
+
+  var zeroNote = "";
+  if (zero && zero.비슷한_이름) {
+    zeroNote += " 0건입니다. 이름이 조금 다를 수 있습니다 — '비슷한_이름' 에 실제로 있는 이름을 넣었으니, 그 중 맞는 이름으로 **다시 한 번** 조회하세요.";
+  }
+  if (zero && zero.기간조건_빼면) {
+    zeroNote += " 기간 조건을 빼면 " + zero.기간조건_빼면 + "건 있습니다 — 물어본 달이 아닌 다른 달에 있는 건일 수 있으니 '기간조건_뺀_표본' 의 날짜를 확인해 그대로 알려주세요.";
+  }
+
   return {
     table: input.table,
     건수: total,
     그룹별: groups,
     표본: slim,
+    조건이_0건일때: zero,
     안내: (limit === 0 ? "행은 요청하지 않았습니다. " : total > slim.length ? "총 " + total + "건 중 " + slim.length + "건만 실었습니다. 더 필요하면 limit 을 올리거나 필터를 좁히세요. " : "")
-      + "이 '건수'는 DB 에서 직접 센 값이라 정확합니다." + groupNote,
+      + "이 '건수'는 DB 에서 직접 센 값이라 정확합니다." + groupNote + zeroNote,
   };
 }
 
@@ -316,6 +439,16 @@ export default async function handler(req, res) {
       "  · 도구를 쓰지 않고 스냅샷만 보고 건수를 말하지 마세요. 세어 보기 전에는 '없다'고 단정하지 마세요.",
       "  · 특정 업체 한 곳의 상태·메모처럼 조회형 질문은 <데이터>만으로 답해도 됩니다.",
       "  · 도구가 error 를 주면 안내에 맞춰 필드·연산자를 고쳐 다시 부르세요.",
+      "",
+      "■ 0건이 나왔을 때 (중요)",
+      "사용자는 업체명을 조금씩 다르게 적습니다(예: '주식회사 엘케이에네스트코리아' ↔ 실제 '(주)엘케이네스트코리아').",
+      "  · 도구 결과의 `조건이_0건일때.비슷한_이름` 에는 **DB 에 실제로 있는 이름**이 들어 있습니다.",
+      "    맞는 이름이 보이면 그 이름으로 한 번 더 조회한 뒤, 답변 첫 줄에 '입력하신 이름과 조금 달라",
+      "    (주)○○○ 로 찾았습니다' 처럼 어떤 이름으로 찾았는지 반드시 밝히세요.",
+      "  · `조건이_0건일때.기간조건_빼면` 이 있으면 그 달에는 없고 **다른 달에 있는** 건입니다.",
+      "    `기간조건_뺀_표본` 의 실제 날짜를 확인해 '8월에는 없고 7월에 신청된 건이 있습니다'처럼 알려주세요.",
+      "  · 같은 조건을 조금씩 바꿔 계속 재조회하지 마세요. 두세 번 해서 안 나오면, 무엇을 찾아 몇 건이었는지와",
+      "    비슷한 후보를 **글로 정리해 답하세요.** 답을 못 찾아도 반드시 글로 답해야 합니다(빈 응답 금지).",
       "",
       "필터 값을 고를 때 주의할 점:",
       "  · 사용자는 줄임말로 말합니다. 기관명은 아래 '실제 값' 목록에서 골라 쓰세요.",
@@ -418,12 +551,40 @@ export default async function handler(req, res) {
       anonKey: req.headers["x-supabase-anon"] || "",
     };
 
+    // 0건일 때 "비슷한 이름"을 뽑을 재료 — 스냅샷에 실제로 있는 이름들.
+    // DB 를 다시 읽지 않는다(스냅샷이 이미 전건이다).
+    const uniqNames = function(rows, key) {
+      var seen = {}, out = [];
+      (rows || []).forEach(function(r) {
+        var v = r && r[key];
+        if (typeof v === "string" && v.trim() && !seen[v]) { seen[v] = 1; out.push(v); }
+      });
+      return out;
+    };
+    const hints = { names: {
+      "업체목록": uniqNames(snapshot.업체목록, "name"),
+      "기관진행": uniqNames(snapshot.기관진행, "business_name"),
+      "정산": uniqNames(snapshot.정산, "business_name"),
+    } };
+
     // ── 도구 루프 ────────────────────────────────────────────────────────────
     // 모델이 `query_crm_data` 를 부르면 실제로 세어 결과를 돌려주고 다시 묻는다.
     // tools/system 은 messages 보다 앞이라 캐시 접두사 안이다 → 루프를 돌아도 캐시는 살아 있다.
-    const MAX_ROUNDS = 6;
+    //
+    // ⚠️ 도구 라운드와 "마무리"를 절대 한 루프에 섞지 말 것 (2026-08-15 장애의 원인).
+    //    예전 코드는 마지막 회차(round === MAX_ROUNDS)에만 tool_choice:none 을 걸었는데,
+    //    그 회차의 응답에 text 블록이 없으면 그대로 answer="" 가 되어 화면에 "(빈 응답)"이 떴다.
+    //    실측(2026-08-15, "주식회사 엘케이에네스트코리아 현황"): 도구 12회 · API 7회
+    //    (cache_read 1,764,684 = 294,114 × 6) · output 2,318 토큰 → **길이 초과가 아니라
+    //    "글 없이 끝난 응답"이 문제**였다. 그래서 아래처럼 나눈다:
+    //      1) 도구 라운드는 tool_use 블록 유무로만 판단해서 돈다
+    //      2) 글 답변이 없으면 도구를 막고 **따로** 한 번 더 물어 반드시 글로 받는다
+    //      3) 그래도 없으면 조회한 내용을 사람이 읽을 수 있게 정리해 내보낸다(절대 빈 문자열 금지)
+    const MAX_TOOL_ROUNDS = 6;
     const usageTotal = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
     let data = null, toolCalls = 0;
+    const trace = [];        // 무엇을 조회해 몇 건 나왔는지 (빈 응답일 때 사람에게 보여줄 재료)
+    const stops = [];        // 회차별 stop_reason (원인 파악용 로그)
 
     // toolChoice=none 이면 도구를 못 부르고 반드시 글로 답한다 (마지막 마무리용).
     const ask = async function(toolChoice) {
@@ -459,14 +620,25 @@ export default async function handler(req, res) {
       return { ok: true, data: d };
     };
 
-    for (let round = 0; round <= MAX_ROUNDS; round++) {
-      // 바퀴를 다 썼는데도 도구를 더 부르려 하면, 있는 것만으로 답하게 강제한다.
-      const resp = await ask(round === MAX_ROUNDS ? { type: "none" } : null);
+    const textOf = function (d) {
+      return ((d && d.content) || [])
+        .filter(function (b) { return b.type === "text"; })
+        .map(function (b) { return b.text; })
+        .join("\n")
+        .trim();
+    };
+
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      const resp = await ask(null);
       if (!resp.ok) { res.status(resp.status).json({ error: resp.msg }); return; }
       data = resp.data;
+      stops.push(data.stop_reason);
 
+      // ⚠️ stop_reason 이 아니라 **tool_use 블록 유무**로 판단한다.
+      //    stop_reason 이 "tool_use" 가 아닌데 도구 블록이 들어 있는 응답(길이 초과 등)을
+      //    예전 코드는 그냥 break 해서 글 없는 응답을 답으로 내보냈다.
       const uses = (data.content || []).filter(function (b) { return b.type === "tool_use"; });
-      if (data.stop_reason !== "tool_use" || uses.length === 0) break;
+      if (uses.length === 0) break;
 
       messages.push({ role: "assistant", content: data.content });
       const results = [];
@@ -474,11 +646,20 @@ export default async function handler(req, res) {
         toolCalls++;
         let out;
         try {
-          out = await runQuery(use.input || {}, creds);
+          out = await runQuery(use.input || {}, creds, hints);
         } catch (e) {
           out = { error: "조회 중 오류: " + (e && e.message ? e.message : String(e)) };
         }
         console.log("[ai-search] tool", JSON.stringify({ input: use.input, 건수: out && out.건수, error: out && out.error }));
+        trace.push({
+          table: (use.input && use.input.table) || "?",
+          filters: (use.input && use.input.filters) || [],
+          any_of: (use.input && use.input.any_of) || undefined,
+          건수: out && out.건수,
+          비슷한_이름: out && out.조건이_0건일때 && out.조건이_0건일때.비슷한_이름,
+          기간조건_빼면: out && out.조건이_0건일때 && out.조건이_0건일때.기간조건_빼면,
+          error: out && out.error,
+        });
         results.push({
           type: "tool_result",
           tool_use_id: use.id,
@@ -489,19 +670,46 @@ export default async function handler(req, res) {
       messages.push({ role: "user", content: results });
     }
 
-    const answer = ((data && data.content) || [])
-      .filter(function (b) { return b.type === "text"; })
-      .map(function (b) { return b.text; })
-      .join("\n")
-      .trim();
+    // ── 마무리: 글 답변이 없으면 도구를 막고 한 번 더 물어 반드시 글로 받는다 ──
+    let answer = textOf(data);
+    if (!answer) {
+      const fin = await ask({ type: "none" });
+      if (fin.ok) { data = fin.data; stops.push(data.stop_reason); answer = textOf(data); }
+      else stops.push("finish_failed:" + fin.status);
+    }
+
+    // ── 최후의 방어: 그래도 글이 없으면 **빈 문자열을 내보내지 않는다** ────────
+    // 화면의 "(빈 응답)"은 사용자에게 아무것도 알려주지 않는다. 조회는 실제로 했으므로,
+    // 무엇을 찾아 몇 건이었는지라도 정리해서 돌려준다(다음 행동을 알 수 있게).
+    if (!answer) {
+      const lines = ["죄송합니다. 이번 질문은 정리된 답변을 만들지 못했습니다.",
+        "다만 조회는 실제로 했고, 결과는 아래와 같습니다."];
+      if (!trace.length) lines.push("· (조회를 한 번도 하지 않았습니다)");
+      trace.slice(0, 10).forEach(function (t) {
+        var cond = (t.filters || []).map(function (f) { return f.field + " " + f.op + " " + JSON.stringify(f.value); }).join(", ");
+        lines.push("· " + t.table + (cond ? " [" + cond + "]" : "") + " → " +
+          (t.error ? "오류: " + t.error : t.건수 + "건"));
+        if (t.비슷한_이름 && t.비슷한_이름.length) lines.push("   비슷한 이름: " + t.비슷한_이름.join(" / "));
+        if (t.기간조건_빼면) lines.push("   기간 조건을 빼면 " + t.기간조건_빼면 + "건 있습니다");
+      });
+      var hinted = trace.filter(function (t) { return t.비슷한_이름 && t.비슷한_이름.length; });
+      if (hinted.length) {
+        lines.push("", "👉 위 '비슷한 이름' 중 맞는 이름으로 다시 물어봐 주세요.");
+      } else {
+        lines.push("", "👉 업체명을 정확히 적거나 기간을 넓혀 다시 물어봐 주세요.");
+      }
+      answer = lines.join("\n");
+      console.warn("[ai-search] 글 없는 응답", JSON.stringify({ stops: stops, tool_calls: toolCalls, trace: trace }));
+    }
 
     // 캐시가 실제로 먹었는지 확인용. read 가 0 인 채로 계속 write 만 나오면
     // 접두사가 매번 달라지고 있다는 뜻이다(스냅샷 키 순서·지시문 변경 등).
-    console.log("[ai-search] usage", JSON.stringify(Object.assign({ tool_calls: toolCalls }, usageTotal)));
+    // stops(회차별 stop_reason)를 같이 남긴다 — "빈 응답" 류가 다시 나면 여기서 바로 보인다.
+    console.log("[ai-search] usage", JSON.stringify(Object.assign({ tool_calls: toolCalls, stops: stops }, usageTotal)));
 
     res.status(200).json({
       answer: answer,
-      usage: Object.assign({ tool_calls: toolCalls }, usageTotal),
+      usage: Object.assign({ tool_calls: toolCalls, stops: stops }, usageTotal),
     });
   } catch (err) {
     res.status(500).json({ error: "서버 오류: " + (err && err.message ? err.message : String(err)) });
