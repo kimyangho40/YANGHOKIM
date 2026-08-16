@@ -5778,6 +5778,26 @@ var _chatBadgeSubSeq = 0;    // 지금까지 만들어진 구독 일련번호
 var _chatBadgeSubActive = 0; // 현재 살아있는 구독 수
 var _wnAlertSubSeq = 0;      // 업무요청·팀노트 알림 구독 일련번호(고유 토픽용 — 멀티마운트 중복 방지)
 
+// ── 📋 팀 업무 "항목 추가" 알림 — 본인이 추가한 건 본인에게 안 울리게 하는 표시 ──────────
+// ⚠️ team_notes 에는 **"누가 수정했는지"가 없다.** `posted_by` 는 카드를 처음 만든 사람이고,
+//    수정(=항목 추가)은 누구나 할 수 있다(App.js 팀노트 수정 버튼). 그래서 채팅(`sender`)이나
+//    업무요청(`request_from`)처럼 **DB 값만으로 본인을 제외할 수가 없다.**
+// → 저장하는 브라우저가 저장 직전에 그 노트 id 를 여기 찍어 두고, 되돌아온 실시간 UPDATE 를 건너뛴다.
+//    다른 사람에게는 정상적으로 울린다. (컴포넌트가 아니라 모듈 전역인 이유: 저장하는 곳은
+//    TeamNotesSection 이고 알림을 내는 곳은 App 이라 서로 다른 컴포넌트다.)
+var _teamNoteSelfEdit = {};        // noteId -> 저장 시각(ms)
+var TEAM_SELF_EDIT_MS = 10000;     // 저장 → 실시간 이벤트가 돌아오기까지의 여유
+function markTeamNoteSelfEdit(noteId) {
+  if (!noteId) return;
+  _teamNoteSelfEdit[noteId] = Date.now();
+}
+function isTeamNoteSelfEdit(noteId) {
+  var t = _teamNoteSelfEdit[noteId];
+  if (!t) return false;
+  if (Date.now() - t > TEAM_SELF_EDIT_MS) { delete _teamNoteSelfEdit[noteId]; return false; }
+  return true;
+}
+
 // ── 🔔 알림음 (Web Audio API "띵동" 2음 차임, 약 1.5초) ──────────────────────
 // 음원 파일 없이 브라우저에서 직접 합성 → 로딩/캐시 문제 없이 또렷하게 재생
 var _notifAudioCtx = null;
@@ -5988,6 +6008,9 @@ function CRMApp({ profile, session }) {
   //       전역으로 옮기면 업무노트 전체가 회귀 사정권에 들어간다(CLAUDE.md 1절). 신호만 넘기고 소비하면 지운다.
   const [pendingWnAction, setPendingWnAction] = useState(null);
   const extraSeenRef = useRef({});   // 요청/팀노트 알림음 이미 처리한 이벤트 키 (초기로드·재구독 오탐 방지)
+  // 팀노트 id -> 체크리스트 항목 수. "항목이 추가됐는지"를 판정하는 **유일한 근거**다.
+  // (Realtime UPDATE 는 새 값만 주고 이전 값을 주지 않으므로 직전 개수를 우리가 들고 있어야 한다)
+  const teamItemCountRef = useRef({});
   const goToWorkNotesRef = useRef(function() {});
   const goToWorkRequestRef = useRef(function() {});   // 업무요청 알림 클릭 → 요청현황 모달까지 열기
   const [chatPendingChannel, setChatPendingChannel] = useState(null); // 알림 클릭 시 이동할 채널
@@ -6805,6 +6828,72 @@ function CRMApp({ profile, session }) {
     });
   }, [playChatSound, showGenericBrowserNotif]);
 
+  // 📋 팀 업무 카드에 **항목이 추가**됐을 때 (UPDATE) — 2026-08-16 신설
+  //
+  // 왜 INSERT 와 따로 두나: 실제 사용 방식이 "일자별 카드를 만들고 그 안에 업무를 추가"라
+  // 항목 추가는 새 행이 아니라 **기존 행의 UPDATE** 다(saveEditNote). 그런데 UPDATE 에는
+  // 확인(read_by)·가져가기·완료 같은 잡음이 훨씬 많아 통째로 알리면 과다알림이 된다
+  // (기존 주석 "UPDATE 는 대부분 잡음" 의 이유는 지금도 유효하다).
+  // → **체크리스트 항목 수가 늘어난 UPDATE 만** 알린다. 나머지는 항목 수가 그대로라 자동으로 걸러진다.
+  //
+  // ⚠️ read_by 는 검사하지 않는다 — 이미 확인한 카드라도 새 항목이 붙으면 알려야 한다.
+  //    (INSERT 알림과 다른 점이다. 거기선 "이미 확인함"이 곧 "이미 본 카드"였다.)
+  const handleTeamItemAdded = useCallback(function(row) {
+    var meName = meRef.current;
+    if (!row || !row.id) return;
+    var list = Array.isArray(row.checklist) ? row.checklist : [];
+    var prev = teamItemCountRef.current[row.id];
+    // 어디로 빠져나가든 다음 비교가 맞도록 **가장 먼저** 갱신한다.
+    teamItemCountRef.current[row.id] = list.length;
+
+    if (!meName || row.deleted_at) return;
+    if (prev === undefined) return;            // 구독 시작 전부터 있던 카드의 첫 이벤트 — 비교 기준이 없다
+    if (list.length <= prev) return;           // 항목이 안 늘었다 = 확인·가져가기·완료·내용수정 → 조용히
+    if (isTeamNoteSelfEdit(row.id)) return;    // 내가 방금 추가한 것 (위 모듈 주석 참고)
+    if (teamRoster(row.team).indexOf(meName) < 0) return; // 내 팀 아님 (INSERT 알림과 같은 기준)
+
+    // 같은 개수의 이벤트가 두 번 흘러와도 한 번만 처리 (재구독·중복 전송 방어)
+    var key = "tni_" + row.id + "_" + list.length;
+    if (extraSeenRef.current[key]) return;
+    extraSeenRef.current[key] = true;
+
+    // 채팅과 같은 규칙: 그 화면을 실제로 보고 있으면 생략한다.
+    // (팀 업무는 업무노트 화면 안에 있다 — TeamNotesSection 이 WorkNotesView 안에서 렌더된다)
+    if (viewRef.current === "worknotes" && document.visibilityState === "visible" && document.hasFocus()) return;
+
+    var added = list.slice(prev);              // 새로 붙은 항목들
+    var firstText = "";
+    for (var i = 0; i < added.length; i++) {
+      if (added[i] && added[i].text) { firstText = String(added[i].text); break; }
+    }
+    var label = row.team === "corporate" ? "[법인팀]" : row.team === "all" ? "[전체]" : "[개인팀]";
+    var headline = "➕ 팀 업무 항목 " + label;
+    var body = (firstText || "새 항목") + (added.length > 1 ? " 외 " + (added.length - 1) + "건" : "");
+
+    if (chatSoundRef.current) playChatSound({ id: key, sender: row.posted_by, reason: "팀 업무 항목 추가" });
+    showGenericBrowserNotif({
+      // ⚠️ tag 는 INSERT 알림과 같은 crm-team-<id> 다 — 같은 카드 알림이 쌓이지 않고 최신 것으로 교체된다.
+      tag: "crm-team-" + row.id,
+      title: headline + (row.title ? " · " + row.title : ""),
+      body: body,
+      onClick: function() { goToWorkNotesRef.current(); },
+    });
+
+    // 앱 내 토스트 — 채팅·팀업무·업무요청과 같은 큐(chatToasts). kind 로만 갈린다.
+    chatToastSeqRef.current += 1;
+    setChatToasts(function(prev2) {
+      return prev2.concat({
+        key: "t" + chatToastSeqRef.current,
+        kind: "team",
+        id: row.id,
+        sender: row.posted_by,
+        label: headline,
+        message: body,
+        shownAt: document.visibilityState === "visible" ? Date.now() : 0,
+      }).slice(-3);
+    });
+  }, [playChatSound, showGenericBrowserNotif]);
+
   // 요청·팀노트 Realtime 구독 (채팅 chat-badge 구독과 동일 패턴 — INSERT/UPDATE 기반)
   useEffect(() => {
     if (!profile?.name) return;
@@ -6814,8 +6903,16 @@ function CRMApp({ profile, session }) {
     // 구독 시작 시점의 기존 id 를 seen 등록 → 재구독/초기 재전송 오탐 방지 (채팅과 동일 방어)
     supabase.from("work_requests").select("id").order("created_at", { ascending: false }).limit(1000)
       .then(function(r) { if (!cancelled && !r.error && r.data) r.data.forEach(function(x) { extraSeenRef.current["req_" + x.id] = true; }); });
-    supabase.from("team_notes").select("id").order("created_at", { ascending: false }).limit(1000)
-      .then(function(r) { if (!cancelled && !r.error && r.data) r.data.forEach(function(x) { extraSeenRef.current["tn_" + x.id] = true; }); });
+    // checklist 도 함께 받는다 — "항목이 추가됐는지"는 직전 개수와 비교해야만 알 수 있고,
+    // Realtime UPDATE 는 이전 값을 주지 않기 때문이다(team_notes 는 100행 미만이라 상한 문제 없음).
+    supabase.from("team_notes").select("id, checklist").order("created_at", { ascending: false }).limit(1000)
+      .then(function(r) {
+        if (cancelled || r.error || !r.data) return;
+        r.data.forEach(function(x) {
+          extraSeenRef.current["tn_" + x.id] = true;
+          teamItemCountRef.current[x.id] = Array.isArray(x.checklist) ? x.checklist.length : 0;
+        });
+      });
 
     fetchExtraAlerts(meName);
 
@@ -6828,11 +6925,19 @@ function CRMApp({ profile, session }) {
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "team_notes" }, function(payload) {
         fetchExtraAlerts(meName);
-        if (payload.eventType === "INSERT") handleIncomingTeamNote(payload.new);
+        if (payload.eventType === "INSERT") {
+          // 새 카드의 항목 수를 기준선으로 넣어 둔다 — 안 넣으면 이 카드에 항목이 추가돼도
+          // "비교 기준 없음"으로 첫 추가를 놓친다.
+          var nr = payload.new || {};
+          if (nr.id) teamItemCountRef.current[nr.id] = Array.isArray(nr.checklist) ? nr.checklist.length : 0;
+          handleIncomingTeamNote(payload.new);
+        } else if (payload.eventType === "UPDATE") {
+          handleTeamItemAdded(payload.new);   // 항목이 늘어난 경우만 알린다(그 외는 함수 안에서 조용히 끊음)
+        }
       })
       .subscribe();
     return function() { cancelled = true; supabase.removeChannel(ch); };
-  }, [profile?.name, fetchExtraAlerts, handleIncomingRequest, handleRequestReplyAlert, handleIncomingTeamNote]);
+  }, [profile?.name, fetchExtraAlerts, handleIncomingRequest, handleRequestReplyAlert, handleIncomingTeamNote, handleTeamItemAdded]);
 
   // 로그인 시 오늘 할 일 알림 - 최초 1회만
   const alertShownRef = useRef(false);
@@ -29313,6 +29418,13 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       checklist: cleanChecklist,
       updated_at: new Date().toISOString(),
     };
+    // 📋 내가 항목을 추가한 경우 **나에게는** 알림이 울리지 않게 표시해 둔다.
+    // team_notes 에는 "누가 수정했는지"가 없어 DB 값만으로는 본인 제외를 할 수 없다(모듈 상단 주석 참고).
+    // 항목이 늘어난 저장에만 찍는다 — 제목만 고친 저장까지 찍으면 그 10초 동안 남이 추가한 항목을 놓친다.
+    var prevNote = allTeamNotes.find(function(n) { return n.id === noteId; });
+    var prevLen = prevNote && Array.isArray(prevNote.checklist) ? prevNote.checklist.length : 0;
+    if (cleanChecklist.length > prevLen) markTeamNoteSelfEdit(noteId);
+
     var r = await supabase.from("team_notes").update(payload).eq("id", noteId);
     if (r.error) { alert("수정 실패: " + r.error.message); return; }
     setAllTeamNotes(function(prev) {
