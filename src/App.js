@@ -6699,11 +6699,29 @@ function CRMApp({ profile, session }) {
     if (!isNaN(createdMs) && createdMs < notifSinceRef.current - 30000) return;
     if (chatSoundRef.current) playChatSound({ id: key, sender: row.posted_by, reason: "팀 업무" });
     var label = row.team === "corporate" ? "[법인팀]" : row.team === "all" ? "[전체]" : "[개인팀]";
+    var headline = (row.is_announcement ? "📌 공지 " : "📋 팀 업무 ") + label;
     showGenericBrowserNotif({
       tag: "crm-team-" + row.id,
-      title: (row.is_announcement ? "📌 공지 " : "📋 팀 업무 ") + label,
+      title: headline,
       body: row.title || row.content || "새 팀 업무",
       onClick: function() { goToWorkNotesRef.current(); },
+    });
+
+    // 앱 내 토스트 — 채팅과 동일하게 **브라우저 알림 권한과 무관하게 항상** 뜬다.
+    // 채팅 토스트와 같은 큐(chatToasts)를 쓴다. 큐를 따로 두면 화면 오른쪽 아래에서
+    // 두 뭉치가 겹쳐 쌓이고, 수명 관리 useEffect 도 두 벌이 된다(moveCards 와 같은 이유로 한 벌만 둔다).
+    // 지우는 건 여기서 setTimeout 하지 않고 기존 수명 관리 useEffect 가 맡는다(숨은 탭 타이머 지연 대응).
+    chatToastSeqRef.current += 1;
+    setChatToasts(function(prev) {
+      return prev.concat({
+        key: "t" + chatToastSeqRef.current,
+        kind: "team",                 // 없으면 채팅으로 간주 → 기존 채팅 토스트는 그대로 동작
+        id: row.id,
+        sender: row.posted_by,
+        label: headline,              // 채팅의 chatChannelLabel() 자리에 들어갈 문구
+        message: row.title || row.content || "새 팀 업무",
+        shownAt: document.visibilityState === "visible" ? Date.now() : 0,
+      }).slice(-3);
     });
   }, [playChatSound, showGenericBrowserNotif]);
 
@@ -7437,13 +7455,16 @@ function CRMApp({ profile, session }) {
               <div key={t.key}
                 onClick={function() {
                   setChatToasts(function(prev) { return prev.filter(function(x) { return x.key !== t.key; }); });
-                  goToChat(t.channel);
+                  // kind 가 없으면 채팅(기존 동작). 팀 업무는 업무노트 화면의 팀 업무 공간으로 이동한다
+                  // — 이미 배포돼 있는 팀 업무 브라우저 알림의 onClick 과 같은 곳으로 보낸다.
+                  if (t.kind === "team") goToWorkNotes();
+                  else goToChat(t.channel);
                 }}
                 style={{ background: "#1A1917", color: "#fff", borderRadius: 10, padding: "11px 13px", boxShadow: "0 6px 22px rgba(0,0,0,0.25)", cursor: "pointer", animation: "chattoastin 0.18s ease" }}>
                 <style>{`@keyframes chattoastin{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}`}</style>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                   <span style={{ fontSize: 12, fontWeight: 800 }}>{t.sender}</span>
-                  <span style={{ fontSize: 10, opacity: 0.7 }}>{chatChannelLabel(t.channel, profile?.name)}</span>
+                  <span style={{ fontSize: 10, opacity: 0.7 }}>{t.kind === "team" ? t.label : chatChannelLabel(t.channel, profile?.name)}</span>
                   <span onClick={function(e) { e.stopPropagation(); setChatToasts(function(prev) { return prev.filter(function(x) { return x.key !== t.key; }); }); }}
                     style={{ marginLeft: "auto", fontSize: 13, opacity: 0.6, cursor: "pointer", lineHeight: 1 }}>✕</span>
                 </div>
