@@ -5977,6 +5977,7 @@ function CRMApp({ profile, session }) {
   const [chatUnread, setChatUnread] = useState(0);
   const [chatUnreadList, setChatUnreadList] = useState([]); // 안 읽은 채팅 메시지 목록(알림함)
   const [showChatNotif, setShowChatNotif] = useState(false); // 채팅 알림함 드롭다운 열림
+  const [notifDiag, setNotifDiag] = useState(null);          // 알림 진단 결과 (알림함 안에 표시)
   // 🔔 알림 확장: 업무 요청·팀 업무노트도 채팅과 같은 알림함/탭배지에 합류
   const [reqAlertList, setReqAlertList] = useState([]);        // 나에게 온 미확인(pending) 업무 요청
   const [teamAlertList, setTeamAlertList] = useState([]);      // 내 팀 미확인(read_by에 내가 없는) 공지
@@ -5988,6 +5989,7 @@ function CRMApp({ profile, session }) {
   const [pendingWnAction, setPendingWnAction] = useState(null);
   const extraSeenRef = useRef({});   // 요청/팀노트 알림음 이미 처리한 이벤트 키 (초기로드·재구독 오탐 방지)
   const goToWorkNotesRef = useRef(function() {});
+  const goToWorkRequestRef = useRef(function() {});   // 업무요청 알림 클릭 → 요청현황 모달까지 열기
   const [chatPendingChannel, setChatPendingChannel] = useState(null); // 알림 클릭 시 이동할 채널
   const [chatSoundOn, setChatSoundOn] = useState(function() {
     try { return localStorage.getItem("crm_chat_sound") !== "off"; } catch (e) { return true; }
@@ -6602,12 +6604,74 @@ function CRMApp({ profile, session }) {
     } catch (e) {}
   }, []);
 
+  // ── 🔎 알림 진단 (2026-08-16) ────────────────────────────────────────────────
+  // 왜 필요한가: "알림이 안 뜬다"의 원인이 **웹에서 읽을 수 없는 곳**에 있을 수 있다.
+  //   · 브라우저 권한(permission) — JS 로 읽힘
+  //   · 윈도우 알림 전체 끄기 / 집중 지원 — **JS 로 절대 읽을 수 없다**
+  // 실제로 2026-08-16 에 그 경우였다: 권한은 granted 이고 new Notification() 도 성공하는데
+  // 윈도우가 ToastEnabled=0 이라 화면에 안 뜨는 상태였다. 코드만 보면 "정상"이라 못 찾는다.
+  // → 그래서 **화면 토스트와 브라우저 팝업을 동시에** 띄우고, 둘을 비교하게 만든다:
+  //     토스트는 보이는데 팝업이 안 보이면 = 윈도우/브라우저 설정 문제(코드 아님).
+  //     둘 다 안 보이면 = 앱 문제.
+  const runNotifDiagnostic = useCallback(function() {
+    var supported = typeof Notification !== "undefined";
+    var perm = supported ? Notification.permission : "unsupported";
+    var info = {
+      권한: perm,
+      브라우저알림지원: supported,
+      알림음설정: chatSoundRef.current ? "켜짐" : "꺼짐",
+      화면상태: document.visibilityState,
+      포커스: document.hasFocus(),
+      브라우저: navigator.userAgent,
+      시각: new Date().toLocaleString("ko-KR"),
+    };
+    console.log("%c[알림진단] 🔎 수동 진단", "background:#4338CA;color:#fff;padding:2px 6px;border-radius:4px;font-weight:700");
+    console.table ? console.table(info) : console.log(info);
+
+    // ① 화면 토스트 — 권한과 무관하게 항상 뜬다(앱이 그리는 것이므로).
+    chatToastSeqRef.current += 1;
+    setChatToasts(function(prev) {
+      return prev.concat({
+        key: "t" + chatToastSeqRef.current,
+        kind: "diag",
+        id: "diag" + Date.now(),
+        sender: "알림 진단",
+        label: "🔎 테스트",
+        message: "이 토스트가 보이면 앱 알림은 정상입니다. 윈도우 팝업도 같이 떴는지 확인해주세요.",
+        shownAt: document.visibilityState === "visible" ? Date.now() : 0,
+      }).slice(-3);
+    });
+
+    // ② 소리
+    if (chatSoundRef.current) playChatSound({ id: "diag", sender: "진단", reason: "알림 진단" });
+
+    // ③ 브라우저 팝업 — 권한이 있을 때만 시도한다.
+    if (perm === "granted") {
+      showGenericBrowserNotif({
+        tag: "crm-diag",
+        title: "🔔 알림 테스트",
+        body: "이 팝업이 보이면 브라우저·윈도우 알림이 모두 정상입니다.",
+      });
+    }
+    setNotifDiag({ perm: perm, supported: supported, at: Date.now() });
+  }, [playChatSound, showGenericBrowserNotif]);
+
   // 알림함/알림 클릭 → 업무노트 화면으로 이동
   const goToWorkNotes = useCallback(function() {
     setView("worknotes");
     setShowChatNotif(false);
   }, []);
   goToWorkNotesRef.current = goToWorkNotes;
+
+  // 업무요청 알림(토스트·팝업·알림함) 클릭 → 업무노트로 이동하면서 "요청 현황" 모달까지 연다.
+  // 사이드바 📋 버튼과 **같은 경로**다(pendingWnAction 신호 → WorkNotesView 가 소비 후 지움).
+  // 업무노트 화면만 열어두면 요청이 어디 있는지 사용자가 다시 찾아야 해서 여기까지 데려간다.
+  const goToWorkRequest = useCallback(function() {
+    setPendingWnAction("reqstatus");
+    setView("worknotes");
+    setShowChatNotif(false);
+  }, []);
+  goToWorkRequestRef.current = goToWorkRequest;
 
   // 미확인 업무요청 / 미확인 팀 공지 / 내가 보낸 요청의 새 답장 로드 (배지·알림함 공용)
   const fetchExtraAlerts = useCallback(async (name) => {
@@ -6655,11 +6719,27 @@ function CRMApp({ profile, session }) {
     var createdMs = parseTsMs(row.created_at);
     if (!isNaN(createdMs) && createdMs < notifSinceRef.current - 30000) return; // 초기로드·재구독 과거 이벤트 무시
     if (chatSoundRef.current) playChatSound({ id: key, sender: row.request_from, reason: "업무 요청" });
+    var headline = (row.urgent ? "🚨 긴급 " : "📩 ") + "업무 요청";
     showGenericBrowserNotif({
       tag: "crm-req-" + row.id,
-      title: (row.urgent ? "🚨 긴급 " : "📩 ") + "업무 요청 · " + row.request_from,
+      title: headline + " · " + row.request_from,
       body: row.content || "",
-      onClick: function() { goToWorkNotesRef.current(); },
+      // 예전엔 업무노트 화면만 열었다 → 받은 요청을 다시 찾아야 했다. 이제 요청현황까지 연다.
+      onClick: function() { goToWorkRequestRef.current(); },
+    });
+
+    // 앱 내 토스트 — 채팅·팀 업무와 같은 큐(chatToasts)를 쓴다. kind 로만 갈린다.
+    chatToastSeqRef.current += 1;
+    setChatToasts(function(prev) {
+      return prev.concat({
+        key: "t" + chatToastSeqRef.current,
+        kind: "req",
+        id: row.id,
+        sender: row.request_from,
+        label: headline,
+        message: row.content || "새 업무 요청",
+        shownAt: document.visibilityState === "visible" ? Date.now() : 0,
+      }).slice(-3);
     });
   }, [playChatSound, showGenericBrowserNotif]);
 
@@ -7455,16 +7535,17 @@ function CRMApp({ profile, session }) {
               <div key={t.key}
                 onClick={function() {
                   setChatToasts(function(prev) { return prev.filter(function(x) { return x.key !== t.key; }); });
-                  // kind 가 없으면 채팅(기존 동작). 팀 업무는 업무노트 화면의 팀 업무 공간으로 이동한다
-                  // — 이미 배포돼 있는 팀 업무 브라우저 알림의 onClick 과 같은 곳으로 보낸다.
+                  // kind 가 없으면 채팅(기존 동작). 각 kind 는 그 종류의 브라우저 알림 onClick 과
+                  // **같은 곳**으로 보낸다 — 토스트와 팝업이 서로 다른 데로 가면 안 되기 때문이다.
                   if (t.kind === "team") goToWorkNotes();
+                  else if (t.kind === "req") goToWorkRequest();
                   else goToChat(t.channel);
                 }}
                 style={{ background: "#1A1917", color: "#fff", borderRadius: 10, padding: "11px 13px", boxShadow: "0 6px 22px rgba(0,0,0,0.25)", cursor: "pointer", animation: "chattoastin 0.18s ease" }}>
                 <style>{`@keyframes chattoastin{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}`}</style>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                   <span style={{ fontSize: 12, fontWeight: 800 }}>{t.sender}</span>
-                  <span style={{ fontSize: 10, opacity: 0.7 }}>{t.kind === "team" ? t.label : chatChannelLabel(t.channel, profile?.name)}</span>
+                  <span style={{ fontSize: 10, opacity: 0.7 }}>{t.label || chatChannelLabel(t.channel, profile?.name)}</span>
                   <span onClick={function(e) { e.stopPropagation(); setChatToasts(function(prev) { return prev.filter(function(x) { return x.key !== t.key; }); }); }}
                     style={{ marginLeft: "auto", fontSize: 13, opacity: 0.6, cursor: "pointer", lineHeight: 1 }}>✕</span>
                 </div>
@@ -8046,15 +8127,47 @@ function CRMApp({ profile, session }) {
                   style={{ fontSize: 11, color: chatSoundOn ? "#4338CA" : "#888", background: chatSoundOn ? "#EEF2FF" : "#F3F3F1", border: "1px solid " + (chatSoundOn ? "#C7D2FE" : "#E8E5E0"), borderRadius: 6, padding: "4px 8px", cursor: "pointer", whiteSpace: "nowrap" }}>
                   {chatSoundOn ? "🔊 알림음 켜짐" : "🔇 알림음 꺼짐"}
                 </button>
+                <button onClick={runNotifDiagnostic} title="알림이 안 뜰 때 눌러보세요 — 원인이 앱인지 윈도우 설정인지 가려줍니다"
+                  style={{ fontSize: 11, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 6, padding: "4px 8px", cursor: "pointer", whiteSpace: "nowrap" }}>
+                  🔎 알림 진단
+                </button>
                 <button onClick={function() { setShowChatNotif(false); }} style={{ background: "none", border: "none", fontSize: 18, color: "#888", cursor: "pointer", lineHeight: 1 }}>✕</button>
               </div>
             </div>
+            {/* 🔎 알림 진단 결과 — 웹이 읽을 수 있는 것(권한)과 읽을 수 없는 것(윈도우 설정)을 나눠서 보여준다 */}
+            {notifDiag && (
+              <div style={{ margin: "12px 16px 0", padding: "12px 14px", background: "#F8FAFF", border: "1px solid #C7D2FE", borderRadius: 10, fontSize: 12, lineHeight: 1.6, color: "#312E81" }}>
+                <div style={{ fontWeight: 800, marginBottom: 6 }}>🔎 알림 진단 결과</div>
+                <div>브라우저 알림 권한: <b>{notifDiag.supported ? notifDiag.perm : "이 브라우저는 알림 미지원"}</b>
+                  {notifDiag.perm === "granted" && " ✅"}
+                  {notifDiag.perm === "denied" && " ❌ 차단됨"}
+                  {notifDiag.perm === "default" && " ⚠️ 아직 허용 안 함"}
+                </div>
+                <div style={{ marginTop: 6 }}>
+                  {notifDiag.perm === "granted" ? (
+                    <>방금 <b>화면 토스트</b>와 <b>윈도우 팝업</b>을 함께 보냈습니다.
+                      <div style={{ marginTop: 4 }}>· 둘 다 보였다 → <b>정상</b>입니다.</div>
+                      <div>· 토스트만 보이고 <b>윈도우 팝업이 안 보였다</b> → 앱이 아니라 <b>윈도우 알림이 꺼져</b> 있습니다.
+                        <br />　<b>설정 → 시스템 → 알림</b> 에서 맨 위 <b>알림</b> 토글을 켜고, 목록에서 쓰시는 브라우저도 켜주세요.
+                        <br />　집중 지원(방해 금지)이 켜져 있어도 가려집니다.</div>
+                    </>
+                  ) : notifDiag.perm === "denied" ? (
+                    <>이 브라우저에서 <b>차단</b>돼 있습니다. 주소창 왼쪽 <b>자물쇠(또는 ⓘ)</b> → <b>알림</b> → <b>허용</b> 으로 바꾼 뒤 새로고침해주세요.</>
+                  ) : (
+                    <>아직 허용하지 않았습니다. 위쪽 배너의 <b>알림 켜기</b> 버튼을 눌러 <b>허용</b>을 선택해주세요.</>
+                  )}
+                </div>
+                <div style={{ marginTop: 6, fontSize: 11, opacity: 0.75 }}>자세한 값은 F12 → Console 의 <b>[알림진단]</b> 표에도 찍혀 있습니다.</div>
+                <button onClick={function() { setNotifDiag(null); }}
+                  style={{ marginTop: 8, fontSize: 11, background: "#fff", border: "1px solid #C7D2FE", borderRadius: 6, padding: "3px 8px", cursor: "pointer", color: "#4338CA" }}>닫기</button>
+              </div>
+            )}
             <div style={{ padding: "12px 16px" }}>
               {/* 📩 나에게 온 미확인 업무 요청 */}
               {reqAlertList.map(function(r) {
                 return (
                   <div key={"req-" + r.id} style={{ background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 10, padding: "12px 14px", marginBottom: 10, cursor: "pointer" }}
-                    onClick={function() { goToWorkNotes(); }}>
+                    onClick={function() { goToWorkRequest(); }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, gap: 8 }}>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#9A3412", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{(r.urgent ? "🚨 " : "📩 ") + r.request_from}</div>
                       <div style={{ fontSize: 10, fontWeight: 600, color: "#B45309", background: "#FFEDD5", borderRadius: 99, padding: "2px 8px", whiteSpace: "nowrap", flexShrink: 0 }}>업무 요청</div>
