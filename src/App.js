@@ -18828,6 +18828,9 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
 
   // 🔴 밀린 미완료 구역 접기(기본 펼침) / 완료돼서 접힌 지난 날짜 카드를 개별로 펼친 목록
   const [overdueOpen, setOverdueOpen] = useState(true);
+  // 🙋 밀린 미완료 "내 담당만" — 기본 켜짐. 관리자(양호)는 전원 노트가 보여서 켜 두지 않으면
+  //    남의 밀린 건까지 수백 건이 쌓인다(실측 208건). 끄면 예전처럼 전체를 본다.
+  const [overdueMineOnly, setOverdueMineOnly] = useState(true);
   const [expandedNotes, setExpandedNotes] = useState({}); // { noteId: true }
   // 📆 지난 날짜 월별 그룹 펼침 상태 { "2026-08": true }. 기본은 가장 최근 달 하나만 펼친다.
   const [openMonths, setOpenMonths] = useState({});
@@ -19137,6 +19140,12 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
       return String(a.text || "").localeCompare(String(b.text || ""));
     });
   }, [unfinishedItems, todayStr]);
+
+  // 🙋 화면에 실제로 그릴 목록 — "내 담당만" 토글 적용분.
+  //    비교는 canCarryFromCard 와 같은 방식(정확히 일치)으로 맞춘다. work_notes.assignee 는
+  //    companies.assignee 와 달리 이름 한 개라 쪼갤 필요가 없다.
+  var overdueMine = overdueItems.filter(function(it) { return (it.assignee || "") === (profile?.name || ""); });
+  var overdueView = overdueMineOnly ? overdueMine : overdueItems;
 
   // 캘린더 현재 월 정보
   var calMonthInfo = useMemo(function() {
@@ -20771,16 +20780,40 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
       {overdueItems.length > 0 && (
         <div style={{ background: "#FFF7F7", border: "1px solid #FECACA", borderRadius: 10, marginBottom: 16, overflow: "hidden" }}>
           <div onClick={function() { setOverdueOpen(function(p) { return !p; }); }}
-            style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 14px", cursor: "pointer", background: "#FEF2F2", borderBottom: overdueOpen ? "1px solid #FECACA" : "none" }}>
+            style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 14px", cursor: "pointer", background: "#FEF2F2", borderBottom: overdueOpen ? "1px solid #FECACA" : "none", flexWrap: "wrap" }}>
             <span style={{ fontSize: 14 }}>🔴</span>
             <div style={{ fontSize: 13, fontWeight: 800, color: "#B91C1C" }}>밀린 미완료</div>
-            <span style={{ fontSize: 11, fontWeight: 700, color: "#B91C1C", background: "#fff", border: "1px solid #FECACA", borderRadius: 99, padding: "2px 9px" }}>{overdueItems.length}건</span>
-            <span style={{ fontSize: 11, color: "#B45309" }}>가장 오래 밀린 건 {overdueItems[0].late}일째</span>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "#B91C1C", background: "#fff", border: "1px solid #FECACA", borderRadius: 99, padding: "2px 9px" }}>{overdueView.length}건</span>
+            {overdueView.length > 0 && <span style={{ fontSize: 11, color: "#B45309" }}>가장 오래 밀린 건 {overdueView[0].late}일째</span>}
+            {/* 🙋 내 담당만 — 헤더 접기와 겹치지 않게 stopPropagation */}
+            <button onClick={function(e) { e.stopPropagation(); setOverdueMineOnly(function(p) { return !p; }); }}
+              title={overdueMineOnly ? "지금은 내 담당 건만 보고 있습니다. 누르면 전체(열람 가능한 담당자 전원)를 봅니다."
+                : "지금은 전체를 보고 있습니다. 누르면 내 담당 건만 봅니다."}
+              style={{ fontSize: 10.5, fontWeight: 700, padding: "3px 10px", borderRadius: 99, cursor: "pointer",
+                background: overdueMineOnly ? "#4338CA" : "#fff", color: overdueMineOnly ? "#fff" : "#6B7280",
+                border: "1px solid " + (overdueMineOnly ? "#4338CA" : "#D1D5DB") }}>
+              🙋 내 담당만{overdueMineOnly ? " ✓" : ""}
+            </button>
+            {overdueMineOnly && overdueItems.length > overdueMine.length && (
+              <span style={{ fontSize: 10.5, color: "#888" }}>전체 {overdueItems.length}건 중</span>
+            )}
             <span style={{ marginLeft: "auto", fontSize: 11, color: "#888" }}>{overdueOpen ? "접기 ▲" : "펼치기 ▼"}</span>
           </div>
           {overdueOpen && (
             <div style={{ padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6, maxHeight: 340, overflowY: "auto" }}>
-              {overdueItems.map(function(it) {
+              {/* 내 담당만 켠 상태에서 내 건이 0이면 — 구역을 통째로 숨기지 않는다.
+                  숨기면 토글을 다시 끌 수가 없어 전체를 볼 방법이 사라진다. */}
+              {overdueView.length === 0 && (
+                <div style={{ textAlign: "center", color: "#6B7280", fontSize: 12, padding: "16px 0", lineHeight: 1.7 }}>
+                  🎉 내 담당 밀린 건은 없어요.
+                  <br />
+                  <button onClick={function() { setOverdueMineOnly(false); }}
+                    style={{ marginTop: 6, fontSize: 11, fontWeight: 700, color: "#4338CA", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 6, padding: "4px 11px", cursor: "pointer" }}>
+                    전체 {overdueItems.length}건 보기
+                  </button>
+                </div>
+              )}
+              {overdueView.map(function(it) {
                 var bs = lateBadgeStyle(it.late);
                 var srcNote = notes.find(function(n) { return n.id === it.noteId; });
                 var canCarry = srcNote && canCarryFromCard(srcNote);
