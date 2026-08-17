@@ -17561,6 +17561,34 @@ function addDaysStr(dateStr, n) {
   d.setDate(d.getDate() + n);
   return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
 }
+// 개월 단위 이동 — 이월 빠른버튼 "1개월 뒤" 전용.
+// ⚠️ setMonth() 를 그대로 쓰면 1/31 +1개월이 3/3 으로 튄다(2월에 31일이 없어 넘침).
+//    말일로 잘라 준다: 1/31 → 2/28(윤년이면 2/29).
+function addMonthsStr(dateStr, n) {
+  var base = dateStr || kstDate();
+  var y = parseInt(base.slice(0, 4), 10), m = parseInt(base.slice(5, 7), 10) - 1, day = parseInt(base.slice(8, 10), 10);
+  if (isNaN(y) || isNaN(m) || isNaN(day)) return kstDate();
+  var lastOfTarget = new Date(y, m + n + 1, 0).getDate();
+  var d = new Date(y, m + n, Math.min(day, lastOfTarget));
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+// ── 🔴 "며칠 밀렸나" 판정 (업무노트 밀린 미완료 구역 · 팀/개인 공용) ──────────────
+// ⚠️ daysSince() 를 쓰면 안 된다. 그건 timestamptz 의 밀리초 차이를 보는 함수라
+//    KST 날짜 문자열을 넣으면 오전에 하루가 밀린다(서류 방치 판정 docWaitDays 와 똑같은 함정).
+//    여기서는 양쪽 다 자정 기준 날짜로 맞춰 뺀다.
+function daysLate(basisDate, todayDate) {
+  if (!basisDate) return 0;
+  var a = new Date(basisDate + "T00:00:00");
+  var b = new Date((todayDate || kstDate()) + "T00:00:00");
+  if (isNaN(a.getTime()) || isNaN(b.getTime())) return 0;
+  return Math.floor((b.getTime() - a.getTime()) / 86400000);
+}
+// 밀림 배지 색 — 7일↑ 빨강 / 3일↑ 주황 / 그 외 회색 (서류 방치 D+3/D+7 과 같은 감각으로 맞췄다)
+function lateBadgeStyle(n) {
+  if (n >= 7) return { bg: "#FEE2E2", color: "#B91C1C", border: "#FCA5A5" };
+  if (n >= 3) return { bg: "#FEF3C7", color: "#B45309", border: "#FDE68A" };
+  return { bg: "#F3F4F6", color: "#6B7280", border: "#E5E7EB" };
+}
 // content 마크다운에서 미완료(- [ ]) 항목 파싱 → {lineIdx, text, dueDate, waitReason, waitSince}
 // text는 마감일 대괄호·대기사유 메타·기존 "→ 이월" 꼬리표를 제거한 순수 항목 텍스트
 function parseUnfinishedItems(content) {
@@ -18790,6 +18818,9 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
   const [calToast, setCalToast] = useState("");
   var openCalAdd = function(title, date) { setCalAdd({ title: title || "", date: date || todayStr }); };
 
+  // 🔴 밀린 미완료 구역 접기(기본 펼침) / 완료돼서 접힌 지난 날짜 카드를 개별로 펼친 목록
+  const [overdueOpen, setOverdueOpen] = useState(true);
+  const [expandedNotes, setExpandedNotes] = useState({}); // { noteId: true }
   // 📅 카드 항목별 이월 — 날짜 선택 팝업 (부모가 1개만 소유)
   const [carryPick, setCarryPick] = useState(null);      // {noteId, lineIdx, text, fromDate} | null
   const [carryPickDate, setCarryPickDate] = useState(""); // 고른 날짜 YYYY-MM-DD
@@ -19050,6 +19081,11 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
             lineIdx: idx,
             text: cleanText,
             dueDate: dueDate,
+            // 🔴 밀린 미완료 구역 전용 부가 정보 — 기존 '미완료 업무' 사이드바는 이 필드를 쓰지 않으므로
+            //    개수·정렬·표시가 전혀 바뀌지 않는다(필드만 늘린 것).
+            // ⚠️ CARRIED_TAIL_RE 는 줄 끝 고정(\s*$)이라 뒤에 {대기사유:...} 가 붙은 줄에서 놓친다.
+            //    이월 후보 계산(carryCandidates)과 같은 비고정 패턴을 쓴다.
+            carried: /→\s*\d{1,2}\/\d{1,2}\s*이월/.test(text),
           });
         }
       });
@@ -19063,6 +19099,28 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
     });
     return items;
   }, [filtered]);
+
+  // ── 🔴 밀린 미완료 (화면 맨 위 고정 구역) ────────────────────────────────────
+  // 기준일 = 항목 마감일 [YYYY-MM-DD] > 없으면 노트 날짜(note_date). 그게 오늘보다 이전이면 "밀림".
+  //  · 기간 제한 없음 — 끝내지 않는 한 계속 뜬다(요청 사항).
+  //  · 이미 다른 날짜로 이월한 원본 줄은 뺀다. 이월은 원본을 지우지 않고 "(→ M/D 이월)" 표시만 남기고
+  //    대상 노트에 복사본을 만들기 때문에, 안 빼면 같은 일이 두 번 세어진다(carryCandidates 와 같은 규칙).
+  //  · 파싱 자체는 위 unfinishedItems 를 그대로 재사용한다. parseUnfinishedItems 는 SQL
+  //    wn_team_unfinished() 와 한 쌍이라 건드리지 않는다(CLAUDE.md).
+  var overdueItems = useMemo(function() {
+    var out = [];
+    unfinishedItems.forEach(function(it) {
+      if (it.carried) return;
+      var basis = it.dueDate || it.noteDate;
+      if (!basis || basis >= todayStr) return;
+      out.push(Object.assign({}, it, { basis: basis, late: daysLate(basis, todayStr) }));
+    });
+    // 오래 밀린 것이 위로
+    return out.sort(function(a, b) {
+      if (b.late !== a.late) return b.late - a.late;
+      return String(a.text || "").localeCompare(String(b.text || ""));
+    });
+  }, [unfinishedItems, todayStr]);
 
   // 캘린더 현재 월 정보
   var calMonthInfo = useMemo(function() {
@@ -19421,6 +19479,46 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
   // (오늘·미래 노트의 항목도 다른 날짜로 옮길 수 있어야 함).
   var canCarryFromCard = function(n) {
     return (n.assignee || "") === (profile?.name || "");
+  };
+
+  // ── 📁 완료된 지난 날짜 카드 접기 ───────────────────────────────────────────
+  // 접는 조건: 노트 날짜가 오늘보다 이전 && 미완료(- [ ]) 항목이 0개.
+  //  · 오늘·미래 카드는 절대 접지 않는다. 미완료가 하나라도 남으면 지난 날짜여도 접지 않는다
+  //    (접어 버리면 "밀린 미완료"에 뜬 일을 정작 카드에서 못 찾는다).
+  //  · 접힘은 화면 상태일 뿐이라 DB 컬럼을 늘리지 않는다.
+  // ⚠️ parseUnfinishedItems 는 SQL wn_team_unfinished() 와 한 쌍이라 읽기만 하고 고치지 않는다.
+  var isCollapsibleNote = function(n) {
+    var d = getNoteDate(n);
+    if (!d || d >= todayStr) return false;
+    if (parseUnfinishedItems(n.content).length > 0) return false;   // 미완료가 남아 있으면 접지 않는다
+    // ⚠️ "미완료 0개"만으로 접으면 체크박스가 아예 없는 단순 메모까지 '완료'로 접힌다.
+    //    체크박스가 하나라도 있고 그게 전부 완료됐거나, 노트를 완료 처리(is_done)한 경우만 접는다.
+    return noteCheckCount(n) > 0 || n.is_done === true;
+  };
+  // 접힌 줄에 보여줄 "체크 n개" — 체크박스가 아예 없는 노트(단순 메모)면 0을 준다.
+  var noteCheckCount = function(n) {
+    var total = 0;
+    String(n.content || "").split("\n").forEach(function(l) { if (/^\s*- \[[ xX]\]/.test(l)) total++; });
+    return total;
+  };
+  // 접힌 카드 한 줄 — 누르면 그 카드만 펼친다.
+  var renderCollapsedNote = function(note) {
+    var d = getNoteDate(note);
+    var wd = d ? ["일","월","화","수","목","금","토"][new Date(d + "T00:00:00").getDay()] : "";
+    var cnt = noteCheckCount(note);
+    return (
+      <div key={note.id} onClick={function() { setExpandedNotes(function(p) { return Object.assign({}, p, { [note.id]: true }); }); }}
+        title="눌러서 펼치기"
+        style={{ display: "flex", alignItems: "center", gap: 10, background: "#FAFAF8", border: "1px solid #EDEBE6", borderRadius: 8, padding: "9px 13px", cursor: "pointer" }}>
+        <span style={{ fontSize: 12 }}>✅</span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: "#666", whiteSpace: "nowrap" }}>{d ? d.slice(5).replace("-", "/") + " (" + wd + ")" : "날짜 없음"}</span>
+        <span style={{ fontSize: 12, color: "#888", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{note.title || "(제목 없음)"}</span>
+        <span style={{ fontSize: 10.5, color: "#15803D", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 99, padding: "2px 8px", whiteSpace: "nowrap" }}>
+          {cnt > 0 ? cnt + "개 모두 완료" : "완료"}
+        </span>
+        <span style={{ fontSize: 10, color: "#AAA", whiteSpace: "nowrap" }}>펼치기 ▼</span>
+      </div>
+    );
   };
 
   // 📩 업무 요청: 받은/보낸 요청 로드 + 업무노트 열었으니 받은 요청 읽음 처리(기능5)
@@ -20089,8 +20187,9 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
       {carryPick && (function() {
         var quick = [
           { label: "내일", d: addDaysStr(todayStr, 1) },
-          { label: "모레", d: addDaysStr(todayStr, 2) },
-          { label: "다음주 월요일", d: addDaysStr(mondayOf(todayStr), 7) },
+          { label: "3일 뒤", d: addDaysStr(todayStr, 3) },
+          { label: "일주일 뒤", d: addDaysStr(todayStr, 7) },
+          { label: "1개월 뒤", d: addMonthsStr(todayStr, 1) },
         ];
         var sameDay = carryPickDate === carryPick.fromDate; // 원본과 같은 날짜로는 옮길 이유가 없다
         var closePick = function() { if (!carryPickBusy) setCarryPick(null); };
@@ -20594,6 +20693,57 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
         )}
       </div>
 
+      {/* ── 🔴 밀린 미완료 — 화면 맨 위 고정. 캘린더/목록 두 모드 모두에서 항상 보인다 ────────
+          0건이면 구역 자체를 그리지 않는다(다 끝낸 날 빈 상자가 남지 않게). */}
+      {overdueItems.length > 0 && (
+        <div style={{ background: "#FFF7F7", border: "1px solid #FECACA", borderRadius: 10, marginBottom: 16, overflow: "hidden" }}>
+          <div onClick={function() { setOverdueOpen(function(p) { return !p; }); }}
+            style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 14px", cursor: "pointer", background: "#FEF2F2", borderBottom: overdueOpen ? "1px solid #FECACA" : "none" }}>
+            <span style={{ fontSize: 14 }}>🔴</span>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#B91C1C" }}>밀린 미완료</div>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "#B91C1C", background: "#fff", border: "1px solid #FECACA", borderRadius: 99, padding: "2px 9px" }}>{overdueItems.length}건</span>
+            <span style={{ fontSize: 11, color: "#B45309" }}>가장 오래 밀린 건 {overdueItems[0].late}일째</span>
+            <span style={{ marginLeft: "auto", fontSize: 11, color: "#888" }}>{overdueOpen ? "접기 ▲" : "펼치기 ▼"}</span>
+          </div>
+          {overdueOpen && (
+            <div style={{ padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6, maxHeight: 340, overflowY: "auto" }}>
+              {overdueItems.map(function(it) {
+                var bs = lateBadgeStyle(it.late);
+                var srcNote = notes.find(function(n) { return n.id === it.noteId; });
+                var canCarry = srcNote && canCarryFromCard(srcNote);
+                return (
+                  <div key={it.noteId + ":" + it.lineIdx}
+                    style={{ display: "flex", alignItems: "flex-start", gap: 8, background: "#fff", border: "1px solid #F3D5D5", borderRadius: 7, padding: "8px 10px" }}>
+                    <span style={{ fontSize: 11, marginTop: 2, color: "#CCC" }}>☐</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12.5, color: "#1A1917", lineHeight: 1.45, wordBreak: "break-word", whiteSpace: "pre-wrap" }}>{it.text}</div>
+                      <div style={{ display: "flex", gap: 6, marginTop: 4, fontSize: 10, color: "#888", flexWrap: "wrap", alignItems: "center" }}>
+                        <span style={{ fontWeight: 700, color: bs.color, background: bs.bg, border: "1px solid " + bs.border, borderRadius: 99, padding: "2px 7px" }}>
+                          {it.late}일 밀림
+                        </span>
+                        <span>📅 {it.basis}{it.dueDate ? " (마감)" : " (노트 날짜)"}</span>
+                        {it.assignee && <span>👤 {it.assignee}</span>}
+                        {it.noteTitle && <span style={{ color: "#AAA" }}>· {it.noteTitle}</span>}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      {canCarry && (
+                        <button title="이 항목을 다른 날짜로 이월 (원본은 지우지 않고 이월 표시만 남습니다)"
+                          onClick={function() { openCarryPicker(srcNote, it.lineIdx); }}
+                          style={{ fontSize: 10, fontWeight: 700, padding: "4px 9px", borderRadius: 6, border: "1px solid #C7D2FE", background: "#EEF2FF", color: "#4338CA", cursor: "pointer", whiteSpace: "nowrap" }}>📅 이월</button>
+                      )}
+                      <button title="이 항목이 있는 날짜로 이동"
+                        onClick={function() { if (it.noteDate) { setViewMode("calendar"); setSelectedDate(it.noteDate); } }}
+                        style={{ fontSize: 10, fontWeight: 600, padding: "4px 9px", borderRadius: 6, border: "1px solid #E8E5E0", background: "#fff", color: "#666", cursor: "pointer", whiteSpace: "nowrap" }}>보기</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* 노트 목록 - 캘린더 모드 또는 리스트 모드 */}
       {viewMode === "calendar" ? (
         selectedDate === null ? (
@@ -20675,7 +20825,7 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
                   <span style={{ fontSize: 12 }}>"+ 이 날짜에 노트 추가" 버튼으로 작성하세요.</span>
                 </div>
               ) : (
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   {notesForSelectedDate.map(function(note) {
                     return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? openCarryPicker : null} onAddToCalendar={openCalAdd} />;
                   })}
@@ -20738,7 +20888,7 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
           {pinned.length > 0 && (
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#B45309", letterSpacing: "0.05em", marginBottom: 10 }}>📌 고정된 노트</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? openCarryPicker : null} onAddToCalendar={openCalAdd} />; })}
               </div>
             </div>
@@ -20747,8 +20897,12 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
           {unpinned.length > 0 && (
             <div>
               {pinned.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: "#888", letterSpacing: "0.05em", marginBottom: 10 }}>전체 노트</div>}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
-                {unpinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? openCarryPicker : null} onAddToCalendar={openCalAdd} />; })}
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {unpinned.map(function(note) {
+                  // 완료된 지난 날짜 카드는 한 줄로 접는다. 사용자가 펼친 카드(expandedNotes)는 그대로 보여준다.
+                  if (isCollapsibleNote(note) && !expandedNotes[note.id]) return renderCollapsedNote(note);
+                  return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? openCarryPicker : null} onAddToCalendar={openCalAdd} />;
+                })}
               </div>
             </div>
           )}
@@ -28932,6 +29086,9 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
   const [activeTab, setActiveTab] = useState("corporate"); // "corporate" | "individual" | "all"(전체·공통)
   const [showAdd, setShowAdd] = useState(false);
   const [showDone, setShowDone] = useState(false); // 가져간/완료된 것도 볼지
+  // 🔴 밀린 미완료 구역 접기(기본 펼침) / 완료돼서 접힌 카드를 개별로 펼친 목록
+  const [teamOverdueOpen, setTeamOverdueOpen] = useState(true);
+  const [expandedDone, setExpandedDone] = useState({}); // { noteId: true }
   // 📅 work_date = 이 업무가 "언제 것인지"(업무 날짜). 마감일(due_date)과 다른 값이다.
   //    기본값 = 오늘. 날짜를 고르면 제목이 "M월D일 업무"로 자동 채워진다(직접 쓴 제목은 보존).
   var blankNewNote = function() {
@@ -28995,6 +29152,35 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
   // ⚠️ 반드시 status === "done"만 집계. "taken"(가져감=진행중)은 완료가 아니므로 제외한다.
   //    (과거 버그: status !== "open"으로 집계해 '가져가기'가 완료로 오인됨)
   var doneCount = useMemo(function() { return tabNotes.filter(function(n) { return n.status === "done"; }).length; }, [tabNotes]);
+
+  // ── 🔴 밀린 미완료 (팀) — 화면 맨 위 고정 구역 ────────────────────────────────
+  // 기준일 = due_date > work_date > 등록일(created_at 의 날짜). 그게 오늘보다 이전이면 "밀림".
+  //  · 완료(done) 카드는 제외. ⚠️ taken(가져감=진행중)은 완료가 아니므로 절대 제외하지 않는다(CLAUDE.md).
+  //  · 항목 단위 판정은 체크리스트의 taken_by 가 비어 있는 것 = 아직 아무도 안 가져간 항목.
+  //    (카드 UI 가 이미 taken_by 로 ☐ / 취소선을 가르므로 같은 기준을 쓴다)
+  //  · 체크리스트가 없는 카드는 카드 자체를 1건으로 센다.
+  //  · 기간 제한 없음 — 끝내지 않는 한 계속 뜬다(요청 사항).
+  // ⚠️ 여기는 읽기 전용이다. team_notes 를 쓰지 않으므로 항목추가 알림(handleTeamItemAdded)과 무관하다.
+  var teamOverdue = useMemo(function() {
+    var t = kstDate();
+    var out = [];
+    (tabNotes || []).forEach(function(n) {
+      if (n.status === "done") return;
+      var basis = n.due_date || n.work_date || String(n.created_at || "").slice(0, 10);
+      if (!basis || basis >= t) return;
+      var late = daysLate(basis, t);
+      var cl = Array.isArray(n.checklist) ? n.checklist : [];
+      if (!cl.length) { out.push({ key: n.id, note: n, item: null, basis: basis, late: late }); return; }
+      cl.forEach(function(it) {
+        if (!it || it.taken_by) return;
+        out.push({ key: n.id + ":" + (it.id || it.text), note: n, item: it, basis: basis, late: late });
+      });
+    });
+    return out.sort(function(a, b) {
+      if (b.late !== a.late) return b.late - a.late;
+      return String((a.item && a.item.text) || a.note.title || "").localeCompare(String((b.item && b.item.text) || b.note.title || ""));
+    });
+  }, [tabNotes]);
 
   var PRI_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
   // 📌 공지로 등록됐고 대기중이며 아직 전원 확인 전인 카드는 최상단 고정 (전원 확인되면 고정 해제 → 접힘)
@@ -29548,6 +29734,51 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
             </button>
           </div>
 
+          {/* ── 🔴 밀린 미완료 (팀) — 목록 맨 위 고정. 0건이면 구역 자체를 그리지 않는다 ── */}
+          {!loading && teamOverdue.length > 0 && (
+            <div style={{ background: "#FFF7F7", border: "1px solid #FECACA", borderRadius: 9, marginBottom: 12, overflow: "hidden" }}>
+              <div onClick={function() { setTeamOverdueOpen(function(p) { return !p; }); }}
+                style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 12px", cursor: "pointer", background: "#FEF2F2", borderBottom: teamOverdueOpen ? "1px solid #FECACA" : "none" }}>
+                <span style={{ fontSize: 12 }}>🔴</span>
+                <div style={{ fontSize: 12, fontWeight: 800, color: "#B91C1C" }}>밀린 미완료</div>
+                <span style={{ fontSize: 10.5, fontWeight: 700, color: "#B91C1C", background: "#fff", border: "1px solid #FECACA", borderRadius: 99, padding: "2px 8px" }}>{teamOverdue.length}건</span>
+                <span style={{ fontSize: 10.5, color: "#B45309" }}>최장 {teamOverdue[0].late}일째</span>
+                <span style={{ marginLeft: "auto", fontSize: 10.5, color: "#888" }}>{teamOverdueOpen ? "접기 ▲" : "펼치기 ▼"}</span>
+              </div>
+              {teamOverdueOpen && (
+                <div style={{ padding: "9px 11px", display: "flex", flexDirection: "column", gap: 5, maxHeight: 300, overflowY: "auto" }}>
+                  {teamOverdue.map(function(r) {
+                    var bs = lateBadgeStyle(r.late);
+                    return (
+                      <div key={r.key}
+                        style={{ display: "flex", alignItems: "flex-start", gap: 7, background: "#fff", border: "1px solid #F3D5D5", borderRadius: 6, padding: "7px 9px" }}>
+                        <span style={{ fontSize: 10.5, marginTop: 2, color: "#CCC" }}>☐</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 11.5, color: "#1A1917", lineHeight: 1.45, wordBreak: "break-word", whiteSpace: "pre-wrap" }}>
+                            {r.item ? renderMentionText(r.item.text, companiesList) : renderMentionText(r.note.title || "(제목 없음)", companiesList)}
+                          </div>
+                          <div style={{ display: "flex", gap: 5, marginTop: 3, fontSize: 9.5, color: "#888", flexWrap: "wrap", alignItems: "center" }}>
+                            <span style={{ fontWeight: 700, color: bs.color, background: bs.bg, border: "1px solid " + bs.border, borderRadius: 99, padding: "2px 6px" }}>
+                              {r.late}일 밀림
+                            </span>
+                            <span>📅 {r.basis}</span>
+                            {r.item && <span style={{ color: "#AAA" }}>· {r.note.title || "(제목 없음)"}</span>}
+                            {r.note.status === "taken" && r.note.taken_by && <span style={{ color: "#1E40AF" }}>👤 {r.note.taken_by} 진행중</span>}
+                          </div>
+                        </div>
+                        {r.item && (
+                          <button onClick={function() { openTakePick(r.note, r.item.id); }}
+                            title="이 항목을 내 업무노트로 가져가기"
+                            style={{ fontSize: 9.5, fontWeight: 700, padding: "4px 8px", borderRadius: 5, border: "none", background: "#1A1917", color: "#fff", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>📅 가져가기</button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* 노트 목록 */}
           {loading ? (
             <div style={{ textAlign: "center", padding: 30, color: "#AAA", fontSize: 12 }}>불러오는 중...</div>
@@ -29556,13 +29787,35 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
               {showDone ? "이 팀에 노트가 없어요" : "대기·진행중인 업무가 없어요. 새 업무를 등록해보세요."}
             </div>
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {displayNotes.map(function(note) {
                 var ps = priorityStyle(note.priority);
                 var ss = statusStyle(note.status);
                 var isOpen = note.status === "open";
                 var isMine = note.taken_by === profile?.name;
                 var isEditing = editingNoteId === note.id;
+
+                // ── 📁 완료(done) 카드는 한 줄로 접는다 ──
+                //  · 완료 카드는 원래 기본으로 숨겨져 있고, "완료된 업무 N건 보기"를 켰을 때만 목록에 나온다.
+                //    그때 카드를 통째로 펴면 지난 완료 건이 화면을 다 먹으므로 한 줄 요약으로 접는다.
+                //  · 수정 중이면 접지 않는다(작성 중 내용이 사라져 보인다).
+                //  ⚠️ status === "done" 만 접는다. taken(가져감=진행중)은 완료가 아니다(CLAUDE.md).
+                if (note.status === "done" && !isEditing && !expandedDone[note.id]) {
+                  var dday = note.work_date || String(note.created_at || "").slice(0, 10);
+                  return (
+                    <div key={note.id} onClick={function() { setExpandedDone(function(p) { return Object.assign({}, p, { [note.id]: true }); }); }}
+                      title="눌러서 펼치기"
+                      style={{ display: "flex", alignItems: "center", gap: 9, background: "#FAFAF8", border: "1px solid #EDEBE6", borderRadius: 8, padding: "8px 12px", cursor: "pointer" }}>
+                      <span style={{ fontSize: 11.5 }}>✅</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: "#666", whiteSpace: "nowrap" }}>{dday ? dday.slice(5).replace("-", "/") : "-"}</span>
+                      <span style={{ fontSize: 11.5, color: "#888", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {note.title || "(제목 없음)"}
+                      </span>
+                      {note.taken_by && <span style={{ fontSize: 9.5, color: "#15803D", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 99, padding: "2px 7px", whiteSpace: "nowrap" }}>👤 {note.taken_by}</span>}
+                      <span style={{ fontSize: 9.5, color: "#AAA", whiteSpace: "nowrap" }}>펼치기 ▼</span>
+                    </div>
+                  );
+                }
 
                 // ── 편집 모드 ──
                 if (isEditing && editingDraft) {
