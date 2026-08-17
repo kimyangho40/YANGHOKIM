@@ -29160,6 +29160,10 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
   // 📆 지난 날짜 월별 그룹 펼침 상태 { "2026-08": true }. 기본은 가장 최근 달 하나만.
   const [openTeamMonths, setOpenTeamMonths] = useState({});
   const teamMonthSeeded = useRef(false);
+  // 📅 팀 항목 이월 — 날짜 선택 팝업 { noteId, itemId, text, fromDate }
+  const [teamCarry, setTeamCarry] = useState(null);
+  const [teamCarryDate, setTeamCarryDate] = useState("");
+  const [teamCarryBusy, setTeamCarryBusy] = useState(false);
   // 📅 work_date = 이 업무가 "언제 것인지"(업무 날짜). 마감일(due_date)과 다른 값이다.
   //    기본값 = 오늘. 날짜를 고르면 제목이 "M월D일 업무"로 자동 채워진다(직접 쓴 제목은 보존).
   var blankNewNote = function() {
@@ -29244,6 +29248,9 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       if (!cl.length) { out.push({ key: n.id, note: n, item: null, basis: basis, late: late }); return; }
       cl.forEach(function(it) {
         if (!it || it.taken_by) return;
+        // 이미 다른 날짜로 이월한 항목은 뺀다 — 대상 카드에 복사본이 있어 두 번 세면 중복이다
+        // (개인 업무노트 overdueItems 의 carried 제외와 같은 규칙)
+        if (/→\s*\d{1,2}\/\d{1,2}\s*이월/.test(String(it.text || ""))) return;
         out.push({ key: n.id + ":" + (it.id || it.text), note: n, item: it, basis: basis, late: late });
       });
     });
@@ -29314,6 +29321,81 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     });
     return { list: out, newestYm: months.length ? months[0].ym : "" };
   })();
+  // ── 📅 팀 항목 이월 ────────────────────────────────────────────────────────
+  // 개인 업무노트 이월과 같은 의미로 맞춘다: **원본은 지우지 않고 "(→ M/D 이월)" 표시만 남기고**,
+  // 그 날짜의 팀 카드에 항목 복사본을 만든다(카드가 없으면 그 날짜 카드를 새로 만든다).
+  //
+  // ⚠️ 알림 주의 (CLAUDE.md)
+  //  · 대상 카드의 체크리스트가 **길어지므로** handleTeamItemAdded 가 팀원들에게 알림을 쏜다.
+  //    내 화면만 markTeamNoteSelfEdit 로 억제한다 — 남에게는 정상적으로 알려야 하는 변화다.
+  //  · 대상 카드가 없어 새로 만드는 경우는 INSERT 알림(handleIncomingTeamNote)이 나간다.
+  //    그쪽은 posted_by === 나 면 스스로 걸러지므로 내 화면엔 안 뜬다.
+  //  · 원본 카드는 항목 **수가 그대로**라(텍스트만 바뀜) 알림이 나가지 않는다 → self-edit 표시도 하지 않는다.
+  //    (표시해 버리면 그 10초 동안 남이 그 카드에 추가한 항목을 내가 놓친다)
+  var openTeamCarry = function(note, itemId, text) {
+    setTeamCarry({ noteId: note.id, itemId: itemId, text: text || "", fromDate: note.work_date || "" });
+    setTeamCarryDate(addDaysStr(kstDate(), 1)); // 기본값 = 내일
+  };
+  var confirmTeamCarry = async function() {
+    if (!teamCarry || !teamCarryDate || teamCarryBusy) return;
+    var src = allTeamNotes.find(function(n) { return n.id === teamCarry.noteId; });
+    if (!src) { alert("원본 카드를 찾지 못했습니다. 새로고침 후 다시 시도해주세요."); return; }
+    var srcList = Array.isArray(src.checklist) ? src.checklist : [];
+    var item = srcList.find(function(i) { return i && i.id === teamCarry.itemId; });
+    if (!item) { alert("항목을 찾지 못했습니다. 새로고침 후 다시 시도해주세요."); return; }
+    setTeamCarryBusy(true);
+    try {
+      var md = mdLabel(teamCarryDate);
+      // 이미 이월 표시가 있으면 떼고 새 날짜로 다시 붙인다(누적 금지 — 개인 이월과 같은 규칙)
+      var baseText = String(item.text || "").replace(/\s*\(→\s*\d{1,2}\/\d{1,2}\s*이월\)\s*$/, "").trim();
+      var newItem = { id: "ck_" + Math.random().toString(36).slice(2, 11), text: baseText,
+        taken_by: null, taken_at: null, taken_work_note_id: null, done: false };
+
+      // 1) 대상 카드 — 같은 팀 · 그 날짜 · 살아있고 완료 아님. 여러 장이면 가장 먼저 만든 것에 합친다
+      //    (합치기 기준을 하나로 두지 않으면 같은 날 카드가 계속 늘어난다 — work_notes 합치기와 같은 이유)
+      var q = await supabase.from("team_notes").select("*")
+        .eq("team", src.team).eq("work_date", teamCarryDate)
+        .is("deleted_at", null).neq("status", "done")
+        .order("created_at", { ascending: true }).limit(1);
+      if (q.error) throw q.error;
+      var dest = (q.data || [])[0] || null;
+
+      if (dest) {
+        var nextList = (Array.isArray(dest.checklist) ? dest.checklist : []).concat([newItem]);
+        markTeamNoteSelfEdit(dest.id); // 항목이 늘어난다 → 내 화면 알림만 억제
+        var u = await supabase.from("team_notes")
+          .update({ checklist: nextList, updated_at: new Date().toISOString() }).eq("id", dest.id);
+        if (u.error) throw u.error;
+      } else {
+        // 2) 그 날짜 카드가 없으면 새로 만든다.
+        //    posted_by 는 트리거(trg_team_notes_protect)가 본인으로 강제하므로 보내지 않는다.
+        var ins = await supabase.from("team_notes").insert({
+          team: src.team, title: teamNoteAutoTitle(teamCarryDate), work_date: teamCarryDate,
+          priority: src.priority || "normal", status: "open", checklist: [newItem], is_announcement: false,
+        });
+        if (ins.error) throw ins.error;
+      }
+
+      // 3) 원본 항목에는 이월 표시만 남긴다 — 언제부터 밀렸는지 추적하려고 지우지 않는다
+      var markedList = srcList.map(function(i) {
+        return (i && i.id === item.id) ? Object.assign({}, i, { text: baseText + " (→ " + md + " 이월)" }) : i;
+      });
+      var u2 = await supabase.from("team_notes")
+        .update({ checklist: markedList, updated_at: new Date().toISOString() }).eq("id", src.id);
+      if (u2.error) throw u2.error;
+
+      setAllTeamNotes(function(prev) {
+        return prev.map(function(n) { return n.id === src.id ? Object.assign({}, n, { checklist: markedList }) : n; });
+      });
+      setTeamCarry(null);
+      await fetchTeamNotes(); // 대상 카드(새로 만들었을 수도 있다)를 화면에 반영
+    } catch (e) {
+      alert("이월 실패: " + ((e && e.message) || e));
+    } finally {
+      setTeamCarryBusy(false);
+    }
+  };
+
   var toggleTeamMonth = function(ym) {
     setOpenTeamMonths(function(p) {
       var n = Object.assign({}, p);
@@ -29878,9 +29960,14 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                           </div>
                         </div>
                         {r.item && (
-                          <button onClick={function() { openTakePick(r.note, r.item.id); }}
-                            title="이 항목을 내 업무노트로 가져가기"
-                            style={{ fontSize: 9.5, fontWeight: 700, padding: "4px 8px", borderRadius: 5, border: "none", background: "#1A1917", color: "#fff", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>📅 가져가기</button>
+                          <span style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                            <button onClick={function() { openTeamCarry(r.note, r.item.id, r.item.text); }}
+                              title="이 항목을 다른 날짜의 팀 업무로 이월 (원본은 지우지 않고 이월 표시만 남습니다)"
+                              style={{ fontSize: 9.5, fontWeight: 700, padding: "4px 8px", borderRadius: 5, border: "1px solid #C7D2FE", background: "#EEF2FF", color: "#4338CA", cursor: "pointer", whiteSpace: "nowrap" }}>📅 이월</button>
+                            <button onClick={function() { openTakePick(r.note, r.item.id); }}
+                              title="이 항목을 내 업무노트로 가져가기"
+                              style={{ fontSize: 9.5, fontWeight: 700, padding: "4px 8px", borderRadius: 5, border: "none", background: "#1A1917", color: "#fff", cursor: "pointer", whiteSpace: "nowrap" }}>📅 가져가기</button>
+                          </span>
                         )}
                       </div>
                     );
@@ -30135,10 +30222,19 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                                       )}
                                     </span>
                                   ) : (
+                                    <span style={{ display: "flex", gap: 3, whiteSpace: "nowrap" }}>
+                                    {/* 📅 이월 — 아직 아무도 안 가져간 항목만. 개인 업무노트 이월과 같은 의미다
+                                        (원본은 남기고 이월 표시만 붙인 뒤, 그 날짜 팀 카드에 복사본을 만든다) */}
+                                    <button onClick={function() { openTeamCarry(note, item.id, item.text); }}
+                                      title="이 항목을 다른 날짜의 팀 업무로 이월 (원본은 지우지 않고 이월 표시만 남습니다)"
+                                      style={{ fontSize: 9, padding: "3px 8px", background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 4, cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}>
+                                      📅 이월
+                                    </button>
                                     <button onClick={function() { openTakePick(note, item.id); }}
                                       style={{ fontSize: 9, padding: "3px 8px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}>
                                       📅 가져가기
                                     </button>
+                                    </span>
                                   )}
                                 </div>
                               );
@@ -30343,6 +30439,67 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
           </div>
         </div>
       )}
+
+      {/* 📅 팀 항목 이월 — 날짜 선택 팝업 (개인 업무노트 이월 팝업과 같은 모양·같은 프리셋) */}
+      {teamCarry && (function() {
+        var t0 = kstDate();
+        var quick = [
+          { label: "내일", d: addDaysStr(t0, 1) },
+          { label: "3일 뒤", d: addDaysStr(t0, 3) },
+          { label: "일주일 뒤", d: addDaysStr(t0, 7) },
+          { label: "1개월 뒤", d: addMonthsStr(t0, 1) },
+        ];
+        var sameDay = teamCarryDate && teamCarryDate === teamCarry.fromDate;
+        var closePick = function() { if (!teamCarryBusy) setTeamCarry(null); };
+        return (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+            <div onClick={function(e) { e.stopPropagation(); }}
+              style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 380, padding: 20, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 15, fontWeight: 800 }}>📅 어느 날짜로 이월할까요?</div>
+                  <div style={{ fontSize: 12, color: "#555", marginTop: 6, background: "#F7F6F3", borderRadius: 6, padding: "6px 9px", lineHeight: 1.5, wordBreak: "break-all" }}>{teamCarry.text}</div>
+                </div>
+                <button onClick={closePick} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#888", lineHeight: 1, marginLeft: 8 }}>✕</button>
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+                {quick.map(function(q) {
+                  var on = teamCarryDate === q.d;
+                  return (
+                    <button key={q.label} onClick={function() { setTeamCarryDate(q.d); }}
+                      style={{ fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 99, cursor: "pointer",
+                        background: on ? "#1A1917" : "#fff", color: on ? "#fff" : "#555", border: "1px solid " + (on ? "#1A1917" : "#E8E5E0") }}>
+                      {q.label} <span style={{ opacity: 0.7, fontWeight: 400 }}>{mdLabel(q.d)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <label style={{ display: "block", fontSize: 11, color: "#888", marginBottom: 5 }}>직접 고르기</label>
+              <input type="date" value={teamCarryDate} onChange={function(e) { setTeamCarryDate(e.target.value); }}
+                style={{ width: "100%", padding: "9px 11px", border: "1px solid #C7D2FE", borderRadius: 8, fontSize: 13, color: "#4338CA", outline: "none", boxSizing: "border-box" }} />
+              <div style={{ fontSize: 11, color: sameDay ? "#B91C1C" : "#888", marginTop: 9, lineHeight: 1.6 }}>
+                {sameDay
+                  ? "원본 카드와 같은 날짜예요. 다른 날짜를 골라주세요."
+                  : "그 날짜에 팀 카드가 없으면 새로 만들어 담습니다. 원본 항목은 지우지 않고 \"(→ " + (teamCarryDate ? mdLabel(teamCarryDate) : "") + " 이월)\" 표시만 남아요."}
+              </div>
+              <div style={{ fontSize: 10.5, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "7px 9px", marginTop: 8, lineHeight: 1.55 }}>
+                ⚠️ 팀 공간이라 <b>대상 카드에 항목이 늘어나면 팀원들에게 알림</b>이 갑니다(내 화면에는 안 뜹니다).
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                <button disabled={!teamCarryDate || sameDay || teamCarryBusy} onClick={confirmTeamCarry}
+                  style={{ flex: 1, padding: "10px 0", borderRadius: 8, border: "none", fontSize: 13, fontWeight: 700,
+                    background: (!teamCarryDate || sameDay || teamCarryBusy) ? "#E8E5E0" : "#4338CA",
+                    color: (!teamCarryDate || sameDay || teamCarryBusy) ? "#AAA" : "#fff",
+                    cursor: (!teamCarryDate || sameDay || teamCarryBusy) ? "default" : "pointer" }}>
+                  {teamCarryBusy ? "이월 중..." : (teamCarryDate ? mdLabel(teamCarryDate) + "로 이월" : "날짜를 골라주세요")}
+                </button>
+                <button onClick={closePick} disabled={teamCarryBusy}
+                  style={{ padding: "10px 16px", background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: teamCarryBusy ? "default" : "pointer" }}>취소</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* 📅 가져가기 날짜 선택 모달 — 어느 날짜의 내 업무노트로 담을지 (9999: 등록/수정 모달 위) */}
       {takePick && (function() {
