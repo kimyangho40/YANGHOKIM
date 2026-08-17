@@ -45,8 +45,12 @@
 승인된 로그인 사용자면 누구나 남의 노트를 전건 조회할 수 있었다(화면 `wnViewable` 필터로만 가려짐).
 
 지금 상태 — 정책 4개(select/insert/update/delete)로 교체. 열람 범위는 **App.js `wnViewable()`과 동일**:
-양호=전원 / 미현↔인선=서로 / 나머지=본인 담당(assignee)만. **예외 하나: `company_id`가 붙은 노트는 팀 공유**
+양호=전원 / 나머지=본인 담당(assignee)만. **예외 하나: `company_id`가 붙은 노트는 팀 공유**
 (기업 상세 타임라인용, 2026-08-05 기준 401건 중 5건).
+
+> ⚠️ 2026-08-17: 미현↔인선 공유 그룹은 **없어졌다**(둘 다 담당자 명단에서 제거).
+> App.js 는 `WN_SHARE_GROUPS = []` 로 반영 완료. **SQL `wn_visible_names()` 는 아직 그대로**라
+> `담당자정리_업무노트RLS_공유그룹해제.sql` 을 돌려야 한 쌍이 맞는다.
 
 **앞으로 work_notes를 건드릴 때 반드시 지킬 것**
 - 열람 규칙을 바꾸면 **App.js `wnViewable`/`WN_ADMINS`/`WN_SHARE_GROUPS`와 SQL `wn_visible_names()`/`wn_is_admin()`을
@@ -72,8 +76,11 @@
 
 **앞으로 chat_messages를 건드릴 때 반드시 지킬 것**
 - 채널 규칙은 **App.js `canAccessChannel`/`CHAT_TEAMS`(App.js:3578)와 SQL `chat_can_access(channel, me)`가 한 쌍**이다.
-  팀 목록은 `profiles.team`이 아니라 **App.js 하드코딩 배열이 원본**(인선은 team='개인전담'이지만 채팅은 corporate).
+  팀 목록은 `profiles.team`이 아니라 **App.js 하드코딩 배열이 원본**이다.
   한쪽만 고치면 "화면엔 채널이 있는데 메시지가 안 온다"가 된다. 고쳤으면 동작검증을 다시 돌릴 것.
+  > ⚠️ 2026-08-17: `CHAT_TEAMS`에서 현애·인선·미현을 뺐다(App.js 반영 완료).
+  > **SQL `chat_can_access()`는 아직 옛 명단**이라 `담당자정리_채팅RLS_명단반영.sql`을 돌려야 한 쌍이 맞는다.
+  > (한쪽만 빠진 지금은 "화면엔 안 보이는데 DB는 아직 허용" 방향이라 남은 사람 기능이 깨지진 않는다.)
 - **관리자(양호)도 남의 DM은 못 본다.** work_notes와 달리 전체 열람 예외가 없다(App.js에도 없다).
   `chat_is_admin()`은 "내가 볼 수 있는 채널에서 남의 메시지 삭제"에만 쓴다.
 - 읽음표시(`read_by`)는 **남의 메시지에 쓰는 게 정상**이라 UPDATE를 본인 것으로 좁힐 수 없다.

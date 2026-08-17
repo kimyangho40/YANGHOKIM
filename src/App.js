@@ -1457,15 +1457,20 @@ function teamOf(co) {
 const TEAM_FILTER_OPTS = ["전체", "법인팀", "개인팀"];
 const DOC_LIST = ["사업자등록증","최근 3년치 재무제표 (23년~25년)","최근 3년치 부가세 증명원 (23년~25년)","법인 기업 금융거래 확인서","대표자 신용점수","4대보험 명부","월별 고용보험 가입자 명부","그 외 사업전환 필수 서류","최근 1년 수출실적 증명서","사업자 대출 금융거래 확인서","대표자 신분증","임대차 계약서","회사 소개서 또는 사업계획서","2026년 상반기 부가세 증명원","대표자 개인 대출 금융거래 확인서","직전연도 상시근로자 수 파악","기업 인증 자료 (벤처·이노비즈·연구전담 부서 등)","특허 및 상표권 관련 자료"];
 const TEAMS = ["법인전담","개인전담","관리자"];
-const ASSIGNEES = ["미현","유진","관호","지혜","현애","인선","동일","양호"];
+// 👥 현재 담당자 명단 — 화면의 담당자 선택/필터가 전부 이 배열 하나를 본다.
+//   2026-08-17: 현애·인선·미현 제거, 정원 추가.
+//   ⚠️ 기존 companies.assignee 값은 건드리지 않았다 — 여기서 빠져도 이미 저장된
+//      "관호, 현애" 같은 값은 그대로 보인다. 그 업체를 편집해 저장하면 그때 빠진다.
+const ASSIGNEES = ["유진","관호","지혜","동일","양호","정원"];
 // 📓 업무노트 열람 권한 — 관리자는 전원 열람, 공유 그룹은 서로 열람(수정은 본인 것만)
 //   양호만 전체 열람. 관호·유진은 관리자 권한 없이 본인 노트만. 양호 본인 노트는 양호만 봄.
 const WN_ADMINS = ["양호"];
-const WN_SHARE_GROUPS = [["미현", "인선"]]; // 서로 노트 열람 가능
+// 공유 그룹은 [미현, 인선] 한 쌍뿐이었는데 둘 다 명단에서 빠져 비었다. (2026-08-17)
+const WN_SHARE_GROUPS = []; // 서로 노트 열람 가능
 // 🧑‍🤝‍🧑 팀 구성 — 팀 공지 "확인" 대상 명단 (팀별로 확인 인원이 다름)
 const TEAM_MEMBERS = {
-  individual: ["양호", "동일", "관호", "현애", "지혜", "정원"], // 개인팀
-  corporate: ["양호", "동일", "유진", "인선", "미현", "정원"],  // 법인팀
+  individual: ["양호", "동일", "관호", "지혜", "정원"], // 개인팀 (현애 제거 2026-08-17)
+  corporate: ["양호", "동일", "유진", "정원"],          // 법인팀 (인선·미현 제거 2026-08-17)
 };
 // ⚠️ 이 명단은 채팅 채널(CHAT_TEAMS)과 **별개 개념**이다 — 여기는 "팀 공지 확인 대상".
 //    둘 다 하드코딩이라 사람이 바뀌면 양쪽을 따로 챙겨야 한다.
@@ -3821,9 +3826,11 @@ const Icon = ({ name, size = 16, color = "currentColor" }) => {
 };
 
 // ── 팀 채팅 상수/헬퍼 ─────────────────────────────────────────────────────────
+// ⚠️ 아래 SQL `public.chat_can_access` 와 한 쌍 — 고쳤으면 SQL 도 같이 돌려야 한다.
+//    2026-08-17: 현애·인선·미현 제거. SQL 반영은 `담당자정리_채팅RLS_명단반영.sql` 참고.
 const CHAT_TEAMS = {
-  corporate:  ["양호", "동일", "유진", "인선", "미현", "정원"],
-  individual: ["양호", "동일", "관호", "현애", "지혜", "정원"],
+  corporate:  ["양호", "동일", "유진", "정원"],
+  individual: ["양호", "동일", "관호", "지혜", "정원"],
 };
 // 전체 팀원 (법인+개인 합집합) — DM 상대 목록
 const CHAT_ALL_MEMBERS = Array.from(new Set([].concat(CHAT_TEAMS.corporate, CHAT_TEAMS.individual)));
@@ -12138,7 +12145,8 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView, companies 
                 <select value={filterAssignee} onChange={function(e) { setFilterAssignee(e.target.value); }}
                   style={{ padding: "6px 10px", borderRadius: 6, fontSize: 12, border: "1px solid #E8E5E0", outline: "none" }}>
                   <option value="">모든 담당자</option>
-                  {["미현","유진","관호","지혜","현애","인선","동일","양호","정원"].map(function(a) {
+                  {/* 명단을 또 박아두면 ASSIGNEES 와 따로 놀아서 한쪽만 고치는 사고가 난다 (2026-08-17) */}
+                  {ASSIGNEES.map(function(a) {
                     return <option key={a} value={a}>{a}</option>;
                   })}
                 </select>
@@ -28930,8 +28938,10 @@ function TeamActivityWidget({ profiles }) {
     return entries.sort(function(a, b) { return b.total - a.total; });
   }, [activity]);
 
-  // 직원 9명만 표시 (양호님 회사 직원 목록)
-  var TEAM_MEMBERS = ["유진", "미현", "정원", "관호", "인선", "현애", "지혜", "동일", "양호"];
+  // 현재 직원만 표시 — 전역 ASSIGNEES 를 그대로 쓴다.
+  //   (예전엔 여기 이름 9개를 또 박아둬서 명단이 바뀔 때마다 두 곳을 고쳐야 했다. 2026-08-17)
+  //   ⚠️ 이 지역 var 는 전역 TEAM_MEMBERS(팀 공지 대상 객체)를 가린다 — 이름만 같고 다른 것이다.
+  var TEAM_MEMBERS = ASSIGNEES;
 
   // 이름 별칭 - 다양하게 입력된 표기를 표준 이름으로 매핑
   // (예: "최지혜" → "지혜", "김동일이사" → "동일", "김현애" → "현애")
