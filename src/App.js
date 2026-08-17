@@ -18821,6 +18821,9 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
   // 🔴 밀린 미완료 구역 접기(기본 펼침) / 완료돼서 접힌 지난 날짜 카드를 개별로 펼친 목록
   const [overdueOpen, setOverdueOpen] = useState(true);
   const [expandedNotes, setExpandedNotes] = useState({}); // { noteId: true }
+  // 📆 지난 날짜 월별 그룹 펼침 상태 { "2026-08": true }. 기본은 가장 최근 달 하나만 펼친다.
+  const [openMonths, setOpenMonths] = useState({});
+  const monthSeeded = useRef(false); // 최초 1회만 기본값을 정한다(사용자가 접은 걸 되살리지 않게)
   // 📅 카드 항목별 이월 — 날짜 선택 팝업 (부모가 1개만 소유)
   const [carryPick, setCarryPick] = useState(null);      // {noteId, lineIdx, text, fromDate} | null
   const [carryPickDate, setCarryPickDate] = useState(""); // 고른 날짜 YYYY-MM-DD
@@ -19059,6 +19062,11 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
     return notesByDate[selectedDate] || [];
   }, [selectedDate, notesByDate]);
 
+  // ⚠️ todayStr 은 아래 여러 계산(밀린 미완료·월별 그룹·이월 기본값)이 쓰므로 반드시 그것들보다 먼저 와야 한다.
+  //    var 는 값 할당이 실행 시점이라, 선언이 아래에 있으면 위쪽 useMemo 안에서 undefined 로 읽힌다
+  //    (문자열 >= undefined 는 항상 false → "오늘·미래 항목을 빼는" 조건이 통째로 무력화된다).
+  var todayStr = (function() { var d = new Date(); return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0"); })();
+
   // 미완료 체크박스 추출 - 모든 노트 content에서 - [ ] 추출
   var unfinishedItems = useMemo(function() {
     var items = [];
@@ -19166,8 +19174,6 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
     setCalendarMonth(newY + "-" + String(newM + 1).padStart(2,"0"));
   };
 
-  var todayStr = (function() { var d = new Date(); return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0"); })();
-
   // 🔍 노트 검색 결과 (제목/내용/담당자 매칭)
   var noteSearchResults = useMemo(function() {
     var q = (noteSearchQ || "").toLowerCase().trim();
@@ -19180,6 +19186,65 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
 
   var pinned = filtered.filter(function(n) { return n.pinned; });
   var unpinned = filtered.filter(function(n) { return !n.pinned; });
+
+  // ── 📆 지난 날짜는 월별로 한 번 더 묶는다 ───────────────────────────────────
+  // 세로 정렬만으로는 카드가 20장 넘어가면 스크롤이 여전히 길다.
+  //  · 오늘·미래 노트(그리고 날짜를 못 읽는 노트)는 지금까지처럼 그대로 편다 — 묶지 않는다.
+  //  · 지난 날짜만 "2026년 8월" 처럼 월 그룹으로 접는다. 헤더에 그 달의 "날짜 개수"를 보여준다
+  //    (노트 개수가 아니다 — 하루에 노트가 여러 장일 수 있어 숫자가 어긋나 보인다).
+  //  · 렌더는 월 헤더와 노트를 한 배열에 섞어 만든다. 기존 map 본문을 그대로 두기 위해서다
+  //    (카드 JSX 를 통째로 옮기면 회귀 위험만 커진다).
+  var unpinnedRender = (function() {
+    var recent = [], byYm = {}, months = [];
+    unpinned.forEach(function(n) {
+      var d = getNoteDate(n);
+      if (!d || d >= todayStr) { recent.push(n); return; }   // 오늘·미래·날짜없음 → 그대로
+      var ym = d.slice(0, 7);
+      if (!byYm[ym]) { byYm[ym] = { ym: ym, notes: [], dates: {} }; months.push(byYm[ym]); }
+      byYm[ym].notes.push(n);
+      byYm[ym].dates[d] = true;
+    });
+    months.sort(function(a, b) { return b.ym.localeCompare(a.ym); }); // 최근 달이 위
+    var out = recent.map(function(n) { return { kind: "note", note: n }; });
+    months.forEach(function(g) {
+      g.dateCount = Object.keys(g.dates).length;
+      g.label = parseInt(g.ym.slice(0, 4), 10) + "년 " + parseInt(g.ym.slice(5, 7), 10) + "월";
+      out.push({ kind: "month", g: g });
+      if (openMonths[g.ym]) g.notes.forEach(function(n) { out.push({ kind: "note", note: n }); });
+    });
+    return { list: out, newestYm: months.length ? months[0].ym : "" };
+  })();
+  var toggleMonth = function(ym) {
+    setOpenMonths(function(p) {
+      var n = Object.assign({}, p);
+      if (n[ym]) delete n[ym]; else n[ym] = true;
+      return n;
+    });
+  };
+  // 기본값: 가장 최근 달 하나만 펼침. 최초 1회만 정한다 —
+  // 매번 정하면 사용자가 접어 둔 달이 다음 렌더에 다시 펴져 버린다.
+  var newestUnpinnedYm = unpinnedRender.newestYm;
+  useEffect(function() {
+    if (monthSeeded.current || !newestUnpinnedYm) return;
+    monthSeeded.current = true;
+    setOpenMonths({ [newestUnpinnedYm]: true });
+  }, [newestUnpinnedYm]);
+  // 월 그룹 헤더 (개인·팀 같은 모양)
+  var renderMonthHeader = function(g, open, onToggle) {
+    return (
+      <div key={"m:" + g.ym} onClick={onToggle} title={open ? "접기" : "펼치기"}
+        style={{ display: "flex", alignItems: "center", gap: 9, background: open ? "#F0EFEA" : "#FAFAF8",
+          border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 13px", cursor: "pointer", marginTop: 4 }}>
+        <span style={{ fontSize: 12 }}>📆</span>
+        <span style={{ fontSize: 12.5, fontWeight: 800, color: "#555" }}>{g.label}</span>
+        <span style={{ fontSize: 10.5, fontWeight: 700, color: "#6B7280", background: "#fff", border: "1px solid #E5E7EB", borderRadius: 99, padding: "2px 8px" }}>
+          {g.dateCount}개 날짜
+        </span>
+        <span style={{ fontSize: 10.5, color: "#AAA" }}>노트 {g.notes.length}개</span>
+        <span style={{ marginLeft: "auto", fontSize: 10.5, color: "#888" }}>{open ? "접기 ▲" : "펼치기 ▼"}</span>
+      </div>
+    );
+  };
 
   // 대시보드 "담당자별 미완료 현황"에서 넘어온 경우 해당 담당자로 필터 (탭 진입 1회)
   useEffect(function() {
@@ -20898,7 +20963,10 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
             <div>
               {pinned.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: "#888", letterSpacing: "0.05em", marginBottom: 10 }}>전체 노트</div>}
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {unpinned.map(function(note) {
+                {unpinnedRender.list.map(function(entry) {
+                  // 📆 지난 날짜 월 그룹 헤더 — 누르면 그 달의 노트들이 펼쳐진다
+                  if (entry.kind === "month") return renderMonthHeader(entry.g, !!openMonths[entry.g.ym], function() { toggleMonth(entry.g.ym); });
+                  var note = entry.note;
                   // 완료된 지난 날짜 카드는 한 줄로 접는다. 사용자가 펼친 카드(expandedNotes)는 그대로 보여준다.
                   if (isCollapsibleNote(note) && !expandedNotes[note.id]) return renderCollapsedNote(note);
                   return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? openCarryPicker : null} onAddToCalendar={openCalAdd} />;
@@ -29089,6 +29157,9 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
   // 🔴 밀린 미완료 구역 접기(기본 펼침) / 완료돼서 접힌 카드를 개별로 펼친 목록
   const [teamOverdueOpen, setTeamOverdueOpen] = useState(true);
   const [expandedDone, setExpandedDone] = useState({}); // { noteId: true }
+  // 📆 지난 날짜 월별 그룹 펼침 상태 { "2026-08": true }. 기본은 가장 최근 달 하나만.
+  const [openTeamMonths, setOpenTeamMonths] = useState({});
+  const teamMonthSeeded = useRef(false);
   // 📅 work_date = 이 업무가 "언제 것인지"(업무 날짜). 마감일(due_date)과 다른 값이다.
   //    기본값 = 오늘. 날짜를 고르면 제목이 "M월D일 업무"로 자동 채워진다(직접 쓴 제목은 보존).
   var blankNewNote = function() {
@@ -29217,6 +29288,46 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       return String(b.created_at || "").localeCompare(String(a.created_at || ""));
     });
   }, [tabNotes, showDone]);
+
+  // ── 📆 팀 노트도 지난 날짜를 월별로 묶는다 (개인 업무노트와 같은 규칙) ───────────
+  //  · 공지 고정 카드는 절대 묶지 않는다 — 항상 맨 위에 보여야 한다(기존 정렬 규칙 유지).
+  //  · 오늘·미래 카드도 묶지 않는다.
+  //  · displayNotes 는 이미 정렬돼 있으므로 순서를 그대로 두고 앞/뒤로만 가른다(정렬 로직 미변경).
+  var teamRender = (function() {
+    var t = kstDate();
+    var head = [], byYm = {}, months = [];
+    (displayNotes || []).forEach(function(n) {
+      var d = String(n.work_date || (n.created_at || "").slice(0, 10) || "");
+      if (isPinnedAnnounce(n) || !d || d >= t) { head.push(n); return; }
+      var ym = d.slice(0, 7);
+      if (!byYm[ym]) { byYm[ym] = { ym: ym, notes: [], dates: {} }; months.push(byYm[ym]); }
+      byYm[ym].notes.push(n);
+      byYm[ym].dates[d] = true;
+    });
+    months.sort(function(a, b) { return b.ym.localeCompare(a.ym); });
+    var out = head.map(function(n) { return { kind: "note", note: n }; });
+    months.forEach(function(g) {
+      g.dateCount = Object.keys(g.dates).length;
+      g.label = parseInt(g.ym.slice(0, 4), 10) + "년 " + parseInt(g.ym.slice(5, 7), 10) + "월";
+      out.push({ kind: "month", g: g });
+      if (openTeamMonths[g.ym]) g.notes.forEach(function(n) { out.push({ kind: "note", note: n }); });
+    });
+    return { list: out, newestYm: months.length ? months[0].ym : "" };
+  })();
+  var toggleTeamMonth = function(ym) {
+    setOpenTeamMonths(function(p) {
+      var n = Object.assign({}, p);
+      if (n[ym]) delete n[ym]; else n[ym] = true;
+      return n;
+    });
+  };
+  // 기본값: 가장 최근 달 하나만 펼침 (최초 1회만)
+  var newestTeamYm = teamRender.newestYm;
+  useEffect(function() {
+    if (teamMonthSeeded.current || !newestTeamYm) return;
+    teamMonthSeeded.current = true;
+    setOpenTeamMonths({ [newestTeamYm]: true });
+  }, [newestTeamYm]);
 
   var openCount = useMemo(function() {
     // 전체(공통) 대기 업무는 양쪽 팀 카운트에 모두 포함
@@ -29788,7 +29899,25 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {displayNotes.map(function(note) {
+              {teamRender.list.map(function(entry) {
+                // 📆 지난 날짜 월 그룹 헤더 — 누르면 그 달의 카드가 펼쳐진다
+                if (entry.kind === "month") {
+                  var g = entry.g, mOpen = !!openTeamMonths[g.ym];
+                  return (
+                    <div key={"m:" + g.ym} onClick={function() { toggleTeamMonth(g.ym); }} title={mOpen ? "접기" : "펼치기"}
+                      style={{ display: "flex", alignItems: "center", gap: 9, background: mOpen ? "#F0EFEA" : "#FAFAF8",
+                        border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 13px", cursor: "pointer", marginTop: 4 }}>
+                      <span style={{ fontSize: 12 }}>📆</span>
+                      <span style={{ fontSize: 12.5, fontWeight: 800, color: "#555" }}>{g.label}</span>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: "#6B7280", background: "#fff", border: "1px solid #E5E7EB", borderRadius: 99, padding: "2px 8px" }}>
+                        {g.dateCount}개 날짜
+                      </span>
+                      <span style={{ fontSize: 10.5, color: "#AAA" }}>업무 {g.notes.length}개</span>
+                      <span style={{ marginLeft: "auto", fontSize: 10.5, color: "#888" }}>{mOpen ? "접기 ▲" : "펼치기 ▼"}</span>
+                    </div>
+                  );
+                }
+                var note = entry.note;
                 var ps = priorityStyle(note.priority);
                 var ss = statusStyle(note.status);
                 var isOpen = note.status === "open";
