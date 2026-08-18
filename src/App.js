@@ -17634,7 +17634,8 @@ var ITEM_BOX_MIN = 260;                    // 박스 최소 폭(px). 넓히면 �
 function itemGridStyle(extra) {
   return Object.assign({
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(" + ITEM_BOX_MIN + "px, 1fr))",
+    // min(...,100%) 이 없으면 컨테이너가 ITEM_BOX_MIN 보다 좁을 때(팀 카드 280px 등) 트랙이 컨테이너를 넘어 가로 스크롤이 생긴다.
+    gridTemplateColumns: "repeat(auto-fill, minmax(min(" + ITEM_BOX_MIN + "px, 100%), 1fr))",
     gap: 6,
     alignItems: "stretch",                 // 같은 행 박스 높이를 맞춘다(버튼 줄이 들쭉날쭉하지 않게)
   }, extra || {});
@@ -19321,7 +19322,7 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
   var renderMonthHeader = function(g, open, onToggle) {
     return (
       <div key={"m:" + g.ym} onClick={onToggle} title={open ? "접기" : "펼치기"}
-        style={{ display: "flex", alignItems: "center", gap: 9, background: open ? "#F0EFEA" : "#FAFAF8",
+        style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 9, background: open ? "#F0EFEA" : "#FAFAF8",
           border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 13px", cursor: "pointer", marginTop: 4 }}>
         <span style={{ fontSize: 12 }}>📆</span>
         <span style={{ fontSize: 12.5, fontWeight: 800, color: "#555" }}>{g.label}</span>
@@ -19662,7 +19663,7 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
     return (
       <div key={note.id} onClick={function() { setExpandedNotes(function(p) { return Object.assign({}, p, { [note.id]: true }); }); }}
         title="눌러서 펼치기"
-        style={{ display: "flex", alignItems: "center", gap: 10, background: "#FAFAF8", border: "1px solid #EDEBE6", borderRadius: 8, padding: "9px 13px", cursor: "pointer" }}>
+        style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 10, background: "#FAFAF8", border: "1px solid #EDEBE6", borderRadius: 8, padding: "9px 13px", cursor: "pointer" }}>
         <span style={{ fontSize: 12 }}>✅</span>
         <span style={{ fontSize: 12, fontWeight: 700, color: "#666", whiteSpace: "nowrap" }}>{d ? d.slice(5).replace("-", "/") + " (" + wd + ")" : "날짜 없음"}</span>
         <span style={{ fontSize: 12, color: "#888", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{note.title || "(제목 없음)"}</span>
@@ -21005,7 +21006,7 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
                   <span style={{ fontSize: 12 }}>"+ 이 날짜에 노트 추가" 버튼으로 작성하세요.</span>
                 </div>
               ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
                   {notesForSelectedDate.map(function(note) {
                     return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? openCarryPicker : null} onAddToCalendar={openCalAdd} />;
                   })}
@@ -21068,7 +21069,7 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
           {pinned.length > 0 && (
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#B45309", letterSpacing: "0.05em", marginBottom: 10 }}>📌 고정된 노트</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
                 {pinned.map(function(note) { return <NoteCard key={note.id} note={note} editingId={editingId} editNote={editNote} setEditNote={setEditNote} saveEdit={saveEdit} setEditingId={setEditingId} toggleDone={toggleDone} togglePin={togglePin} deleteNote={deleteNote} fmtDate={fmtDate} currentUserName={profile?.name} onChecklistChange={onChecklistChange} moveNoteDate={moveNoteDate} setWaitReason={setNoteWaitReason} editable={canEditNote(note)} getRequestForItem={getRequestForItem} onAddRequestReply={addRequestReply} onCarryItem={canCarryFromCard(note) ? openCarryPicker : null} onAddToCalendar={openCalAdd} />; })}
               </div>
             </div>
@@ -21077,7 +21078,7 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
           {unpinned.length > 0 && (
             <div>
               {pinned.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: "#888", letterSpacing: "0.05em", marginBottom: 10 }}>전체 노트</div>}
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
                 {unpinnedRender.list.map(function(entry) {
                   // 📆 지난 날짜 월 그룹 헤더 — 누르면 그 달의 노트들이 펼쳐진다
                   if (entry.kind === "month") return renderMonthHeader(entry.g, !!openMonths[entry.g.ym], function() { toggleMonth(entry.g.ym); });
@@ -30290,14 +30291,14 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
               {showDone ? "이 팀에 노트가 없어요" : "대기·진행중인 업무가 없어요. 새 업무를 등록해보세요."}
             </div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
               {teamRender.list.map(function(entry) {
                 // 📆 지난 날짜 월 그룹 헤더 — 누르면 그 달의 카드가 펼쳐진다
                 if (entry.kind === "month") {
                   var g = entry.g, mOpen = !!openTeamMonths[g.ym];
                   return (
                     <div key={"m:" + g.ym} onClick={function() { toggleTeamMonth(g.ym); }} title={mOpen ? "접기" : "펼치기"}
-                      style={{ display: "flex", alignItems: "center", gap: 9, background: mOpen ? "#F0EFEA" : "#FAFAF8",
+                      style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 9, background: mOpen ? "#F0EFEA" : "#FAFAF8",
                         border: "1px solid #E8E5E0", borderRadius: 8, padding: "10px 13px", cursor: "pointer", marginTop: 4 }}>
                       <span style={{ fontSize: 12 }}>📆</span>
                       <span style={{ fontSize: 12.5, fontWeight: 800, color: "#555" }}>{g.label}</span>
@@ -30326,7 +30327,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                   return (
                     <div key={note.id} onClick={function() { setExpandedDone(function(p) { return Object.assign({}, p, { [note.id]: true }); }); }}
                       title="눌러서 펼치기"
-                      style={{ display: "flex", alignItems: "center", gap: 9, background: "#FAFAF8", border: "1px solid #EDEBE6", borderRadius: 8, padding: "8px 12px", cursor: "pointer" }}>
+                      style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 9, background: "#FAFAF8", border: "1px solid #EDEBE6", borderRadius: 8, padding: "8px 12px", cursor: "pointer" }}>
                       <span style={{ fontSize: 11.5 }}>✅</span>
                       <span style={{ fontSize: 11, fontWeight: 700, color: "#666", whiteSpace: "nowrap" }}>{dday ? dday.slice(5).replace("-", "/") : "-"}</span>
                       <span style={{ fontSize: 11.5, color: "#888", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -30502,11 +30503,11 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                             </div>
                             <span style={{ fontSize: 10, fontWeight: 700, color: "#1A1917" }}>{takenCount}/{cl.length} 가져감</span>
                           </div>
-                          {/* 📦 항목들 — 작은 카드 박스로 3열 배치(좁으면 자동으로 2열·1열).
-                              ⚠️ 세로 1열 시절의 "5개 초과 → 165px" 기준을 그대로 두면 3열에선 2행도 안 돼 잘리는 위치가 이상해진다.
-                                 → 행 기준으로 환산(3열 가정 · 3행까지 노출)해서 그 안에서만 스크롤한다.
+                          {/* 📦 항목들 — 작은 카드 박스. 열 수는 컨테이너 폭이 정한다(auto-fill).
+                              ⚠️ 팀 카드가 280px 카드 그리드로 돌아왔으므로 이 안에서는 사실상 1열이다.
+                                 → 행 환산 인자도 1열 기준(1열 가정 · 3행까지 노출)이어야 잘리는 위치가 맞는다.
                               상단(진행률바)·하단(가져가기/완료 버튼)은 이 div 바깥이라 스크롤과 무관하게 항상 고정 노출된다. */}
-                          <div style={itemGridStyle({ maxHeight: itemGridMaxHeight(cl.length, 3, 3), overflowY: cl.length > 9 ? "auto" : "visible", overflowX: "hidden", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", paddingRight: cl.length > 9 ? 4 : 0 })}>
+                          <div style={itemGridStyle({ maxHeight: itemGridMaxHeight(cl.length, 1, 3), overflowY: cl.length > 3 ? "auto" : "visible", overflowX: "hidden", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", paddingRight: cl.length > 3 ? 4 : 0 })}>
                             {cl.map(function(item) {
                               // 📅 일정 항목은 모양이 달라 따로 그린다(기존 항목 렌더는 손대지 않는다)
                               if (item && item.is_sched) return renderSchedItem(note, item);
