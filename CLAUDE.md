@@ -187,19 +187,34 @@ reset role;
 ```
 (`is_admin()` = uid 가 `role='admin' and status='approved'`. 현재 양호·정원만 해당.)
 
-## ⚠️ 파이프라인 단계 · 계약금 정산 반영 — 2026-08-11 신설
-(SQL: `파이프라인_단계개편_계약금입금완료.sql` 7/7 · `계약금_수수료율_컬럼추가.sql` 8/8, 각 `_rollback`/`_검증`)
+## ⚠️ 파이프라인 단계 · 계약금 정산 반영 — 2026-08-11 신설 (2026-08-18 STEP2 폐지로 개정)
+(SQL: `파이프라인_단계개편_계약금입금완료.sql` 7/7 · `계약금_수수료율_컬럼추가.sql` 8/8, 각 `_rollback`/`_검증`
+ · 폐지 `파이프라인_STEP2_계약금입금완료_폐지.sql` / `_rollback` · 조사 `단계제거_조회_계약금입금완료.sql`)
 
-**"계약금입금완료"는 이제 두 컬럼에 같은 글자로 존재한다. 일부러 그렇게 뒀다.**
-- `companies.contract_status` (`CONTRACT_STATUSES`) — 서명 절차가 어디까지 갔나
-- `companies.stage` / `pipeline_cards.stage` (`STAGES` STEP2, 상수 `CONTRACT_PAID_STAGE`) — 파이프라인 단계
+### 🔻 2026-08-18: STEP2 "계약금입금완료" 칸을 파이프라인에서 없앴다
+실무에서 계약금이 들어오면 곧바로 '필수서류 및 인증서요청'으로 넘어가 이 칸을 거치지 않았다(항상 0건).
+제거 전 실측: `pipeline_cards.stage` 0건(휴지통 포함) · `companies.stage` 0건(삭제분 포함) ·
+`agency_cases.status` 0건 · `status_stage_map` 규칙 0건 → **옮길 데이터가 없어 데이터는 손대지 않았다.**
+지운 것은 `stage_stagnation_config` 고아 행 1건뿐(화면에 안 그려져 사람이 지울 수도 없는 행이 된다).
 
-같은 이름이면 같이 움직여야 혼동이 없다 → **양방향 연동**을 코드로 유지한다:
-- 계약 상태를 켜면 → `advanceCardsToContractPaid()` 가 그 업체의 열린 카드를 STEP2 로 **앞으로만** 옮긴다.
-  이미 STEP2 를 지난 카드는 안 건드린다(뒤로 끌면 진행이 후퇴한다). 부결/반려·기타는 STAGES 뒤쪽이라 자동 제외.
+- **STEP 번호는 전부 `STAGES.indexOf()+1` 로 계산한다 — 하드코딩된 번호가 한 곳도 없다.**
+  그래서 배열에서 한 칸 빼면 뒤 단계가 자동으로 당겨진다(구 STEP3 필수서류 → **STEP2**).
+  보드 헤더·이동 select·상태→STEP 매핑 모달·기업상세 카드 배지가 전부 같은 계산을 쓴다.
+  → 앞으로도 STEP 번호를 글자로 박지 말 것. 안내문이 필요하면 `advanceStageLabel()` 처럼 계산해서 쓴다.
+
+**`contract_status` 와 `stage` 의 이름 중복은 이걸로 사라졌다. 연동은 이제 한 방향뿐이다.**
+- `companies.contract_status` (`CONTRACT_STATUSES`) — 서명 절차가 어디까지 갔나. **정산 반영의 유일한 발동 조건.**
+- `companies.stage` / `pipeline_cards.stage` (`STAGES`) — 파이프라인 단계. 정산과 무관하다.
+
+- 계약 상태를 켜면 → `advanceCardsToContractPaid()` 가 그 업체의 열린 카드를
+  `CONTRACT_PAID_ADVANCE_STAGE`(= "필수서류 및 인증서요청") 로 **앞으로만** 옮긴다.
+  이미 그 단계를 지난 카드는 안 건드린다(뒤로 끌면 진행이 후퇴한다). 부결/반려·기타는 STAGES 뒤쪽이라 자동 제외.
   드래그 이동과 같은 의미가 되도록 `sync_mode='manual'` 로 고정한다 —
   **안 그러면 다음 기관상태 자동 동기화(`status_stage_map`)가 단계를 되돌려 놓는다.**
-- 카드를 STEP2 로 드래그하면 → `contract_status` 를 켜고 같은 정산 반영 경로를 탄다.
+- ⚠️ **반대 방향(카드를 끌면 계약 상태가 켜짐)은 일부러 없앴다.** 옛 `applyContractPaid()` 는 제거했다.
+  "필수서류 및 인증서요청" 으로 옮겼다고 계약금이 입금된 것은 아니기 때문이다.
+  **계약 상태를 켜는 곳은 기업상세의 [계약금입금완료] 버튼 하나뿐**이고, 정산 반영도 거기서 함께 실행된다.
+  → 파이프라인 드래그·일괄 이동에는 이제 정산 부작용이 **하나도 없다**(단계만 바뀐다).
 
 **정산 자동 반영(`syncSettlementFromCompany`)에서 지킬 것**
 - 조건은 **OR** 다: `contract_status='계약금입금완료'` **또는** `fee_status='수수료수령완료'`.

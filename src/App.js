@@ -743,19 +743,28 @@ function StorageAudio({ url, style }) {
 }
 
 // ── 상수 ─────────────────────────────────────────────────────────────────────
-// 파이프라인 보드 단계(12). "추가 진행 예정/중"은 2026-07-26 폐지 → 카드의 '새 기관 추가 신청' 버튼으로 대체.
+// 파이프라인 보드 단계(11). "추가 진행 예정/중"은 2026-07-26 폐지 → 카드의 '새 기관 추가 신청' 버튼으로 대체.
 // 2026-08-11: STEP2 "계약금입금완료" 신설 · "스크립트 전달 완료" 폐지(카드 0건·기업 0건·기관상태 0건이라 이동 대상 없음).
-const STAGES = ["상담/진단완료", "계약금입금완료", "필수서류 및 인증서요청", "기관신청대기/방문예정", "기관신청완료/방문완료", "심사중/실태조사대기", "실태조사완료/약정완료", "자금집행완료", "수수료대기 및 입금요청", "입금완료/사후관리", "부결/반려", "기타"];
-// ⚠️ STEP2 의 이름은 companies.contract_status 의 값 "계약금입금완료"(CONTRACT_STATUSES)와 **일부러 같게** 뒀다.
-//    같은 글자면 같이 움직여야 혼동이 없다 → syncContractStageLink() 가 둘을 한 쌍으로 유지한다.
-//    (계약상태를 켜면 카드가 STEP2 로 전진 · 카드를 STEP2 로 옮기면 계약상태가 켜짐. 뒤로는 절대 안 옮긴다.)
-const CONTRACT_PAID_STAGE = "계약금입금완료";
+// 2026-08-18: STEP2 "계약금입금완료" 폐지 — 실무에서 계약금이 들어오면 곧바로 '필수서류 및 인증서요청'으로
+//   넘어가 이 칸을 거치지 않는다(카드 0건·기업 0건·기관상태 0건·매핑규칙 0건 실측 후 제거).
+//   ⚠️ STEP 번호는 전부 STAGES.indexOf()+1 로 계산하므로 뒤 단계가 자동으로 한 칸씩 당겨진다.
+const STAGES = ["상담/진단완료", "필수서류 및 인증서요청", "기관신청대기/방문예정", "기관신청완료/방문완료", "심사중/실태조사대기", "실태조사완료/약정완료", "자금집행완료", "수수료대기 및 입금요청", "입금완료/사후관리", "부결/반려", "기타"];
+// 📌 계약금이 입금되면(companies.contract_status = "계약금입금완료") 카드를 여기까지 **앞으로만** 민다.
+//    2026-08-17 까지는 같은 이름의 STEP2 칸이 따로 있어 양방향 연동이었지만, 그 칸을 폐지하면서
+//    **한 방향(계약상태 → 카드 전진)만** 남겼다.
+//    ⚠️ 반대 방향은 일부러 없앴다 — 이 단계로 드래그했다고 계약금이 입금된 것은 아니기 때문이다.
+//       계약 상태를 켜는 곳은 기업상세의 [계약금입금완료] 버튼 하나뿐이다(정산 반영도 거기서 함께 실행된다).
+const CONTRACT_PAID_ADVANCE_STAGE = "필수서류 및 인증서요청";
+// 안내문에 쓰는 라벨. STEP 번호를 글자로 박아두면 단계가 바뀔 때 어긋나므로 매번 계산한다.
+function advanceStageLabel() {
+  var i = STAGES.indexOf(CONTRACT_PAID_ADVANCE_STAGE);
+  return (i >= 0 ? "STEP" + (i + 1) + "(" + CONTRACT_PAID_ADVANCE_STAGE + ")" : CONTRACT_PAID_ADVANCE_STAGE);
+}
 // 폐지된 단계 — companies.stage(구 데이터)에는 아직 남아 있어 목록 필터/편집 셀렉트에서만 노출
 const RETIRED_STAGES = ["추가 진행 예정", "추가 진행 중"];
 const COMPANY_STAGES = STAGES.concat(RETIRED_STAGES);
 const STAGE_COLORS = {
   "상담/진단완료":           { bg: "#EEF2FF", text: "#4338CA", border: "#C7D2FE" },
-  "계약금입금완료":          { bg: "#F0FDF4", text: "#15803D", border: "#BBF7D0" },
   "필수서류 및 인증서요청":  { bg: "#FFF7ED", text: "#C2410C", border: "#FED7AA" },
   "기관신청대기/방문예정":   { bg: "#FFF1F2", text: "#BE123C", border: "#FECDD3" },
   "기관신청완료/방문완료":   { bg: "#ECFDF5", text: "#047857", border: "#A7F3D0" },
@@ -2635,16 +2644,16 @@ async function syncSettlementFromCompany(co) {
   return { mode: "insert", amount: amount, rate: rate };
 }
 
-// ── 📌 계약상태 ↔ 파이프라인 STEP2 연동 ──────────────────────────────────────
-// STAGES 의 "계약금입금완료"(STEP2)와 contract_status 의 "계약금입금완료"는 일부러 같은 이름이다.
-// 계약 상태를 켜면 그 업체의 열린 카드를 STEP2 로 **앞으로만** 옮긴다.
-//   · 이미 STEP2 를 지난 카드(심사중 등)는 건드리지 않는다 — 뒤로 끌어내리면 진행이 후퇴한다.
+// ── 📌 계약상태 → 파이프라인 카드 전진 (한 방향) ─────────────────────────────
+// 계약 상태를 "계약금입금완료"로 켜면 그 업체의 열린 카드를 CONTRACT_PAID_ADVANCE_STAGE
+// ("필수서류 및 인증서요청") 로 **앞으로만** 옮긴다 — 계약금이 들어오면 바로 서류를 요청하는 실무 흐름.
+//   · 이미 그 단계를 지난 카드(심사중 등)는 건드리지 않는다 — 뒤로 끌어내리면 진행이 후퇴한다.
 //   · 부결/반려·기타는 STAGES 뒤쪽이라 이 조건에서 자동으로 빠진다.
 //   · 드래그 이동과 같은 의미가 되도록 sync_mode='manual' 로 고정한다
 //     (안 그러면 다음 기관상태 자동 동기화가 단계를 되돌려 놓는다).
 async function advanceCardsToContractPaid(companyId) {
   if (!companyId) return { moved: 0 };
-  var target = STAGES.indexOf(CONTRACT_PAID_STAGE);
+  var target = STAGES.indexOf(CONTRACT_PAID_ADVANCE_STAGE);
   if (target < 0) return { moved: 0 };
   var q = await supabase.from("pipeline_cards").select("id, stage")
     .eq("company_id", companyId).is("closed_at", null).is("deleted_at", null); // 🗑 휴지통 카드는 옮기지 않는다
@@ -2656,7 +2665,7 @@ async function advanceCardsToContractPaid(companyId) {
   if (!movers.length) return { moved: 0 };
   var nowIso = new Date().toISOString();
   var r = await supabase.from("pipeline_cards")
-    .update({ stage: CONTRACT_PAID_STAGE, sync_mode: "manual", needs_mapping: false,
+    .update({ stage: CONTRACT_PAID_ADVANCE_STAGE, sync_mode: "manual", needs_mapping: false,
               stage_changed_at: nowIso, alerted_at: null, updated_at: nowIso })
     .in("id", movers.map(function(c) { return c.id; }));
   if (r.error) return { moved: 0, error: r.error.message };
@@ -8392,7 +8401,7 @@ function CRMApp({ profile, session }) {
             {view === "calendar" && <CalendarView companies={companies} onSelectCompany={setSelectedCompany} profile={profile} />}
             {view === "manual" && <ManualView />}
             {view === "quicklinks" && <QuickLinksView />}
-            {view === "pipeline" && <PipelineView cardRows={pipelineCardRows} hiddenByList={pipelineCardData.hiddenByList} onClearListFilters={clearListFilters} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setPipelineCards={setPipelineCards} setCompanies={setCompanies} setStagnConfig={setStagnConfig} canEditMapping={profile?.name === "양호"} myName={profile?.name} stagnRows={stagnRows} />}
+            {view === "pipeline" && <PipelineView cardRows={pipelineCardRows} hiddenByList={pipelineCardData.hiddenByList} onClearListFilters={clearListFilters} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setPipelineCards={setPipelineCards} setStagnConfig={setStagnConfig} canEditMapping={profile?.name === "양호"} myName={profile?.name} stagnRows={stagnRows} />}
             {view === "cases" && <ApprovalCasesView profile={profile} />}
             {view === "signoff" && <SignOffView profile={profile} onBadgeUpdate={setSignOffBadge} />}
             {/* 전체 담당자 보기는 업무노트 열람 권한(wnIsAdmin=양호)과 같은 기준으로. role='admin' 만으로는 DB(RLS)가 남의 노트를 안 준다 */}
@@ -10117,7 +10126,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         {[
           { label: "전체 관리 업체", value: companies.length, sub: "법인 " + companies.filter(c=>c.type==="법인").length + " · 개인 " + companies.filter(c=>c.type==="개인").length, color: "#4338CA", viewId: "list" },
           { label: "계약 완료", value: contracted + "건", sub: "수수료 완납 " + contractDone + "건", color: "#15803D", viewId: "settlement" },
-          { label: "대기 건", value: companies.filter(c=>["상담/진단완료","계약금입금완료","필수서류 및 인증서요청","기관신청대기/방문예정"].includes(c.stage)).length + "건", sub: "신청 전 단계", color: "#B45309", viewId: "pipeline" },
+          { label: "대기 건", value: companies.filter(c=>["상담/진단완료","필수서류 및 인증서요청","기관신청대기/방문예정"].includes(c.stage)).length + "건", sub: "신청 전 단계", color: "#B45309", viewId: "pipeline" },
           { label: "진행중", value: companies.filter(c=>["기관신청완료/방문완료","심사중/실태조사대기","실태조사완료/약정완료","자금집행완료"].includes(c.stage)).length + "건", sub: "기관 신청 이후", color: "#7C3AED", viewId: "agency" },
         ].map((k, i) => (
           <div key={i} onClick={() => setView(k.viewId)}
@@ -10812,7 +10821,7 @@ function normPipeSearchName(s) {
 }
 function onlyDigits(s) { return String(s == null ? "" : s).replace(/[^0-9]/g, ""); }
 
-function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssignee, setFilterAssignee, assignees, onSelect, setPipelineCards, setCompanies, setStagnConfig, canEditMapping, myName, stagnRows }) {
+function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssignee, setFilterAssignee, assignees, onSelect, setPipelineCards, setStagnConfig, canEditMapping, myName, stagnRows }) {
   // 파이프라인 탭 진입 시 카드 최신화 (기관현황 자동동기화 결과 반영)
   useEffect(function() {
     var alive = true;
@@ -11175,30 +11184,10 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
     if (dragOverStage === stage) setDragOverStage(null);
   };
 
-  // 📌 STEP2(계약금입금완료) 연동 — 카드를 STEP2로 옮기면 계약 상태도 같이 켠다.
-  //    이름이 같은 값이면 같이 움직여야 혼동이 없다(CLAUDE.md). 이어서 계약금·수수료율이 있으면
-  //    정산에도 반영한다 — 기업정보에서 켠 것과 완전히 같은 경로.
-  //    ⚠️ 루프 안에서 클로저를 만들지 않으려고 함수로 뺐다(같은 회사가 여러 장 걸려도 회사당 1회만 호출).
-  var applyContractPaid = async function(row) {
-    var cid = row.card.company_id;
-    if (!cid || !row.co || row.co.contract_status === "계약금입금완료") return;
-    try {
-      var cAt = new Date().toISOString();
-      var cr = await supabase.from("companies")
-        .update({ contract_status: "계약금입금완료", contract_status_at: cAt })
-        .eq("id", cid);
-      if (cr.error) { console.warn("계약 상태 반영 실패:", cr.error.message); return; }
-      if (setCompanies) setCompanies(function(prev) { return (prev || []).map(function(x) { return x.id === cid ? Object.assign({}, x, { contract_status: "계약금입금완료", contract_status_at: cAt }) : x; }); });
-      var sres3 = await syncSettlementFromCompany(Object.assign({}, row.co, { contract_status: "계약금입금완료" }));
-      if (sres3 && sres3.error) console.warn("정산 자동반영 실패:", sres3.error);
-    } catch (eCS) { console.warn("계약 상태 연동 중 오류:", eCS); }
-  };
-
   // ── 단계 이동 공용 로직 (개별 드래그 · 일괄 이동이 같은 함수를 쓴다) ──────────
   // 두 벌로 두면 반드시 어긋나므로 반영 로직은 여기 하나뿐이다. 확인창만 호출부에서 따로 띄운다.
   //  · 카드마다 출발 단계가 달라 정리 필드(기타 사유 / 부결 종결 해제 / 재배치 확인)가 제각각이라
   //    한 방 UPDATE 로 묶지 않고 카드별로 보낸다. 실패한 카드는 건너뛰고 끝에 모아서 보고한다.
-  //  · STEP2 연동은 **회사 단위로 중복 제거**해 회사당 1회만 실행한다(정산에 같은 값을 여러 번 밀지 않기 위해).
   var moveCards = async function(rows, newStage) {
     var targets = (rows || []).filter(function(r) { return r && r.card && r.card.stage !== newStage; });
     if (!targets.length) return { moved: 0, failed: [] };
@@ -11216,17 +11205,6 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
       // 수동 이동 → 이번 정체구간 알림 해제(연결 업무노트 완료 처리)
       if (card.alert_note_id) { try { await supabase.from("work_notes").update({ is_done: true }).eq("id", card.alert_note_id); } catch (e3) {} }
       moved.push({ row: row, oldStage: oldStage, upd: upd });
-    }
-    // 📌 STEP2 연동 — 회사 중복 제거 후 회사당 1회
-    if (newStage === CONTRACT_PAID_STAGE) {
-      var seenCo = {};
-      for (var j = 0; j < moved.length; j++) {
-        var mrow = moved[j].row;
-        var mcid = mrow.card.company_id;
-        if (!mcid || seenCo[mcid]) continue;
-        seenCo[mcid] = true;
-        await applyContractPaid(mrow);
-      }
     }
     // 팀 활동 로그에 남김 (대시보드 '우리 팀 활동 로그') — 일괄이면 한 번에 넣는다
     if (moved.length) {
@@ -11300,7 +11278,7 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
 
   // 확인창 + 이동 — **개별 드래그와 일괄 이동이 같은 문구·같은 경로**를 쓴다.
   //  · 이미 그 단계인 카드는 빼고, 몇 건이 빠졌는지 알려준다.
-  //  · 반영은 반드시 moveCards 한 곳을 거친다(단계값·STEP2 정산 연동이 갈라지지 않게).
+  //  · 반영은 반드시 moveCards 한 곳을 거친다(단계값이 갈라지지 않게).
   //  · opts.silentWhenEmpty — 드래그처럼 "옮길 게 없으면 아무 일도 없던 것"으로 끝내야 할 때.
   var confirmAndMoveCards = async function(rows, newStage, opts) {
     opts = opts || {};
@@ -11314,13 +11292,6 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
     var msg = movable.length + "건을 '" + newStage + "'(으)로 옮길까요?\n\n" + previewList(movable)
       + (skipped ? "\n\n(이미 그 단계인 " + skipped + "건은 제외됩니다)" : "")
       + "\n\n수동 이동으로 기록됩니다 — 이후 기관현황이 바뀌어도 자동으로 덮어쓰지 않습니다.";
-    if (newStage === CONTRACT_PAID_STAGE) {
-      var coIds = {};
-      movable.forEach(function(r) { if (r.card.company_id && r.co && r.co.contract_status !== "계약금입금완료") coIds[r.card.company_id] = true; });
-      var nCo = Object.keys(coIds).length;
-      if (nCo) msg += "\n\n⚠ '" + CONTRACT_PAID_STAGE + "'로 옮기면 " + nCo + "개 업체의 계약 상태가 켜지고,\n"
-        + "   계약금·수수료율이 정산현황에도 자동 반영됩니다.";
-    }
     if (!window.confirm(msg)) return null;
     setBulkBusy(true);
     var res = await moveCards(movable, newStage);
@@ -13973,7 +13944,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
     }
     setData(function(p) { return Object.assign({}, p, payload); });
     if (onPatchCompany) onPatchCompany(data.id, payload);
-    // 💰📌 계약금입금완료로 켰을 때만 — 정산 자동 반영 + 파이프라인 카드 STEP2 전진.
+    // 💰📌 계약금입금완료로 켰을 때만 — 정산 자동 반영 + 파이프라인 카드 전진(필수서류 및 인증서요청).
     //    해제(다시 눌러 '미정')는 되돌리지 않는다: 이미 넘어간 정산 값을 지우면 사람이 고친 걸 덮게 된다.
     if (value === "계약금입금완료") {
       var co = Object.assign({}, data, { contract_status: value });
@@ -13982,9 +13953,9 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
       var mv = await advanceCardsToContractPaid(data.id);
       if (s && (s.mode === "insert" || s.mode === "update")) {
         alert("💰 정산" + (s.mode === "insert" ? "에 새 행을 만들어 " : "에 ") + "계약금·수수료율을 반영했어요."
-          + (mv && mv.moved ? "\n📌 파이프라인 카드 " + mv.moved + "장을 STEP2(계약금입금완료)로 옮겼습니다." : ""));
+          + (mv && mv.moved ? "\n📌 파이프라인 카드 " + mv.moved + "장을 " + advanceStageLabel() + "로 옮겼습니다." : ""));
       } else if (mv && mv.moved) {
-        alert("📌 파이프라인 카드 " + mv.moved + "장을 STEP2(계약금입금완료)로 옮겼습니다.");
+        alert("📌 파이프라인 카드 " + mv.moved + "장을 " + advanceStageLabel() + "로 옮겼습니다.");
       }
     }
   };
