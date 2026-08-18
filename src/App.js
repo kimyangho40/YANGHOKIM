@@ -1471,6 +1471,36 @@ const TEAMS = ["법인전담","개인전담","관리자"];
 //   ⚠️ 기존 companies.assignee 값은 건드리지 않았다 — 여기서 빠져도 이미 저장된
 //      "관호, 현애" 같은 값은 그대로 보인다. 그 업체를 편집해 저장하면 그때 빠진다.
 const ASSIGNEES = ["유진","관호","지혜","동일","양호","정원"];
+// ── 📅 팀 일정 항목 (2026-08-18) ────────────────────────────────────────────
+// 실태조사·기관방문 같은 "예정 일정". **별도 테이블을 만들지 않는다** —
+// 팀 업무노트 체크리스트 항목(team_notes.checklist, jsonb)에 아래 필드를 얹어 쓴다.
+//   { ...기존항목, is_sched:true, sched_kind, company_id, company_name, assignee,
+//     done, done_at, done_by, result }
+// 이렇게 두는 이유: 항목이 곧 "그 날짜 팀 카드의 체크리스트 항목"이라
+//   ① "그 날짜 팀 업무노트에 뜬다"가 구조상 자동이고,
+//   ② 이월·밀린 미완료·월별 접기가 이미 이 자료구조를 쓰고 있어 분기가 거의 안 는다.
+// ⚠️ 기존 항목에는 is_sched 가 없다(undefined) → 일정 분기를 타지 않아 그대로 그려진다.
+const SCHED_KINDS = ["실태조사", "기관방문", "약정", "서류마감", "재방문", "통화"];
+const SCHED_KIND_COLORS = {
+  "실태조사": { bg: "#EEF2FF", text: "#4338CA", border: "#C7D2FE" },
+  "기관방문": { bg: "#ECFDF5", text: "#047857", border: "#A7F3D0" },
+  "약정":     { bg: "#F5F3FF", text: "#7C3AED", border: "#DDD6FE" },
+  "서류마감": { bg: "#FEE2E2", text: "#B91C1C", border: "#FECACA" },
+  "재방문":   { bg: "#FFF7ED", text: "#C2410C", border: "#FED7AA" },
+  "통화":     { bg: "#E0F2FE", text: "#0369A1", border: "#BAE6FD" },
+};
+// 직접 입력한 종류는 목록에 없으므로 회색으로 떨어진다
+function schedKindStyle(kind) {
+  return SCHED_KIND_COLORS[kind] || { bg: "#F3F4F6", text: "#4B5563", border: "#D1D5DB" };
+}
+// ⚠️ 일정 항목도 text 를 반드시 채운다 — 이월 표시·밀린 미완료 정렬·알림 본문이 text 를 읽는다.
+function schedItemText(kind, companyName) {
+  return String(kind || "일정") + (companyName ? " · " + companyName : "");
+}
+// 일정이 "언제 것인지" = 그 카드의 업무 날짜. work_date 가 없는 옛 카드는 등록일로 대체한다.
+function schedDateOf(note) {
+  return String((note && note.work_date) || String((note && note.created_at) || "").slice(0, 10) || "");
+}
 // 📓 업무노트 열람 권한 — 관리자는 전원 열람, 공유 그룹은 서로 열람(수정은 본인 것만)
 //   양호만 전체 열람. 관호·유진은 관리자 권한 없이 본인 노트만. 양호 본인 노트는 양호만 봄.
 const WN_ADMINS = ["양호"];
@@ -29200,6 +29230,11 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
   // 📆 지난 날짜 월별 그룹 펼침 상태 { "2026-08": true }. 기본은 가장 최근 달 하나만.
   const [openTeamMonths, setOpenTeamMonths] = useState({});
   const teamMonthSeeded = useRef(false);
+  // 📅 일정 만들기 팝업 — { date, kind, kindCustom, company_id, company_name, assignee, team }
+  const [showSched, setShowSched] = useState(false);
+  const [newSched, setNewSched] = useState(null);
+  const [schedBusy, setSchedBusy] = useState(false);
+  const [schedCoQuery, setSchedCoQuery] = useState(""); // 업체 검색어
   // 📅 팀 항목 이월 — 날짜 선택 팝업 { noteId, itemId, text, fromDate }
   const [teamCarry, setTeamCarry] = useState(null);
   const [teamCarryDate, setTeamCarryDate] = useState("");
@@ -29288,6 +29323,10 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       if (!cl.length) { out.push({ key: n.id, note: n, item: null, basis: basis, late: late }); return; }
       cl.forEach(function(it) {
         if (!it || it.taken_by) return;
+        // 📅 체크한 일정 항목은 끝난 것이다 — 가져가기(taken_by)와는 다른 축이라 따로 뺀다.
+        //    안 빼면 "다녀와서 체크까지 했는데 계속 밀린 걸로 뜨는" 상태가 된다.
+        //    일반 항목은 done 을 쓰는 곳이 없어(항상 false) 영향이 없다.
+        if (it.done) return;
         // 이미 다른 날짜로 이월한 항목은 뺀다 — 대상 카드에 복사본이 있어 두 번 세면 중복이다
         // (개인 업무노트 overdueItems 의 carried 제외와 같은 규칙)
         if (/→\s*\d{1,2}\/\d{1,2}\s*이월/.test(String(it.text || ""))) return;
@@ -29361,6 +29400,97 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     });
     return { list: out, newestYm: months.length ? months[0].ym : "" };
   })();
+  // ── 📅 일정 만들기 / 체크 / 결과 ──────────────────────────────────────────
+  var openSchedModal = function() {
+    setNewSched({
+      date: kstDate(), kind: SCHED_KINDS[0], kindCustom: "",
+      company_id: null, company_name: "",
+      assignee: normalizeName(profile?.name || "") || ASSIGNEES[0],
+      team: activeTab, // 기본값 = 지금 보고 있는 탭
+    });
+    setSchedCoQuery("");
+    setShowSched(true);
+  };
+  // 저장 경로는 **이월(confirmTeamCarry)과 완전히 같다** — (팀 × 날짜) 카드를 찾아 항목을 붙이고,
+  // 없으면 그 날짜 카드를 새로 만든다. 합치기 기준을 하나로 두지 않으면 같은 날 카드가 계속 늘어난다.
+  var addSchedule = async function() {
+    if (!newSched || schedBusy) return;
+    var kind = (newSched.kind === "__custom__" ? String(newSched.kindCustom || "").trim() : newSched.kind);
+    if (!kind) { alert("일정 종류를 입력해주세요."); return; }
+    if (!newSched.date) { alert("날짜를 선택해주세요."); return; }
+    if (!newSched.assignee) { alert("담당자를 선택해주세요."); return; }
+    setSchedBusy(true);
+    try {
+      var item = {
+        id: "ck_" + Math.random().toString(36).slice(2, 11),
+        text: schedItemText(kind, newSched.company_name),
+        taken_by: null, taken_at: null, taken_work_note_id: null, done: false,
+        is_sched: true, sched_kind: kind,
+        company_id: newSched.company_id || null,
+        company_name: newSched.company_name || "",
+        assignee: newSched.assignee,
+        result: "", done_at: null, done_by: null,
+      };
+      var q = await supabase.from("team_notes").select("*")
+        .eq("team", newSched.team).eq("work_date", newSched.date)
+        .is("deleted_at", null).neq("status", "done")
+        .order("created_at", { ascending: true }).limit(1);
+      if (q.error) throw q.error;
+      var dest = (q.data || [])[0] || null;
+      if (dest) {
+        var nextList = (Array.isArray(dest.checklist) ? dest.checklist : []).concat([item]);
+        // 항목이 늘어난다 → handleTeamItemAdded 가 팀원에게 알린다(사용자 결정: 알림 유지).
+        // 내 화면만 억제한다 — 내가 방금 만든 것까지 나에게 알릴 필요는 없다.
+        markTeamNoteSelfEdit(dest.id);
+        var u = await supabase.from("team_notes")
+          .update({ checklist: nextList, updated_at: new Date().toISOString() }).eq("id", dest.id);
+        if (u.error) throw u.error;
+      } else {
+        // posted_by 는 트리거(trg_team_notes_protect)가 본인으로 강제하므로 보내지 않는다.
+        var ins = await supabase.from("team_notes").insert({
+          team: newSched.team, title: teamNoteAutoTitle(newSched.date), work_date: newSched.date,
+          priority: "normal", status: "open", checklist: [item], is_announcement: false,
+        });
+        if (ins.error) throw ins.error;
+      }
+      setShowSched(false);
+      setNewSched(null);
+      await fetchTeamNotes();
+    } catch (e) {
+      alert("일정 등록 실패: " + ((e && e.message) || e));
+    } finally {
+      setSchedBusy(false);
+    }
+  };
+  // 체크(다녀옴) 토글 · 결과 메모 저장 — 둘 다 **항목 수가 그대로**라 팀원 알림이 나가지 않는다.
+  //   그래서 markTeamNoteSelfEdit 도 찍지 않는다(찍으면 그 10초 동안 남이 추가한 항목을 놓친다 — CLAUDE.md).
+  var patchSchedItem = async function(note, itemId, patch, failMsg) {
+    var list = Array.isArray(note.checklist) ? note.checklist : [];
+    if (!list.some(function(i) { return i && i.id === itemId; })) return;
+    var next = list.map(function(i) { return (i && i.id === itemId) ? Object.assign({}, i, patch) : i; });
+    setAllTeamNotes(function(prev) { return prev.map(function(x) { return x.id === note.id ? Object.assign({}, x, { checklist: next }) : x; }); });
+    var r = await supabase.from("team_notes")
+      .update({ checklist: next, updated_at: new Date().toISOString() }).eq("id", note.id);
+    if (r.error) {
+      // 실패하면 화면을 되돌린다 — 저장된 것처럼 보이면 안 된다
+      setAllTeamNotes(function(prev) { return prev.map(function(x) { return x.id === note.id ? Object.assign({}, x, { checklist: list }) : x; }); });
+      alert(failMsg + ": " + r.error.message);
+    }
+  };
+  var toggleSchedDone = function(note, item) {
+    var nextDone = !item.done;
+    patchSchedItem(note, item.id, {
+      done: nextDone,
+      done_at: nextDone ? new Date().toISOString() : null,
+      done_by: nextDone ? (normalizeName(profile?.name || "") || null) : null,
+    }, "일정 체크 저장 실패");
+  };
+  var saveSchedResult = function(note, item, text) {
+    var v = String(text || "").trim();
+    if (v === String(item.result || "").trim()) return; // 안 바뀌었으면 저장하지 않는다
+    patchSchedItem(note, item.id, { result: v }, "결과 메모 저장 실패");
+  };
+
   // ── 📅 팀 항목 이월 ────────────────────────────────────────────────────────
   // 개인 업무노트 이월과 같은 의미로 맞춘다: **원본은 지우지 않고 "(→ M/D 이월)" 표시만 남기고**,
   // 그 날짜의 팀 카드에 항목 복사본을 만든다(카드가 없으면 그 날짜 카드를 새로 만든다).
@@ -29390,6 +29520,18 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       var baseText = String(item.text || "").replace(/\s*\(→\s*\d{1,2}\/\d{1,2}\s*이월\)\s*$/, "").trim();
       var newItem = { id: "ck_" + Math.random().toString(36).slice(2, 11), text: baseText,
         taken_by: null, taken_at: null, taken_work_note_id: null, done: false };
+      // 📅 일정 항목이면 종류·업체·담당자를 같이 옮긴다 — 안 옮기면 연기한 순간 평범한 글줄이 된다.
+      //    결과·완료 표시는 **일부러 안 옮긴다** — 연기된 일정은 아직 안 다녀온 것이다.
+      if (item.is_sched) {
+        newItem.is_sched = true;
+        newItem.sched_kind = item.sched_kind || "";
+        newItem.company_id = item.company_id || null;
+        newItem.company_name = item.company_name || "";
+        newItem.assignee = item.assignee || "";
+        newItem.result = "";
+        newItem.done_at = null;
+        newItem.done_by = null;
+      }
 
       // 1) 대상 카드 — 같은 팀 · 그 날짜 · 살아있고 완료 아님. 여러 장이면 가장 먼저 만든 것에 합친다
       //    (합치기 기준을 하나로 두지 않으면 같은 날 카드가 계속 늘어난다 — work_notes 합치기와 같은 이유)
@@ -29902,6 +30044,69 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     return { bg: "#FEF9C3", color: "#854D0E", label: "🟡 보통", dot: "#EAB308" }; // normal
   };
 
+  // ── 📅 일정 항목 한 줄 그리기 ─────────────────────────────────────────────
+  // 일반 체크리스트 항목과 **다른 모양**이다: 체크박스(다녀옴) + 종류 배지 + 업체명 + 담당자 + 결과 한 줄.
+  // ⚠️ 일정에는 '가져가기'를 두지 않는다 — taken_by 가 붙으면 기존 렌더가 취소선을 씌워
+  //    done(다녀옴) 체크와 표시가 겹쳐 무엇이 끝난 건지 알 수 없게 된다. 대신 '연기'(이월)만 둔다.
+  var renderSchedItem = function(note, item) {
+    var ks = schedKindStyle(item.sched_kind);
+    var done = !!item.done;
+    var future = schedDateOf(note) > kstDate();   // 오늘 이후 = 아직 안 온 예정 일정
+    return (
+      <div key={item.id}
+        style={{ padding: "6px 8px", borderRadius: 6,
+          background: done ? "#F7F6F3" : (future ? "#F0F9FF" : "#fff"),
+          border: "0.5px solid " + (done ? "transparent" : (future ? "#BAE6FD" : "#E8E5E0")) }}>
+        {/* 모바일(MobileApp 도 이 컴포넌트를 그린다)에서 좁아지면 줄바꿈되게 wrap */}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 5, flexWrap: "wrap" }}>
+          <input type="checkbox" checked={done} onChange={function() { toggleSchedDone(note, item); }}
+            title="다녀온 뒤 체크하세요"
+            style={{ marginTop: 2, cursor: "pointer", accentColor: "#4338CA", flexShrink: 0 }} />
+          <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 4, whiteSpace: "nowrap",
+            flexShrink: 0, background: ks.bg, color: ks.text, border: "1px solid " + ks.border }}>
+            {item.sched_kind || "일정"}
+          </span>
+          <span style={{ flex: 1, fontSize: 11, fontWeight: 600, lineHeight: 1.5, wordBreak: "break-word", minWidth: 0,
+            color: done ? "#888" : "#1A1917", textDecoration: done ? "line-through" : "none" }}>
+            {item.company_name || "(업체 미지정)"}
+          </span>
+          {item.assignee && (
+            <span style={{ fontSize: 9, padding: "2px 7px", background: "#EEF2FF", color: "#4338CA",
+              borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>👤 {item.assignee}</span>
+          )}
+          {future && !done && (
+            <span title="아직 오지 않은 예정 일정입니다 (밀린 미완료가 아닙니다)"
+              style={{ fontSize: 9, padding: "2px 6px", background: "#E0F2FE", color: "#0369A1",
+                borderRadius: 4, fontWeight: 800, whiteSpace: "nowrap", flexShrink: 0 }}>예정</span>
+          )}
+          {!done && (
+            <button onClick={function() { openTeamCarry(note, item.id, item.text); }}
+              title="이 일정을 다른 날짜로 연기 (원본에는 연기 표시가 남습니다)"
+              style={{ fontSize: 9, padding: "3px 8px", background: "#EEF2FF", color: "#4338CA",
+                border: "1px solid #C7D2FE", borderRadius: 4, cursor: "pointer", fontWeight: 700,
+                whiteSpace: "nowrap", flexShrink: 0 }}>📅 연기</button>
+          )}
+        </div>
+        {/* 결과 메모 — 입력 중에는 화면 상태를 건드리지 않고 blur 때 한 번만 저장한다.
+            key 에 result 를 섞어, 저장되거나 남이 고쳐 값이 바뀌면 칸이 새 값으로 다시 그려지게 한다. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4, paddingLeft: 20 }}>
+          <span style={{ fontSize: 9, color: "#888", flexShrink: 0 }}>↳ 결과</span>
+          <input key={item.id + ":" + (item.result || "")} defaultValue={item.result || ""}
+            placeholder="다녀온 뒤 결과를 한 줄로 (예: 방문 완료, 실태조사 잘 마침, 약정 8/28 예정)"
+            onBlur={function(e) { saveSchedResult(note, item, e.target.value); }}
+            onKeyDown={function(e) { if (e.key === "Enter") e.target.blur(); }}
+            style={{ flex: 1, minWidth: 0, padding: "3px 7px", border: "1px solid #E8E5E0",
+              borderRadius: 5, fontSize: 10, background: "#fff" }} />
+        </div>
+        {done && item.done_by && (
+          <div style={{ fontSize: 9, color: "#15803D", marginTop: 3, paddingLeft: 20 }}>
+            ✅ {item.done_by} 완료{item.done_at ? " · " + mdLabel(String(item.done_at).slice(0, 10)) : ""}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   var statusStyle = function(s) {
     if (s === "open") return { bg: "#DCFCE7", color: "#15803D", label: "🟢 대기중" };
     if (s === "taken") return { bg: "#DBEAFE", color: "#1E40AF", label: "🔵 진행중" };
@@ -29930,6 +30135,8 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
               <input type="checkbox" checked={showDone} onChange={function(e) { setShowDone(e.target.checked); }} />
               완료된 업무 {doneCount > 0 ? doneCount + "건 " : ""}보기
             </label>
+            <button onClick={openSchedModal} title="실태조사·기관방문 같은 예정 일정을 등록합니다. 그 날짜의 팀 업무에 자동으로 올라갑니다."
+              style={{ background: "#fff", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 6, padding: "6px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📅 일정 만들기</button>
             <button onClick={function() {
               setNewNoteTeam(activeTab);
               // 아직 아무것도 안 쓴 상태면 오늘 날짜·자동 제목으로 새로 시작(자정 넘겨 열어도 어제 날짜가 남지 않게).
@@ -30241,6 +30448,8 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                               상단(진행률바)·하단(가져가기/완료 버튼)은 이 div 바깥이라 스크롤과 무관하게 항상 고정 노출된다. */}
                           <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: cl.length > 5 ? 165 : "none", overflowY: cl.length > 5 ? "auto" : "visible", overflowX: "hidden", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", paddingRight: cl.length > 5 ? 4 : 0 }}>
                             {cl.map(function(item) {
+                              // 📅 일정 항목은 모양이 달라 따로 그린다(기존 항목 렌더는 손대지 않는다)
+                              if (item && item.is_sched) return renderSchedItem(note, item);
                               var taken = !!item.taken_by;
                               var mine = item.taken_by === profile?.name;
                               return (
@@ -30348,6 +30557,124 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
             </div>
           )}
         </>
+      )}
+
+      {/* ── 📅 일정 만들기 ──────────────────────────────────────────────────── */}
+      {showSched && newSched && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 500, padding: 24, maxHeight: "90vh", overflowY: "auto" }}>
+            <h2 style={{ margin: 0, marginBottom: 4, fontSize: 16, fontWeight: 700 }}>📅 일정 만들기</h2>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 16 }}>
+              등록하면 그 날짜의 팀 업무에 항목으로 올라갑니다. 다녀온 뒤 체크하고 결과를 적으면 됩니다.
+            </div>
+
+            {/* 업체명 — 안 골라도 된다(서류마감처럼 업체 없는 일정이 있다) */}
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>업체명 <span style={{ color: "#CCC" }}>(선택)</span></label>
+              {newSched.company_name ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 6 }}>
+                  <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: "#1A1917" }}>{newSched.company_name}</span>
+                  <button onClick={function() { setNewSched(function(x) { return Object.assign({}, x, { company_id: null, company_name: "" }); }); setSchedCoQuery(""); }}
+                    style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#666" }}>✕ 지우기</button>
+                </div>
+              ) : (
+                <>
+                  <input value={schedCoQuery} onChange={function(e) { setSchedCoQuery(e.target.value); }}
+                    placeholder="업체명 일부를 입력하세요"
+                    style={{ width: "100%", padding: "8px 10px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box" }} />
+                  {schedCoQuery.trim() && (function() {
+                    var q = schedCoQuery.trim().toLowerCase();
+                    var hits = (companiesList || []).filter(function(c) { return c && c.name && String(c.name).toLowerCase().indexOf(q) >= 0; }).slice(0, 8);
+                    if (!hits.length) return <div style={{ fontSize: 11, color: "#888", padding: "6px 2px" }}>검색 결과가 없습니다. (업체 없이 등록해도 됩니다)</div>;
+                    return (
+                      <div style={{ marginTop: 4, border: "1px solid #E8E5E0", borderRadius: 6, maxHeight: 160, overflowY: "auto" }}>
+                        {hits.map(function(c) {
+                          return (
+                            <div key={c.id} onClick={function() { setNewSched(function(x) { return Object.assign({}, x, { company_id: c.id, company_name: c.name }); }); setSchedCoQuery(""); }}
+                              style={{ padding: "7px 10px", fontSize: 12, cursor: "pointer", borderBottom: "1px solid #F7F6F3" }}>
+                              {c.name}
+                              {c.assignee && <span style={{ marginLeft: 6, fontSize: 10, color: "#888" }}>· {c.assignee}</span>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </>
+              )}
+            </div>
+
+            {/* 날짜 */}
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>날짜</label>
+              <input type="date" value={newSched.date} onChange={function(e) { var v = e.target.value; setNewSched(function(x) { return Object.assign({}, x, { date: v }); }); }}
+                style={{ width: "100%", padding: "8px 10px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box" }} />
+            </div>
+
+            {/* 종류 */}
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>종류</label>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                {SCHED_KINDS.map(function(k) {
+                  var on = newSched.kind === k;
+                  var ks = schedKindStyle(k);
+                  return (
+                    <button key={k} onClick={function() { setNewSched(function(x) { return Object.assign({}, x, { kind: k }); }); }}
+                      style={{ padding: "6px 12px", borderRadius: 99, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                        background: on ? ks.text : ks.bg, color: on ? "#fff" : ks.text, border: "1px solid " + ks.border }}>{k}</button>
+                  );
+                })}
+                <button onClick={function() { setNewSched(function(x) { return Object.assign({}, x, { kind: "__custom__" }); }); }}
+                  style={{ padding: "6px 12px", borderRadius: 99, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                    background: newSched.kind === "__custom__" ? "#4B5563" : "#F3F4F6", color: newSched.kind === "__custom__" ? "#fff" : "#4B5563", border: "1px solid #D1D5DB" }}>✏️ 직접 입력</button>
+              </div>
+              {newSched.kind === "__custom__" && (
+                <input value={newSched.kindCustom} autoFocus onChange={function(e) { var v = e.target.value; setNewSched(function(x) { return Object.assign({}, x, { kindCustom: v }); }); }}
+                  placeholder="예: 사전 미팅, 서류 보완 방문"
+                  style={{ width: "100%", marginTop: 6, padding: "8px 10px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, boxSizing: "border-box" }} />
+              )}
+            </div>
+
+            {/* 담당자 */}
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>담당자</label>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                {ASSIGNEES.map(function(a) {
+                  var on = newSched.assignee === a;
+                  return (
+                    <button key={a} onClick={function() { setNewSched(function(x) { return Object.assign({}, x, { assignee: a }); }); }}
+                      style={{ padding: "6px 14px", borderRadius: 99, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                        background: on ? "#1A1917" : "#fff", color: on ? "#fff" : "#666", border: "1px solid " + (on ? "#1A1917" : "#E8E5E0") }}>{a}</button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 대상 팀 */}
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 11, color: "#888", display: "block", marginBottom: 4 }}>대상 팀</label>
+              <div style={{ display: "flex", gap: 6 }}>
+                {[{ k: "corporate", l: "🏢 법인팀", c: "#1A1917" }, { k: "individual", l: "👤 개인팀", c: "#1A1917" }, { k: "all", l: "🌐 전체(공통)", c: "#7C3AED" }].map(function(t) {
+                  var on = newSched.team === t.k;
+                  return (
+                    <button key={t.k} onClick={function() { setNewSched(function(x) { return Object.assign({}, x, { team: t.k }); }); }}
+                      style={{ flex: 1, padding: "8px", background: on ? t.c : "#fff", color: on ? "#fff" : "#666",
+                        border: "1px solid " + (on ? t.c : "#E8E5E0"), borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t.l}</button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={function() { setShowSched(false); setNewSched(null); }} disabled={schedBusy}
+                style={{ flex: 1, padding: "10px", background: "#fff", color: "#666", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 13, cursor: "pointer" }}>취소</button>
+              <button onClick={addSchedule} disabled={schedBusy}
+                style={{ flex: 1, padding: "10px", background: schedBusy ? "#AAA" : "#4338CA", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: schedBusy ? "default" : "pointer" }}>
+                {schedBusy ? "등록 중…" : "일정 등록"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* 새 팀 노트 추가 모달 */}
