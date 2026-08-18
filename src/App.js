@@ -19715,12 +19715,36 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
     );
   };
 
+  // ── ✅ 밀린 미완료에서 바로 완료 / 🗑 삭제 (개인 업무노트) ─────────────────────
+  // 저장은 기존 onChecklistChange 하나만 쓴다 — 병합·재시도·활동로그·요청 동기화가 전부 거기 붙어 있다.
+  //  · 완료 = 그 줄을 "- [ ]" → "- [x]" 로. parseUnfinishedItems 가 [ ] 만 세므로 목록에서 자동으로 빠진다.
+  //  · 삭제 = 그 줄을 통째로 뺀다. 줄 수가 달라지므로, 그 사이 다른 곳에서 먼저 바뀌었으면
+  //    reapplyLineChanges 가 null 을 돌려 **저장을 거부**한다(덮어쓰지 않는다). 사람에게 알리고 끝낸다.
+  //  · 권한은 화면과 DB 가 같다: canEditNote(본인 노트 또는 WN 관리자).
+  //  · lineIdx 는 화면을 그릴 때의 줄 번호다 → 쓰기 직전에 그 줄이 아직 체크박스인지 정규식으로 확인한다.
+  var completeOverdueLine = async function(srcNote, lineIdx) {
+    if (!srcNote || !canEditNote(srcNote)) return;
+    var lines = String(srcNote.content || "").split("\n");
+    var line = lines[lineIdx];
+    if (!/^\s*- \[ \]/.test(line || "")) { alert("이 항목을 찾지 못했습니다. 화면을 새로고침한 뒤 다시 해주세요."); return; }
+    lines[lineIdx] = line.replace("- [ ]", "- [x]");
+    await onChecklistChange(srcNote.id, lines.join("\n"));
+  };
+  var deleteOverdueLine = async function(srcNote, lineIdx, text) {
+    if (!srcNote || !canEditNote(srcNote)) return;
+    var lines = String(srcNote.content || "").split("\n");
+    if (!/^\s*- \[[ xX]\]/.test(lines[lineIdx] || "")) { alert("이 항목을 찾지 못했습니다. 화면을 새로고침한 뒤 다시 해주세요."); return; }
+    if (!window.confirm("정말 삭제하시겠어요?\n\n" + String(text || "").slice(0, 80) + "\n\n삭제한 항목은 되돌릴 수 없습니다.")) return;
+    lines.splice(lineIdx, 1);
+    await onChecklistChange(srcNote.id, lines.join("\n"));
+  };
   // 🔴 밀린 미완료 항목 한 칸 — 위 "밀린 미완료" 구역과 🗂 내 개인 업무노트 구역이 **같이 쓴다**.
   //    두 벌로 두면 배지·이월 버튼이 갈라지므로 반드시 이 함수 한 곳만 고칠 것.
   var renderOverdueItemBox = function(it) {
     var bs = lateBadgeStyle(it.late);
     var srcNote = notes.find(function(n) { return n.id === it.noteId; });
     var canCarry = srcNote && canCarryFromCard(srcNote);
+    var canEdit = !!srcNote && canEditNote(srcNote);   // 완료·삭제는 편집 권한이 있어야 한다
     return (
       <div key={it.noteId + ":" + it.lineIdx}
         style={itemBoxStyle({ border: "1px solid #F3D5D5" })}>
@@ -19744,6 +19768,16 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
             <button title="이 항목을 다른 날짜로 이월 (원본은 지우지 않고 이월 표시만 남습니다)"
               onClick={function() { openCarryPicker(srcNote, it.lineIdx); }}
               style={{ fontSize: 10, fontWeight: 700, padding: "4px 9px", borderRadius: 6, border: "1px solid #C7D2FE", background: "#EEF2FF", color: "#4338CA", cursor: "pointer", whiteSpace: "nowrap" }}>📅 이월</button>
+          )}
+          {canEdit && (
+            <button title="이 항목을 완료 처리합니다 (노트의 체크박스가 ☑ 로 바뀝니다)"
+              onClick={function() { completeOverdueLine(srcNote, it.lineIdx); }}
+              style={{ fontSize: 10, fontWeight: 700, padding: "4px 9px", borderRadius: 6, border: "1px solid #86EFAC", background: "#F0FDF4", color: "#15803D", cursor: "pointer", whiteSpace: "nowrap" }}>✅ 완료</button>
+          )}
+          {canEdit && (
+            <button title="이 항목을 노트에서 지웁니다 (되돌릴 수 없습니다)"
+              onClick={function() { deleteOverdueLine(srcNote, it.lineIdx, it.text); }}
+              style={{ fontSize: 10, fontWeight: 600, padding: "4px 9px", borderRadius: 6, border: "1px solid #FECACA", background: "#fff", color: "#B91C1C", cursor: "pointer", whiteSpace: "nowrap" }}>🗑 삭제</button>
           )}
           <button title="이 항목이 있는 날짜로 이동"
             onClick={function() { if (it.noteDate) { setViewMode("calendar"); setSelectedDate(it.noteDate); } }}
@@ -29502,7 +29536,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       var late = daysLate(basis, t);
       var cl = Array.isArray(n.checklist) ? n.checklist : [];
       if (!cl.length) { out.push({ key: n.id, note: n, item: null, basis: basis, late: late }); return; }
-      cl.forEach(function(it) {
+      cl.forEach(function(it, ii) {
         if (!it || it.taken_by) return;
         // 📅 체크한 일정 항목은 끝난 것이다 — 가져가기(taken_by)와는 다른 축이라 따로 뺀다.
         //    안 빼면 "다녀와서 체크까지 했는데 계속 밀린 걸로 뜨는" 상태가 된다.
@@ -29511,7 +29545,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
         // 이미 다른 날짜로 이월한 항목은 뺀다 — 대상 카드에 복사본이 있어 두 번 세면 중복이다
         // (개인 업무노트 overdueItems 의 carried 제외와 같은 규칙)
         if (/→\s*\d{1,2}\/\d{1,2}\s*이월/.test(String(it.text || ""))) return;
-        out.push({ key: n.id + ":" + (it.id || it.text), note: n, item: it, basis: basis, late: late });
+        out.push({ key: n.id + ":" + (it.id || it.text), note: n, item: it, idx: ii, basis: basis, late: late });
       });
     });
     return out.sort(function(a, b) {
@@ -29643,20 +29677,57 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       setSchedBusy(false);
     }
   };
-  // 체크(다녀옴) 토글 · 결과 메모 저장 — 둘 다 **항목 수가 그대로**라 팀원 알림이 나가지 않는다.
-  //   그래서 markTeamNoteSelfEdit 도 찍지 않는다(찍으면 그 10초 동안 남이 추가한 항목을 놓친다 — CLAUDE.md).
-  var patchSchedItem = async function(note, itemId, patch, failMsg) {
+  // 팀 카드의 체크리스트를 통째로 갈아 끼운다 — 낙관적 반영 후 실패하면 화면을 되돌린다.
+  //   ⚠️ 팀원 알림(handleTeamItemAdded)은 **항목 수가 늘었을 때만** 울린다. 완료(수 그대로)·삭제(수 감소)는
+  //      자동으로 조용하다. 비교 기준(teamItemCountRef)은 이벤트마다 가장 먼저 갱신되므로 삭제해도 어긋나지 않는다.
+  //      그래서 여기서는 markTeamNoteSelfEdit 를 찍지 않는다(찍으면 10초간 남이 추가한 항목을 놓친다 — CLAUDE.md).
+  var saveTeamChecklist = async function(note, nextList, failMsg) {
     var list = Array.isArray(note.checklist) ? note.checklist : [];
-    if (!list.some(function(i) { return i && i.id === itemId; })) return;
-    var next = list.map(function(i) { return (i && i.id === itemId) ? Object.assign({}, i, patch) : i; });
-    setAllTeamNotes(function(prev) { return prev.map(function(x) { return x.id === note.id ? Object.assign({}, x, { checklist: next }) : x; }); });
+    setAllTeamNotes(function(prev) { return prev.map(function(x) { return x.id === note.id ? Object.assign({}, x, { checklist: nextList }) : x; }); });
     var r = await supabase.from("team_notes")
-      .update({ checklist: next, updated_at: new Date().toISOString() }).eq("id", note.id);
+      .update({ checklist: nextList, updated_at: new Date().toISOString() }).eq("id", note.id);
     if (r.error) {
       // 실패하면 화면을 되돌린다 — 저장된 것처럼 보이면 안 된다
       setAllTeamNotes(function(prev) { return prev.map(function(x) { return x.id === note.id ? Object.assign({}, x, { checklist: list }) : x; }); });
       alert(failMsg + ": " + r.error.message);
     }
+  };
+  // 체크(다녀옴) 토글 · 결과 메모 저장 — 저장 자체는 saveTeamChecklist 한 곳으로 모았다(동작 동일).
+  var patchSchedItem = async function(note, itemId, patch, failMsg) {
+    var list = Array.isArray(note.checklist) ? note.checklist : [];
+    if (!list.some(function(i) { return i && i.id === itemId; })) return;
+    var next = list.map(function(i) { return (i && i.id === itemId) ? Object.assign({}, i, patch) : i; });
+    await saveTeamChecklist(note, next, failMsg);
+  };
+  // ── ✅ 밀린 미완료에서 바로 완료 / 🗑 삭제 (팀 체크리스트 항목) ────────────────────
+  // ⚠️ done(끝냄) 과 taken_by(가져감) 는 **다른 축**이다 — 섞지 말 것(CLAUDE.md).
+  //    여기 done 은 일정 항목의 "다녀옴" 과 같은 필드다. 일반 항목은 지금까지 done 을 true 로 만드는
+  //    코드가 없었으므로 옛 데이터는 전부 false/undefined 라, 이 분기는 새로 완료한 항목에만 걸린다.
+  // ⚠️ 옛 항목은 id 가 없을 수 있다(저장 경로가 id 를 채우기 전 데이터).
+  //    id 가 없으면 배열 위치로 찾는다 — id 로만 지우면 id 없는 항목이 **한꺼번에** 지워진다.
+  var teamItemHit = function(i, k, item, idx) { return (item && item.id) ? !!(i && i.id === item.id) : k === idx; };
+  var completeTeamItem = function(note, item, idx) {
+    var list = Array.isArray(note.checklist) ? note.checklist : [];
+    var next = list.map(function(i, k) {
+      return teamItemHit(i, k, item, idx)
+        ? Object.assign({}, i, { done: true, done_at: new Date().toISOString(), done_by: profile?.name || "" })
+        : i;
+    });
+    saveTeamChecklist(note, next, "완료 처리 실패");
+  };
+  var uncompleteTeamItem = function(note, item, idx) {
+    var list = Array.isArray(note.checklist) ? note.checklist : [];
+    var next = list.map(function(i, k) {
+      return teamItemHit(i, k, item, idx) ? Object.assign({}, i, { done: false, done_at: null, done_by: null }) : i;
+    });
+    saveTeamChecklist(note, next, "되돌리기 실패");
+  };
+  var deleteTeamItem = async function(note, item, idx) {
+    var list = Array.isArray(note.checklist) ? note.checklist : [];
+    if (!window.confirm("정말 삭제하시겠어요?\n\n" + String((item && item.text) || "").slice(0, 80) + "\n\n삭제한 항목은 되돌릴 수 없습니다.")) return;
+    var next = list.filter(function(i, k) { return !teamItemHit(i, k, item, idx); });
+    if (next.length === list.length) { alert("이 항목을 찾지 못했습니다. 화면을 새로고침한 뒤 다시 해주세요."); return; }
+    await saveTeamChecklist(note, next, "삭제 실패");
   };
   var toggleSchedDone = function(note, item) {
     var nextDone = !item.done;
@@ -30397,17 +30468,39 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                           {r.item && <span style={{ color: "#AAA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>· {r.note.title || "(제목 없음)"}</span>}
                           {r.note.status === "taken" && r.note.taken_by && <span style={{ color: "#1E40AF" }}>👤 {r.note.taken_by} 진행중</span>}
                         </div>
-                        {/* 3단 — 버튼 */}
-                        {r.item && (
-                          <div style={ITEM_BOX_ACTIONS}>
-                            <button onClick={function() { openTeamCarry(r.note, r.item.id, r.item.text); }}
-                              title="이 항목을 다른 날짜의 팀 업무로 이월 (원본은 지우지 않고 이월 표시만 남습니다)"
-                              style={{ fontSize: 9.5, fontWeight: 700, padding: "4px 8px", borderRadius: 5, border: "1px solid #C7D2FE", background: "#EEF2FF", color: "#4338CA", cursor: "pointer", whiteSpace: "nowrap" }}>📅 이월</button>
-                            <button onClick={function() { openTakePick(r.note, r.item.id); }}
-                              title="이 항목을 내 업무노트로 가져가기"
-                              style={{ fontSize: 9.5, fontWeight: 700, padding: "4px 8px", borderRadius: 5, border: "none", background: "#1A1917", color: "#fff", cursor: "pointer", whiteSpace: "nowrap" }}>📅 가져가기</button>
-                          </div>
-                        )}
+                        {/* 3단 — 버튼. 두 종류의 행이 섞여 있다:
+                            · r.item 있음 = 카드 안의 체크리스트 항목 → 기존 이월·가져가기 옆에 완료·삭제를 더 붙인다
+                            · r.item 없음 = 체크리스트가 없는 카드 자체 → 카드를 완료(status=done)/삭제(soft delete)한다
+                              (예전에는 이 행에 버튼이 하나도 없어 손댈 방법이 없었다) */}
+                        <div style={ITEM_BOX_ACTIONS}>
+                          {r.item ? (
+                            <>
+                              <button onClick={function() { openTeamCarry(r.note, r.item.id, r.item.text); }}
+                                title="이 항목을 다른 날짜의 팀 업무로 이월 (원본은 지우지 않고 이월 표시만 남습니다)"
+                                style={{ fontSize: 9.5, fontWeight: 700, padding: "4px 8px", borderRadius: 5, border: "1px solid #C7D2FE", background: "#EEF2FF", color: "#4338CA", cursor: "pointer", whiteSpace: "nowrap" }}>📅 이월</button>
+                              <button onClick={function() { openTakePick(r.note, r.item.id); }}
+                                title="이 항목을 내 업무노트로 가져가기"
+                                style={{ fontSize: 9.5, fontWeight: 700, padding: "4px 8px", borderRadius: 5, border: "none", background: "#1A1917", color: "#fff", cursor: "pointer", whiteSpace: "nowrap" }}>📅 가져가기</button>
+                              <button onClick={function() { completeTeamItem(r.note, r.item, r.idx); }}
+                                title="이 항목을 끝난 것으로 표시합니다 (가져가기와는 다른 축입니다 · 카드에서 되돌릴 수 있습니다)"
+                                style={{ fontSize: 9.5, fontWeight: 700, padding: "4px 8px", borderRadius: 5, border: "1px solid #86EFAC", background: "#F0FDF4", color: "#15803D", cursor: "pointer", whiteSpace: "nowrap" }}>✅ 완료</button>
+                              <button onClick={function() { deleteTeamItem(r.note, r.item, r.idx); }}
+                                title="이 항목을 카드에서 지웁니다 (되돌릴 수 없습니다)"
+                                style={{ fontSize: 9.5, fontWeight: 600, padding: "4px 8px", borderRadius: 5, border: "1px solid #FECACA", background: "#fff", color: "#B91C1C", cursor: "pointer", whiteSpace: "nowrap" }}>🗑 삭제</button>
+                            </>
+                          ) : (
+                            <>
+                              <button onClick={function() { markDone(r.note.id); }}
+                                title="이 카드를 완료 처리합니다 ('완료된 업무 N건 보기'를 켜면 다시 보입니다)"
+                                style={{ fontSize: 9.5, fontWeight: 700, padding: "4px 8px", borderRadius: 5, border: "1px solid #86EFAC", background: "#F0FDF4", color: "#15803D", cursor: "pointer", whiteSpace: "nowrap" }}>✅ 완료</button>
+                              {(profile?.name === "양호" || profile?.role === "admin" || profile?.name === r.note.posted_by) && (
+                                <button onClick={function() { deleteTeamNote(r.note.id, r.note.posted_by); }}
+                                  title="이 카드를 삭제합니다 (되돌릴 수 없습니다)"
+                                  style={{ fontSize: 9.5, fontWeight: 600, padding: "4px 8px", borderRadius: 5, border: "1px solid #FECACA", background: "#fff", color: "#B91C1C", cursor: "pointer", whiteSpace: "nowrap" }}>🗑 삭제</button>
+                              )}
+                            </>
+                          )}
+                        </div>
                       </div>
                     );
                   })}
@@ -30641,22 +30734,34 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                                  → 행 환산 인자도 1열 기준(1열 가정 · 3행까지 노출)이어야 잘리는 위치가 맞는다.
                               상단(진행률바)·하단(가져가기/완료 버튼)은 이 div 바깥이라 스크롤과 무관하게 항상 고정 노출된다. */}
                           <div style={itemGridStyle({ maxHeight: itemGridMaxHeight(cl.length, 1, 3), overflowY: cl.length > 3 ? "auto" : "visible", overflowX: "hidden", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", paddingRight: cl.length > 3 ? 4 : 0 })}>
-                            {cl.map(function(item) {
+                            {cl.map(function(item, ci) {
                               // 📅 일정 항목은 모양이 달라 따로 그린다(기존 항목 렌더는 손대지 않는다)
                               if (item && item.is_sched) return renderSchedItem(note, item);
                               var taken = !!item.taken_by;
+                              var doneIt = !!item.done;        // ✅ 완료한 항목 (가져감 taken_by 와 다른 축)
                               var mine = item.taken_by === profile?.name;
                               return (
-                                <div key={item.id} style={itemBoxStyle({ background: taken ? "#F7F6F3" : "#fff", border: "0.5px solid " + (taken ? "#EDEBE6" : "#E8E5E0") })}>
+                                <div key={item.id} style={itemBoxStyle({ background: (taken || doneIt) ? "#F7F6F3" : "#fff", border: "0.5px solid " + ((taken || doneIt) ? "#EDEBE6" : "#E8E5E0") })}>
                                   {/* 1단 — 항목 내용 */}
                                   <div style={{ display: "flex", alignItems: "flex-start", gap: 6, minWidth: 0 }}>
-                                    <span style={{ fontSize: 11, color: taken ? "#888" : "#CCC", marginTop: 1, flexShrink: 0 }}>☐</span>
-                                    <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, color: taken ? "#888" : "#1A1917", textDecoration: taken ? "line-through" : "none", lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                                    <span style={{ fontSize: 11, color: (taken || doneIt) ? "#888" : "#CCC", marginTop: 1, flexShrink: 0 }}>{doneIt ? "✅" : "☐"}</span>
+                                    <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, color: (taken || doneIt) ? "#888" : "#1A1917", textDecoration: (taken || doneIt) ? "line-through" : "none", lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                                       {renderMentionText(item.text, companiesList)}
                                     </span>
                                   </div>
                                   {/* 2·3단 — 가져간 항목은 담당자 배지, 아니면 버튼 */}
-                                  {taken ? (
+                                  {/* ✅ 완료한 항목 — 밀린 미완료에서 완료를 누른 것. 되돌릴 수 있게 ↩️ 를 둔다.
+                                      ⚠️ 가져감(taken_by)과 다른 축이라 배지를 따로 그린다 — 섞으면 무엇이 끝난 건지 알 수 없다. */}
+                                  {doneIt ? (
+                                    <div style={Object.assign({ alignItems: "center" }, ITEM_BOX_ACTIONS)}>
+                                      <span style={{ fontSize: 9, padding: "2px 7px", background: "#DCFCE7", color: "#15803D", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap" }}>
+                                        ✅ 완료{item.done_by ? " · " + item.done_by : ""}
+                                      </span>
+                                      <button onClick={function() { uncompleteTeamItem(note, item, ci); }}
+                                        title="완료 취소 (다시 미완료로 되돌립니다)"
+                                        style={{ background: "none", border: "none", cursor: "pointer", padding: 2, fontSize: 11, color: "#888", lineHeight: 1 }}>↩️</button>
+                                    </div>
+                                  ) : taken ? (
                                     <div style={Object.assign({ alignItems: "center" }, ITEM_BOX_ACTIONS)}>
                                       <span style={{ fontSize: 9, padding: "2px 7px", background: mine ? "#DCFCE7" : "#DBEAFE", color: mine ? "#15803D" : "#1E40AF", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap" }}>
                                         👤 {item.taken_by}{mine ? " (나)" : ""}
