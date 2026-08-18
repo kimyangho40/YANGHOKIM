@@ -17624,6 +17624,35 @@ function lateBadgeStyle(n) {
   if (n >= 3) return { bg: "#FEF3C7", color: "#B45309", border: "#FDE68A" };
   return { bg: "#F3F4F6", color: "#6B7280", border: "#E5E7EB" };
 }
+// ── 📦 항목 카드 박스 배치 (업무노트·팀 업무 공통) ────────────────────────────
+// 예전엔 항목이 한 줄로 화면 끝까지 늘어나 이월·가져가기 버튼이 오른쪽 멀리 떨어졌다.
+// → 항목 하나를 작은 박스로 만들어 버튼을 내용 바로 아래에 붙인다.
+// ⚠️ 이 저장소는 인라인 스타일만 쓰고 CSS 미디어쿼리가 없다. 그래서 열 수를 숫자로 박지 않고
+//    auto-fill + minmax 로 **컨테이너 폭이 스스로 정하게** 한다 → 데스크톱 3열 / 좁으면 2열 / 모바일 1열.
+//    (모바일 MobileApp 도 TeamNotesSection 을 그대로 렌더하므로 이 한 줄로 같이 해결된다.)
+var ITEM_BOX_MIN = 260;                    // 박스 최소 폭(px). 넓히면 열이 줄고, 좁히면 늘어난다.
+function itemGridStyle(extra) {
+  return Object.assign({
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(" + ITEM_BOX_MIN + "px, 1fr))",
+    gap: 6,
+    alignItems: "stretch",                 // 같은 행 박스 높이를 맞춘다(버튼 줄이 들쭉날쭉하지 않게)
+  }, extra || {});
+}
+// 박스 하나의 공통 뼈대 — 세로 3단(내용 / 배지 / 버튼). 버튼 줄은 marginTop:auto 로 항상 맨 아래.
+function itemBoxStyle(extra) {
+  return Object.assign({
+    display: "flex", flexDirection: "column", gap: 4,
+    padding: "7px 9px", borderRadius: 7, minWidth: 0,
+    background: "#fff", border: "0.5px solid #E8E5E0",
+  }, extra || {});
+}
+var ITEM_BOX_ACTIONS = { display: "flex", gap: 4, flexWrap: "wrap", marginTop: "auto", paddingTop: 2 };
+// 그리드 높이 상한 — 세로 1열일 때의 "항목 N개" 기준을 그대로 쓰면 3열에서 잘리는 위치가 이상해진다.
+// 행 단위로 환산해서 rows 행 높이까지만 보이고 그 안에서 스크롤한다.
+function itemGridMaxHeight(count, perRowGuess, rows) {
+  return count > perRowGuess * rows ? rows * 84 : "none";  // 박스 1개 ≈ 78px + gap 6
+}
 // content 마크다운에서 미완료(- [ ]) 항목 파싱 → {lineIdx, text, dueDate, waitReason, waitSince}
 // text는 마감일 대괄호·대기사유 메타·기존 "→ 이월" 꼬리표를 제거한 순수 항목 텍스트
 function parseUnfinishedItems(content) {
@@ -18664,11 +18693,13 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
       {/* 체크리스트 or 일반 내용 */}
       {note.content && (
         checklist ? (
-          <div style={{ marginBottom: 10 }}>
+          // 📦 항목 = 작은 카드 박스. 폭이 넓으면 3열, 좁으면 1열(모바일)로 자동 배치된다
+          <div style={itemGridStyle({ marginBottom: 10 })}>
             {checklist.map(function(item) {
               if (!item.isCheck) {
+                // 체크박스가 아닌 일반 글줄(머리글·구분 역할) — 박스에 넣지 않고 한 줄 통째로 둔다
                 return item.text ? (
-                  <div key={item.idx} style={{ fontSize: 13, color: "#888", lineHeight: 1.75, paddingLeft: 4 }}>{item.text}</div>
+                  <div key={item.idx} style={{ gridColumn: "1 / -1", fontSize: 13, color: "#888", lineHeight: 1.75, paddingLeft: 4 }}>{item.text}</div>
                 ) : null;
               }
               var isReq = /^📩/.test(item.text); // 팀원 업무 요청 항목
@@ -18677,7 +18708,8 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
                 var replies = reqRow ? (Array.isArray(reqRow.replies) ? reqRow.replies : (function() { try { return JSON.parse(reqRow.replies || "[]"); } catch (e) { return []; } })()) : [];
                 var replyOpen = replyOpenIdx === item.idx;
                 return (
-                  <div key={item.idx} style={{ background: "#FFF7ED", borderLeft: "3px solid #F59E0B", borderRadius: 6, padding: "6px 8px", marginBottom: 4 }}>
+                  // 📩 팀원 업무요청 항목은 답장 스레드·입력창이 붙어 있어 좁은 박스에 넣으면 못 쓴다 → 한 줄 통째로
+                  <div key={item.idx} style={{ gridColumn: "1 / -1", background: "#FFF7ED", borderLeft: "3px solid #F59E0B", borderRadius: 6, padding: "6px 8px" }}>
                     <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
                       <input type="checkbox" checked={item.checked} onChange={function() { toggleCheckItem(item.idx); }}
                         style={{ width: 15, height: 15, marginTop: 3, cursor: "pointer", accentColor: "#F59E0B", flexShrink: 0 }} />
@@ -18724,35 +18756,47 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
               var alreadyCarried = /\(?→\s*\d{1,2}\/\d{1,2}\s*이월\)?/.test(rawLine);
               var showCarry = !!onCarryItem && !item.checked;
               return (
-                <div key={item.idx} style={{ display: "flex", alignItems: "flex-start", gap: 6, padding: item.waitReason ? "6px 8px" : "6px 0", background: item.waitReason ? "#FFFBEB" : "transparent", border: item.waitReason ? "1px solid #FDE68A" : undefined, borderRadius: 8 }}>
-                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", flex: 1, minWidth: 0 }}>
+                <div key={item.idx} style={itemBoxStyle({
+                  background: item.waitReason && !item.checked ? "#FFFBEB" : (item.checked ? "#FAFAF8" : "#fff"),
+                  border: "1px solid " + (item.waitReason && !item.checked ? "#FDE68A" : "#E8E5E0"),
+                })}>
+                  {/* 1단 — 체크박스 + 항목 내용 */}
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: 7, cursor: "pointer", minWidth: 0 }}>
                     <input type="checkbox" checked={item.checked} onChange={function() { toggleCheckItem(item.idx); }}
-                      style={{ width: 15, height: 15, marginTop: 3, cursor: "pointer", accentColor: "#1A1917", flexShrink: 0 }} />
-                    <span style={{ fontSize: 13, color: item.checked ? "#AAA" : "#333", textDecoration: item.checked ? "line-through" : "none", lineHeight: 1.8, whiteSpace: "pre-wrap" }}>{item.text}</span>
-                    {item.waitReason && !item.checked && (
-                      <span style={{ fontSize: 10, fontWeight: 700, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 99, padding: "1px 7px", whiteSpace: "nowrap", flexShrink: 0, marginTop: 2 }}>⏳ {item.waitReason}</span>
-                    )}
+                      style={{ width: 15, height: 15, marginTop: 2, cursor: "pointer", accentColor: "#1A1917", flexShrink: 0 }} />
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: item.checked ? "#AAA" : "#333", textDecoration: item.checked ? "line-through" : "none", lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{item.text}</span>
                   </label>
-                  {/* 🗓️ 이 항목을 구글 캘린더 일정으로 — 항목 마감일이 있으면 그 날짜로 채운다 */}
-                  {onAddToCalendar && !item.checked && (
-                    <button title="이 항목을 구글 캘린더 일정으로 추가"
-                      onClick={function() {
-                        // parseChecklist 는 항목 마감일을 안 돌려준다 → 원본 줄의 [YYYY-MM-DD] 를 직접 읽는다.
-                        var dm = rawLine.match(/\[(\d{4}-\d{2}-\d{2})\]/);
-                        onAddToCalendar(item.text, (dm && dm[1]) || note.due_date || note.note_date || "");
-                      }}
-                      style={{ flexShrink: 0, marginTop: 1, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", padding: "3px 8px", borderRadius: 6, cursor: "pointer",
-                        background: "#FFFBEB", border: "1px solid #FDE68A", color: "#B45309", lineHeight: 1.5 }}>
-                      📅 캘린더
-                    </button>
+                  {/* 2단 — 배지 */}
+                  {item.waitReason && !item.checked && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, paddingLeft: 22 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 99, padding: "1px 7px" }}>⏳ {item.waitReason}</span>
+                    </div>
                   )}
-                  {showCarry && (
-                    <button title={alreadyCarried ? "이미 한 번 이월한 항목 — 다른 날짜로 다시 미루기 (표시는 새 날짜로 바뀜)" : "이 항목을 다른 날짜 노트로 이월 (원본은 지우지 않고 '이월' 표시만 남음)"}
-                      onClick={function() { onCarryItem(note, item.idx); }}
-                      style={{ flexShrink: 0, marginTop: 1, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", padding: "3px 9px", borderRadius: 6, cursor: "pointer",
-                        background: alreadyCarried ? "#FFFBEB" : "#EEF2FF", border: "1px solid " + (alreadyCarried ? "#FDE68A" : "#C7D2FE"), color: alreadyCarried ? "#B45309" : "#4338CA" }}>
-                      {alreadyCarried ? "📅 다시 이월" : "📅 이월"}
-                    </button>
+                  {/* 3단 — 버튼. 내용 바로 아래에 붙어 손이 멀어지지 않는다 */}
+                  {((onAddToCalendar && !item.checked) || showCarry) && (
+                    <div style={ITEM_BOX_ACTIONS}>
+                      {/* 🗓️ 이 항목을 구글 캘린더 일정으로 — 항목 마감일이 있으면 그 날짜로 채운다 */}
+                      {onAddToCalendar && !item.checked && (
+                        <button title="이 항목을 구글 캘린더 일정으로 추가"
+                          onClick={function() {
+                            // parseChecklist 는 항목 마감일을 안 돌려준다 → 원본 줄의 [YYYY-MM-DD] 를 직접 읽는다.
+                            var dm = rawLine.match(/\[(\d{4}-\d{2}-\d{2})\]/);
+                            onAddToCalendar(item.text, (dm && dm[1]) || note.due_date || note.note_date || "");
+                          }}
+                          style={{ fontSize: 10.5, fontWeight: 600, whiteSpace: "nowrap", padding: "3px 8px", borderRadius: 6, cursor: "pointer",
+                            background: "#FFFBEB", border: "1px solid #FDE68A", color: "#B45309", lineHeight: 1.5 }}>
+                          📅 캘린더
+                        </button>
+                      )}
+                      {showCarry && (
+                        <button title={alreadyCarried ? "이미 한 번 이월한 항목 — 다른 날짜로 다시 미루기 (표시는 새 날짜로 바뀜)" : "이 항목을 다른 날짜 노트로 이월 (원본은 지우지 않고 '이월' 표시만 남음)"}
+                          onClick={function() { onCarryItem(note, item.idx); }}
+                          style={{ fontSize: 10.5, fontWeight: 600, whiteSpace: "nowrap", padding: "3px 9px", borderRadius: 6, cursor: "pointer",
+                            background: alreadyCarried ? "#FFFBEB" : "#EEF2FF", border: "1px solid " + (alreadyCarried ? "#FDE68A" : "#C7D2FE"), color: alreadyCarried ? "#B45309" : "#4338CA" }}>
+                          {alreadyCarried ? "📅 다시 이월" : "📅 이월"}
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               );
@@ -20827,11 +20871,11 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
             <span style={{ marginLeft: "auto", fontSize: 11, color: "#888" }}>{overdueOpen ? "접기 ▲" : "펼치기 ▼"}</span>
           </div>
           {overdueOpen && (
-            <div style={{ padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6, maxHeight: 340, overflowY: "auto" }}>
+            <div style={itemGridStyle({ padding: "10px 12px", maxHeight: 360, overflowY: "auto" })}>
               {/* 내 담당만 켠 상태에서 내 건이 0이면 — 구역을 통째로 숨기지 않는다.
                   숨기면 토글을 다시 끌 수가 없어 전체를 볼 방법이 사라진다. */}
               {overdueView.length === 0 && (
-                <div style={{ textAlign: "center", color: "#6B7280", fontSize: 12, padding: "16px 0", lineHeight: 1.7 }}>
+                <div style={{ gridColumn: "1 / -1", textAlign: "center", color: "#6B7280", fontSize: 12, padding: "16px 0", lineHeight: 1.7 }}>
                   🎉 내 담당 밀린 건은 없어요.
                   <br />
                   <button onClick={function() { setOverdueMineOnly(false); }}
@@ -20846,20 +20890,23 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
                 var canCarry = srcNote && canCarryFromCard(srcNote);
                 return (
                   <div key={it.noteId + ":" + it.lineIdx}
-                    style={{ display: "flex", alignItems: "flex-start", gap: 8, background: "#fff", border: "1px solid #F3D5D5", borderRadius: 7, padding: "8px 10px" }}>
-                    <span style={{ fontSize: 11, marginTop: 2, color: "#CCC" }}>☐</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12.5, color: "#1A1917", lineHeight: 1.45, wordBreak: "break-word", whiteSpace: "pre-wrap" }}>{it.text}</div>
-                      <div style={{ display: "flex", gap: 6, marginTop: 4, fontSize: 10, color: "#888", flexWrap: "wrap", alignItems: "center" }}>
-                        <span style={{ fontWeight: 700, color: bs.color, background: bs.bg, border: "1px solid " + bs.border, borderRadius: 99, padding: "2px 7px" }}>
-                          {it.late}일 밀림
-                        </span>
-                        <span>📅 {it.basis}{it.dueDate ? " (마감)" : " (노트 날짜)"}</span>
-                        {it.assignee && <span>👤 {it.assignee}</span>}
-                        {it.noteTitle && <span style={{ color: "#AAA" }}>· {it.noteTitle}</span>}
-                      </div>
+                    style={itemBoxStyle({ border: "1px solid #F3D5D5" })}>
+                    {/* 1단 — 내용 */}
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 7, minWidth: 0 }}>
+                      <span style={{ fontSize: 11, marginTop: 2, color: "#CCC", flexShrink: 0 }}>☐</span>
+                      <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: "#1A1917", lineHeight: 1.5, wordBreak: "break-word", whiteSpace: "pre-wrap" }}>{it.text}</div>
                     </div>
-                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    {/* 2단 — 배지 */}
+                    <div style={{ display: "flex", gap: 5, fontSize: 9.5, color: "#888", flexWrap: "wrap", alignItems: "center", paddingLeft: 18 }}>
+                      <span style={{ fontWeight: 700, color: bs.color, background: bs.bg, border: "1px solid " + bs.border, borderRadius: 99, padding: "2px 7px" }}>
+                        {it.late}일 밀림
+                      </span>
+                      <span>📅 {it.basis}{it.dueDate ? " (마감)" : " (노트 날짜)"}</span>
+                      {it.assignee && <span>👤 {it.assignee}</span>}
+                      {it.noteTitle && <span style={{ color: "#AAA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>· {it.noteTitle}</span>}
+                    </div>
+                    {/* 3단 — 버튼 */}
+                    <div style={ITEM_BOX_ACTIONS}>
                       {canCarry && (
                         <button title="이 항목을 다른 날짜로 이월 (원본은 지우지 않고 이월 표시만 남습니다)"
                           onClick={function() { openCarryPicker(srcNote, it.lineIdx); }}
@@ -30053,54 +30100,63 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     var done = !!item.done;
     var future = schedDateOf(note) > kstDate();   // 오늘 이후 = 아직 안 온 예정 일정
     return (
-      <div key={item.id}
-        style={{ padding: "6px 8px", borderRadius: 6,
-          background: done ? "#F7F6F3" : (future ? "#F0F9FF" : "#fff"),
-          border: "0.5px solid " + (done ? "transparent" : (future ? "#BAE6FD" : "#E8E5E0")) }}>
-        {/* 모바일(MobileApp 도 이 컴포넌트를 그린다)에서 좁아지면 줄바꿈되게 wrap */}
-        <div style={{ display: "flex", alignItems: "flex-start", gap: 5, flexWrap: "wrap" }}>
+      // 📦 일반 항목과 같은 박스 뼈대를 쓰되 색만 일정용(다녀옴=회색 / 예정=하늘색)으로 바꾼다
+      <div key={item.id} style={itemBoxStyle({
+        background: done ? "#F7F6F3" : (future ? "#F0F9FF" : "#fff"),
+        border: "0.5px solid " + (done ? "#EDEBE6" : (future ? "#BAE6FD" : "#E8E5E0")),
+      })}>
+        {/* 1단 — 체크(다녀옴) + 종류 배지 + 업체명 */}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 5, minWidth: 0 }}>
           <input type="checkbox" checked={done} onChange={function() { toggleSchedDone(note, item); }}
             title="다녀온 뒤 체크하세요"
             style={{ marginTop: 2, cursor: "pointer", accentColor: "#4338CA", flexShrink: 0 }} />
           <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 4, whiteSpace: "nowrap",
-            flexShrink: 0, background: ks.bg, color: ks.text, border: "1px solid " + ks.border }}>
+            flexShrink: 0, marginTop: 1, background: ks.bg, color: ks.text, border: "1px solid " + ks.border }}>
             {item.sched_kind || "일정"}
           </span>
-          <span style={{ flex: 1, fontSize: 11, fontWeight: 600, lineHeight: 1.5, wordBreak: "break-word", minWidth: 0,
+          <span style={{ flex: 1, fontSize: 11.5, fontWeight: 600, lineHeight: 1.55, wordBreak: "break-word", minWidth: 0,
             color: done ? "#888" : "#1A1917", textDecoration: done ? "line-through" : "none" }}>
             {item.company_name || "(업체 미지정)"}
           </span>
-          {item.assignee && (
-            <span style={{ fontSize: 9, padding: "2px 7px", background: "#EEF2FF", color: "#4338CA",
-              borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>👤 {item.assignee}</span>
-          )}
-          {future && !done && (
-            <span title="아직 오지 않은 예정 일정입니다 (밀린 미완료가 아닙니다)"
-              style={{ fontSize: 9, padding: "2px 6px", background: "#E0F2FE", color: "#0369A1",
-                borderRadius: 4, fontWeight: 800, whiteSpace: "nowrap", flexShrink: 0 }}>예정</span>
-          )}
-          {!done && (
+        </div>
+        {/* 2단 — 담당자·예정 배지 */}
+        {(item.assignee || (future && !done)) && (
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center", paddingLeft: 20 }}>
+            {item.assignee && (
+              <span style={{ fontSize: 9, padding: "2px 7px", background: "#EEF2FF", color: "#4338CA",
+                borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap" }}>👤 {item.assignee}</span>
+            )}
+            {future && !done && (
+              <span title="아직 오지 않은 예정 일정입니다 (밀린 미완료가 아닙니다)"
+                style={{ fontSize: 9, padding: "2px 6px", background: "#E0F2FE", color: "#0369A1",
+                  borderRadius: 4, fontWeight: 800, whiteSpace: "nowrap" }}>예정</span>
+            )}
+          </div>
+        )}
+        {/* 결과 메모 — 입력 중에는 화면 상태를 건드리지 않고 blur 때 한 번만 저장한다.
+            key 에 result 를 섞어, 저장되거나 남이 고쳐 값이 바뀌면 칸이 새 값으로 다시 그려지게 한다. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, paddingLeft: 20 }}>
+          <span style={{ fontSize: 9, color: "#888", flexShrink: 0 }}>↳ 결과</span>
+          <input key={item.id + ":" + (item.result || "")} defaultValue={item.result || ""}
+            placeholder="다녀온 뒤 결과 (예: 방문 완료, 약정 8/28)"
+            onBlur={function(e) { saveSchedResult(note, item, e.target.value); }}
+            onKeyDown={function(e) { if (e.key === "Enter") e.target.blur(); }}
+            style={{ flex: 1, minWidth: 0, padding: "3px 7px", border: "1px solid #E8E5E0",
+              borderRadius: 5, fontSize: 10, background: "#fff", boxSizing: "border-box" }} />
+        </div>
+        {done && item.done_by && (
+          <div style={{ fontSize: 9, color: "#15803D", paddingLeft: 20 }}>
+            ✅ {item.done_by} 완료{item.done_at ? " · " + mdLabel(String(item.done_at).slice(0, 10)) : ""}
+          </div>
+        )}
+        {/* 3단 — 연기(이월). 일정에는 '가져가기'를 두지 않는다(위 주석 참고) */}
+        {!done && (
+          <div style={ITEM_BOX_ACTIONS}>
             <button onClick={function() { openTeamCarry(note, item.id, item.text); }}
               title="이 일정을 다른 날짜로 연기 (원본에는 연기 표시가 남습니다)"
               style={{ fontSize: 9, padding: "3px 8px", background: "#EEF2FF", color: "#4338CA",
                 border: "1px solid #C7D2FE", borderRadius: 4, cursor: "pointer", fontWeight: 700,
-                whiteSpace: "nowrap", flexShrink: 0 }}>📅 연기</button>
-          )}
-        </div>
-        {/* 결과 메모 — 입력 중에는 화면 상태를 건드리지 않고 blur 때 한 번만 저장한다.
-            key 에 result 를 섞어, 저장되거나 남이 고쳐 값이 바뀌면 칸이 새 값으로 다시 그려지게 한다. */}
-        <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4, paddingLeft: 20 }}>
-          <span style={{ fontSize: 9, color: "#888", flexShrink: 0 }}>↳ 결과</span>
-          <input key={item.id + ":" + (item.result || "")} defaultValue={item.result || ""}
-            placeholder="다녀온 뒤 결과를 한 줄로 (예: 방문 완료, 실태조사 잘 마침, 약정 8/28 예정)"
-            onBlur={function(e) { saveSchedResult(note, item, e.target.value); }}
-            onKeyDown={function(e) { if (e.key === "Enter") e.target.blur(); }}
-            style={{ flex: 1, minWidth: 0, padding: "3px 7px", border: "1px solid #E8E5E0",
-              borderRadius: 5, fontSize: 10, background: "#fff" }} />
-        </div>
-        {done && item.done_by && (
-          <div style={{ fontSize: 9, color: "#15803D", marginTop: 3, paddingLeft: 20 }}>
-            ✅ {item.done_by} 완료{item.done_at ? " · " + mdLabel(String(item.done_at).slice(0, 10)) : ""}
+                whiteSpace: "nowrap" }}>📅 연기</button>
           </div>
         )}
       </div>
@@ -30186,35 +30242,37 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                 <span style={{ marginLeft: "auto", fontSize: 10.5, color: "#888" }}>{teamOverdueOpen ? "접기 ▲" : "펼치기 ▼"}</span>
               </div>
               {teamOverdueOpen && (
-                <div style={{ padding: "9px 11px", display: "flex", flexDirection: "column", gap: 5, maxHeight: 300, overflowY: "auto" }}>
+                <div style={itemGridStyle({ padding: "9px 11px", maxHeight: 330, overflowY: "auto" })}>
                   {teamOverdue.map(function(r) {
                     var bs = lateBadgeStyle(r.late);
                     return (
-                      <div key={r.key}
-                        style={{ display: "flex", alignItems: "flex-start", gap: 7, background: "#fff", border: "1px solid #F3D5D5", borderRadius: 6, padding: "7px 9px" }}>
-                        <span style={{ fontSize: 10.5, marginTop: 2, color: "#CCC" }}>☐</span>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 11.5, color: "#1A1917", lineHeight: 1.45, wordBreak: "break-word", whiteSpace: "pre-wrap" }}>
+                      <div key={r.key} style={itemBoxStyle({ border: "1px solid #F3D5D5" })}>
+                        {/* 1단 — 내용 */}
+                        <div style={{ display: "flex", alignItems: "flex-start", gap: 7, minWidth: 0 }}>
+                          <span style={{ fontSize: 10.5, marginTop: 2, color: "#CCC", flexShrink: 0 }}>☐</span>
+                          <div style={{ flex: 1, minWidth: 0, fontSize: 11.5, color: "#1A1917", lineHeight: 1.5, wordBreak: "break-word", whiteSpace: "pre-wrap" }}>
                             {r.item ? renderMentionText(r.item.text, companiesList) : renderMentionText(r.note.title || "(제목 없음)", companiesList)}
                           </div>
-                          <div style={{ display: "flex", gap: 5, marginTop: 3, fontSize: 9.5, color: "#888", flexWrap: "wrap", alignItems: "center" }}>
-                            <span style={{ fontWeight: 700, color: bs.color, background: bs.bg, border: "1px solid " + bs.border, borderRadius: 99, padding: "2px 6px" }}>
-                              {r.late}일 밀림
-                            </span>
-                            <span>📅 {r.basis}</span>
-                            {r.item && <span style={{ color: "#AAA" }}>· {r.note.title || "(제목 없음)"}</span>}
-                            {r.note.status === "taken" && r.note.taken_by && <span style={{ color: "#1E40AF" }}>👤 {r.note.taken_by} 진행중</span>}
-                          </div>
                         </div>
+                        {/* 2단 — 배지 */}
+                        <div style={{ display: "flex", gap: 5, fontSize: 9.5, color: "#888", flexWrap: "wrap", alignItems: "center", paddingLeft: 18 }}>
+                          <span style={{ fontWeight: 700, color: bs.color, background: bs.bg, border: "1px solid " + bs.border, borderRadius: 99, padding: "2px 6px" }}>
+                            {r.late}일 밀림
+                          </span>
+                          <span>📅 {r.basis}</span>
+                          {r.item && <span style={{ color: "#AAA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>· {r.note.title || "(제목 없음)"}</span>}
+                          {r.note.status === "taken" && r.note.taken_by && <span style={{ color: "#1E40AF" }}>👤 {r.note.taken_by} 진행중</span>}
+                        </div>
+                        {/* 3단 — 버튼 */}
                         {r.item && (
-                          <span style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                          <div style={ITEM_BOX_ACTIONS}>
                             <button onClick={function() { openTeamCarry(r.note, r.item.id, r.item.text); }}
                               title="이 항목을 다른 날짜의 팀 업무로 이월 (원본은 지우지 않고 이월 표시만 남습니다)"
                               style={{ fontSize: 9.5, fontWeight: 700, padding: "4px 8px", borderRadius: 5, border: "1px solid #C7D2FE", background: "#EEF2FF", color: "#4338CA", cursor: "pointer", whiteSpace: "nowrap" }}>📅 이월</button>
                             <button onClick={function() { openTakePick(r.note, r.item.id); }}
                               title="이 항목을 내 업무노트로 가져가기"
                               style={{ fontSize: 9.5, fontWeight: 700, padding: "4px 8px", borderRadius: 5, border: "none", background: "#1A1917", color: "#fff", cursor: "pointer", whiteSpace: "nowrap" }}>📅 가져가기</button>
-                          </span>
+                          </div>
                         )}
                       </div>
                     );
@@ -30444,24 +30502,29 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                             </div>
                             <span style={{ fontSize: 10, fontWeight: 700, color: "#1A1917" }}>{takenCount}/{cl.length} 가져감</span>
                           </div>
-                          {/* 항목들 — 6개 이상이면 항목 5개 높이로 고정하고 이 목록 안에서만 세로 스크롤.
+                          {/* 📦 항목들 — 작은 카드 박스로 3열 배치(좁으면 자동으로 2열·1열).
+                              ⚠️ 세로 1열 시절의 "5개 초과 → 165px" 기준을 그대로 두면 3열에선 2행도 안 돼 잘리는 위치가 이상해진다.
+                                 → 행 기준으로 환산(3열 가정 · 3행까지 노출)해서 그 안에서만 스크롤한다.
                               상단(진행률바)·하단(가져가기/완료 버튼)은 이 div 바깥이라 스크롤과 무관하게 항상 고정 노출된다. */}
-                          <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: cl.length > 5 ? 165 : "none", overflowY: cl.length > 5 ? "auto" : "visible", overflowX: "hidden", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", paddingRight: cl.length > 5 ? 4 : 0 }}>
+                          <div style={itemGridStyle({ maxHeight: itemGridMaxHeight(cl.length, 3, 3), overflowY: cl.length > 9 ? "auto" : "visible", overflowX: "hidden", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", paddingRight: cl.length > 9 ? 4 : 0 })}>
                             {cl.map(function(item) {
                               // 📅 일정 항목은 모양이 달라 따로 그린다(기존 항목 렌더는 손대지 않는다)
                               if (item && item.is_sched) return renderSchedItem(note, item);
                               var taken = !!item.taken_by;
                               var mine = item.taken_by === profile?.name;
                               return (
-                                <div key={item.id}
-                                  style={{ display: "flex", alignItems: "flex-start", gap: 6, padding: "5px 8px", background: taken ? "#F7F6F3" : "#fff", borderRadius: 6, border: "0.5px solid " + (taken ? "transparent" : "#E8E5E0") }}>
-                                  <span style={{ fontSize: 11, color: taken ? "#888" : "#CCC", marginTop: 1 }}>☐</span>
-                                  <span style={{ flex: 1, fontSize: 11, color: taken ? "#888" : "#1A1917", textDecoration: taken ? "line-through" : "none", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                                    {renderMentionText(item.text, companiesList)}
-                                  </span>
+                                <div key={item.id} style={itemBoxStyle({ background: taken ? "#F7F6F3" : "#fff", border: "0.5px solid " + (taken ? "#EDEBE6" : "#E8E5E0") })}>
+                                  {/* 1단 — 항목 내용 */}
+                                  <div style={{ display: "flex", alignItems: "flex-start", gap: 6, minWidth: 0 }}>
+                                    <span style={{ fontSize: 11, color: taken ? "#888" : "#CCC", marginTop: 1, flexShrink: 0 }}>☐</span>
+                                    <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, color: taken ? "#888" : "#1A1917", textDecoration: taken ? "line-through" : "none", lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                                      {renderMentionText(item.text, companiesList)}
+                                    </span>
+                                  </div>
+                                  {/* 2·3단 — 가져간 항목은 담당자 배지, 아니면 버튼 */}
                                   {taken ? (
-                                    <span style={{ display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
-                                      <span style={{ fontSize: 9, padding: "2px 7px", background: mine ? "#DCFCE7" : "#DBEAFE", color: mine ? "#15803D" : "#1E40AF", borderRadius: 99, fontWeight: 700 }}>
+                                    <div style={Object.assign({ alignItems: "center" }, ITEM_BOX_ACTIONS)}>
+                                      <span style={{ fontSize: 9, padding: "2px 7px", background: mine ? "#DCFCE7" : "#DBEAFE", color: mine ? "#15803D" : "#1E40AF", borderRadius: 99, fontWeight: 700, whiteSpace: "nowrap" }}>
                                         👤 {item.taken_by}{mine ? " (나)" : ""}
                                       </span>
                                       {(mine || normalizeName(profile?.name) === "양호" || profile?.role === "admin") && (
@@ -30469,9 +30532,9 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                                           title="원위치 (대기중으로 돌리기)"
                                           style={{ background: "none", border: "none", cursor: "pointer", padding: 2, fontSize: 11, color: "#888", lineHeight: 1 }}>↩️</button>
                                       )}
-                                    </span>
+                                    </div>
                                   ) : (
-                                    <span style={{ display: "flex", gap: 3, whiteSpace: "nowrap" }}>
+                                    <div style={ITEM_BOX_ACTIONS}>
                                     {/* 📅 이월 — 아직 아무도 안 가져간 항목만. 개인 업무노트 이월과 같은 의미다
                                         (원본은 남기고 이월 표시만 붙인 뒤, 그 날짜 팀 카드에 복사본을 만든다) */}
                                     <button onClick={function() { openTeamCarry(note, item.id, item.text); }}
@@ -30483,7 +30546,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                                       style={{ fontSize: 9, padding: "3px 8px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}>
                                       📅 가져가기
                                     </button>
-                                    </span>
+                                    </div>
                                   )}
                                 </div>
                               );
