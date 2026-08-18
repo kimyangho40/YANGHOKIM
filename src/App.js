@@ -30266,6 +30266,21 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     });
   };
 
+  // ↩️ 카드 완료 취소 — 완료 처리 이전 상태로 되돌린다(밀린 미완료에도 다시 나타난다).
+  //   ⚠️ team_notes 는 "완료 전 상태"를 따로 저장하지 않는다 — status 한 칸뿐이다.
+  //      그래서 taken_by 로 되돌릴 곳을 정한다: 가져간 사람이 있으면 taken(진행중), 없으면 open(대기).
+  //      status 흐름 open → taken → done 과 같은 규칙이라 어긋나지 않는다(CLAUDE.md).
+  var undoMarkDone = async function(note) {
+    var back = note.taken_by ? "taken" : "open";
+    var r = await supabase.from("team_notes").update({ status: back }).eq("id", note.id);
+    if (r.error) { alert("완료 취소 실패: " + r.error.message); return; }
+    setAllTeamNotes(function(prev) {
+      return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { status: back }) : n; });
+    });
+    // expandedDone 은 '완료돼서 접힌 카드를 펼쳐 둔 목록'이다 — 완료가 풀린 카드에는 의미가 없어 지운다.
+    setExpandedDone(function(p) { var q = Object.assign({}, p); delete q[note.id]; return q; });
+  };
+
   // 공지 확인(ack) 토글 — 본인 이름을 team_notes.read_by 배열에 넣고 뺀다
   var toggleAck = async function(note) {
     var me = normalizeName(profile?.name);
@@ -30491,7 +30506,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                           ) : (
                             <>
                               <button onClick={function() { markDone(r.note.id); }}
-                                title="이 카드를 완료 처리합니다 ('완료된 업무 N건 보기'를 켜면 다시 보입니다)"
+                                title="이 카드를 완료 처리합니다 ('완료된 업무 N건 보기'를 켜면 다시 보이고, 거기서 ↩️ 로 되돌릴 수 있습니다)"
                                 style={{ fontSize: 9.5, fontWeight: 700, padding: "4px 8px", borderRadius: 5, border: "1px solid #86EFAC", background: "#F0FDF4", color: "#15803D", cursor: "pointer", whiteSpace: "nowrap" }}>✅ 완료</button>
                               {(profile?.name === "양호" || profile?.role === "admin" || profile?.name === r.note.posted_by) && (
                                 <button onClick={function() { deleteTeamNote(r.note.id, r.note.posted_by); }}
@@ -30560,6 +30575,10 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                         {note.title || "(제목 없음)"}
                       </span>
                       {note.taken_by && <span style={{ fontSize: 9.5, color: "#15803D", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 99, padding: "2px 7px", whiteSpace: "nowrap" }}>👤 {note.taken_by}</span>}
+                      {/* 줄 전체가 "펼치기" 클릭이라 stopPropagation 이 없으면 취소와 펼치기가 같이 일어난다 */}
+                      <button onClick={function(e) { e.stopPropagation(); undoMarkDone(note); }}
+                        title="완료 취소 (완료 처리 이전 상태로 되돌립니다)"
+                        style={{ background: "none", border: "none", cursor: "pointer", padding: 2, fontSize: 11, color: "#888", lineHeight: 1 }}>↩️</button>
                       <span style={{ fontSize: 9.5, color: "#AAA", whiteSpace: "nowrap" }}>펼치기 ▼</span>
                     </div>
                   );
@@ -30717,8 +30736,11 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                     {(function() {
                       var cl = note.checklist || [];
                       if (cl.length === 0) return null;
-                      var takenCount = cl.filter(function(it) { return it.taken_by; }).length;
-                      var pct = Math.round((takenCount / cl.length) * 100);
+                      // ✅ 완료(done)한 항목도 진행에 넣는다 — 밀린 미완료에서 완료를 누르면
+                      //    taken_by 없이 끝나므로, 가져간 것만 세면 다 끝낸 카드가 0/N 으로 남는다.
+                      //    ⚠️ 두 축을 합쳐 세는 건 여기(진행률 표시)뿐이다. 판정 로직은 여전히 각각 본다.
+                      var progressCount = cl.filter(function(it) { return it && (it.taken_by || it.done); }).length;
+                      var pct = Math.round((progressCount / cl.length) * 100);
                       return (
                         <div style={{ marginBottom: 8 }}>
                           {/* 진행률 */}
@@ -30727,7 +30749,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                             <div style={{ flex: 1, height: 5, background: "#F7F6F3", borderRadius: 99, overflow: "hidden" }}>
                               <div style={{ width: pct + "%", height: "100%", background: "#4338CA", transition: "width 0.2s" }}></div>
                             </div>
-                            <span style={{ fontSize: 10, fontWeight: 700, color: "#1A1917" }}>{takenCount}/{cl.length} 가져감</span>
+                            <span style={{ fontSize: 10, fontWeight: 700, color: "#1A1917" }}>{progressCount}/{cl.length} 완료·가져감</span>
                           </div>
                           {/* 📦 항목들 — 작은 카드 박스. 열 수는 컨테이너 폭이 정한다(auto-fill).
                               ⚠️ 팀 카드가 280px 카드 그리드로 돌아왔으므로 이 안에서는 사실상 1열이다.
@@ -30844,6 +30866,11 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                       {note.status === "taken" && isMine && (
                         <button onClick={function() { markDone(note.id); }}
                           style={{ flex: 1, background: "#fff", color: "#15803D", border: "1px solid #86EFAC", borderRadius: 6, padding: "6px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>✅ 완료처리</button>
+                      )}
+                      {/* ↩️ 완료 취소 — 완료된 카드는 밀린 미완료에서도 빠지므로 되돌릴 길을 남긴다 */}
+                      {note.status === "done" && (
+                        <button onClick={function() { undoMarkDone(note); }} title="완료 취소 (완료 처리 이전 상태로 되돌립니다)"
+                          style={{ flex: 1, background: "#fff", color: "#B45309", border: "1px solid #FED7AA", borderRadius: 6, padding: "6px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>↩️ 완료 취소</button>
                       )}
                       {/* 수정 버튼 (누구나 가능) */}
                       <button onClick={function() { startEditNote(note); }} title="수정"
