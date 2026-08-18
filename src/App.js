@@ -11252,20 +11252,30 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
   };
 
   // 컬럼에 drop — 수동 이동. 반영은 moveCards 가 담당한다(일괄 이동과 동일 경로).
+  //  · ☑ 다중 선택 중이고 **끌고 온 카드가 그 선택 안에 있으면 → 선택된 전체가 같이 이동**한다.
+  //    선택에 없는 카드를 끌면 그 카드 하나만 옮긴다(선택 상태는 그대로 둔다).
+  //  · 확인창·반영은 일괄 이동과 똑같이 confirmAndMoveCards → moveCards 를 탄다(두 벌로 두면 반드시 어긋난다).
   var handleDrop = async function(e, newStage) {
     e.preventDefault();
     var droppedId = draggingId;
-    var oldStage = draggingFrom;
     setDraggingId(null);
     setDraggingFrom(null);
     setDragOverStage(null);
-    if (!droppedId || oldStage === newStage) return;
+    if (!droppedId) return;
     var row = cardRows.find(function(x) { return x.card.id === droppedId; });
     if (!row) return;
-    var label = row.co.name + " · " + agencyLabel(row.card.agency_group);
-    if (!confirm("'" + label + "' 단계를 '" + oldStage + "' → '" + newStage + "'(으)로 변경할까요?\n(수동 이동 → 이후 기관현황이 바뀌어도 자동으로 덮어쓰지 않습니다)")) return;
-    var res = await moveCards([row], newStage);
-    if (res.failed.length) alert("단계 변경 실패: " + res.failed[0]);
+    var inSel = !!selectedIds[droppedId];
+    var rows = [row];
+    if (inSel) {
+      rows = (selectedRows || []).slice();
+      // 끌었다 = 화면에 보인다 이므로 selectedRows 에 이미 있는 게 정상이지만, 방어적으로 채운다
+      if (!rows.some(function(r) { return r.card.id === droppedId; })) rows.push(row);
+    }
+    // 옮길 게 없으면(출발 단계 == 드롭 단계) 조용히 끝낸다 — 예전 단일 드래그 동작 그대로
+    var res = await confirmAndMoveCards(rows, newStage, { silentWhenEmpty: true });
+    if (!res) return;
+    if (inSel) clearSelection();
+    if (res.failed.length) alert(res.moved + "건 이동 · " + res.failed.length + "건 실패\n\n" + res.failed.slice(0, 5).join("\n"));
   };
 
   // ── ☑ 다중 선택 ─────────────────────────────────────────────────────────────
@@ -11288,12 +11298,19 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
       + (rows.length > 5 ? "\n … 외 " + (rows.length - 5) + "건" : "");
   };
 
-  // 일괄 이동 — 확인창에서 몇 건인지·무엇인지 보여주고, STEP2면 정산 반영까지 미리 알린다.
-  var doBulkMove = async function(newStage) {
-    if (!newStage || bulkBusy) return;
-    var movable = selectedRows.filter(function(r) { return r.card.stage !== newStage; });
-    if (!movable.length) { alert("옮길 카드가 없습니다.\n(선택한 카드가 이미 '" + newStage + "' 단계입니다)"); return; }
-    var skipped = selectedRows.length - movable.length;
+  // 확인창 + 이동 — **개별 드래그와 일괄 이동이 같은 문구·같은 경로**를 쓴다.
+  //  · 이미 그 단계인 카드는 빼고, 몇 건이 빠졌는지 알려준다.
+  //  · 반영은 반드시 moveCards 한 곳을 거친다(단계값·STEP2 정산 연동이 갈라지지 않게).
+  //  · opts.silentWhenEmpty — 드래그처럼 "옮길 게 없으면 아무 일도 없던 것"으로 끝내야 할 때.
+  var confirmAndMoveCards = async function(rows, newStage, opts) {
+    opts = opts || {};
+    if (!newStage || bulkBusy) return null;
+    var movable = (rows || []).filter(function(r) { return r && r.card && r.card.stage !== newStage; });
+    if (!movable.length) {
+      if (!opts.silentWhenEmpty) alert("옮길 카드가 없습니다.\n(선택한 카드가 이미 '" + newStage + "' 단계입니다)");
+      return null;
+    }
+    var skipped = (rows || []).length - movable.length;
     var msg = movable.length + "건을 '" + newStage + "'(으)로 옮길까요?\n\n" + previewList(movable)
       + (skipped ? "\n\n(이미 그 단계인 " + skipped + "건은 제외됩니다)" : "")
       + "\n\n수동 이동으로 기록됩니다 — 이후 기관현황이 바뀌어도 자동으로 덮어쓰지 않습니다.";
@@ -11304,10 +11321,18 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
       if (nCo) msg += "\n\n⚠ '" + CONTRACT_PAID_STAGE + "'로 옮기면 " + nCo + "개 업체의 계약 상태가 켜지고,\n"
         + "   계약금·수수료율이 정산현황에도 자동 반영됩니다.";
     }
-    if (!window.confirm(msg)) return;
+    if (!window.confirm(msg)) return null;
     setBulkBusy(true);
     var res = await moveCards(movable, newStage);
     setBulkBusy(false);
+    return res;
+  };
+
+  // 일괄 이동(→ 이동 버튼) — 선택된 카드를 그대로 공용 경로에 넘긴다.
+  var doBulkMove = async function(newStage) {
+    if (!newStage || bulkBusy) return;
+    var res = await confirmAndMoveCards(selectedRows, newStage);
+    if (!res) return;
     clearSelection();
     if (res.failed.length) alert(res.moved + "건 이동 · " + res.failed.length + "건 실패\n\n" + res.failed.slice(0, 5).join("\n"));
   };
@@ -11735,7 +11760,8 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
                   var isChecked = !!selectedIds[card.id];     // ☑ 다중 선택됨
                   return (
                     <div key={card.id}
-                      draggable={!selectMode}
+                      // ☑ 선택 모드에서도 끌 수 있게 둔다 — 선택해 놓고 그중 하나를 끌면 선택된 전체가 같이 이동한다(handleDrop).
+                      draggable
                       onDragStart={function(e) { handleDragStart(e, row); }}
                       onDragEnd={handleDragEnd}
                       onClick={function(e) {
