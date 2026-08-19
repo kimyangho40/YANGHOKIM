@@ -1776,6 +1776,37 @@ function loanAmountOf(ln) {
   var r = parseLoanAmount(ln && ln.amount);
   return r.won == null ? 0 : r.won;
 }
+// ── 기대출 금액 입력칸은 "만원" 단위로 통일 (2026-08-19, 대표 결정) ──────────
+// 단위 글자를 안 붙이면 "12,353이 1만원인지 1,235만원인지" 판단이 안 돼 합계에서 빠지던 문제를
+// "입력 단위를 만원으로 고정"해서 없앤다.
+//
+// ⚠️ parseLoanAmount 는 한 줄도 고치지 않았다. 저장 형식을 "53000만" 처럼 만 글자가 붙은
+//    문자열로 맞춰, 이미 검증된 파싱 경로를 그대로 타게 했다.
+//    · 파서를 손대면 기존 170건이 전부 같은 함수를 통과하므로 회귀 사정권이 통째로 열린다
+//      (옛 사고: "20백만원"→20원, "1억"→1원 — 커밋 d3df072 참고).
+//    · ×10,000 해서 원 숫자로 저장하는 방식은 8만원 같은 소액이 다시 100,000 미만이 되어
+//      "단위 확인 필요"가 재발한다. 그래서 쓰지 않았다.
+//
+// 저장 원문 → 입력칸에 보여줄 만원 숫자 문자열.
+// 해석 못 한 값(예: "50+30+19" 같은 메모)은 원문을 그대로 돌려준다 — 숫자로 바꿔 보여주면
+// 사람이 그 메모를 못 고치고, 저장된 원문도 화면에서 사라진다.
+function loanAmountToManInput(raw) {
+  var s = raw == null ? "" : String(raw);
+  if (!s.trim()) return "";
+  var p = parseLoanAmount(s);
+  if (p.won == null) return s;
+  // 소수 넷째 자리(=1원)까지만 끊는다 — 부동소수 찌꺼기(92937.99999999999)를 없애기 위함
+  return String(Math.round((p.won / 10000) * 1e4) / 1e4);
+}
+// 입력칸에 친 문자열 → 저장할 원문.
+// 숫자만 쳤으면 만원으로 확정하고, 사람이 단위를 직접 쓴 경우("5억3천만원")는 그대로 둔다(하위호환).
+function manInputToLoanAmount(s) {
+  var t = String(s == null ? "" : s).trim();
+  if (!t) return "";
+  var c = t.replace(/[,\s]/g, "");
+  if (/^[0-9]+(\.[0-9]+)?$/.test(c)) return c + "만";
+  return t;
+}
 // 신청했으나 부결/탈락한 건 — 실행된 대출이 아니므로 합계·부채비율·미분류·확인필요 어디에도 넣지 않는다.
 // 금액은 NULL(빈칸)로 두고 status="rejected"로만 구분한다. (0으로 두면 '0원 대출을 받았다'로 오독되어 평균·합계를 오염시킴)
 // note에 원문(예: "넣었으나 탈락")과 기관명을 남겨 거절 이력으로 보존한다.
@@ -15387,6 +15418,11 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                     </span>
                   );
                 })()}
+                {/* 입력 단위 안내 — 단위를 안 붙여 '확인 필요'로 빠지던 문제를 만원 고정으로 없앴다(2026-08-19) */}
+                <span title="금액칸은 만원 단위입니다. 숫자만 입력하면 됩니다 — 5억3,000만원이면 53000, 8,500만원이면 8500."
+                  style={{ background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 6, padding: "3px 9px", fontSize: 10.5, fontWeight: 800 }}>
+                  단위: 만원 · 숫자만 입력 (5억3,000만원 → 53000)
+                </span>
                 <div style={{ marginLeft: "auto" }} />
               </div>
               <div style={{ overflowX: "auto", marginBottom: 8 }}>
@@ -15395,7 +15431,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                     <tr style={{ background: "#F4F4F8" }}>
                       <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "20%" }}>기관</th>
                       <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "15%" }}>구분</th>
-                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "14%" }}>금액</th>
+                      <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "14%" }}>금액 <span style={{ color: "#4338CA", fontWeight: 800 }}>(만원)</span></th>
                       <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "12%" }}>은행</th>
                       <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "17%" }}>실행일</th>
                       <th style={{ padding: "6px 5px", border: "1px solid #E8E5E0", fontWeight: 600, width: "17%" }}>만기일</th>
@@ -15448,7 +15484,10 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                             )}
                           </td>
                           <td style={{ border: "1px solid #E8E5E0", padding: 0, background: rejected ? "#F3F4F6" : (amtP.won == null && amtP.note ? "#FEF2F2" : "transparent") }}>
-                            <input value={ln.amount || ""} onChange={function(e) { updateLoan("amount", e.target.value); }} style={mutedIn} placeholder={rejected ? "실행 안 됨" : ""} />
+                            {/* 금액은 만원 단위로 입력받는다 — 저장은 "53000만" 형태(loanAmountToManInput/manInputToLoanAmount 주석 참고) */}
+                            <input value={loanAmountToManInput(ln.amount)} onChange={function(e) { updateLoan("amount", manInputToLoanAmount(e.target.value)); }}
+                              style={mutedIn} placeholder={rejected ? "실행 안 됨" : "만원"}
+                              title="만원 단위로 숫자만 입력하세요 (5억3,000만원 → 53000). 아래 초록색 줄에서 실제 금액을 확인할 수 있습니다." />
                             {rejected ? (
                               <div title={ln.note ? "원문: " + ln.note : "신청했으나 부결/탈락 — 실행된 대출이 아니므로 합계·부채비율에서 제외됩니다."}
                                 style={{ fontSize: 9.5, color: "#6B7280", padding: "0 5px 4px", fontWeight: 800 }}>🚫 신청 거절{ln.note ? " · " + ln.note : ""}</div>
