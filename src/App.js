@@ -16583,6 +16583,13 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                 continue;
               }
               var insertData = {
+                // 🔗 기업목록과 바로 연결한다. 예전에는 이 줄이 없어서 이 버튼으로 만든 건이 전부
+                //    company_id = null 로 태어났고(2026-08-19 실측: 미연결 291건), 이후 이름이
+                //    완전히 같을 때만 autoLinkCompanies 로 겨우 붙었다. 꼬리표가 붙은 이름
+                //    ("(주)123푸드 (신청 보류)")은 영영 안 붙는다.
+                //    ⚠️ companyName 은 nameInput 을 우선하므로 data.name 과 다를 수 있다.
+                //       그래도 지금 열려 있는 기업의 id 로 잇는 게 맞다 — 이름보다 정확하다.
+                company_id: data.id || null,
                 business_name: companyName,
                 agency_group: agencyGroup,
                 month: monthNum,
