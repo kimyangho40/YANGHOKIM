@@ -1320,6 +1320,20 @@ function contractBadge(co) {
 // 상태까지 서로 다르다. 예전에는 정렬 없이 먼저 도착한 행을 최신으로 쳤는데, PostgREST는 order를
 // 지정하지 않으면 순서를 보장하지 않아 현황 행을 수정만 해도 카드 단계가 뒤집혔다(불일치 14건 발생).
 function caseTs(v) { var t = v ? Date.parse(v) : NaN; return isNaN(t) ? 0 : t; }
+// 🗓 (년,월) → 비교용 숫자. 없으면 0 = 가장 과거.
+function caseYm(c) { return ((c && c.year) || 0) * 100 + ((c && c.month) || 0); }
+// 🗓 오늘이 속한 달보다 **뒤인** 행 = "아직 오지 않은 계획". 단계 판정에서 최신으로 치지 않는다.
+//    (2026-08-19) 실무에서 다음 달 신청 건을 미리 '시작 전'으로 등록해 둔다(2026-09 46행·2026-11 34행).
+//    isNewerCase 는 년→월 순으로 이기므로 그 계획 행이 최신이 되어 → '상담/진단완료' 로 매핑 →
+//    **이미 진행된 카드가 뒤로 끌려갔다**(실측: 재동기화 시 auto 카드 41장 중 40장 후퇴).
+//    ⚠️ isNewerCase 자체는 "정렬 규칙"이라 손대지 않는다 — 여기에 시간 개념을 넣으면 회귀 사정권이 넓어진다.
+//       필터는 최신 행을 고르는 호출부 3곳(syncPipelineFromCase·resyncAutoCards·toggleSyncMode)에서만 건다.
+//    ⚠️ 화면(기관현황 목록·필터·정산)에는 미래 월 행이 그대로 보여야 한다. 이건 단계 판정 전용이다.
+//    ⚠️ 기준이 "오늘"이라 시간이 지나면 저절로 풀린다 — 9월이 되면 2026-09 행이 정상적으로 최신이 된다.
+function isFutureCase(c) {
+  var k = kstDate(); // "YYYY-MM-DD" (KST)
+  return caseYm(c) > parseInt(k.slice(0, 4), 10) * 100 + parseInt(k.slice(5, 7), 10);
+}
 function isNewerCase(a, b) {
   if (!b) return true;
   if (!a) return false;
@@ -1341,22 +1355,27 @@ async function syncPipelineFromCase(c) {
     //    과거 월 행을 고쳤다고 카드가 과거 단계로 되돌아가지 않게 하기 위함. (2026-07-27)
     //    같은 월 안에서는 방금 사람이 손댄 c 가 이긴다 — 그게 곧 updated_at 최신이고,
     //    DB 저장 직후 호출이라 다시 읽으면 옛 값을 볼 수 있어(경합) 재조회 결과를 쓰지 않는다.
-    var eff = c;
+    //    🗓 (2026-08-19) 여기에 "미래 월은 제외"가 추가됐다 — isFutureCase 주석 참고.
+    //       c 자체가 미래 월이면 기준 행이 없다고 본다(eff = null) → 아래에서 카드 단계를 건드리지 않는다.
+    //       ⚠️ 카드 **신규 생성**은 그대로 둔다. 새 (회사×기관) 조합이 카드 없이 남으면 보드에서 사라진다.
+    var eff = isFutureCase(c) ? null : c;
     try {
-      var cYm = (c.year || 0) * 100 + (c.month || 0);
+      // c 가 미래면 기준이 없으므로 과거·현재 전 구간에서 최신 하나를 고른다(baseYm = -1).
+      var cYm = eff ? caseYm(c) : -1;
       var sq = supabase.from("agency_cases").select("id,status,year,month,created_at,updated_at").is("deleted_at", null);
       sq = c.company_id ? sq.eq("company_id", c.company_id) : sq.eq("business_name", c.business_name);
       sq = ag ? sq.eq("agency_group", ag) : sq.is("agency_group", null);
       var sr = await sq;
       var newest = null;
       (sr.data || []).forEach(function(s) {
-        if ((s.year || 0) * 100 + (s.month || 0) > cYm && isNewerCase(s, newest)) newest = s;
+        if (isFutureCase(s)) return; // 🗓 미래 월 행은 최신으로 치지 않는다
+        if (caseYm(s) > cYm && isNewerCase(s, newest)) newest = s;
       });
       if (newest) eff = newest;
     } catch (e1) { /* 조회 실패 시 방금 저장한 행 기준으로 진행 */ }
     // 1) 매핑 조회
     var stage = null;
-    if (eff.status) {
+    if (eff && eff.status) {
       var mr = await supabase.from("status_stage_map").select("agency_group,stage")
         .eq("status_value", eff.status).in("agency_group", [ag || "__none__", "*"]);
       var maps = mr.data || [];
@@ -1386,16 +1405,18 @@ async function syncPipelineFromCase(c) {
         if (changed) { upd.stage_changed_at = new Date().toISOString(); upd.alerted_at = null; }
         await supabase.from("pipeline_cards").update(upd).eq("id", card.id);
         if (changed && card.alert_note_id) { try { await supabase.from("work_notes").update({ is_done: true }).eq("id", card.alert_note_id); } catch (e2) {} }
-      } else if (eff.status) {
+      } else if (eff && eff.status) {
         await supabase.from("pipeline_cards").update({ needs_mapping: true, updated_at: new Date().toISOString() }).eq("id", card.id);
       }
+      // 🗓 eff === null (미래 월 행뿐) → 카드를 건드리지 않는다. needs_mapping 도 세우지 않는다
+      //    (매핑이 없는 게 아니라 아직 판정할 때가 아닌 것이라, 화면에 ⚠ 를 띄우면 오해를 부른다).
     } else if (ag) {
       // 새 (회사×기관) 조합 → 카드 신규 생성
       await supabase.from("pipeline_cards").insert({
         company_id: c.company_id || null, business_name: c.business_name || "", agency_group: ag,
         stage: stage || "상담/진단완료", sync_mode: "auto",
         synced_status: stage ? eff.status : null, synced_month: stage ? (eff.month || null) : null,
-        needs_mapping: !stage && !!eff.status,
+        needs_mapping: !stage && !!(eff && eff.status), // 🗓 eff 가 null(미래 월뿐)일 수 있다
       });
     }
   } catch (e) { console.warn("파이프라인 자동동기화 실패:", e && e.message); }
@@ -1421,6 +1442,7 @@ async function resyncAutoCards() {
   cases.forEach(function(c) {
     if (c.deleted_at) return;
     if (!c.company_id) return;   // 회사 미연결 현황은 카드와 매칭할 수 없음(빈 키로 뭉치는 것 방지)
+    if (isFutureCase(c)) return; // 🗓 미리 등록해 둔 미래 월 '시작 전' 행이 최신이 되어 카드를 뒤로 끌지 않게
     var key = c.company_id + "||" + (c.agency_group || "");
     if (isNewerCase(c, latest[key])) latest[key] = c;
   });
@@ -11444,7 +11466,8 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
       cq = cq.eq("agency_group", card.agency_group);
       var lc = await cq;
       var latest = null;
-      (lc.data || []).forEach(function(s) { if (isNewerCase(s, latest)) latest = s; });
+      // 🗓 미래 월 행은 최신으로 치지 않는다(syncPipelineFromCase 와 같은 규칙 — isFutureCase 주석 참고).
+      (lc.data || []).forEach(function(s) { if (isFutureCase(s)) return; if (isNewerCase(s, latest)) latest = s; });
       if (latest) await syncPipelineFromCase({ company_id: card.company_id, business_name: card.business_name, agency_group: card.agency_group, status: latest.status, year: latest.year, month: latest.month });
       var fresh = await supabase.from("pipeline_cards").select("*").is("deleted_at", null);
       if (fresh.data && setPipelineCards) setPipelineCards(fresh.data);
