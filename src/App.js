@@ -21833,6 +21833,7 @@ function SettlementView({ profile }) {
   const [loading, setLoading] = useState(true);
   const [activeMonth, setActiveMonth] = useState(new Date().getMonth() + 1);
   const [activeYear, setActiveYear] = useState(new Date().getFullYear());
+  const [dataYearBounds, setDataYearBounds] = useState({ min: null, max: null }); // 연도 화살표 범위용(목록 필터와 무관)
   const [editingId, setEditingId] = useState(null);
   const [editData, setEditData] = useState({});
   const [editSource, setEditSource] = useState("auto");
@@ -21856,6 +21857,18 @@ function SettlementView({ profile }) {
       .order("created_at", { ascending: false });
     if (!r1.error) setCases(r1.data || []);
     if (!r2.error) setManuals(r2.data || []);
+
+    // 연도 화살표가 갈 수 있는 범위 — 목록(승인 이상)과 **별개로** 연도만 본다. (2026-08-19)
+    //  ⚠️ 위 status 필터를 풀어서 해결하면 안 된다. 그러면 부결·시작 전 건까지 정산 목록에 들어와
+    //     계약금·수수료 합계가 통째로 어긋난다(실측 2026년 285건 → 1,767건).
+    //  ⚠️ 전체 행을 받아 훑지도 않는다 — agency_cases 는 2,200행이 넘어 PostgREST 1000행 상한에
+    //     조용히 걸린다(CLAUDE.md 2-5). 필요한 건 최소·최대 연도뿐이라 정렬 후 1행씩만 받는다.
+    var yb = await Promise.all([
+      supabase.from("agency_cases").select("year").not("year", "is", null).order("year", { ascending: true }).limit(1),
+      supabase.from("agency_cases").select("year").not("year", "is", null).order("year", { ascending: false }).limit(1),
+    ]);
+    var pick = function(r) { return (!r.error && r.data && r.data[0] && r.data[0].year) || null; };
+    setDataYearBounds({ min: pick(yb[0]), max: pick(yb[1]) });
     setLoading(false);
   };
 
@@ -21936,16 +21949,18 @@ function SettlementView({ profile }) {
   //  · 예전에는 year === 2026 이 코드에 박혀 있어 해가 바뀌면 정산이 통째로 빈 화면이 됐다.
   //  · 올해·내년을 항상 넣는 이유: 아직 건이 없는 내년에도 미리 등록할 수 있어야 한다.
   //  · 지난 연도는 "데이터가 있을 때만" 열린다 — 빈 해로 무한정 거슬러 가지 않게 하기 위함.
-  //  ⚠️ cases 는 fetchData 가 승인 이상 상태만 불러온다. 그래서 승인 전 건만 있는 해는
-  //     여기에 안 잡힌다(2026-08-19 기준 2025년이 그렇다). 그 해도 열려면 fetchData 를 고쳐야 한다.
+  //  ⚠️ "데이터에 있는 연도"는 dataYearBounds(전 상태 대상, fetchData 참고)로 판단한다.
+  //     화면에 뜨는 cases 는 승인 이상만이라, 그것만 보면 승인 전 건만 있는 해가 통째로 안 열린다
+  //     (2026-08-19 기준 2025년: 20건 전부 승인 이전 → 목록은 0건이지만 연도는 열려야 한다).
   var yearRange = useMemo(function() {
     var now = new Date().getFullYear();
     var s = new Set([now, now + 1]);
-    cases.forEach(function(c) { if (c.year && !c.deleted_at) s.add(c.year); });
+    if (dataYearBounds.min) s.add(dataYearBounds.min);
+    if (dataYearBounds.max) s.add(dataYearBounds.max);
     manuals.forEach(function(m) { if (m.year) s.add(m.year); });
     var arr = Array.from(s).sort(function(a, b) { return a - b; });
     return { years: arr, min: arr[0], max: arr[arr.length - 1] };
-  }, [cases, manuals]);
+  }, [manuals, dataYearBounds]);
 
   // 연도별 건수 — 화살표 옆 배지에 쓴다(그 해에 데이터가 있는지 한눈에)
   var yearCount = useMemo(function() {
@@ -22297,8 +22312,11 @@ function SettlementView({ profile }) {
             {activeYear === new Date().getFullYear() && (
               <span style={{ background: "#F7F6F3", color: "#888", borderRadius: 99, padding: "2px 8px", fontSize: 10.5, fontWeight: 700 }}>올해</span>
             )}
-            <span style={{ fontSize: 11, color: yearCount ? "#888" : "#C4C0BA" }}>
-              {yearCount ? yearCount + "건" : "데이터 없음"}
+            {/* 0건일 때 "정산 건 없음"으로 적는다 — 그 해에 기관 건이 아예 없다는 뜻이 아니라
+                승인 이상으로 올라온 게 없다는 뜻이라(2025년이 그렇다) 오해를 막기 위함 */}
+            <span title={yearCount ? null : "이 해에는 승인·약정·완료·자금집행완료 상태인 기관 건이 없습니다. 직접 등록은 할 수 있습니다."}
+              style={{ fontSize: 11, color: yearCount ? "#888" : "#C4C0BA" }}>
+              {yearCount ? yearCount + "건" : "정산 건 없음"}
             </span>
           </div>
         );
