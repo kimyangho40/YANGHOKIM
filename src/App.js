@@ -21832,6 +21832,7 @@ function SettlementView({ profile }) {
   const [manuals, setManuals] = useState([]);   // 수동 (settlement_manual)
   const [loading, setLoading] = useState(true);
   const [activeMonth, setActiveMonth] = useState(new Date().getMonth() + 1);
+  const [activeYear, setActiveYear] = useState(new Date().getFullYear());
   const [editingId, setEditingId] = useState(null);
   const [editData, setEditData] = useState({});
   const [editSource, setEditSource] = useState("auto");
@@ -21858,14 +21859,14 @@ function SettlementView({ profile }) {
     setLoading(false);
   };
 
-  // 자동 + 수동 합산 (현재 월)
+  // 자동 + 수동 합산 (현재 연·월)
   var filteredAuto = useMemo(function() {
-    return cases.filter(function(c) { return c.month === activeMonth && c.year === 2026 && !c.deleted_at; });
-  }, [cases, activeMonth]);
+    return cases.filter(function(c) { return c.month === activeMonth && c.year === activeYear && !c.deleted_at; });
+  }, [cases, activeMonth, activeYear]);
 
   var filteredManual = useMemo(function() {
-    return manuals.filter(function(m) { return m.month === activeMonth && m.year === 2026; });
-  }, [manuals, activeMonth]);
+    return manuals.filter(function(m) { return m.month === activeMonth && m.year === activeYear; });
+  }, [manuals, activeMonth, activeYear]);
 
   var allFiltered = useMemo(function() {
     var auto = filteredAuto.map(function(c) { return Object.assign({}, c, { _source: "auto" }); });
@@ -21923,13 +21924,43 @@ function SettlementView({ profile }) {
     return opts;
   }, [byTeam]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 월 탭용 - 데이터 있는 월
+  // 월 탭용 - 선택한 연도에 데이터 있는 월
   var monthsWithData = useMemo(function() {
     var s = new Set();
-    cases.forEach(function(c) { if (c.year === 2026 && !c.deleted_at) s.add(c.month); });
-    manuals.forEach(function(m) { if (m.year === 2026) s.add(m.month); });
+    cases.forEach(function(c) { if (c.year === activeYear && !c.deleted_at) s.add(c.month); });
+    manuals.forEach(function(m) { if (m.year === activeYear) s.add(m.month); });
     return s;
+  }, [cases, manuals, activeYear]);
+
+  // 연도 이동 범위 = 데이터에 실제 있는 연도 ∪ {올해, 내년}  (2026-08-19)
+  //  · 예전에는 year === 2026 이 코드에 박혀 있어 해가 바뀌면 정산이 통째로 빈 화면이 됐다.
+  //  · 올해·내년을 항상 넣는 이유: 아직 건이 없는 내년에도 미리 등록할 수 있어야 한다.
+  //  · 지난 연도는 "데이터가 있을 때만" 열린다 — 빈 해로 무한정 거슬러 가지 않게 하기 위함.
+  //  ⚠️ cases 는 fetchData 가 승인 이상 상태만 불러온다. 그래서 승인 전 건만 있는 해는
+  //     여기에 안 잡힌다(2026-08-19 기준 2025년이 그렇다). 그 해도 열려면 fetchData 를 고쳐야 한다.
+  var yearRange = useMemo(function() {
+    var now = new Date().getFullYear();
+    var s = new Set([now, now + 1]);
+    cases.forEach(function(c) { if (c.year && !c.deleted_at) s.add(c.year); });
+    manuals.forEach(function(m) { if (m.year) s.add(m.year); });
+    var arr = Array.from(s).sort(function(a, b) { return a - b; });
+    return { years: arr, min: arr[0], max: arr[arr.length - 1] };
   }, [cases, manuals]);
+
+  // 연도별 건수 — 화살표 옆 배지에 쓴다(그 해에 데이터가 있는지 한눈에)
+  var yearCount = useMemo(function() {
+    var n = 0;
+    cases.forEach(function(c) { if (c.year === activeYear && !c.deleted_at) n++; });
+    manuals.forEach(function(m) { if (m.year === activeYear) n++; });
+    return n;
+  }, [cases, manuals, activeYear]);
+
+  // 연도를 바꾸면 편집·등록 중이던 것을 닫는다 (월 탭과 같은 규칙)
+  var changeYear = function(delta) {
+    var next = activeYear + delta;
+    if (next < yearRange.min || next > yearRange.max) return;
+    setActiveYear(next); setEditingId(null); setEditData({}); setShowAddManual(false);
+  };
 
   var parseAmt = function(v) {
     if (!v) return 0;
@@ -22038,7 +22069,7 @@ function SettlementView({ profile }) {
 
   // 수동 신규 등록
   var openAddManual = function() {
-    setNewManual({ year: 2026, month: activeMonth, business_name: "", agency_group: "", assignee: "", request_amount: "", contract_fee: "", commission_rate: "", approval_amount: "", approval_date: "", commission_fee: "", received_amount: "", contract_date: "", invoice_issued: false, fee_received: false, fee_received_date: "", settlement_notes: "" });
+    setNewManual({ year: activeYear, month: activeMonth, business_name: "", agency_group: "", assignee: "", request_amount: "", contract_fee: "", commission_rate: "", approval_amount: "", approval_date: "", commission_fee: "", received_amount: "", contract_date: "", invoice_issued: false, fee_received: false, fee_received_date: "", settlement_notes: "" });
     setShowAddManual(true);
   };
 
@@ -22242,6 +22273,37 @@ function SettlementView({ profile }) {
         </div>
       </div>
 
+      {/* 연도 선택 — 좌우 화살표. 월 탭 바로 위에 둔다(월을 고르기 전에 해를 먼저 정하는 순서) */}
+      {(function() {
+        var canPrev = activeYear > yearRange.min, canNext = activeYear < yearRange.max;
+        var arrow = function(dir, on) {
+          return (
+            <button onClick={function() { changeYear(dir); }} disabled={!on}
+              title={on ? (activeYear + dir) + "년으로 이동" : "이 방향에는 정산 데이터가 없습니다"}
+              style={{ width: 28, height: 28, borderRadius: 7, border: "1px solid " + (on ? "#E8E5E0" : "#F1EFEC"),
+                background: "#fff", color: on ? "#333" : "#D6D3CE", fontSize: 13, fontWeight: 800, lineHeight: 1,
+                cursor: on ? "pointer" : "default", padding: 0 }}>
+              {dir < 0 ? "‹" : "›"}
+            </button>
+          );
+        };
+        return (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            {arrow(-1, canPrev)}
+            <div style={{ minWidth: 68, textAlign: "center", fontSize: 15, fontWeight: 800, letterSpacing: "-0.02em" }}>
+              {activeYear}년
+            </div>
+            {arrow(1, canNext)}
+            {activeYear === new Date().getFullYear() && (
+              <span style={{ background: "#F7F6F3", color: "#888", borderRadius: 99, padding: "2px 8px", fontSize: 10.5, fontWeight: 700 }}>올해</span>
+            )}
+            <span style={{ fontSize: 11, color: yearCount ? "#888" : "#C4C0BA" }}>
+              {yearCount ? yearCount + "건" : "데이터 없음"}
+            </span>
+          </div>
+        );
+      })()}
+
       {/* 월 탭 */}
       <div style={{ display: "flex", gap: 4, marginBottom: 18, flexWrap: "wrap" }}>
         {MONTHS_LIST.map(function(m) {
@@ -22318,7 +22380,7 @@ function SettlementView({ profile }) {
       <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
         {teamFiltered.length === 0 ? (
           <div style={{ padding: "60px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>
-            {activeMonth}월{teamFilter !== "전체" ? " · " + teamFilter : ""}{assigneeFilter !== "전체" ? " · 담당자 " + assigneeFilter : ""} 데이터가 없습니다. 직접 등록하거나 기관별 현황에서 승인 상태로 변경해주세요.
+            {activeYear}년 {activeMonth}월{teamFilter !== "전체" ? " · " + teamFilter : ""}{assigneeFilter !== "전체" ? " · 담당자 " + assigneeFilter : ""} 데이터가 없습니다. 직접 등록하거나 기관별 현황에서 승인 상태로 변경해주세요.
           </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
@@ -22347,7 +22409,7 @@ function SettlementView({ profile }) {
           >
           <div style={{ background: "#fff", borderRadius: 14, width: 520, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
-              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>정산 직접 등록 ({activeMonth}월)</h2>
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>정산 직접 등록 ({activeYear}년 {activeMonth}월)</h2>
               <button onClick={function() { if (confirmDiscard(Object.keys(newManual).some(function(k){ return k!=="year" && k!=="month" && newManual[k] !== "" && newManual[k] !== false && newManual[k] != null; }))) setShowAddManual(false); }} style={{ background: "none", border: "none", cursor: "pointer" }}><Icon name="x" size={18} color="#888" /></button>
             </div>
             <div style={{ padding: "20px 24px" }}>
