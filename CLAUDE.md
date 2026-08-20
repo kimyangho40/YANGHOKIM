@@ -586,15 +586,15 @@ commission_fee·contract_date·fee_received·settlement_notes` 를 **또** 들�
 `reapply_from_id` 링크·`reject_checklist`·정산 연결이 통째로 끊긴다.
 
 - 🔗 **복사본은 원본의 `company_id` 를 반드시 가져간다.** 1차 insert 가 실패해 최소 컬럼으로
-  재시도할 때도 `company_id` 는 남긴다. ⚠️ 기존 「📋 복사/붙여넣기」(1건, sessionStorage)는
-  `company_id` 를 **안 넣는다** — 미연결 291건의 공급원 중 하나다. 그 버튼은 이번에 안 건드렸다.
+  재시도할 때도 `company_id` 는 남긴다(`baseData`/`minimal` 양쪽 모두).
+  **기존 「📋 복사/붙여넣기」(1건, sessionStorage)도 같은 날 같이 고쳤다** — 아래 절 참고.
 - ⚠️ **복사는 결과·정산 필드를 가져가지 않는다.** 가져가면 정산관리가 같은 계약금·수수료를 한 번 더 센다.
   (제외: `result`·`result_reason`·`approval_*`·`contract_*`·`commission_fee`·`fee_received*`·
   `invoice_*`·`received_amount`·`settlement_notes`·`reject_checklist`·`delivered_docs`·
   `script_delivered`·`phone_education_done`·`sort_order`·`notion_page_id`·`apply_date`)
   가져가는 것은 `COPY_FIELDS` 27개 + `company_id`·`reapply_from_id`·`status`.
-- ⚠️ **기존 「📋 붙여넣기」는 `agency_cases` 에 없는 `product` 컬럼을 쓴다**(맞는 이름은 `fund_product`).
-  그래서 1차 insert 가 늘 실패하고 최소 컬럼으로 떨어진다(CLAUDE.md 2-6 ②의 실물). 새 기능은 안 쓴다.
+- 새 기능의 신청상품 컬럼은 `fund_product` 다. `product` 는 **사례집(`case_studies`)** 쪽 컬럼이라
+  `agency_cases` 에는 없다(CLAUDE.md 2-6 ②).
 - ⚠️ **구조혁신&사업전환만 상태 어휘가 다르다 — `"시작전"`(띄어쓰기 없음), 나머지는 `"시작 전"`.**
   `initialStatusFor(group)` 이 목적지에 맞는 값을 고른다. 어휘가 다른 기관 사이에서는
   "현재 상태 유지"를 **잠그고** 초기화로 고정한다 — 안 그러면 목적지 드롭다운에 없는 상태값이 생긴다.
@@ -620,6 +620,21 @@ commission_fee·contract_date·fee_received·settlement_notes` 를 **또** 들�
 - **중복 방지**: 목적지에 같은 건(`기관+연+월+company_id`, 없으면 사업자명)이 있으면 실행 전에 세어
   건너뛴다 → 두 번 눌러도 안 불어난다. **조인키는 `company_id` 가 원본이다** — 사업자명은 작업 메모가
   붙은 원문이 섞여 있다(2절).
+
+### 🔧 같은 날 — 기존 「📋 복사/붙여넣기」(1건) 버그 2건도 고쳤다 (2026-08-20)
+새 기능과 **완전히 별개 경로**라 따로 손봐야 했다. 둘 다 한 줄짜리다.
+1. 🔗 **`company_id` 를 안 실었다** → 이 버튼으로 붙여넣은 건이 **전부 미연결로 태어났다**
+   (「기관별현황에 등록」 버튼과 같은 계열의 사고 — 0단계-5 참고. 미연결 159 → 160건으로 늘던 원인).
+   → 복사할 때 클립보드에 싣고, 붙여넣을 때 **`baseData` 에** 넣는다(2차 재시도에서도 연결이 살아 있게).
+   ⚠️ **옛 클립보드**(이 수정 전에 복사해 세션에 남은 것)에는 `company_id` 가 없어 `null` 이 된다 — 예전과 같다.
+   ⚠️ **연결되면 `resyncAutoCards` 의 방패가 사라진다**(그 함수는 `company_id` 없는 행을 일부러 건너뛴다).
+   붙여넣은 `시작 전` 행이 그 (회사×기관)의 최신 행이 되면, **[재동기화] 를 눌렀을 때** 카드가 뒤로 갈 수 있다.
+   미래 월로 붙여넣으면 해당 없음(미래 월 규칙).
+2. **`product` → `fund_product`** — `copyData.product = selectedCase.product` 였는데 `selectedCase` 에
+   그 컬럼이 없어 **늘 `undefined`** 였다. 그래서 잘못된 컬럼이 insert 에 실린 적은 **없고**(1차 insert 는
+   정상이었다), 증상은 **신청상품이 복사되지 않는다** 하나였다. 나머지(우선도·업종·인증서)는 정상이었다.
+- **중복 체크·`syncPipelineFromCase` 호출은 일부러 안 붙였다** — 이 버튼의 기존 동작을 넓히지 않기 위해서다.
+  (새 다중선택 기능에는 둘 다 있다.)
 
 **검증**: 복사 payload 를 `begin … rollback` 트랜잭션으로 실검증(3건 insert → `company_id` 3/3 유지 ·
 `reapply_from_id` 3/3 · 상태 '시작 전' 3/3 → 롤백 후 별도 조회로 흔적 0건 재확인).

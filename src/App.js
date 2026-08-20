@@ -26043,6 +26043,9 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
                 agency_group: activeGroup,
                 year: activeYear,
                 month: Number(activeMonth) || (new Date().getMonth() + 1),
+                // 🔗 2차(핵심 컬럼만) 재시도에서도 연결이 살아 있도록 baseData 에 둔다.
+                //    옛 클립보드(이 수정 전에 복사해 둔 것)에는 company_id 가 없어 null 이 된다 — 예전과 같다.
+                company_id: clipboardCase.company_id || null,
                 business_name: clipboardCase.business_name,
                 representative: clipboardCase.representative || null,
                 business_number: clipboardCase.business_number || null,
@@ -26055,7 +26058,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
               // 1차: 전체 데이터로 시도 (선택 컬럼 포함)
               var fullData = Object.assign({}, baseData);
               if (clipboardCase.credit_score != null) fullData.credit_score = clipboardCase.credit_score;
-              if (clipboardCase.product) fullData.product = clipboardCase.product;
+              if (clipboardCase.fund_product) fullData.fund_product = clipboardCase.fund_product;
               // 우선도 + 추가정보 + 업종 같이 붙여넣기
               ["industry","priority_checks","extra_notes","ipin_account","ipin_password","resident_number","agency_login_id","agency_login_password","personal_cert_password","business_cert_password","final_confirm"].forEach(function(f) {
                 if (clipboardCase[f] != null && clipboardCase[f] !== "") fullData[f] = clipboardCase[f];
@@ -27201,6 +27204,10 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <button onClick={function() {
                   var copyData = {
+                    // 🔗 붙여넣은 건이 미연결로 태어나지 않게 기업 연결을 클립보드에 같이 싣는다.
+                    //    (없으면 autoLinkCompanies 의 "이름 완전일치"에만 기대게 되는데,
+                    //     사업자명에는 작업 메모가 붙은 원문이 섞여 있어 영영 안 붙는 건이 생긴다)
+                    company_id: selectedCase.company_id || null,
                     business_name: selectedCase.business_name,
                     representative: selectedCase.representative,
                     business_number: selectedCase.business_number,
@@ -27210,7 +27217,9 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
                     industry: selectedCase.industry,
                     notes: selectedCase.notes,
                     credit_score: selectedCase.credit_score,
-                    product: selectedCase.product,
+                    // ⚠️ agency_cases 의 신청상품 컬럼 이름은 fund_product 다.
+                    //    product 는 case_studies 쪽 컬럼이라 여기선 늘 undefined 였다(신청상품이 안 따라갔다).
+                    fund_product: selectedCase.fund_product,
                     // 우선도 + 추가정보 같이 복사
                     priority_checks: selectedCase.priority_checks,
                     extra_notes: selectedCase.extra_notes,
