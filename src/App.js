@@ -1347,7 +1347,12 @@ function isNewerCase(a, b) {
 // 기관현황 → 파이프라인 단방향 자동동기화.
 // (기관, 상태) → status_stage_map 조회(기관별 우선, 없으면 공통 '*') → 해당 회사×기관 카드 stage 갱신.
 // sync_mode='manual'(수동 고정) 카드는 절대 덮어쓰지 않음. 매핑 없으면 이동 안 하고 needs_mapping=true.
-async function syncPipelineFromCase(c) {
+// opts.createOnly — 카드가 이미 있으면 아무것도 안 한다(단계도 needs_mapping 도 안 건드린다).
+//   기관현황 다중선택 복사/이동에서만 쓴다. 복사는 "계획 등록"이지 진행 변화가 아니라서,
+//   이미 있는 (회사×기관) 카드를 최신 행 기준으로 다시 계산하면 남의 카드가 조용히 움직인다.
+//   반대로 새 (회사×기관) 조합은 카드를 만들어 줘야 보드에서 통째로 사라지지 않는다.
+//   ⚠️ opts 를 안 주는 기존 호출부(신규등록·인라인편집 등)는 동작이 완전히 그대로다.
+async function syncPipelineFromCase(c, opts) {
   try {
     if (!c || (!c.company_id && !c.business_name)) return;
     var ag = c.agency_group || null;
@@ -1392,6 +1397,7 @@ async function syncPipelineFromCase(c) {
     var cr = await q;
     var card = (cr.data || [])[0];
     if (card) {
+      if (opts && opts.createOnly) return; // 📄 복사/이동: 이미 있는 카드는 손대지 않는다
       // 🗑 휴지통 카드는 조용히 지나간다 — 되살리지도, 새로 만들지도 않는다.
       //    ⚠️ 위 2)의 조회에 deleted_at 필터를 걸면 안 된다. "카드 없음"으로 판단해
       //    아래 insert 로 내려가는데, 삭제된 카드가 (회사×기관) unique 슬롯을 점유하고 있어
@@ -25057,6 +25063,24 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
     } catch (e) { return null; }
   });
 
+  // ── 📄 다중선택 복사/이동 ──────────────────────────────────────────────────
+  // 선택은 "지금 화면에 보이는 행(filtered)"과 교집합으로만 쓴다 → 액션바 숫자와 실제 실행 대상이
+  // 어긋날 수가 없다(파이프라인 일괄이동의 "화면 밖 N건 제외"를 애초에 안 만드는 방식).
+  // 탭·연도·월을 바꿀 때는 아예 비운다 — changeYear 가 필터를 비우는 것과 같은 계열이다.
+  const [selectedIds, setSelectedIds] = useState([]);
+  const selAnchorRef = useRef(-1);                  // Shift+클릭 범위 선택 기준(filtered 안 위치)
+  const [bulkMode, setBulkMode] = useState(null);   // null | "copy" | "move"
+  const [bulkDest, setBulkDest] = useState(null);   // { group, year, month, keepMonth, keepStatus }
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkResult, setBulkResult] = useState(null);
+  const [agencyToast, setAgencyToast] = useState(null);
+  // 토스트는 7초 뒤 사라진다. [바로 이동]을 누를 시간은 주되 화면에 눌러앉지는 않게.
+  useEffect(function() {
+    if (!agencyToast) return;
+    var t = setTimeout(function() { setAgencyToast(null); }, 7000);
+    return function() { clearTimeout(t); };
+  }, [agencyToast]);
+
   // 지역본부 → 연락처 중앙 매핑 (branch_contacts 테이블)
   const [contactMap, setContactMap] = useState({});
   // 연락처 인라인 편집: 현재 편집중인 칸 키 (row.id + "_" + branch), null이면 평소 텍스트 표시
@@ -25360,6 +25384,39 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
     });
   }, [cases, activeGroup, activeMonth, filterAssignee, activeYear, statusFilter, searchQ]);
 
+  // 📄 선택된 행 = 지금 화면에 보이는 것만. 선택 후 검색·담당자 필터가 바뀌어 사라진 건은
+  //    자동으로 빠진다 → 액션바에 보이는 숫자가 곧 실행 대상 수다.
+  var selectedRows = useMemo(function() {
+    if (!selectedIds.length) return [];
+    var s = {}; selectedIds.forEach(function(id) { s[id] = 1; });
+    return filtered.filter(function(r) { return s[r.id]; });
+  }, [filtered, selectedIds]);
+  var allVisibleSelected = filtered.length > 0 && selectedRows.length === filtered.length;
+  var clearSel = function() { setSelectedIds([]); selAnchorRef.current = -1; };
+  var toggleAllVisible = function() {
+    if (allVisibleSelected) { clearSel(); return; }
+    setSelectedIds(filtered.map(function(r) { return r.id; }));
+    selAnchorRef.current = -1;
+  };
+  // Shift+클릭 = 기준 행부터 지금 행까지 화면 순서대로 범위 선택(해제가 아니라 추가만 한다)
+  var toggleRowSel = function(idx, e) {
+    var shift = !!(e && e.shiftKey);
+    var anchor = selAnchorRef.current;
+    setSelectedIds(function(prev) {
+      var set = {}; prev.forEach(function(id) { set[id] = 1; });
+      if (shift && anchor >= 0 && anchor < filtered.length) {
+        var a = Math.min(anchor, idx), b = Math.max(anchor, idx);
+        for (var i = a; i <= b; i++) { if (filtered[i]) set[filtered[i].id] = 1; }
+      } else {
+        var id = filtered[idx] && filtered[idx].id;
+        if (!id) return prev;
+        if (set[id]) delete set[id]; else set[id] = 1;
+      }
+      return Object.keys(set);
+    });
+    if (!shift) selAnchorRef.current = idx;
+  };
+
   // 검색은 "지금 보고 있는 기관 탭 + 월" 안에서만 걸린다.
   // 그래서 다른 탭/월에 있는 업체를 찾으면 화면상 0건이라 "검색이 안 된다"고 오해하기 쉽다.
   //   (실제로 '프라이빗'은 소진공·기타·신용보증재단 3개 탭, 3·4·6·8월에 흩어져 있다)
@@ -25421,6 +25478,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
     setActiveYear(next);
     setEditingId(null); setEditData({}); setShowAddCase(false);
     setFilterAssignee([]); setStatusFilter("all");
+    setSelectedIds([]); selAnchorRef.current = -1;   // 📄 연도가 바뀌면 선택은 무효
   };
 
   var monthsWithData = useMemo(function() {
@@ -25776,6 +25834,174 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
     setRejectTarget(null);
   };
 
+  // ── 📄 다중선택 복사/이동 실행 ─────────────────────────────────────────────
+  // 복사 = 새 행 insert(원본 유지) / 이동 = 같은 행의 기관·연·월만 update.
+  //  ⚠️ 이동을 "지우고 새로 만들기"로 하면 id 가 바뀌어 reapply_from_id 링크·재신청 체크리스트가 끊긴다.
+  //  ⚠️ 복사는 결과·정산 필드를 가져가지 않는다. 가져가면 정산관리가 같은 계약금·수수료를 한 번 더 센다.
+  //     (안 가져가는 것: result·result_reason·approval_*·contract_*·commission_fee·fee_received*·
+  //      invoice_*·received_amount·settlement_notes·reject_checklist·delivered_docs·
+  //      script_delivered·phone_education_done·sort_order·notion_page_id·apply_date)
+  var COPY_FIELDS = [
+    "business_name", "representative", "business_number", "resident_number", "assignee",
+    "region", "branch", "industry", "credit_score", "employee_count",
+    "request_amount", "request_fund", "fund_product", "agency_sub", "notes", "extra_notes",
+    "priority_checks", "login_id", "login_pw", "personal_cert", "business_cert",
+    "ipin_account", "ipin_password", "agency_login_id", "agency_login_password",
+    "personal_cert_password", "business_cert_password",
+  ];
+  // ⚠️ 구조혁신&사업전환만 상태 어휘가 다르다 — "시작전"(띄어쓰기 없음), 나머지는 "시작 전".
+  //    목적지 기관에 맞는 값을 써야 목적지 드롭다운에 없는 상태가 안 생긴다.
+  var isGujo = function(g) { return g === "구조혁신&사업전환"; };
+  var initialStatusFor = function(g) { return isGujo(g) ? "시작전" : "시작 전"; };
+
+  var openBulk = function(mode) {
+    if (!selectedRows.length) return;
+    setBulkResult(null);
+    setBulkMode(mode);
+    setBulkDest({
+      group: activeGroup,
+      year: activeYear,
+      month: activeMonth === "all" ? (new Date().getMonth() + 1) : Number(activeMonth),
+      keepMonth: false,
+      keepStatus: false,
+    });
+  };
+  var closeBulk = function() { setBulkMode(null); setBulkDest(null); };
+
+  // 목적지 중복 판정 키 — 조인키는 company_id 가 원본이고, 없을 때만 사업자명으로 떨어진다.
+  // (사업자명은 작업 메모가 붙은 원문이 섞여 있어 조인키로 믿을 수 없다 — CLAUDE.md 2절)
+  var destKeyOf = function(group, y, m, row) {
+    return (group || "") + "||" + y + "||" + m + "||" + (row.company_id || ("N:" + (row.business_name || "").trim()));
+  };
+
+  // 실행 전에 미리 세어 보여 준다 → 두 번 눌러도 안 불어난다.
+  var bulkPlan = useMemo(function() {
+    if (!bulkMode || !bulkDest) return null;
+    var exist = {};
+    cases.forEach(function(c) {
+      if (c.deleted_at) return;
+      exist[destKeyOf(c.agency_group, Number(c.year), Number(c.month), c)] = 1;
+    });
+    var go = [], skip = [];
+    selectedRows.forEach(function(r) {
+      var m = bulkDest.keepMonth ? Number(r.month) : Number(bulkDest.month);
+      var sameSpot = (r.agency_group || "") === bulkDest.group
+        && Number(r.year) === Number(bulkDest.year) && Number(r.month) === m;
+      if (sameSpot) skip.push({ row: r, why: "지금 있는 자리와 같음" });
+      else if (exist[destKeyOf(bulkDest.group, Number(bulkDest.year), m, r)]) skip.push({ row: r, why: "목적지에 이미 있음" });
+      else go.push({ row: r, month: m });
+    });
+    // 구조혁신 ↔ 다른 기관 사이에서는 상태를 그대로 옮길 수 없다(어휘가 다르다).
+    var vocabDiffers = selectedRows.some(function(r) { return isGujo(r.agency_group) !== isGujo(bulkDest.group); });
+    return { go: go, skip: skip, vocabDiffers: vocabDiffers };
+  }, [bulkMode, bulkDest, selectedRows, cases]);
+
+  var goToDest = function(dest) {
+    if (!dest) return;
+    setActiveGroup(dest.group);
+    setActiveYear(Number(dest.year));
+    setActiveMonth(Number(dest.month));
+    setStatusFilter("all"); setFilterAssignee([]); setSearchQ("");
+    setEditingId(null); setEditData({}); setSelectedCase(null);
+    clearSel(); setAgencyToast(null); setBulkResult(null);
+  };
+
+  var runBulk = async function() {
+    if (!bulkMode || !bulkDest || !bulkPlan || bulkBusy) return;
+    if (!bulkPlan.go.length) { alert("실행할 건이 없습니다. (전부 건너뜀 대상)"); return; }
+    var isMove = bulkMode === "move";
+    var destLabel = agencyLabel(bulkDest.group) + " " + bulkDest.year + "년"
+      + (bulkDest.keepMonth ? " (원본 월 그대로)" : " " + bulkDest.month + "월");
+    if (isMove && !window.confirm(
+      "선택한 " + bulkPlan.go.length + "건을 " + destLabel + "로 이동합니다.\n\n" +
+      "⚠️ 원본 줄은 지금 자리에서 사라집니다. 계속할까요?")) return;
+
+    setBulkBusy(true);
+    var ok = [], fail = [];
+    var pendingUpd = [], pendingIns = [];      // ⚠️ setCases 는 루프 밖에서 한 번만 — 클로저가 늦게 실행돼도 안전하게
+    var forceInit = bulkPlan.vocabDiffers || !bulkDest.keepStatus;
+    for (var i = 0; i < bulkPlan.go.length; i++) {
+      var it = bulkPlan.go[i];
+      var r = it.row;
+      try {
+        if (isMove) {
+          var upd = { agency_group: bulkDest.group, year: Number(bulkDest.year), month: it.month, updated_at: new Date().toISOString() };
+          // 어휘가 다른 기관으로 옮기면 목적지에 없는 상태값이 되므로 그때만 초기화한다.
+          if (isGujo(r.agency_group) !== isGujo(bulkDest.group)) upd.status = initialStatusFor(bulkDest.group);
+          var mr = await supabase.from("agency_cases").update(upd).eq("id", r.id);
+          if (mr.error) { fail.push({ row: r, why: mr.error.message }); continue; }
+          pendingUpd.push({ id: r.id, upd: upd });
+          ok.push({ row: r, month: it.month, status: upd.status || r.status });
+        } else {
+          var ins = {
+            agency_group: bulkDest.group, year: Number(bulkDest.year), month: it.month,
+            company_id: r.company_id || null,          // 🔗 기업 연결을 반드시 그대로 가져간다
+            reapply_from_id: r.id,                     // 어디서 왔는지 남긴다(화면에 ↩ 배지로 뜬다)
+            status: forceInit ? initialStatusFor(bulkDest.group) : (r.status || initialStatusFor(bulkDest.group)),
+          };
+          COPY_FIELDS.forEach(function(f) { if (r[f] != null && r[f] !== "") ins[f] = r[f]; });
+          var cr2 = await supabase.from("agency_cases").insert(ins).select().single();
+          if (cr2.error) {
+            // 선택 컬럼 미지원 방어 — 핵심 컬럼만 재시도. company_id 는 어떤 경우에도 남긴다.
+            console.warn("복사 1차 insert 실패, 핵심 컬럼만 재시도:", cr2.error.message);
+            var minimal = {
+              agency_group: ins.agency_group, year: ins.year, month: ins.month,
+              company_id: ins.company_id, status: ins.status,
+              business_name: r.business_name, representative: r.representative || null,
+              business_number: r.business_number || null, assignee: r.assignee || null,
+              request_amount: r.request_amount || null, region: r.region || null, notes: r.notes || null,
+            };
+            cr2 = await supabase.from("agency_cases").insert(minimal).select().single();
+          }
+          if (cr2.error || !cr2.data) { fail.push({ row: r, why: cr2.error ? cr2.error.message : "알 수 없는 에러" }); continue; }
+          pendingIns.push(cr2.data);
+          ok.push({ row: r, month: it.month, status: cr2.data.status });
+        }
+      } catch (e) { fail.push({ row: r, why: (e && e.message) || "예외" }); }
+    }
+    if (pendingUpd.length || pendingIns.length) {
+      setCases(function(prev) {
+        var byId = {}; pendingUpd.forEach(function(u) { byId[u.id] = u.upd; });
+        var next = prev.map(function(c) { return byId[c.id] ? Object.assign({}, c, byId[c.id]) : c; });
+        return next.concat(pendingIns);
+      });
+    }
+
+    // ── 파이프라인 카드 — "없으면 만들고, 있으면 절대 안 건드린다"(createOnly) ──
+    //  · 다른 기관으로 복사/이동 = 새 (회사×기관) 조합 → 카드가 없으면 보드에서 통째로 안 보인다.
+    //  · 같은 기관·다른 연도로 복사 = 카드가 이미 있다 → 최신 행 기준으로 다시 계산하면
+    //    단순 복사가 남의 카드 단계를 조용히 움직인다. 그래서 손대지 않는다.
+    //  · 🗓 미래 월(내년 재신청 리스트)이어도 안전하다 — 최신 행을 고르는 3곳이 전부 미래 월을 건너뛴다.
+    //  · 이동한 "원본 기관" 카드는 일부러 정리하지 않는다. 남은 행 기준으로 재계산하면
+    //    카드가 뒤로 끌려갈 수 있어서다. 원본 기관에 행이 안 남으면 파이프라인 휴지통에서 사람이 지운다.
+    for (var j = 0; j < ok.length; j++) {
+      var o = ok[j];
+      await syncPipelineFromCase({
+        company_id: o.row.company_id, business_name: o.row.business_name,
+        agency_group: bulkDest.group, status: o.status,
+        year: Number(bulkDest.year), month: o.month,
+      }, { createOnly: true });
+    }
+
+    setBulkBusy(false);
+    var dest = {
+      group: bulkDest.group, year: Number(bulkDest.year),
+      month: ok.length ? ok[0].month : Number(bulkDest.month),
+    };
+    var movedAway = isMove && ok.length > 0;
+    if (!fail.length && !bulkPlan.skip.length) {
+      closeBulk(); clearSel();
+      setAgencyToast({
+        msg: "✅ " + ok.length + "건을 " + agencyLabel(dest.group) + " " + dest.year + "년"
+          + (bulkDest.keepMonth ? "" : " " + dest.month + "월") + "으로 " + (isMove ? "이동" : "복사") + "했습니다",
+        dest: dest, movedAway: movedAway,
+      });
+    } else {
+      closeBulk(); clearSel();
+      setBulkResult({ ok: ok, fail: fail, skip: bulkPlan.skip, dest: dest, mode: bulkMode, keepMonth: bulkDest.keepMonth, movedAway: movedAway });
+    }
+  };
+
   // 스크립트 전달 / 유선교육 토글 (즉시 저장 + 낙관적 갱신, 컬럼 미생성 방어)
   var toggleFlag = async function(row, field, val) {
     setCases(function(prev) { return prev.map(function(c) { return c.id === row.id ? Object.assign({}, c, { [field]: val }) : c; }); });
@@ -25889,7 +26115,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
           {otherMatches.slice(0, 6).map(function(m) {
             return (
               <span key={m.group + m.month}
-                onClick={function() { setActiveGroup(m.group); setActiveMonth(m.month); setStatusFilter("all"); setFilterAssignee([]); }}
+                onClick={function() { setActiveGroup(m.group); setActiveMonth(m.month); setStatusFilter("all"); setFilterAssignee([]); setSelectedIds([]); selAnchorRef.current = -1; }}
                 title="눌러서 이동"
                 style={{ cursor: "pointer", background: "#fff", border: "1px solid #E8D9AE", borderRadius: 99, padding: "2px 9px", fontWeight: 600 }}>
                 {m.group} {m.month}월 {m.n}건
@@ -25905,7 +26131,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
         {AGENCY_GROUPS.map(function(g) {
           var isActive = activeGroup === g.id;
           return (
-            <div key={g.id} onClick={function() { setActiveGroup(g.id); setEditingId(null); setFilterAssignee([]); }}
+            <div key={g.id} onClick={function() { setActiveGroup(g.id); setEditingId(null); setFilterAssignee([]); setSelectedIds([]); selAnchorRef.current = -1; }}
               style={{ padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: isActive ? 700 : 400,
                 background: isActive ? g.color : "#fff", color: isActive ? "#fff" : "#555",
                 border: isActive ? "none" : "1px solid #E8E5E0", transition: "all 0.15s" }}>
@@ -25953,7 +26179,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
           var hasData = monthsWithData.has(m);
           var isActive = Number(activeMonth) === m;
           return (
-            <div key={m} onClick={function() { setActiveMonth(m); setEditingId(null); setFilterAssignee([]); setStatusFilter("all"); }}
+            <div key={m} onClick={function() { setActiveMonth(m); setEditingId(null); setFilterAssignee([]); setStatusFilter("all"); setSelectedIds([]); selAnchorRef.current = -1; }}
               style={{ padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: isActive ? 700 : 400,
                 background: isActive ? groupColor : hasData ? "#fff" : "#F7F6F3",
                 color: isActive ? "#fff" : hasData ? "#333" : "#CCC",
@@ -25963,7 +26189,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
           );
         })}
         {/* 전체 월 보기 */}
-        <div onClick={function() { setActiveMonth("all"); setEditingId(null); setFilterAssignee([]); setStatusFilter("all"); }}
+        <div onClick={function() { setActiveMonth("all"); setEditingId(null); setFilterAssignee([]); setStatusFilter("all"); setSelectedIds([]); selAnchorRef.current = -1; }}
           style={{ padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12,
             fontWeight: activeMonth === "all" ? 700 : 600,
             background: activeMonth === "all" ? groupColor : "#1A1917",
@@ -26087,6 +26313,12 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
             <thead>
               <tr style={{ background: "#F7F6F3", borderBottom: "2px solid #E8E5E0", position: "sticky", top: 0, zIndex: 2 }}>
+                <th style={{ padding: "10px 4px", textAlign: "center", background: "#F7F6F3", width: 34, minWidth: 34, maxWidth: 34, boxSizing: "border-box" }}>
+                  <input type="checkbox" checked={allVisibleSelected}
+                    ref={function(el) { if (el) el.indeterminate = !allVisibleSelected && selectedRows.length > 0; }}
+                    onChange={toggleAllVisible} title="화면에 보이는 건 전체 선택/해제"
+                    style={{ width: 15, height: 15, cursor: "pointer", accentColor: "#4338CA" }} />
+                </th>
                 <th style={headerCellStyle("num", { width: colWidths.num })}>#<ResizeHandle colKey="num" /></th>
                 <th style={headerCellStyle("business_name")}>사업자명<ResizeHandle colKey="business_name" /></th>
                 {activeGroup === "중소벤처기업진흥공단" && (
@@ -26122,8 +26354,16 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
               {filtered.map(function(row, idx) {
                 var isEditing = editingId === row.id;
                 var sc = STATUS_COLORS_MAP[row.status] || { bg: "#F7F6F3", text: "#888" };
+                var isSel = selectedIds.indexOf(row.id) >= 0;
                 return (
-                  <tr key={row.id} style={{ borderBottom: "1px solid #F0EDE8", background: selectedCase && selectedCase.id === row.id ? "#F0FDF4" : isEditing ? "#FAFFF7" : "transparent", cursor: "pointer" }} onClick={function() { if (!isEditing) setSelectedCase(row); }}>
+                  <tr key={row.id} style={{ borderBottom: "1px solid #F0EDE8", background: selectedCase && selectedCase.id === row.id ? "#F0FDF4" : isEditing ? "#FAFFF7" : isSel ? "#EEF2FF" : "transparent", cursor: "pointer" }} onClick={function() { if (!isEditing) setSelectedCase(row); }}>
+                    {/* 📄 다중선택 — 셀 전체가 stopPropagation 이라 눌러도 상세 모달이 안 열린다 */}
+                    <td style={{ padding: "10px 4px", textAlign: "center" }} onClick={function(e) { e.stopPropagation(); }}>
+                      <input type="checkbox" checked={isSel} onChange={function() {}}
+                        onClick={function(e) { e.stopPropagation(); toggleRowSel(idx, e); }}
+                        title="Shift+클릭 = 범위 선택"
+                        style={{ width: 15, height: 15, cursor: "pointer", accentColor: "#4338CA" }} />
+                    </td>
                     <td style={{ padding: "10px 12px", color: "#AAA", fontSize: 12 }}>{idx + 1}</td>
                     <td style={{ padding: "10px 12px" }}>
                       {isEditing
@@ -26504,6 +26744,222 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* 📄 다중선택 액션바 — 선택이 1건 이상일 때만, 화면 하단 고정 */}
+      {selectedRows.length > 0 && !bulkMode && !bulkResult && (
+        <div style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: 24, zIndex: 900,
+          display: "flex", alignItems: "center", gap: 8, background: "#fff", border: "1px solid #E8E5E0",
+          borderRadius: 999, padding: "10px 14px 10px 18px", boxShadow: "0 12px 40px rgba(0,0,0,0.18)" }}>
+          <span style={{ fontSize: 13, fontWeight: 700, marginRight: 4 }}>☑ {selectedRows.length}건 선택됨</span>
+          <button onClick={function() { openBulk("copy"); }}
+            style={{ padding: "7px 14px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+            📄 복사
+          </button>
+          <button onClick={function() { openBulk("move"); }}
+            style={{ padding: "7px 14px", background: "#fff", color: "#B91C1C", border: "1px solid #FCA5A5", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+            ➡ 이동
+          </button>
+          <button onClick={clearSel}
+            style={{ padding: "7px 12px", background: "none", color: "#888", border: "none", fontSize: 12, cursor: "pointer" }}>
+            선택 해제
+          </button>
+        </div>
+      )}
+
+      {/* 📄 목적지 지정 팝업 (복사 / 이동 공용) */}
+      {bulkMode && bulkDest && bulkPlan && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1200, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 16, width: 560, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.25)" }}>
+            <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: bulkMode === "move" ? "#B91C1C" : "#1A1917" }}>
+                  {selectedRows.length}건 {bulkMode === "move" ? "이동" : "복사"}
+                </h2>
+                <div style={{ fontSize: 12, color: bulkMode === "move" ? "#B91C1C" : "#888", marginTop: 3 }}>
+                  {bulkMode === "move" ? "⚠️ 원본 줄이 지금 자리에서 사라집니다" : "원본 줄은 그대로 두고 목적지에 새 줄을 만듭니다"}
+                </div>
+              </div>
+              <button onClick={closeBulk} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#888" }}>✕</button>
+            </div>
+
+            <div style={{ padding: "18px 24px" }}>
+              {/* 기관 */}
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>기관</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 18 }}>
+                {AGENCY_GROUPS.map(function(g) {
+                  var on = bulkDest.group === g.id;
+                  return (
+                    <div key={g.id} onClick={function() { setBulkDest(function(p) { return Object.assign({}, p, { group: g.id }); }); }}
+                      style={{ padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: on ? 700 : 500,
+                        background: on ? g.color : "#fff", color: on ? "#fff" : "#555", border: "1px solid " + (on ? g.color : "#E8E5E0") }}>
+                      {agencyLabel(g.id)}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* 연도 */}
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>연도</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+                <button onClick={function() { setBulkDest(function(p) { return Object.assign({}, p, { year: p.year - 1 }); }); }}
+                  disabled={bulkDest.year <= Math.min(yearRange.min, activeYear)}
+                  style={{ width: 30, height: 30, borderRadius: 8, border: "1px solid #E8E5E0", background: "#fff", cursor: bulkDest.year <= Math.min(yearRange.min, activeYear) ? "not-allowed" : "pointer", fontSize: 14, color: "#555" }}>‹</button>
+                <span style={{ fontSize: 16, fontWeight: 700, minWidth: 76, textAlign: "center" }}>{bulkDest.year}년</span>
+                <button onClick={function() { setBulkDest(function(p) { return Object.assign({}, p, { year: p.year + 1 }); }); }}
+                  disabled={bulkDest.year >= new Date().getFullYear() + 2}
+                  style={{ width: 30, height: 30, borderRadius: 8, border: "1px solid #E8E5E0", background: "#fff", cursor: bulkDest.year >= new Date().getFullYear() + 2 ? "not-allowed" : "pointer", fontSize: 14, color: "#555" }}>›</button>
+                {bulkDest.year > new Date().getFullYear() && (
+                  <span style={{ fontSize: 11, color: "#0369A1", background: "#E6F1FB", padding: "3px 8px", borderRadius: 99 }}>
+                    미래 연도 — 파이프라인 단계는 안 움직입니다
+                  </span>
+                )}
+              </div>
+
+              {/* 월 */}
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>월</div>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, cursor: "pointer" }}>
+                <input type="checkbox" checked={!!bulkDest.keepMonth}
+                  onChange={function(e) { var v = e.target.checked; setBulkDest(function(p) { return Object.assign({}, p, { keepMonth: v }); }); }}
+                  style={{ width: 15, height: 15, cursor: "pointer", accentColor: "#4338CA" }} />
+                <span style={{ fontSize: 12, color: "#333" }}>원본 월 그대로 (3월 건 → 3월, 5월 건 → 5월)</span>
+              </label>
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 18, opacity: bulkDest.keepMonth ? 0.35 : 1, pointerEvents: bulkDest.keepMonth ? "none" : "auto" }}>
+                {[1,2,3,4,5,6,7,8,9,10,11,12].map(function(m) {
+                  var on = Number(bulkDest.month) === m;
+                  return (
+                    <div key={m} onClick={function() { setBulkDest(function(p) { return Object.assign({}, p, { month: m }); }); }}
+                      style={{ padding: "5px 10px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: on ? 700 : 400,
+                        background: on ? "#1A1917" : "#fff", color: on ? "#fff" : "#333", border: on ? "none" : "1px solid #E8E5E0" }}>
+                      {m}월
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* 상태 — 복사일 때만 */}
+              {bulkMode === "copy" && (
+                <div style={{ marginBottom: 18 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>상태</div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {[{ k: false, t: "시작 전으로 초기화" }, { k: true, t: "현재 상태 유지" }].map(function(o) {
+                      var on = !!bulkDest.keepStatus === o.k;
+                      var locked = o.k && bulkPlan.vocabDiffers;
+                      return (
+                        <div key={String(o.k)} onClick={function() { if (locked) return; setBulkDest(function(p) { return Object.assign({}, p, { keepStatus: o.k }); }); }}
+                          style={{ padding: "7px 14px", borderRadius: 8, cursor: locked ? "not-allowed" : "pointer", fontSize: 12, fontWeight: on ? 700 : 500,
+                            opacity: locked ? 0.4 : 1, background: on ? "#4338CA" : "#fff", color: on ? "#fff" : "#555", border: "1px solid " + (on ? "#4338CA" : "#E8E5E0") }}>
+                          {o.t}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {bulkPlan.vocabDiffers && (
+                    <div style={{ fontSize: 11, color: "#B45309", marginTop: 7, lineHeight: 1.5 }}>
+                      {"⚠️ 구조혁신&사업전환은 상태 어휘가 달라(\"시작전\") 그대로 옮기면 목적지 목록에 없는 값이 됩니다 → 초기화로 고정됩니다."}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 미리보기 */}
+              <div style={{ background: "#FAFAF9", border: "1px solid #EDEBE8", borderRadius: 10, padding: "14px 16px" }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#333", marginBottom: 8 }}>
+                  {agencyLabel(bulkDest.group)} · {bulkDest.year}년 {bulkDest.keepMonth ? "(원본 월 그대로)" : bulkDest.month + "월"} 로
+                </div>
+                <div style={{ fontSize: 12, color: "#15803D", fontWeight: 600 }}>
+                  ✅ {bulkMode === "move" ? "옮길" : "새로 만들"} 건 {bulkPlan.go.length}건
+                </div>
+                {bulkPlan.skip.length > 0 && (
+                  <div style={{ fontSize: 12, color: "#B45309", marginTop: 6, lineHeight: 1.6 }}>
+                    ⏭ 건너뜀 {bulkPlan.skip.length}건
+                    <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
+                      {bulkPlan.skip.slice(0, 6).map(function(x) { return (x.row.business_name || "-") + "(" + x.why + ")"; }).join(" · ")}
+                      {bulkPlan.skip.length > 6 ? " 외 " + (bulkPlan.skip.length - 6) + "건" : ""}
+                    </div>
+                  </div>
+                )}
+                <div style={{ fontSize: 11, color: "#888", marginTop: 8, lineHeight: 1.6 }}>
+                  🔗 기업 연결(company_id)·대표자·사업자번호·담당자·지역·비고를 그대로 가져갑니다.<br />
+                  결과·정산 값(계약금·수수료·수령여부)은 가져가지 않습니다.
+                </div>
+              </div>
+            </div>
+
+            <div style={{ padding: "0 24px 20px", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button onClick={closeBulk} disabled={bulkBusy}
+                style={{ padding: "10px 18px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, color: "#555", cursor: "pointer" }}>취소</button>
+              <button onClick={runBulk} disabled={bulkBusy || !bulkPlan.go.length}
+                style={{ padding: "10px 20px", background: bulkBusy || !bulkPlan.go.length ? "#CCC" : (bulkMode === "move" ? "#B91C1C" : "#1A1917"),
+                  color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: bulkBusy || !bulkPlan.go.length ? "not-allowed" : "pointer" }}>
+                {bulkBusy ? "실행 중…" : (bulkMode === "move" ? "이동 실행" : "복사 실행")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 📄 실행 결과 (건너뜀·실패가 있을 때만 뜬다) */}
+      {bulkResult && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1200, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 16, width: 520, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.25)" }}>
+            <div style={{ padding: "20px 24px 14px", borderBottom: "1px solid #E8E5E0" }}>
+              <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700 }}>
+                {bulkResult.mode === "move" ? "이동" : "복사"} 결과 — {agencyLabel(bulkResult.dest.group)} {bulkResult.dest.year}년{bulkResult.keepMonth ? "" : " " + bulkResult.dest.month + "월"}
+              </h2>
+            </div>
+            <div style={{ padding: "16px 24px" }}>
+              <div style={{ fontSize: 13, color: "#15803D", fontWeight: 700, marginBottom: 10 }}>✅ 완료 {bulkResult.ok.length}건</div>
+              {bulkResult.skip.length > 0 && (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 13, color: "#B45309", fontWeight: 700 }}>⏭ 건너뜀 {bulkResult.skip.length}건</div>
+                  <div style={{ fontSize: 12, color: "#888", marginTop: 4, lineHeight: 1.7 }}>
+                    {bulkResult.skip.map(function(x, i) { return (<div key={i}>{x.row.business_name || "-"} — {x.why}</div>); })}
+                  </div>
+                </div>
+              )}
+              {bulkResult.fail.length > 0 && (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 13, color: "#B91C1C", fontWeight: 700 }}>❌ 실패 {bulkResult.fail.length}건</div>
+                  <div style={{ fontSize: 12, color: "#888", marginTop: 4, lineHeight: 1.7 }}>
+                    {bulkResult.fail.map(function(x, i) { return (<div key={i}>{x.row.business_name || "-"} — {x.why}</div>); })}
+                  </div>
+                </div>
+              )}
+              {bulkResult.movedAway && (
+                <div style={{ fontSize: 11, color: "#888", background: "#FAFAF9", border: "1px solid #EDEBE8", borderRadius: 8, padding: "10px 12px", lineHeight: 1.6 }}>
+                  원본 기관의 파이프라인 카드는 그대로 둡니다(자동 재계산이 카드를 뒤로 끌 수 있어서입니다).
+                  원본 기관에 남은 건이 없다면 파이프라인에서 그 카드를 정리해 주세요.
+                </div>
+              )}
+            </div>
+            <div style={{ padding: "0 24px 20px", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button onClick={function() { setBulkResult(null); }}
+                style={{ padding: "10px 18px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, color: "#555", cursor: "pointer" }}>닫기</button>
+              {bulkResult.ok.length > 0 && (
+                <button onClick={function() { goToDest(bulkResult.dest); }}
+                  style={{ padding: "10px 20px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                  🔗 목적지로 이동
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 📄 완료 토스트 */}
+      {agencyToast && (
+        <div style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: 24, zIndex: 1300,
+          display: "flex", alignItems: "center", gap: 12, background: "#1A1917", color: "#fff",
+          borderRadius: 12, padding: "12px 14px 12px 18px", boxShadow: "0 12px 40px rgba(0,0,0,0.28)", maxWidth: "90vw" }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>{agencyToast.msg}</span>
+          <button onClick={function() { goToDest(agencyToast.dest); }}
+            style={{ padding: "6px 12px", background: "#fff", color: "#1A1917", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+            바로 이동 →
+          </button>
+          <button onClick={function() { setAgencyToast(null); }}
+            style={{ background: "none", border: "none", color: "#fff", opacity: 0.6, fontSize: 16, cursor: "pointer", lineHeight: 1 }}>✕</button>
         </div>
       )}
 
