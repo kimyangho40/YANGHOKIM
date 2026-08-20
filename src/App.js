@@ -5998,6 +5998,13 @@ function CRMApp({ profile, session }) {
     var params = new URLSearchParams(window.location.search);
     return params.get("group") || null;
   });
+  // 📅 기관별현황 연도 — 등록 월을 YYYY-MM 으로 직접 받으므로 다른 해로 등록될 수 있다.
+  //    연도를 같이 안 넘기면 이동한 화면이 올해로 고정돼 방금 만든 건이 안 보인다.
+  const [agencyJumpYear, setAgencyJumpYear] = useState(() => {
+    var params = new URLSearchParams(window.location.search);
+    var y = params.get("year");
+    return y ? parseInt(y, 10) : null;
+  });
   // 기관별현황 이동 요청 번호 — 올릴 때마다 AgencyView가 다시 마운트된다(key로 사용).
   // jumpToMonth/jumpToGroup은 AgencyView에서 useState 초기값으로만 쓰여 다시 마운트해야 반영되고,
   // 같은 기관/월에 연속 등록하면 값이 안 바뀌어도 새 케이스를 다시 조회해야 하므로 별도 번호가 필요하다.
@@ -6007,6 +6014,7 @@ function CRMApp({ profile, session }) {
   const handleAgencyRegistered = function(target) {
     if (target && target.group) setAgencyJumpGroup(target.group);
     if (target && target.month) setAgencyJumpMonth(target.month);
+    if (target && target.year) setAgencyJumpYear(target.year);
     setAgencyJumpKey(function(k) { return k + 1; }); // 이미 기관별현황을 보고 있어도 다시 마운트 → 새 케이스 반영
     setSelectedCompany(null); // 등록은 업체 상세에서 시작되므로 모달을 닫아야 이동한 화면이 보인다
     setSelectedTab(null);
@@ -6015,7 +6023,8 @@ function CRMApp({ profile, session }) {
     if (target && target.group && target.month) {
       try {
         window.history.replaceState(null, "",
-          window.location.pathname + "?view=agency&month=" + target.month + "&group=" + encodeURIComponent(target.group));
+          window.location.pathname + "?view=agency&month=" + target.month + "&group=" + encodeURIComponent(target.group)
+            + (target.year ? "&year=" + target.year : ""));
       } catch (e) { /* 주소 교체 실패는 이동 자체에 영향 없음 */ }
     }
   };
@@ -8469,7 +8478,7 @@ function CRMApp({ profile, session }) {
         ) : (
           <>
             {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setFilterAssignee={setFilterAssignee} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} myName={profile?.name} myUid={profile?.id} stagnRows={stagnRows} />}
-            {view === "agency" && <AgencyView key={agencyJumpKey} jumpToMonth={agencyJumpMonth} jumpToGroup={agencyJumpGroup} />}
+            {view === "agency" && <AgencyView key={agencyJumpKey} jumpToMonth={agencyJumpMonth} jumpToGroup={agencyJumpGroup} jumpToYear={agencyJumpYear} />}
             {view === "dbleads" && <DBLeadsView canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
             {view === "assigndb" && <AssignDbView />}
             {view === "settlement" && <SettlementView profile={profile} />}
@@ -16629,7 +16638,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
               if (!ins.error) {
                 addedCount++;
                 if (registeredGroups.length === 0) {
-                  registeredGroups.push({ group: agencyGroup, month: monthNum });
+                  registeredGroups.push({ group: agencyGroup, month: monthNum, year: yearNum });
                 }
               } else {
                 errorMessages.push(agencyGroup + ": " + ins.error.message);
@@ -16652,7 +16661,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
             if (registeredGroups.length > 0 && onAgencyRegistered) {
               // 등록한 기관/월로 이동 (모달 닫기·화면 전환은 상위에서 처리).
               // 전에는 여기서 window.location.href로 앱을 통째로 새로고침했다 → SPA 상태 전부 손실
-              onAgencyRegistered({ group: registeredGroups[0].group, month: registeredGroups[0].month });
+              onAgencyRegistered({ group: registeredGroups[0].group, month: registeredGroups[0].month, year: registeredGroups[0].year });
             }
           }}
             style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, background: "#4338CA", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
@@ -25020,8 +25029,12 @@ const STATUS_COLORS_MAP = {
 
 const ALL_STATUS_OPTIONS = ["시작 전","진행 중","기관 방문 전","기관 방문 후 대기","온라인 신청 후 대기","임시저장","최종제출","우선도 평가 예비","우선도 평가","실태 조사 예정","실태 조사 완료","심사대기","심사중","승인","약정","완료","부결","반려","보류","중단","진행불가","신청취소","신청못함"];
 
-function AgencyView({ jumpToMonth, jumpToGroup }) {
-  var currentYear = new Date().getFullYear();
+function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
+  // 📅 연도 선택 (2026-08-20) — 예전에는 올해(new Date().getFullYear())가 코드에 박혀 있어
+  //    올해가 아닌 건은 화면에 아예 안 떴다. 기관현황 등록은 월을 YYYY-MM 으로 직접 받으므로
+  //    지난해·내년 건이 실제로 들어온다(그래서 "등록했는데 안 보인다"가 생겼다).
+  //    UI 는 정산관리(SettlementView)와 같은 모양 — 좌우 화살표 + 연도, 월 탭 바로 위.
+  const [activeYear, setActiveYear] = useState(Number(jumpToYear) || new Date().getFullYear());
   const [activeGroup, setActiveGroup] = useState(jumpToGroup || "소상공인시장진흥공단");
   const [activeMonth, setActiveMonth] = useState(jumpToMonth || new Date().getMonth() + 1);
   const [statusFilter, setStatusFilter] = useState("all"); // "all" | "approved" | "inProgress" | "rejected"
@@ -25219,7 +25232,8 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   useEffect(function() {
     if (jumpToMonth) setActiveMonth(Number(jumpToMonth));
     if (jumpToGroup) setActiveGroup(jumpToGroup);
-  }, [jumpToMonth, jumpToGroup]);
+    if (jumpToYear) setActiveYear(Number(jumpToYear));
+  }, [jumpToMonth, jumpToGroup, jumpToYear]);
 
   // 중복 사업장 판단: 같은 기관(activeGroup) 안에서 사업자명+대표자명이 같으면 중복
   // (신보에도 있고 기보에도 있는 건 협업이라 중복 아님. 한 기관 안 중복 등록만 잡음)
@@ -25313,7 +25327,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       var matchSearch = matchesQuery(c, q, qDigits);
       return c.agency_group === activeGroup
         && matchMonth
-        && Number(c.year) === currentYear
+        && Number(c.year) === activeYear
         && !c.deleted_at
         && (filterAssignee.length === 0 || filterAssignee.some(function(n) { return (c.assignee || "").split(",").map(function(x) { return x.trim(); }).includes(n); }))
         && matchStatus
@@ -25344,7 +25358,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       if (bOrder != null) return 1;
       return (a.created_at || "").localeCompare(b.created_at || "");
     });
-  }, [cases, activeGroup, activeMonth, filterAssignee, currentYear, statusFilter, searchQ]);
+  }, [cases, activeGroup, activeMonth, filterAssignee, activeYear, statusFilter, searchQ]);
 
   // 검색은 "지금 보고 있는 기관 탭 + 월" 안에서만 걸린다.
   // 그래서 다른 탭/월에 있는 업체를 찾으면 화면상 0건이라 "검색이 안 된다"고 오해하기 쉽다.
@@ -25357,7 +25371,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     var byPlace = {};
     cases.forEach(function(c) {
       if (c.deleted_at) return;
-      if (Number(c.year) !== currentYear) return;
+      if (Number(c.year) !== activeYear) return;
       if (!matchesQuery(c, q, qDigits)) return;
       var inView = c.agency_group === activeGroup
         && (activeMonth === "all" || Number(c.month) === Number(activeMonth));
@@ -25368,7 +25382,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     });
     return Object.keys(byPlace).map(function(k) { return byPlace[k]; })
       .sort(function(a, b) { return a.group === b.group ? a.month - b.month : a.group.localeCompare(b.group); });
-  }, [cases, searchQ, activeGroup, activeMonth, currentYear]);
+  }, [cases, searchQ, activeGroup, activeMonth, activeYear]);
 
   var trashedCases = useMemo(function() {
     return cases.filter(function(c) { return !!c.deleted_at; });
@@ -25379,28 +25393,60 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     return cases.filter(function(c) { return !c.deleted_at && !c.company_id; }).length;
   }, [cases]);
 
+  // 연도 이동 범위 = 데이터에 실제 있는 연도 ∪ {올해, 내년} ∪ {지금 보고 있는 해}
+  //  · 올해·내년을 항상 넣는 이유: 아직 건이 없는 내년에도 미리 등록할 수 있어야 한다.
+  //  · 지난 연도는 데이터가 있을 때만 열린다 — 빈 해로 무한정 거슬러 가지 않게 하기 위함.
+  //  · activeYear 를 넣는 이유: 점프(jumpToYear)로 들어온 해가 조회 전이면 범위 밖이라
+  //    화살표가 양쪽 다 잠겨 되돌아올 수 없게 된다.
+  //  ⚠️ 정산관리와 달리 별도 조회(dataYearBounds)가 필요 없다 — 이 화면의 cases 는
+  //     fetchAllRows("agency_cases","*") 로 상태 필터 없이 전건을 이미 들고 있다.
+  var yearRange = useMemo(function() {
+    var now = new Date().getFullYear();
+    var set = new Set([now, now + 1, activeYear]);
+    cases.forEach(function(c) { if (!c.deleted_at && c.year) set.add(Number(c.year)); });
+    var arr = Array.from(set).filter(function(y) { return y > 1900; }).sort(function(a, b) { return a - b; });
+    return { years: arr, min: arr[0], max: arr[arr.length - 1] };
+  }, [cases, activeYear]);
+
+  // 화살표 옆 배지 — 그 해에 (기관 무관) 살아있는 건이 몇 개인지
+  var yearCaseCount = useMemo(function() {
+    return cases.filter(function(c) { return !c.deleted_at && Number(c.year) === activeYear; }).length;
+  }, [cases, activeYear]);
+
+  // 연도를 바꾸면 편집·등록 중이던 것과 필터를 닫는다 (월 탭과 같은 규칙).
+  // 담당자 칩은 해마다 다른 사람이라 유지하면 아무것도 없는 0건 화면이 된다.
+  var changeYear = function(delta) {
+    var next = activeYear + delta;
+    if (next < yearRange.min || next > yearRange.max) return;
+    setActiveYear(next);
+    setEditingId(null); setEditData({}); setShowAddCase(false);
+    setFilterAssignee([]); setStatusFilter("all");
+  };
+
   var monthsWithData = useMemo(function() {
     var s = new Set();
     cases.filter(function(c) {
-      return c.agency_group === activeGroup && Number(c.year) === currentYear && !c.deleted_at;
+      return c.agency_group === activeGroup && Number(c.year) === activeYear && !c.deleted_at;
     }).forEach(function(c) { s.add(Number(c.month)); });
     return s;
-  }, [cases, activeGroup]);
+  }, [cases, activeGroup, activeYear]);
 
   var assigneesInGroup = useMemo(function() {
     var s = new Set();
     cases.filter(function(c) {
-      return c.agency_group === activeGroup && Number(c.month) === Number(activeMonth) && !c.deleted_at;
+      // 연도까지 봐야 한다 — 안 보면 다른 해 담당자가 칩으로 떠서 눌러도 0건이 된다
+      return c.agency_group === activeGroup && Number(c.month) === Number(activeMonth)
+        && Number(c.year) === activeYear && !c.deleted_at;
     }).forEach(function(c) { if (c.assignee) c.assignee.split(",").map(function(x) { return x.trim(); }).filter(Boolean).forEach(function(n) { s.add(n); }); });
     return Array.from(s).sort();
-  }, [cases, activeGroup, activeMonth]);
+  }, [cases, activeGroup, activeMonth, activeYear]);
 
   var summary = useMemo(function() {
     // summary는 statusFilter 무관하게 항상 전체 카운트 보여줘야 함 (클릭 가능 표시용)
     // 그래서 filtered가 아니라 별도로 계산
     var baseList = cases.filter(function(c) {
       var matchMonth = activeMonth === "all" ? true : Number(c.month) === Number(activeMonth);
-      return c.agency_group === activeGroup && matchMonth && Number(c.year) === currentYear && !c.deleted_at
+      return c.agency_group === activeGroup && matchMonth && Number(c.year) === activeYear && !c.deleted_at
         && (filterAssignee.length === 0 || filterAssignee.some(function(n) { return (c.assignee || "").split(",").map(function(x) { return x.trim(); }).includes(n); }));
     });
     // 그룹별 건수를 한 번에 센다. 그룹 목록(STATUS_VIEW_GROUPS)이 늘어도 여기 고칠 필요 없다.
@@ -25411,7 +25457,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
       byGroup[k] = (byGroup[k] || 0) + 1;
     });
     return Object.assign({ total: baseList.length }, byGroup);
-  }, [cases, activeGroup, activeMonth, filterAssignee, currentYear]);
+  }, [cases, activeGroup, activeMonth, filterAssignee, activeYear]);
 
   var activeGroupObj = AGENCY_GROUPS.find(function(g) { return g.id === activeGroup; });
   var groupColor = activeGroupObj ? activeGroupObj.color : "#4338CA";
@@ -25460,7 +25506,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
 
   var openAddCase = function() {
     setNewCase({
-      agency_group: activeGroup, year: currentYear, month: Number(activeMonth),
+      agency_group: activeGroup, year: activeYear, month: Number(activeMonth),
       business_name: "", representative: "", business_number: "",
       assignee: "", status: "시작 전", request_amount: "", region: "", notes: "",
     });
@@ -25472,7 +25518,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     if (!newCase.business_name) { alert("사업자명은 필수입니다."); return; }
     var insertData = {
       agency_group: activeGroup,
-      year: currentYear,
+      year: activeYear,
       month: Number(activeMonth),
       business_name: newCase.business_name,
       representative: newCase.representative || null,
@@ -25492,7 +25538,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
     if (result.error) {
       console.warn("agency_cases insert 1차 실패, 핵심 컬럼만 재시도:", result.error.message);
       var minimal = {
-        agency_group: activeGroup, year: currentYear, month: Number(activeMonth),
+        agency_group: activeGroup, year: activeYear, month: Number(activeMonth),
         business_name: newCase.business_name, representative: newCase.representative || null,
         business_number: newCase.business_number || null, assignee: newCase.assignee || null,
         status: newCase.status || "시작 전", request_amount: newCase.request_amount || null,
@@ -25669,7 +25715,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
   };
   // 원본 건 기준 다음달(년/월 +1). 12월 → 다음해 1월. (오늘 기준 아님)
   var nextApplyPeriod = function(y, m) {
-    y = Number(y) || currentYear;
+    y = Number(y) || activeYear;
     m = Number(m) || (new Date().getMonth() + 1);
     var nm = m + 1, ny = y;
     if (nm > 12) { nm = 1; ny = y + 1; }
@@ -25769,7 +25815,7 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
               // 핵심 필수 컬럼만 먼저 시도
               var baseData = {
                 agency_group: activeGroup,
-                year: currentYear,
+                year: activeYear,
                 month: Number(activeMonth) || (new Date().getMonth() + 1),
                 business_name: clipboardCase.business_name,
                 representative: clipboardCase.representative || null,
@@ -25868,6 +25914,38 @@ function AgencyView({ jumpToMonth, jumpToGroup }) {
           );
         })}
       </div>
+
+      {/* 연도 선택 — 좌우 화살표. 월 탭 바로 위에 둔다(월을 고르기 전에 해를 먼저 정하는 순서) */}
+      {(function() {
+        var canPrev = activeYear > yearRange.min, canNext = activeYear < yearRange.max;
+        var arrow = function(dir, on) {
+          return (
+            <button onClick={function() { changeYear(dir); }} disabled={!on}
+              title={on ? (activeYear + dir) + "년으로 이동" : "이 방향에는 기관 데이터가 없습니다"}
+              style={{ width: 28, height: 28, borderRadius: 7, border: "1px solid " + (on ? "#E8E5E0" : "#F1EFEC"),
+                background: "#fff", color: on ? "#333" : "#D6D3CE", fontSize: 13, fontWeight: 800, lineHeight: 1,
+                cursor: on ? "pointer" : "default", padding: 0 }}>
+              {dir < 0 ? "‹" : "›"}
+            </button>
+          );
+        };
+        return (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            {arrow(-1, canPrev)}
+            <div style={{ minWidth: 68, textAlign: "center", fontSize: 15, fontWeight: 800, letterSpacing: "-0.02em" }}>
+              {activeYear}년
+            </div>
+            {arrow(1, canNext)}
+            {activeYear === new Date().getFullYear() && (
+              <span style={{ background: "#F7F6F3", color: "#888", borderRadius: 99, padding: "2px 8px", fontSize: 10.5, fontWeight: 700 }}>올해</span>
+            )}
+            <span title={yearCaseCount ? null : "이 해에는 등록된 기관 건이 없습니다. 신규 추가는 할 수 있습니다."}
+              style={{ fontSize: 11, color: yearCaseCount ? "#888" : "#C4C0BA" }}>
+              {yearCaseCount ? yearCaseCount + "건" : "기관 건 없음"}
+            </span>
+          </div>
+        );
+      })()}
 
       {/* 월 탭 + 전체 */}
       <div style={{ display: "flex", gap: 4, marginBottom: 18, flexWrap: "wrap" }}>

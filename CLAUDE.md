@@ -544,6 +544,38 @@ commission_fee·contract_date·fee_received·settlement_notes` 를 **또** 들�
   `monthsWithData`(월 탭의 ● 표시)도 선택한 연도 기준으로 다시 센다.
 - ⚠️ **같은 하드코딩이 `setNewLead` 에도 남아 있다**(`year: 2026`, 배정DB 계열). 이번 범위가 아니라 안 건드렸다.
 
+## 📅 기관별현황 연도 선택 (2026-08-20, **DB 변경 0건 · 새 쿼리 0건**)
+
+`AgencyView` 가 `var currentYear = new Date().getFullYear()` 를 **13곳에서** 보고 있어
+**올해가 아닌 건은 화면에 아예 안 떴다.** 실측: 살아있는 1,822건 중 **2025년 20건이 통째로 안 보이는 상태**였다
+(전부 `구조혁신&사업전환` 2·6·7·8월). `activeYear` 상태로 바꿨다. UI 는 **정산관리와 같은 모양**
+(좌우 화살표 + 연도, 월 탭 바로 위).
+
+- **범위(`yearRange`) = 데이터에 있는 연도 ∪ {올해, 내년} ∪ {지금 보고 있는 해}.**
+  ⚠️ 정산관리와 달리 **별도 조회(`dataYearBounds`)가 필요 없다** — 이 화면의 `cases` 는
+  `fetchAllRows("agency_cases","*")` 로 **상태 필터 없이 전건**을 이미 들고 있다.
+  (정산관리는 `fetchData` 가 승인 이상만 불러와서 연도만 따로 떠야 했다. 그 차이를 헷갈리지 말 것.)
+  · `activeYear` 를 범위에 넣는 이유: 점프로 들어온 해가 조회 전이면 범위 밖이라 **화살표가 양쪽 다 잠긴다.**
+- ⚠️ **`monthsWithData` 의 의존성 배열에 연도가 빠져 있었다**(`[cases, activeGroup]`).
+  상수일 때는 안 드러났지만 상태로 바꾸면 **연도를 옮겨도 월 탭의 ● 표시가 안 바뀐다.** 같이 고쳤다.
+- `assigneesInGroup`(담당자 칩)에 **연도 조건을 새로 넣었다.** 안 넣으면 다른 해 담당자가 칩으로 떠서
+  눌러도 0건이 된다. 연도를 바꿀 때 `filterAssignee`·`statusFilter` 를 비우는 것도 같은 이유(월 탭과 같은 규칙).
+- **휴지통(`trashedCases`)은 일부러 연도로 안 거른다** — 연도와 무관하게 전부 보여야 복구할 수 있다.
+  그래서 `yearRange` 는 살아있는 행만 보고 만든다(삭제분만 있는 해를 열 필요가 없다).
+- 신규 등록·붙여넣기 등록·`nextApplyPeriod` 폴백도 `activeYear` 를 쓴다 →
+  **2025년을 보는 중에 추가하면 2025년 건으로 들어간다.**
+
+### 🔗 `jumpToYear` — 등록 후 이동에 연도를 같이 싣는다
+「기관별현황에 등록」은 월을 **`YYYY-MM` 으로 직접 받는다**(다른 해로 등록될 수 있다).
+그런데 `registeredGroups` 가 `{group, month}` 만 담아 **연도를 버리고 있었다** → 다른 해로 등록하면
+이동한 화면이 올해로 고정돼 **방금 만든 건이 안 보인다.** 연도를 끝까지 실어 보내도록 고쳤다.
+
+`CompanyModal`(`{group, month, year}`) → `handleAgencyRegistered` → `agencyJumpYear` → `AgencyView jumpToYear`
+- URL 도 `?view=agency&month=&group=&year=` 로 맞춘다(새로고침해도 같은 화면). **`year` 는 없으면 생략** — 옛 링크 호환.
+- `jumpToMonth`/`jumpToGroup` 과 같은 규칙이다: `useState` 초기값 + `useEffect` 양쪽에 넣어야 한다
+  (`agencyJumpKey` 로 다시 마운트되는 경로와 프롭만 바뀌는 경로가 둘 다 있다).
+- **모바일은 영향 없다** — `AgencyView` 렌더 지점은 `CRMApp` 한 곳뿐이다(팀 업무와 다른 점).
+
 ## 💰 기대출 금액 입력칸 = "만원" 단위 고정 (2026-08-19, **DB 스키마 변경 0건 · 파서 변경 0줄**)
 
 단위 글자를 안 붙이면 `"12,353"` 이 1만원인지 1,235만원인지 몰라 **합계에서 빠지던** 문제
