@@ -576,6 +576,55 @@ commission_fee·contract_date·fee_received·settlement_notes` 를 **또** 들�
   (`agencyJumpKey` 로 다시 마운트되는 경로와 프롭만 바뀌는 경로가 둘 다 있다).
 - **모바일은 영향 없다** — `AgencyView` 렌더 지점은 `CRMApp` 한 곳뿐이다(팀 업무와 다른 점).
 
+## 📄 기관별현황 다중선택 복사·이동 (2026-08-20, **DB 스키마 변경 0건 · SQL 실행 0건**)
+
+목록 맨 앞 체크박스 열 → 하단 액션바 → 목적지 팝업(기관·연도·월·상태) → 복사 또는 이동.
+실무: 소진공 부결 건을 재단으로 복사(재신청) · 올해 건을 2027년으로 복사(내년 재신청 리스트).
+
+**복사는 insert, 이동은 UPDATE 다 — 이동을 "지우고 새로 만들기"로 바꾸지 말 것.**
+이동은 같은 행의 `agency_group`·`year`·`month` 만 바꾼다. id 가 바뀌면
+`reapply_from_id` 링크·`reject_checklist`·정산 연결이 통째로 끊긴다.
+
+- 🔗 **복사본은 원본의 `company_id` 를 반드시 가져간다.** 1차 insert 가 실패해 최소 컬럼으로
+  재시도할 때도 `company_id` 는 남긴다. ⚠️ 기존 「📋 복사/붙여넣기」(1건, sessionStorage)는
+  `company_id` 를 **안 넣는다** — 미연결 291건의 공급원 중 하나다. 그 버튼은 이번에 안 건드렸다.
+- ⚠️ **복사는 결과·정산 필드를 가져가지 않는다.** 가져가면 정산관리가 같은 계약금·수수료를 한 번 더 센다.
+  (제외: `result`·`result_reason`·`approval_*`·`contract_*`·`commission_fee`·`fee_received*`·
+  `invoice_*`·`received_amount`·`settlement_notes`·`reject_checklist`·`delivered_docs`·
+  `script_delivered`·`phone_education_done`·`sort_order`·`notion_page_id`·`apply_date`)
+  가져가는 것은 `COPY_FIELDS` 27개 + `company_id`·`reapply_from_id`·`status`.
+- ⚠️ **기존 「📋 붙여넣기」는 `agency_cases` 에 없는 `product` 컬럼을 쓴다**(맞는 이름은 `fund_product`).
+  그래서 1차 insert 가 늘 실패하고 최소 컬럼으로 떨어진다(CLAUDE.md 2-6 ②의 실물). 새 기능은 안 쓴다.
+- ⚠️ **구조혁신&사업전환만 상태 어휘가 다르다 — `"시작전"`(띄어쓰기 없음), 나머지는 `"시작 전"`.**
+  `initialStatusFor(group)` 이 목적지에 맞는 값을 고른다. 어휘가 다른 기관 사이에서는
+  "현재 상태 유지"를 **잠그고** 초기화로 고정한다 — 안 그러면 목적지 드롭다운에 없는 상태값이 생긴다.
+
+### 파이프라인 카드 — `syncPipelineFromCase(c, { createOnly: true })`
+공용 함수에 **선택 인자 하나**를 더했다. 카드가 이미 있으면 **즉시 return**(단계도 `needs_mapping` 도 안 건드림).
+`opts` 를 안 주는 기존 호출부 5곳은 동작이 완전히 그대로다.
+- **다른 기관으로 복사/이동** = 새 (회사×기관) 조합 → **카드를 만들어 줘야** 보드에서 통째로 사라지지 않는다.
+- **같은 기관·다른 연도로 복사** = 카드가 이미 있다 → **손대면 안 된다.** 최신 행 기준으로 다시 계산하면
+  단순 복사가 남의 카드 단계를 조용히 움직인다(재동기화 버튼과 같은 효과가 그 조합에만 걸린다).
+- 🗓 **미래 월 규칙과 충돌 없음.** 최신 행을 고르는 3곳(`syncPipelineFromCase`·`resyncAutoCards`·
+  `toggleSyncMode`)이 전부 미래 월을 건너뛰므로, 2027년 리스트를 아무리 만들어도 카드가 뒤로 안 끌린다.
+- ⚠️ **이동한 "원본 기관" 카드는 일부러 정리하지 않는다.** 남은 행 기준 재계산은 카드를 뒤로 끌 수 있다
+  (2026-08-20 실측 "뒤로 4장"과 같은 성격). 원본 기관에 행이 안 남으면 파이프라인 휴지통에서 사람이 지운다.
+  결과 화면에 그 안내를 띄운다.
+
+### 선택 규칙 — "보이는 것 = 선택된 것 = 실행되는 것"
+`selectedRows = filtered ∩ selectedIds` 로만 쓴다. 검색·담당자 필터가 바뀌어 사라진 행은 **자동으로 빠지고**,
+액션바에 보이는 숫자가 곧 실행 대상 수다 → 파이프라인 일괄이동의 "화면 밖 N건 제외"를 애초에 안 만든다.
+탭·연도·월을 바꾸면 선택을 **비운다**(`changeYear` 가 필터를 비우는 것과 같은 계열, 5곳).
+- Shift+클릭은 **범위 추가만** 한다(해제 안 함). 기준은 `selAnchorRef`.
+- 행 체크박스 셀은 `stopPropagation` — 누를 때 상세 모달이 안 열린다.
+- **중복 방지**: 목적지에 같은 건(`기관+연+월+company_id`, 없으면 사업자명)이 있으면 실행 전에 세어
+  건너뛴다 → 두 번 눌러도 안 불어난다. **조인키는 `company_id` 가 원본이다** — 사업자명은 작업 메모가
+  붙은 원문이 섞여 있다(2절).
+
+**검증**: 복사 payload 를 `begin … rollback` 트랜잭션으로 실검증(3건 insert → `company_id` 3/3 유지 ·
+`reapply_from_id` 3/3 · 상태 '시작 전' 3/3 → 롤백 후 별도 조회로 흔적 0건 재확인).
+컬럼 오타 점검 `node scripts/audit-select-columns.mjs` 0건 · `CI=true npx react-scripts build` 통과(main.js +4.09 kB).
+
 ## 💰 기대출 금액 입력칸 = "만원" 단위 고정 (2026-08-19, **DB 스키마 변경 0건 · 파서 변경 0줄**)
 
 단위 글자를 안 붙이면 `"12,353"` 이 1만원인지 1,235만원인지 몰라 **합계에서 빠지던** 문제
