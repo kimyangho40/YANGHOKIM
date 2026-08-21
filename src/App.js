@@ -7537,6 +7537,10 @@ function CRMApp({ profile, session }) {
             .eq("month", monthNum).eq("year", yearNum).is("deleted_at", null).maybeSingle();
           if (!existing.data) {
             var ins = await supabase.from("agency_cases").insert({
+              // 🔗 기업목록과 바로 연결한다(「기관별현황에 등록」 버튼과 같은 이유 — CLAUDE.md 0단계-5).
+              //    이 줄이 없으면 이 경로로 만든 건이 전부 company_id=null 로 태어나
+              //    아래 카드도 이름으로만 붙는다.
+              company_id: rest.id || null,
               business_name: rest.name, agency_group: agencyGroup,
               month: monthNum, year: yearNum,
               assignee: Array.isArray(rest.assignee) ? rest.assignee.join(", ") : (rest.assignee || ""),
@@ -7547,8 +7551,14 @@ function CRMApp({ profile, session }) {
               contract_date: rest.contract_date || null,
               status: "시작 전",
             });
-            if (!ins.error) addedCount++;
-            else showToast("기관별현황 등록 실패: " + ins.error.message, "error");
+            if (!ins.error) {
+              addedCount++;
+              // 🃏 (기업 × 기관) 카드가 없으면 만든다. 있으면 절대 안 건드린다(createOnly).
+              await syncPipelineFromCase({
+                company_id: rest.id || null, business_name: rest.name, agency_group: agencyGroup,
+                status: "시작 전", year: yearNum, month: monthNum,
+              }, { createOnly: true });
+            } else showToast("기관별현황 등록 실패: " + ins.error.message, "error");
           }
         }
         if (addedCount > 0) showToast("기관별 현황에 " + addedCount + "건 자동 등록됐어요 (" + monthNum + "월)!");
@@ -16643,6 +16653,13 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
               var ins = await supabase.from("agency_cases").insert(insertData);
               if (!ins.error) {
                 addedCount++;
+                // 🃏 (기업 × 기관) 카드가 없으면 만든다. 있으면 절대 안 건드린다(createOnly).
+                //    예전엔 이 버튼이 카드를 아예 안 만들어, 기업상세에서 등록한 기관 건이
+                //    파이프라인 보드에 통째로 안 보였다.
+                await syncPipelineFromCase({
+                  company_id: data.id || null, business_name: companyName, agency_group: agencyGroup,
+                  status: "시작 전", year: yearNum, month: monthNum,
+                }, { createOnly: true });
                 if (registeredGroups.length === 0) {
                   registeredGroups.push({ group: agencyGroup, month: monthNum, year: yearNum });
                 }
@@ -25798,6 +25815,8 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
       var base = {
         agency_group: rejectTarget.agency_group || activeGroup,
         year: per.year, month: per.month,
+        // 🔗 원본 건의 기업 연결을 그대로 가져간다. 없으면 재신청 건이 미연결로 태어난다.
+        company_id: rejectTarget.company_id || null,
         business_name: rejectTarget.business_name,
         representative: rejectTarget.representative || null,
         business_number: rejectTarget.business_number || null,
@@ -25816,6 +25835,13 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
       if (!ins.error && ins.data) {
         checklist.reapplied_case_id = ins.data.id;
         setCases(function(prev) { return prev.concat([ins.data]); });
+        // 🃏 재신청은 보통 같은 (기업 × 기관) 이라 카드가 이미 있다 → createOnly 가 즉시 return 한다.
+        //    기관이 없던 조합이면 그때만 카드를 새로 만든다. 기존 카드 단계는 절대 안 움직인다.
+        await syncPipelineFromCase({
+          company_id: ins.data.company_id || null, business_name: ins.data.business_name,
+          agency_group: ins.data.agency_group, status: ins.data.status,
+          year: ins.data.year, month: ins.data.month,
+        }, { createOnly: true });
       } else if (ins.error) {
         alert("재신청 건 자동 생성 실패: " + ins.error.message);
       }
@@ -26070,6 +26096,15 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
                 r = await supabase.from("agency_cases").insert(baseData).select();
               }
               if (r.error) { alert("추가 실패: " + r.error.message); return; }
+              // 🃏 (기업 × 기관) 카드가 없으면 만든다. 있으면 절대 안 건드린다(createOnly).
+              //    같은 기관 안에서 붙여넣으면 카드가 이미 있어 즉시 return 하고,
+              //    다른 기관으로 붙여넣을 때만 새 카드가 생긴다.
+              var pasted = (r.data && r.data[0]) || baseData;
+              await syncPipelineFromCase({
+                company_id: pasted.company_id || null, business_name: pasted.business_name,
+                agency_group: pasted.agency_group, status: pasted.status,
+                year: pasted.year, month: pasted.month,
+              }, { createOnly: true });
               fetchCases();
               alert("✅ '" + clipboardCase.business_name + "' 추가 완료");
             }} title={"클립보드: " + clipboardCase.business_name + " (" + clipboardCase.sourceGroup + " " + clipboardCase.sourceMonth + "월)"}
