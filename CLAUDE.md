@@ -804,13 +804,17 @@ unique index 는 `(company_id, agency_group)` 이라 `company_id` 가 null 인 �
 ### 적용한 4곳 — **저장 위치(테이블·컬럼)는 하나도 안 바꿨다**
 | 화면 | 칸 | 저장 | 저장 함수 |
 |---|---|---|---|
-| 기관별현황 **표** | 비고 | `agency_cases.notes` | 보기 모드 → `saveCaseMemo` / **인라인 편집 중 → `editData` 에만** (기존 [저장] 버튼이 커밋) |
+| 기관별현황 **표** | 비고 | `agency_cases.notes` | `saveCaseMemo` — **편집 모드든 아니든 [확인] 누르면 바로 저장** |
 | 기관별현황 **사이드패널** | 📝 이슈 메모 | `agency_cases.notes` | `saveCaseMemo` |
 | 기관별현황 **사이드패널** | 추가 메모 | `agency_cases.extra_notes` | `saveCaseMemo` |
 | 기업목록 **표** | 기타 | `companies.next_action` | `saveEtc` (기존 함수, 값만 인자로 받게 넓힘) |
 
 - `saveCaseMemo(caseId, field, value)` 는 **사이드패널 「이슈 메모」의 옛 `onBlur` UPDATE 를 그대로 뽑은 것**이다.
   새 저장 경로를 만들지 말고 이걸 쓸 것. `setCases` + `setSelectedCase` 를 같이 맞춘다.
+- ⚠️ **인라인 편집(연필) 중에 비고 팝업으로 저장하면 `editData.notes` 도 같이 맞춰야 한다.**
+  `saveEdit` 은 `notes: editData.notes` 를 **항상** payload 에 싣기 때문에, 안 맞추면 그 줄의
+  [저장]을 누르는 순간 **옛 값으로 방금 저장한 메모가 되돌아간다.**
+  (기업목록 「기타」는 `saveRowEdit` 이 `next_action` 을 안 싣기 때문에 이 문제가 없다.)
 - ⚠️ **표 셀은 `stopPropagation` 이 필수다.** 기관현황은 행 클릭 → 사이드패널, 기업목록은 행 클릭 → 기업상세가
   열린다. 안 걸면 팝업과 패널이 같이 뜬다. (기관현황 **우선도 셀**이 이미 같은 패턴 — 그걸 따라갔다.)
 - ⚠️ 사이드패널 미리보기에 **`maxHeight` + `overflowY:auto`** 를 준다. 옛 textarea 의 `rows` 를 대신하는 것으로,

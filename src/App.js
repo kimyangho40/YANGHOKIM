@@ -27263,20 +27263,23 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
           key={memoEdit.mode + "|" + memoEdit.caseId + "|" + memoEdit.field}
           title={memoEdit.title}
           subject={memoEdit.subject}
-          hint={memoEdit.mode === "row" ? "이 줄의 [저장]을 눌러야 최종 저장됩니다" : "확인하면 바로 저장됩니다"}
+          hint="확인하면 바로 저장됩니다"
           placeholder="내용을 입력하세요"
           initial={memoEdit.initial}
           onCancel={function() { setMemoEdit(null); }}
           onSave={async function(text) {
+            // 편집 모드든 아니든 **여기서 바로 저장한다.** 팝업에 이미 [확인]이 있는데
+            // 줄의 [저장]을 또 눌러야 하면 두 단계가 되어 "썼는데 안 남았다"가 생긴다.
+            var ok = await saveCaseMemo(memoEdit.caseId, memoEdit.field, text);
+            if (!ok) return;
+            // ⚠️ 인라인 편집 중이면 editData 도 같은 값으로 맞춘다.
+            //    안 맞추면 그 줄의 [저장](saveEdit)이 **옛 editData.notes 로 방금 저장한 메모를 되돌린다.**
+            //    (saveEdit 은 notes 를 항상 payload 에 싣는다.)
             if (memoEdit.mode === "row") {
-              // 인라인 편집 중인 행 → editData 에만 반영. DB 저장은 기존 [저장] 버튼(saveEdit)이 한다.
               var f = memoEdit.field;
               setEditData(function(pr) { var nx = Object.assign({}, pr); nx[f] = text; return nx; });
-              setMemoEdit(null);
-              return;
             }
-            var ok = await saveCaseMemo(memoEdit.caseId, memoEdit.field, text);
-            if (ok) setMemoEdit(null);
+            setMemoEdit(null);
           }} />
       )}
 
