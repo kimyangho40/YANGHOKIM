@@ -27809,7 +27809,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
                         </div>
                       </div>
 
-                      <div style={{ fontSize: 10, color: "#AAA", marginTop: 6 }}>각 입력 후 칸 밖 클릭 시 자동 저장</div>
+                      <div style={{ fontSize: 10, color: "#AAA", marginTop: 6 }}>각 입력 후 칸 밖 클릭 시 자동 저장 · 추가 메모는 눌러서 크게 편집</div>
                     </>
                   );
                 })()}
