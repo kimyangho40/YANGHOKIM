@@ -1344,6 +1344,80 @@ function isNewerCase(a, b) {
   return String(a.id || "") > String(b.id || "");
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// 🎚 기관현황 상태 → 파이프라인 카드 자동 연동 정책 (2026-08-21 확정)
+//   두 화면의 상태 어휘는 **일부러 다르게 유지한다.** 통일하지 말 것 —
+//   기관현황은 35종의 월별 시계열이고 파이프라인은 11종의 (회사×기관) 스냅샷이다.
+//   연결은 오직 아래 번역표 + status_stage_map 을 통해서만 한다.
+// ──────────────────────────────────────────────────────────────────────────────
+
+// 🎚 진행 순서(rank). ⚠️ STAGES 배열 인덱스와 **다르다. 인덱스로 전진 판정을 하면 안 된다.**
+//    부결/반려·기타는 배열 끝에 있지만 "진행 단계"가 아니라 **순서 밖**이다(rank 없음).
+//    인덱스로 재면 부결(10번째)이 입금완료(9번째)보다 '앞'이 되어 전진 규칙이 통째로 뒤집힌다.
+//    (같은 이유로 파이프라인 보드도 '다음 단계' 계산에서 이 둘을 뺀다 — nextStages 참고)
+const STAGE_RANK = {
+  "상담/진단완료": 1, "필수서류 및 인증서요청": 2, "기관신청대기/방문예정": 3,
+  "기관신청완료/방문완료": 4, "심사중/실태조사대기": 5, "실태조사완료/약정완료": 6,
+  "자금집행완료": 7, "수수료대기 및 입금요청": 8, "입금완료/사후관리": 9,
+};
+function stageRank(s) { var r = STAGE_RANK[s]; return r == null ? null : r; }
+
+// 💰 돈 단계 — **자동으로는 절대 못 들어가고, 여기 있는 카드는 자동으로 안 움직인다.**
+//    수수료 청구·입금은 사람이 확인해야 하는 사실이라 기관현황 상태로 유추하면 안 된다.
+//    실측(2026-08-21): 이 규칙이 없으면 상태가 '완료'인 카드 52장이 입금완료/사후관리 →
+//    자금집행완료 로 **뒤로 끌린다**((유)JB특수시스템·(주)리딩트러스트 등).
+const MONEY_STAGES = ["수수료대기 및 입금요청", "입금완료/사후관리"];
+function isMoneyStage(s) { return MONEY_STAGES.indexOf(s) !== -1; }
+
+// 🅿️ 자동으로 **들어갈 수 없는** 주차 칸. 사람이 사유를 적어 넣는 자리다.
+//    (moveCards 로 손수 옮기는 건 그대로 된다 — 막는 건 자동 이동뿐이다.)
+const NO_AUTO_TARGET_STAGES = MONEY_STAGES.concat(["기타"]);
+
+// 📖 번역표 — 확정본(2026-08-21). status_stage_map 보다 **이게 이긴다.**
+//    매핑표는 사람이 화면에서 고칠 수 있어, 확정 규칙을 거기 두면 조용히 바뀔 수 있다.
+const SYNC_CREATE_ONLY_STATUS = ["시작 전", "시작전"];  // ⚠️ 구조혁신은 띄어쓰기가 없다
+const SYNC_NO_MOVE_STATUS = ["진행 중", "보류"];        // 여러 단계에 걸쳐 있어 판단 불가
+const SYNC_STATUS_OVERRIDE = {
+  "승인": "실태조사완료/약정완료",
+  "완료": "자금집행완료",   // ⚠️ 입금완료/사후관리가 **아니다**. 돈 단계는 사람이 민다.
+  "부결": "부결/반려",
+};
+
+// 상태 → 무엇을 할지. mapped 는 status_stage_map 조회 결과.
+//   { action: "create-only" } 카드 없으면 생성, 있으면 손도 안 댐
+//   { action: "none" }        아무것도 안 함 (⚠ needs_mapping 도 안 세운다)
+//   { action: "stage", stage } 이 단계를 목표로 삼는다(전진 판정은 canAutoMoveStage 가)
+//   { action: "unmapped" }     매핑이 없다 → needs_mapping
+function autoStagePolicy(status, mapped) {
+  if (!status) return { action: "none" };
+  if (SYNC_CREATE_ONLY_STATUS.indexOf(status) !== -1) return { action: "create-only" };
+  if (SYNC_NO_MOVE_STATUS.indexOf(status) !== -1) return { action: "none" };
+  var ov = SYNC_STATUS_OVERRIDE[status];
+  if (ov) return { action: "stage", stage: ov };
+  if (mapped) return { action: "stage", stage: mapped };
+  return { action: "unmapped" };
+}
+
+// 목표 단계로 실제로 옮길지. 원칙 1(전진만) · 2(돈 단계 동결) · 부결 되돌리기가 전부 여기 있다.
+//   반환 { move, why, clearOther, clearClosed }
+//   ⚠️ clearOther/clearClosed 는 **분기와 무관하게** 계산한다. moveCards(수동 드래그)가
+//      하는 정리와 같은 규칙이어야 한다 — 안 그러면 '실태조사완료인데 종결로 숨은 카드'가 생긴다.
+function canAutoMoveStage(cur, target) {
+  var clearOther = cur === "기타" && target !== "기타";
+  var clearClosed = cur === "부결/반려" && target !== "부결/반려";
+  var no = function(why) { return { move: false, why: why }; };
+  var yes = function(why) { return { move: true, why: why, clearOther: clearOther, clearClosed: clearClosed }; };
+  if (!target || target === cur) return no("same");
+  if (NO_AUTO_TARGET_STAGES.indexOf(target) !== -1) return no(isMoneyStage(target) ? "money-target" : "etc-target");
+  if (isMoneyStage(cur)) return no("money-frozen");           // 원칙 2 — 돈 단계 카드는 동결
+  if (target === "부결/반려") return yes("reject");            // 결론이라 순서 밖에서도 간다
+  if (cur === "부결/반려") return yes("undo-reject");          // 부결 되돌리기 + 종결 해제
+  if (cur === "기타") return yes("leave-etc");                 // 주차장 탈출은 후퇴가 아니다
+  var rc = stageRank(cur), rt = stageRank(target);
+  if (rc == null || rt == null) return no("rank-unknown");
+  return rt > rc ? yes("forward") : no("backward");            // 원칙 1 — 앞으로만
+}
+
 // 기관현황 → 파이프라인 단방향 자동동기화.
 // (기관, 상태) → status_stage_map 조회(기관별 우선, 없으면 공통 '*') → 해당 회사×기관 카드 stage 갱신.
 // sync_mode='manual'(수동 고정) 카드는 절대 덮어쓰지 않음. 매핑 없으면 이동 안 하고 needs_mapping=true.
@@ -1404,23 +1478,38 @@ async function syncPipelineFromCase(c, opts) {
       //    unique 위반 에러가 난다. 조회는 삭제분까지 포함해서 하고 여기서 끊는 게 맞다.
       if (card.deleted_at) return;
       if (card.sync_mode === "manual") return; // 수동 고정 → 자동 덮어쓰기 안 함
-      if (stage) {
-        var changed = card.stage !== stage;
-        var upd = { stage: stage, synced_status: eff.status, synced_month: eff.month || null, needs_mapping: false, updated_at: new Date().toISOString() };
-        // 단계가 실제로 바뀔 때만 정체 타이머 리셋 + 이번 구간 알림 해제
-        if (changed) { upd.stage_changed_at = new Date().toISOString(); upd.alerted_at = null; }
-        await supabase.from("pipeline_cards").update(upd).eq("id", card.id);
-        if (changed && card.alert_note_id) { try { await supabase.from("work_notes").update({ is_done: true }).eq("id", card.alert_note_id); } catch (e2) {} }
-      } else if (eff && eff.status) {
+      // 🎚 번역표 정책 게이트 — 여기가 이 함수의 유일한 "카드를 움직일까" 판단 지점이다.
+      var pol = autoStagePolicy(eff && eff.status, stage);
+      if (pol.action === "create-only" || pol.action === "none") return; // 🚫 손대지 않는다
+      if (pol.action === "unmapped") {
         await supabase.from("pipeline_cards").update({ needs_mapping: true, updated_at: new Date().toISOString() }).eq("id", card.id);
+        return;
       }
-      // 🗓 eff === null (미래 월 행뿐) → 카드를 건드리지 않는다. needs_mapping 도 세우지 않는다
-      //    (매핑이 없는 게 아니라 아직 판정할 때가 아닌 것이라, 화면에 ⚠ 를 띄우면 오해를 부른다).
+      var gate = canAutoMoveStage(card.stage, pol.stage);
+      if (!gate.move) return;   // ⬅ 후퇴 · 💰 돈 단계 · 🅿️ 기타 목표 → 아무것도 안 한다
+      var nowIso2 = new Date().toISOString();
+      var upd = {
+        stage: pol.stage, synced_status: eff.status, synced_month: eff.month || null,
+        needs_mapping: false, stage_changed_at: nowIso2, alerted_at: null, updated_at: nowIso2,
+      };
+      // 단계를 벗어나면 그 단계 전용 표시를 정리한다 — moveCards(수동 드래그)와 **같은 규칙**.
+      //   안 지우면 '실태조사완료인데 종결(closed_at)이라 보드에서 숨은 카드'처럼 유령이 생긴다.
+      if (gate.clearOther) { upd.other_reason = null; upd.other_reason_note = null; upd.other_reason_at = null; }
+      if (gate.clearClosed) { upd.closed_at = null; upd.closed_by = null; }
+      await supabase.from("pipeline_cards").update(upd).eq("id", card.id);
+      if (card.alert_note_id) { try { await supabase.from("work_notes").update({ is_done: true }).eq("id", card.alert_note_id); } catch (e2) {} }
+      // 🗓 eff === null (미래 월 행뿐) → autoStagePolicy 가 "none" 을 줘서 위에서 이미 return 했다.
+      //    needs_mapping 도 세우지 않는다(매핑이 없는 게 아니라 아직 판정할 때가 아니다).
     } else if (ag) {
-      // 새 (회사×기관) 조합 → 카드 신규 생성
+      // 새 (회사×기관) 조합 → 카드 신규 생성.
+      //   ⚠️ 생성에는 "전진만/이동 없음" 규칙을 걸지 않는다. 그 규칙들은 **이미 쌓인 진행을
+      //      지키려는 것**인데 새 카드에는 지킬 진행이 없다. 여기서 막으면 보드에서 통째로 사라진다.
+      //   단 번역표 override(승인·완료·부결)와 💰 돈 단계 금지는 생성에도 적용한다.
+      var newStage = SYNC_STATUS_OVERRIDE[(eff && eff.status) || ""] || stage || "상담/진단완료";
+      if (isMoneyStage(newStage)) newStage = "자금집행완료"; // 원칙 2 — 자동으로 돈 단계에 놓지 않는다
       await supabase.from("pipeline_cards").insert({
         company_id: c.company_id || null, business_name: c.business_name || "", agency_group: ag,
-        stage: stage || "상담/진단완료", sync_mode: "auto",
+        stage: newStage, sync_mode: "auto",
         synced_status: stage ? eff.status : null, synced_month: stage ? (eff.month || null) : null,
         needs_mapping: !stage && !!(eff && eff.status), // 🗓 eff 가 null(미래 월뿐)일 수 있다
       });
@@ -1458,12 +1547,27 @@ async function resyncAutoCards() {
     if (!card.agency_group) continue; // 기관 미지정은 자동대상 아님
     var lt = latest[(card.company_id || "") + "||" + card.agency_group] || {};
     var stage = lookup(card.agency_group, lt.status);
+    // 🎚 번역표 정책을 여기에도 똑같이 건다(2026-08-21 결정). 안 걸면 이 버튼 한 번에
+    //    syncPipelineFromCase 가 막아 둔 것이 전부 되살아난다 — 실측으로 후퇴 4장·보류 5장이
+    //    다시 움직이고, 무엇보다 상태가 '완료'인 카드 52장이 입금완료/사후관리 → 자금집행완료로 뒤로 끌린다.
+    var pol = autoStagePolicy(lt.status, stage);
     var patch = null;
-    if (stage && (card.stage !== stage || card.needs_mapping || card.synced_status !== lt.status)) {
-      patch = { stage: stage, synced_status: lt.status, synced_month: lt.month || null, needs_mapping: false, updated_at: new Date().toISOString() };
-    } else if (!stage && lt.status && !card.needs_mapping) {
+    if (pol.action === "stage") {
+      var gate = canAutoMoveStage(card.stage, pol.stage);
+      if (gate.move) {
+        var nowIso = new Date().toISOString();
+        patch = {
+          stage: pol.stage, synced_status: lt.status, synced_month: lt.month || null,
+          needs_mapping: false, stage_changed_at: nowIso, alerted_at: null, updated_at: nowIso,
+        };
+        // moveCards·syncPipelineFromCase 와 같은 정리 규칙
+        if (gate.clearOther) { patch.other_reason = null; patch.other_reason_note = null; patch.other_reason_at = null; }
+        if (gate.clearClosed) { patch.closed_at = null; patch.closed_by = null; }
+      }
+    } else if (pol.action === "unmapped" && !card.needs_mapping) {
       patch = { needs_mapping: true, updated_at: new Date().toISOString() };
     }
+    // pol.action 이 "create-only"(시작 전) · "none"(진행 중·보류·최신행 없음)이면 patch = null → 손대지 않는다.
     if (patch) { await supabase.from("pipeline_cards").update(patch).eq("id", card.id); updated++; }
   }
   return updated;
@@ -10690,6 +10794,22 @@ function MappingModal({ onClose, setPipelineCards, setStagnConfig, canEdit }) {
 
   var groupIds = ["*"].concat(AGENCY_GROUPS.map(function(g) { return g.id; }));
   var stepIdx = function(s) { return STAGES.indexOf(s) + 1; };
+  // 📖 이 매핑 행이 확정 규칙 때문에 그대로 안 먹는 경우를 배지로 알려준다.
+  //    안 붙이면 화면이 거짓말을 한다 — 예: '완료 → 입금완료/사후관리' 로 보이는데 실제로는 자금집행완료로 간다.
+  var policyNote = function(status, mappedStage) {
+    if (SYNC_CREATE_ONLY_STATUS.indexOf(status) !== -1)
+      return { label: "생성만", title: "카드가 없으면 만들고, 이미 있으면 단계를 건드리지 않습니다.", bg: "#F0FDF4", fg: "#15803D", bd: "#BBF7D0" };
+    if (SYNC_NO_MOVE_STATUS.indexOf(status) !== -1)
+      return { label: "🚫 자동 이동 없음", title: "여러 단계에 걸쳐 있어 판단할 수 없어, 이 상태로는 카드를 옮기지 않습니다.", bg: "#F3F4F6", fg: "#4B5563", bd: "#E5E7EB" };
+    var ov = SYNC_STATUS_OVERRIDE[status];
+    if (ov && ov !== mappedStage)
+      return { label: "📖 확정: " + ov, title: "확정 규칙이 매핑표보다 우선합니다. 실제로는 '" + ov + "' 로 이동합니다.", bg: "#EEF2FF", fg: "#4338CA", bd: "#C7D2FE" };
+    if (isMoneyStage(mappedStage))
+      return { label: "💰 자동 금지", title: "돈 관련 단계는 자동으로 들어가지 않습니다. 사람이 파이프라인에서 직접 옮겨야 합니다.", bg: "#FEF3C7", fg: "#B45309", bd: "#FDE68A" };
+    if (mappedStage === "기타")
+      return { label: "🅿️ 자동 금지", title: "'기타'로는 자동 이동하지 않습니다(사유를 사람이 적는 칸). 기타에서 나가는 것은 허용합니다.", bg: "#FEF3C7", fg: "#B45309", bd: "#FDE68A" };
+    return null;
+  };
   var stageSelect = function(value, onChange, disabled) {
     return <select value={value} disabled={disabled} onChange={function(e) { onChange(e.target.value); }}
       style={{ padding: "3px 6px", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 12, background: disabled ? "#F7F6F3" : "#fff" }}>
@@ -10722,6 +10842,22 @@ function MappingModal({ onClose, setPipelineCards, setStagnConfig, canEdit }) {
         </p>
 
         {loading ? <div style={{ padding: 30, textAlign: "center", color: "#AAA" }}>불러오는 중…</div> : tab === "map" ? <>
+          {/* 📖 번역표 확정본 — 이 규칙은 코드에 있고 아래 매핑표보다 우선한다.
+              화면에 안 적으면 "매핑표엔 이렇게 돼 있는데 왜 안 움직이지?"가 된다. */}
+          <div style={{ background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#4338CA", marginBottom: 8 }}>📖 자동 이동 확정 규칙 — 아래 매핑표보다 우선합니다</div>
+            <div style={{ fontSize: 12, color: "#3730A3", lineHeight: 1.7 }}>
+              <div>· <b>시작 전</b> → 카드가 없으면 <b>생성만</b> (있으면 손대지 않음)</div>
+              <div>· <b>진행 중 · 보류</b> → <b>자동 이동 없음</b> (여러 단계에 걸쳐 있어 판단 불가)</div>
+              <div>· <b>승인</b> → 실태조사완료/약정완료 &nbsp;·&nbsp; <b>완료</b> → 자금집행완료 &nbsp;·&nbsp; <b>부결</b> → 부결/반려</div>
+              <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #C7D2FE" }}>
+                <div>· <b>앞으로만 전진</b> — 카드가 목표보다 앞선 단계면 뒤로 끌지 않습니다.</div>
+                <div>· 💰 <b>수수료대기 및 입금요청 · 입금완료/사후관리</b>는 자동으로 들어가지도, 벗어나지도 않습니다 (사람이 직접 이동).</div>
+                <div>· 🅿️ <b>기타</b>로는 자동 이동하지 않습니다. 기타에서 <b>나가는</b> 것은 허용하고 사유를 지웁니다.</div>
+                <div>· 부결/반려에서 다른 상태로 되돌리면 <b>카드도 복귀</b>하고 종결 표시가 풀립니다.</div>
+              </div>
+            </div>
+          </div>
           {/* 미매핑 경고 */}
           {unmapped.length > 0 && <div style={{ background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 800, color: "#B45309", marginBottom: 8 }}>⚠ 매핑 필요 {unmapped.length}건 — 자동 이동되지 않습니다</div>
@@ -10763,10 +10899,12 @@ function MappingModal({ onClose, setPipelineCards, setStagnConfig, canEdit }) {
               <div style={{ fontSize: 13, fontWeight: 800, color: gid === "*" ? "#4338CA" : agencyColor(gid), marginBottom: 6 }}>{gid === "*" ? "공통 기본매핑" : (AGENCY_GROUPS.find(function(g){return g.id===gid;})||{}).label + " (예외)"}</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 {rows.map(function(row) {
-                  return <div key={row.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
+                  var ov = policyNote(row.status_value, row.stage);
+                  return <div key={row.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", flexWrap: "wrap" }}>
                     <span style={{ fontSize: 12, minWidth: 170, fontWeight: 600 }}>{row.status_value}</span>
                     <span style={{ color: "#CCC" }}>→</span>
                     {stageSelect(row.stage, function(v) { updateStage(row, v); }, !canEdit)}
+                    {ov && <span title={ov.title} style={{ fontSize: 11, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: ov.bg, color: ov.fg, border: "1px solid " + ov.bd }}>{ov.label}</span>}
                     {canEdit && <button onClick={function() { removeRow(row); }} style={{ border: "none", background: "transparent", color: "#DC2626", cursor: "pointer", fontSize: 12 }}>삭제</button>}
                   </div>;
                 })}
@@ -10776,7 +10914,8 @@ function MappingModal({ onClose, setPipelineCards, setStagnConfig, canEdit }) {
 
           {canEdit && <div style={{ borderTop: "1px solid #EEE", paddingTop: 14, marginTop: 6, display: "flex", alignItems: "center", gap: 10 }}>
             <button disabled={busy} onClick={doResync} style={{ border: "1px solid #4338CA", background: busy ? "#EEE" : "#EEF2FF", color: "#4338CA", borderRadius: 8, padding: "7px 14px", fontSize: 13, cursor: busy ? "default" : "pointer", fontWeight: 700 }}>{busy ? "재동기화 중…" : "자동카드 전체 재동기화"}</button>
-            <span style={{ fontSize: 11, color: "#888" }}>매핑을 바꾼 뒤 누르면 기존 자동카드(수동 고정 제외)에 새 매핑을 반영합니다.</span>
+            <span style={{ fontSize: 11, color: "#888" }}>매핑을 바꾼 뒤 누르면 기존 자동카드(수동 고정 제외)에 새 매핑을 반영합니다.
+              <br />위 확정 규칙이 여기에도 그대로 걸립니다 — <b>앞으로만</b> 움직이고, 💰돈 단계 카드는 건드리지 않습니다.</span>
           </div>}
         </> : (
           /* 🚧 단계별 정체 기준일수 */
@@ -11483,7 +11622,11 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
       if (setPipelineCards) setPipelineCards(function(prev) { return prev.map(function(x) { return x.id === card.id ? Object.assign({}, x, { sync_mode: "manual" }) : x; }); });
     } else {
       // 수동 → 자동: 최신 기관 상태로 재동기화
-      if (!confirm("'" + row.co.name + " · " + agencyLabel(card.agency_group) + "'를 자동 동기화로 전환할까요?\n(현재 기관현황 최신 상태로 단계가 재조정됩니다)")) return;
+      // ⚠️ 2026-08-21: 여기서도 번역표 정책이 걸린다(syncPipelineFromCase 경유).
+      //    "재조정"이 옛날처럼 아무 방향으로나 되지 않으므로 문구를 사실에 맞게 고쳤다.
+      if (!confirm("'" + row.co.name + " · " + agencyLabel(card.agency_group) + "'를 자동 동기화로 전환할까요?\n\n"
+        + "· 기관현황 최신 상태 기준으로 단계가 **앞으로만** 재조정됩니다(뒤로는 안 갑니다).\n"
+        + "· 수수료대기·입금완료 단계는 자동으로 바뀌지 않습니다.")) return;
       await supabase.from("pipeline_cards").update({ sync_mode: "auto", updated_at: new Date().toISOString() }).eq("id", card.id);
       // 최신 행 판별은 isNewerCase(년→월→수정→등록→id)로 통일 — 같은 월에 행이 여러 개(동점)여도 결과가 항상 같다.
       var cq = supabase.from("agency_cases").select("id,status,year,month,created_at,updated_at").is("deleted_at", null);
