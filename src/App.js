@@ -13031,9 +13031,12 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
     return listDupKeys[bn + "|" + rep] || 0;
   }
 
-  // 태블릿(768~1024px)에서 숨길 부가 컬럼 — 핵심(업체명·지역·대표자·담당·진행단계·계약·신청기관·작업)만 남김
+  // 태블릿(768~1024px)에서 숨길 부가 컬럼 — 핵심(업체명·대표자·담당·진행단계·계약·기타·작업)만 남김
   //  "계약"은 일부러 숨기지 않는다 — 방치된 계약을 한눈에 보는 게 이 칸의 목적이라 태블릿에서도 보여야 한다.
-  const LIST_TABLET_HIDE = ["유형", "지역", "업종", "규모/기관", "중복", "신청기관", "계약일", "진행기관", "23년~25년 매출", "26년 상반기 매출", "신용점수", "기타"];
+  //  "기타"도 숨기지 않는다(2026-08-21) — 눌러서 메모를 쓰는 칸이라, 숨기면 좁은 화면에서
+  //  메모 기능 자체에 손이 닿지 않는다. 실측 최소폭: 대표자80+담당60+진행단계175+계약46+기타140+작업110
+  //  = 611 + 업체명(auto, min 180) ≈ 791px → 1024px 화면에서 여유 있게 들어간다.
+  const LIST_TABLET_HIDE = ["유형", "지역", "업종", "규모/기관", "중복", "신청기관", "계약일", "진행기관", "23년~25년 매출", "26년 상반기 매출", "신용점수"];
   // 컬럼 너비 수동 조절 (헤더 경계 드래그) - 브라우저(localStorage)에 자동 저장
   const DEFAULT_LIST_COL_WIDTHS = {
     "업체명": 200, "유형": 80, "지역": 90, "업종": 120, "규모/기관": 130, "대표자": 80, "담당": 60,
@@ -13434,8 +13437,10 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                     ) : ((co.credit_score_kcb || co.credit_score_nice) ? ((co.credit_score_kcb || "-") + " / " + (co.credit_score_nice || "-")) : "-")}
                   </td>
                   {/* 📝 기타 — 누르면 확대 편집 팝업(기관현황 비고와 같은 컴포넌트).
-                      행 클릭은 기업 상세를 여므로 stopPropagation 은 그대로 둔다. */}
-                  <td className="lst-hide-tablet" style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer" }}
+                      행 클릭은 기업 상세를 여므로 stopPropagation 은 그대로 둔다.
+                      ⚠️ lst-hide-tablet 을 붙이지 않는다 — 붙이면 좁은 화면에서 메모를 아예 못 쓴다.
+                         헤더 쪽 짝은 LIST_TABLET_HIDE 배열이다. 둘을 같이 고칠 것. */}
+                  <td style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer" }}
                     onClick={function(e) { e.stopPropagation(); setMemoEditCo(co); }}
                     title="클릭하면 크게 열어 편집합니다">
                     {(function() {
