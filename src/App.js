@@ -13114,13 +13114,13 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
   };
 
   // "기타" 칸 인라인 편집
-  const [editingEtcId, setEditingEtcId] = useState(null);
-  const [editingEtcVal, setEditingEtcVal] = useState("");
-  var saveEtc = async function(co) {
-    var v = editingEtcVal;
+  // 📝 「기타」 메모 확대 편집 팝업 — { co } 하나만 담는다.
+  const [memoEditCo, setMemoEditCo] = useState(null);
+  // 📝 「기타」 저장 — 저장 위치(companies.next_action)와 UPDATE 모양은 예전 그대로다.
+  //    값만 팝업에서 직접 받는다(예전엔 인라인 input 의 editingEtcVal 상태를 읽었다).
+  var saveEtc = async function(co, v) {
     await supabase.from("companies").update({ next_action: v || null }).eq("id", co.id);
     setCompanies(function(prev) { return prev.map(function(c) { return c.id === co.id ? Object.assign({}, c, { next_action: v }) : c; }); });
-    setEditingEtcId(null);
   };
 
   var fetchTrashedCompanies = async function() {
@@ -13148,7 +13148,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
   const [editRowId, setEditRowId] = useState(null);
   const [editRow, setEditRow] = useState({});
   const startRowEdit = function(co) {
-    setEditNameId(null); setEditRegionId(null); setEditingEtcId(null);
+    setEditNameId(null); setEditRegionId(null);
     setEditRowId(co.id);
     setEditRow({
       name: co.name || "", region: co.region || "", industry: co.industry || "",
@@ -13433,17 +13433,17 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                       </div>
                     ) : ((co.credit_score_kcb || co.credit_score_nice) ? ((co.credit_score_kcb || "-") + " / " + (co.credit_score_nice || "-")) : "-")}
                   </td>
-                  <td className="lst-hide-tablet" style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                    onClick={function(e) { e.stopPropagation(); }}
-                    onDoubleClick={function() { setEditingEtcId(co.id); setEditingEtcVal(co.next_action || ""); }}
-                    title="더블클릭하면 수정">
-                    {editingEtcId === co.id ? (
-                      <input value={editingEtcVal} autoFocus
-                        onChange={function(e) { setEditingEtcVal(e.target.value); }}
-                        onBlur={function() { saveEtc(co); }}
-                        onKeyDown={function(e) { if (e.key === "Enter") { e.target.blur(); } if (e.key === "Escape") { setEditingEtcId(null); } }}
-                        style={{ width: "100%", padding: "3px 6px", border: "1px solid #4338CA", borderRadius: 4, fontSize: 11, boxSizing: "border-box", outline: "none" }} />
-                    ) : (co.next_action || "-")}
+                  {/* 📝 기타 — 누르면 확대 편집 팝업(기관현황 비고와 같은 컴포넌트).
+                      행 클릭은 기업 상세를 여므로 stopPropagation 은 그대로 둔다. */}
+                  <td className="lst-hide-tablet" style={{ padding: "11px 13px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer" }}
+                    onClick={function(e) { e.stopPropagation(); setMemoEditCo(co); }}
+                    title="클릭하면 크게 열어 편집합니다">
+                    {(function() {
+                      var prev = memoPreview(co.next_action, 30);
+                      return <span style={{ color: prev ? "#555" : "#CCC", textDecoration: "underline", textDecorationColor: "#E8E5E0", textUnderlineOffset: 3 }}>
+                        {prev || "메모 추가"}
+                      </span>;
+                    })()}
                   </td>
                   <td style={{ padding: "11px 8px", whiteSpace: "nowrap" }} onClick={function(e) { e.stopPropagation(); }}>
                     {editRowId === co.id ? (
@@ -13489,6 +13489,22 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
       {showDriveLink && (
         <DriveAutoLinkModal companies={companies} setCompanies={setCompanies} showToast={showToast}
           onClose={function() { setShowDriveLink(false); }} />
+      )}
+
+      {/* 📝 「기타」 메모 확대 편집 팝업 — 기관현황 비고와 같은 컴포넌트·같은 조작감 */}
+      {memoEditCo && (
+        <MemoEditModal
+          key={memoEditCo.id}
+          title="📝 기타"
+          subject={memoEditCo.name || "(업체명 없음)"}
+          hint="확인하면 바로 저장됩니다"
+          placeholder="메모를 입력하세요"
+          initial={memoEditCo.next_action || ""}
+          onCancel={function() { setMemoEditCo(null); }}
+          onSave={async function(text) {
+            await saveEtc(memoEditCo, text);   // 저장 위치 그대로: companies.next_action
+            setMemoEditCo(null);
+          }} />
       )}
 
       {/* 기업목록 휴지통 모달 */}
@@ -13792,6 +13808,69 @@ function MembersView({ profiles, onRefresh, showToast }) {
 // initialTab: 열릴 때 처음 보여줄 탭. 기업목록 "작업" 버튼이 용도별로 다른 탭을 지정한다
 // (✏️ 수정 → "info"(기본정보, 입력폼), 💬 상담메모 → "history"(이슈·액션 · 소통내역)).
 // 지정 안 하면 기존과 동일하게 "info".
+// ── 📝 메모 확대 편집 팝업 (2026-08-21) ──────────────────────────────────────
+// 좁은 칸(표 한 줄짜리 input·사이드패널 rows=3~4 textarea)을 누르면 넉넉한 창으로 연다.
+// 업무노트의 "체크리스트 항목 편집 모달"(TeamNotesSection 하단)과 **같은 구조·같은 조작감**이다:
+//   오버레이(바깥 클릭으로 안 닫힘) → 흰 카드 maxWidth 560 → 제목 → 힌트 → 넓은 textarea → [취소][확인]
+//   Ctrl(⌘)+Enter 저장 · Esc 취소.
+// ⚠️ MentionField 는 일부러 안 쓴다 — @업체 태그는 업무노트 전용 기능이고, 여기 메모 칸들은
+//    평범한 텍스트다. 겉모습과 조작감만 같게 맞췄다.
+// ⚠️ 저장은 하지 않는다. onSave(text) 로 값만 돌려주고 **저장은 호출부의 기존 경로**가 한다
+//    (같은 컬럼·같은 UPDATE). 이 컴포넌트에 supabase 를 들이지 말 것.
+// ⚠️ Esc 는 window capture 로 잡고 stopPropagation 한다. 안 그러면 뒤에 있는 사이드패널·
+//    모달이 같은 Esc 로 같이 닫혀 작성 중이던 내용이 날아간다(ZoomSection 과 같은 방식).
+function MemoEditModal({ title, subject, hint, placeholder, initial, onSave, onCancel }) {
+  const [text, setText] = useState(initial == null ? "" : String(initial));
+  const dirty = text !== (initial == null ? "" : String(initial));
+  const cancelRef = useRef(null);
+  cancelRef.current = function() { if (confirmDiscard(dirty)) onCancel(); };
+
+  useEffect(function() {
+    var onKey = function(e) { if (e.key === "Escape") { e.stopPropagation(); cancelRef.current(); } };
+    window.addEventListener("keydown", onKey, true);
+    return function() { window.removeEventListener("keydown", onKey, true); };
+  }, []);
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+      /* 바깥 클릭으로는 닫지 않는다 — 작성 중이던 내용이 날아간다. 닫기는 취소 버튼/Esc 로만. */>
+      <div onClick={function(e) { e.stopPropagation(); }}
+        style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 560, padding: 18, boxShadow: "0 10px 40px rgba(0,0,0,0.2)" }}>
+        <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>{title}</div>
+        {/* 어느 업체 메모인지 헷갈리지 않게 — 팀노트 '가져가기' 팝업의 대상 표시와 같은 스타일 */}
+        {subject && (
+          <div style={{ fontSize: 12, color: "#555", margin: "6px 0 8px", background: "#F7F6F3", borderRadius: 6, padding: "6px 9px", lineHeight: 1.5, wordBreak: "break-all" }}>
+            🏢 {subject}
+          </div>
+        )}
+        <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>
+          {hint ? hint + " · " : ""}Enter는 줄바꿈 · Ctrl+Enter로 저장 · Esc로 취소
+        </div>
+        <textarea value={text} autoFocus placeholder={placeholder || "내용을 입력하세요"}
+          onChange={function(e) { setText(e.target.value); }}
+          onKeyDown={function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); onSave(text); }
+          }}
+          style={{ width: "100%", minHeight: 220, padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none", background: "#fff", resize: "vertical", fontFamily: "inherit", lineHeight: 1.7, whiteSpace: "pre-wrap" }} />
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+          <button onClick={function() { cancelRef.current(); }}
+            style={{ padding: "9px 16px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>취소</button>
+          <button onClick={function() { onSave(text); }}
+            style={{ padding: "9px 18px", background: "#4338CA", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>확인</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 📝 표 한 줄에 보여줄 미리보기 — 줄바꿈은 공백으로 접고 앞부분만.
+function memoPreview(v, max) {
+  var t = String(v == null ? "" : v).replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  var n = max || 40;
+  return t.length > n ? t.slice(0, n) + "…" : t;
+}
+
 // ── 🔍 확대 입력 모드 ─────────────────────────────────────────────────────────
 // 사이드패널은 폭이 좁아 항목이 많은 섹션은 입력이 불편하다.
 // "크게 보기"를 누르면 그 섹션만 화면 중앙 큰 창으로 열어 넉넉하게 입력한다.
@@ -25216,6 +25295,11 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
   const [companySuggestions, setCompanySuggestions] = useState([]);
   const [companiesList, setCompaniesList] = useState([]);
   const [selectedCase, setSelectedCase] = useState(null);
+  // 📝 메모 확대 편집 팝업 (표 「비고」 · 사이드패널 「이슈 메모」/「추가 메모」)
+  //   { title, subject, field, initial, mode, caseId }
+  //   mode "row"  = 인라인 편집 중인 행 → editData 에만 반영. 저장은 기존 [저장] 버튼이 한다.
+  //   mode "case" = 그 건에 바로 저장 → saveCaseMemo(기존 사이드패널 UPDATE 와 같은 것).
+  const [memoEdit, setMemoEdit] = useState(null);
   const [clipboardCase, setClipboardCase] = useState(function() {
     try {
       var saved = sessionStorage.getItem("agencyClipboard");
@@ -25730,6 +25814,20 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
     });
     setCompanySuggestions([]);
     setShowAddCase(true);
+  };
+
+  // 📝 메모 단건 저장 — 사이드패널 「이슈 메모」가 쓰던 UPDATE 를 그대로 뽑은 것이다.
+  //    ⚠️ 저장 위치(테이블·컬럼)를 바꾸지 않는다. 새 저장 경로를 만들지 말고 이걸 쓸 것.
+  var saveCaseMemo = async function(caseId, field, value) {
+    var upd = {};
+    upd[field] = value;
+    upd.updated_at = new Date().toISOString();
+    var r = await supabase.from("agency_cases").update(upd).eq("id", caseId);
+    if (r.error) { alert("저장 실패: " + r.error.message); return false; }
+    setCases(function(prev) { return prev.map(function(c) { return c.id === caseId ? Object.assign({}, c, upd) : c; }); });
+    // 사이드패널이 같은 건을 열어 두고 있으면 화면도 같이 맞춘다
+    setSelectedCase(function(pc) { return pc && pc.id === caseId ? Object.assign({}, pc, upd) : pc; });
+    return true;
   };
 
   var saveNewCase = async function() {
@@ -26795,11 +26893,25 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
                         return <span style={{ fontSize: 12, color: "#555", fontWeight: 600 }}>{(matchedCo.credit_score_kcb || "-") + " / " + (matchedCo.credit_score_nice || "-")}</span>;
                       })()}
                     </td>
-                    <td style={{ padding: "10px 12px" }}>
-                      {isEditing
-                        ? <input value={editData.notes || ""} onChange={function(e) { var v = e.target.value; setEditData(function(p) { return Object.assign({}, p, { notes: v }); }); }}
-                            style={{ padding: "4px 8px", border: "1px solid #86EFAC", borderRadius: 6, fontSize: 12, width: "100%", boxSizing: "border-box" }} />
-                        : <span style={{ fontSize: 12, color: "#777" }}>{row.notes || "-"}</span>}
+                    {/* 📝 비고 — 누르면 확대 편집 팝업. 줄바꿈이 있는 메모라 한 줄 input 으로는 못 쓴다.
+                        ⚠️ 행 클릭은 사이드패널을 여므로 stopPropagation 필수(바로 옆 우선도 셀과 같은 패턴). */}
+                    <td style={{ padding: "10px 12px", cursor: "pointer" }}
+                      title="클릭하면 크게 열어 편집합니다"
+                      onClick={function(e) {
+                        e.stopPropagation();
+                        setMemoEdit({
+                          title: "📝 비고", subject: row.business_name || "(업체명 없음)", field: "notes",
+                          initial: isEditing ? (editData.notes || "") : (row.notes || ""),
+                          mode: isEditing ? "row" : "case", caseId: row.id,
+                        });
+                      }}>
+                      {(function() {
+                        var v = isEditing ? (editData.notes || "") : (row.notes || "");
+                        var prev = memoPreview(v, 40);
+                        return <span style={{ fontSize: 12, color: prev ? (isEditing ? "#15803D" : "#777") : "#CCC", textDecoration: "underline", textDecorationColor: "#E8E5E0", textUnderlineOffset: 3 }}>
+                          {prev || "메모 추가"}
+                        </span>;
+                      })()}
                     </td>
                     <td style={{ padding: "10px 12px", textAlign: "center" }}>
                       {isEditing ? (
@@ -27142,6 +27254,30 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
           <button onClick={function() { setAgencyToast(null); }}
             style={{ background: "none", border: "none", color: "#fff", opacity: 0.6, fontSize: 16, cursor: "pointer", lineHeight: 1 }}>✕</button>
         </div>
+      )}
+
+      {/* 📝 메모 확대 편집 팝업 — 업무노트 체크리스트 편집 모달과 같은 컴포넌트(MemoEditModal).
+          사이드패널(zIndex 900)·재신청 모달(1100)보다 위에 떠야 하므로 컴포넌트 안에서 9999 를 쓴다. */}
+      {memoEdit && (
+        <MemoEditModal
+          key={memoEdit.mode + "|" + memoEdit.caseId + "|" + memoEdit.field}
+          title={memoEdit.title}
+          subject={memoEdit.subject}
+          hint={memoEdit.mode === "row" ? "이 줄의 [저장]을 눌러야 최종 저장됩니다" : "확인하면 바로 저장됩니다"}
+          placeholder="내용을 입력하세요"
+          initial={memoEdit.initial}
+          onCancel={function() { setMemoEdit(null); }}
+          onSave={async function(text) {
+            if (memoEdit.mode === "row") {
+              // 인라인 편집 중인 행 → editData 에만 반영. DB 저장은 기존 [저장] 버튼(saveEdit)이 한다.
+              var f = memoEdit.field;
+              setEditData(function(pr) { var nx = Object.assign({}, pr); nx[f] = text; return nx; });
+              setMemoEdit(null);
+              return;
+            }
+            var ok = await saveCaseMemo(memoEdit.caseId, memoEdit.field, text);
+            if (ok) setMemoEdit(null);
+          }} />
       )}
 
       {/* 부결/반려 재신청 체크리스트 모달 */}
@@ -27535,17 +27671,18 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
               {/* 이슈 메모 */}
               <div style={{ marginBottom: 20 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>📝 이슈 메모</div>
-                <textarea value={selectedCase.notes || ""}
-                  onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { notes: e.target.value }); }); }}
-                  onBlur={async function() {
-                    var r = await supabase.from("agency_cases").update({ notes: selectedCase.notes, updated_at: new Date().toISOString() }).eq("id", selectedCase.id);
-                    if (!r.error) {
-                      setCases(function(prev) { return prev.map(function(c) { return c.id === selectedCase.id ? Object.assign({}, c, { notes: selectedCase.notes }) : c; }); });
-                    }
+                {/* 📝 누르면 확대 편집 팝업. 저장은 saveCaseMemo — 예전 onBlur 가 하던 UPDATE 와 같은 것이다. */}
+                <div onClick={function() {
+                    setMemoEdit({
+                      title: "📝 이슈 메모", subject: selectedCase.business_name || "(업체명 없음)", field: "notes",
+                      initial: selectedCase.notes || "", mode: "case", caseId: selectedCase.id,
+                    });
                   }}
-                  placeholder="이슈 내용을 입력하세요..."
-                  rows={4} style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.6, resize: "vertical", boxSizing: "border-box", outline: "none", fontFamily: "inherit" }} />
-                <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>입력 후 칸 밖 클릭 시 자동 저장</div>
+                  title="클릭하면 크게 열어 편집합니다"
+                  style={{ width: "100%", minHeight: 76, maxHeight: 160, overflowY: "auto", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, lineHeight: 1.6, boxSizing: "border-box", cursor: "pointer", background: "#fff", whiteSpace: "pre-wrap", wordBreak: "break-word", color: selectedCase.notes ? "#1A1917" : "#AAA" }}>
+                  {selectedCase.notes || "이슈 내용을 입력하세요..."}
+                </div>
+                <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>클릭하면 크게 열립니다 · Ctrl+Enter로 저장</div>
               </div>
 
               {/* 🆕 추가 정보 (아이핀, 공단계정, 인증서 등) */}
@@ -27659,11 +27796,17 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
                       {/* 추가 메모 */}
                       <div style={{ marginBottom: 4 }}>
                         <label style={labelStyle}>추가 메모</label>
-                        <textarea value={selectedCase.extra_notes || ""}
-                          onChange={function(e) { setSelectedCase(function(p) { return Object.assign({}, p, { extra_notes: e.target.value }); }); }}
-                          onBlur={function() { saveField("extra_notes", selectedCase.extra_notes || ""); }}
-                          placeholder="추가로 기록할 내용..."
-                          rows={3} style={Object.assign({}, inputStyle, { resize: "vertical", lineHeight: 1.5 })} />
+                        {/* 📝 누르면 확대 편집 팝업. 저장은 saveCaseMemo — saveField("extra_notes", …) 와 같은 UPDATE 다. */}
+                        <div onClick={function() {
+                            setMemoEdit({
+                              title: "📝 추가 메모", subject: selectedCase.business_name || "(업체명 없음)", field: "extra_notes",
+                              initial: selectedCase.extra_notes || "", mode: "case", caseId: selectedCase.id,
+                            });
+                          }}
+                          title="클릭하면 크게 열어 편집합니다"
+                          style={Object.assign({}, inputStyle, { minHeight: 54, maxHeight: 120, overflowY: "auto", lineHeight: 1.5, cursor: "pointer", whiteSpace: "pre-wrap", wordBreak: "break-word", color: selectedCase.extra_notes ? "#1A1917" : "#AAA" })}>
+                          {selectedCase.extra_notes || "추가로 기록할 내용..."}
+                        </div>
                       </div>
 
                       <div style={{ fontSize: 10, color: "#AAA", marginTop: 6 }}>각 입력 후 칸 밖 클릭 시 자동 저장</div>

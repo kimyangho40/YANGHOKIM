@@ -782,6 +782,49 @@ unique index 는 `(company_id, agency_group)` 이라 `company_id` 가 null 인 �
 - 카드 지문(id+stage+stage_changed_at+sync_mode) **배포 전후 동일** — 코드 변경만으로는 한 장도 안 움직인다.
 - `CI=true npx react-scripts build` 통과 · `node scripts/audit-select-columns.mjs` 0건.
 
+## 📝 메모 확대 편집 팝업 (2026-08-21, **DB 변경 0건 · 저장 로직 0줄**)
+
+좁은 칸(표 한 줄짜리 input · 사이드패널 rows=3~4 textarea)을 누르면 넉넉한 창이 열린다.
+**업무노트의 「체크리스트 항목 편집 모달」과 같은 구조·같은 조작감**으로 맞췄다(새로 디자인하지 않았다).
+
+### 공용 컴포넌트 `MemoEditModal` — 새 메모 칸을 만들면 이걸 쓸 것
+오버레이(바깥 클릭으로 안 닫힘) → 흰 카드 `maxWidth 560` → 제목 → 🏢 업체명 → 힌트 → `minHeight 220` textarea → [취소][확인].
+`Ctrl(⌘)+Enter` 저장 · `Esc` 취소 · 내용이 바뀐 채로 닫으면 `confirmDiscard`.
+
+- ⚠️ **저장을 하지 않는다.** `onSave(text)` 로 값만 돌려주고 **저장은 호출부의 기존 경로**가 한다.
+  **이 컴포넌트에 supabase 를 들이지 말 것** — 들어오는 순간 저장 경로가 두 벌이 된다.
+- ⚠️ **`MentionField` 는 일부러 안 쓴다.** @업체 태그는 업무노트 전용이고 이 칸들은 평범한 텍스트다.
+  겉모습·조작감만 같게 맞췄다. **업무노트 원본 모달은 한 줄도 안 건드렸다.**
+- ⚠️ **Esc 는 `window` capture(`addEventListener(..., true)`) 로 잡고 `stopPropagation` 한다.**
+  안 그러면 뒤에 있는 사이드패널·전역 검색(App.js 의 bubble 단계 Esc 핸들러)이 **같은 Esc 로 같이 닫혀**
+  작성 중이던 내용이 날아간다. `ZoomSection` 이 쓰는 것과 같은 방식이다.
+- `zIndex: 9999` — 사이드패널(900)·재신청 모달(1100)보다 위여야 한다.
+- 짝꿍 헬퍼 `memoPreview(v, max)` — 표 한 줄에 보여줄 미리보기(줄바꿈을 공백으로 접고 앞부분만).
+
+### 적용한 4곳 — **저장 위치(테이블·컬럼)는 하나도 안 바꿨다**
+| 화면 | 칸 | 저장 | 저장 함수 |
+|---|---|---|---|
+| 기관별현황 **표** | 비고 | `agency_cases.notes` | 보기 모드 → `saveCaseMemo` / **인라인 편집 중 → `editData` 에만** (기존 [저장] 버튼이 커밋) |
+| 기관별현황 **사이드패널** | 📝 이슈 메모 | `agency_cases.notes` | `saveCaseMemo` |
+| 기관별현황 **사이드패널** | 추가 메모 | `agency_cases.extra_notes` | `saveCaseMemo` |
+| 기업목록 **표** | 기타 | `companies.next_action` | `saveEtc` (기존 함수, 값만 인자로 받게 넓힘) |
+
+- `saveCaseMemo(caseId, field, value)` 는 **사이드패널 「이슈 메모」의 옛 `onBlur` UPDATE 를 그대로 뽑은 것**이다.
+  새 저장 경로를 만들지 말고 이걸 쓸 것. `setCases` + `setSelectedCase` 를 같이 맞춘다.
+- ⚠️ **표 셀은 `stopPropagation` 이 필수다.** 기관현황은 행 클릭 → 사이드패널, 기업목록은 행 클릭 → 기업상세가
+  열린다. 안 걸면 팝업과 패널이 같이 뜬다. (기관현황 **우선도 셀**이 이미 같은 패턴 — 그걸 따라갔다.)
+- ⚠️ 사이드패널 미리보기에 **`maxHeight` + `overflowY:auto`** 를 준다. 옛 textarea 의 `rows` 를 대신하는 것으로,
+  안 주면 긴 메모(실측 최대 1,541자)가 패널을 통째로 늘린다.
+- 기업목록 「기타」는 **더블클릭 → 클릭**으로 바뀌었다. 인라인 input 이 사라져 죽은 상태
+  `editingEtcId`/`editingEtcVal` 도 같이 걷어냈다.
+
+### 일부러 안 건드린 것
+- 기업상세 「현재 이슈」·「차기 업무」 — 이미 `minHeight: 220` 이라 충분히 크다. 누를 때마다 팝업이 뜨면 불편하다.
+- 기관현황 **신규등록 모달**의 「비고 / 메모」 — 이미 모달 안이라 모달 위 모달이 된다.
+- 짧은 칸 전부(신청금액·상태·신용점수·계약금·수수료율) · 업무노트 원본 · 정산관리 비고 · 배정DB 이슈메모.
+
+**모바일 영향 없음** — `AgencyView`·`ListView` 는 `CRMApp`(데스크톱)에서만 렌더된다.
+
 ## 💰 기대출 금액 입력칸 = "만원" 단위 고정 (2026-08-19, **DB 스키마 변경 0건 · 파서 변경 0줄**)
 
 단위 글자를 안 붙이면 `"12,353"` 이 1만원인지 1,235만원인지 몰라 **합계에서 빠지던** 문제
