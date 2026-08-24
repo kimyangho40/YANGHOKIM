@@ -14216,6 +14216,9 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
   const [data, setData] = useState({ ...company });
   // 서류현황 탭에서 액션 줄(수령완료·재요청·요청취소)이 펼쳐진 서류명. 한 번에 하나만 연다.
   const [openDocAction, setOpenDocAction] = useState(null);
+  // 📤 요청함 다중선택 — 체크한 서류명 배열. 실행 대상은 항상 (요청함 목록 ∩ 이 배열)이라
+  // 그 사이 상태가 바뀌어 요청함에서 빠진 서류는 자동으로 제외된다.
+  const [selDocs, setSelDocs] = useState([]);
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(company.name || "");
   const [agencyCases, setAgencyCases] = useState([]);
@@ -15956,6 +15959,18 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                 // "수령완료로 잘못 찍었다가 한 번 더 누르기"뿐이었다. 그래서 아무도 안 했고
                 // 요청함 74건이 전부 D+3 초과로 쌓였다(최장 38일). 종료 경로가 없던 게 방치의 진짜 원인이다.
                 var receiveDoc = function(doc) { applyDocAction(doc, "received"); };    // 받았다
+                // 여러 건을 한 번에 수령완료. ⚠️ 새 저장 경로를 만들지 않는다 —
+                // docActionPatch 를 서류마다 순서대로 겹쳐 적용할 뿐이라 요청일·알림 봉인 처리가
+                // 하나씩 누르는 것과 완전히 같다(수령 기록이 어긋나지 않는다).
+                var receiveDocs = function(docs) {
+                  var list = (docs || []).filter(Boolean);
+                  if (!list.length) return;
+                  setData(function(p) {
+                    var next = p;
+                    list.forEach(function(d) { next = Object.assign({}, next, docActionPatch(next, d, "received")); });
+                    return next;
+                  });
+                };
                 var reRequestDoc = function(doc) { applyDocAction(doc, "rerequest"); }; // 카톡 다시 보냄 → 오늘로 리셋
                 var cancelDoc = function(doc) { applyDocAction(doc, "cancel"); };       // 업체가 안 줌·불필요
                 // 자동감지 결과를 '수령완료'로 올린다(제안 → 사람이 누른 것만 여기로 온다).
@@ -15991,7 +16006,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                         // 이게 없으면 창을 닫았다 열었을 때 결과가 사라진 것처럼 보인다(다시 fetch 하기 전까지).
                         if (onPatchCompany) onPatchCompany(data.id, { doc_scan: scan });
                       }} />
-                    <div style={{ fontSize: 11, color: "#888", marginBottom: 10, background: "#F7F6F3", borderRadius: 6, padding: "8px 11px" }}>💡 <b style={{ color: "#6B7280" }}>미요청</b> 서류를 누르면 <b style={{ color: "#B45309" }}>요청함</b>으로 바뀌고 요청일이 기록됩니다. <b style={{ color: "#B45309" }}>요청함</b> 서류를 누르면 <b>수령완료 · 재요청 · 요청 취소</b> 중에 고를 수 있어요. 칩의 <b>📂</b> 는 드라이브에서 그 서류로 보이는 파일을 찾았다는 뜻입니다.</div>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 10, background: "#F7F6F3", borderRadius: 6, padding: "8px 11px" }}>💡 <b style={{ color: "#6B7280" }}>미요청</b> 서류를 누르면 <b style={{ color: "#B45309" }}>요청함</b>으로 바뀌고 요청일이 기록됩니다. <b style={{ color: "#B45309" }}>요청함</b> 서류를 누르면 <b>수령완료 · 재요청 · 요청 취소</b> 중에 고를 수 있어요. 왼쪽 <b>체크박스</b>로 여러 건을 골라 <b>한 번에 수령완료</b>할 수도 있습니다. 칩의 <b>📂</b> 는 드라이브에서 그 서류로 보이는 파일을 찾았다는 뜻입니다.</div>
 
                     {/* 1. 미요청 */}
                     <div style={{ background: "#F9FAFB", borderRadius: 8, padding: "12px 14px", marginBottom: 10, border: "1px solid #E5E7EB" }}>
@@ -16008,22 +16023,71 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                     {(function() {
                       var waitCount = reqedList.filter(function(d) { var dd = docWaitDays(reqDates[d]); return dd !== null && dd >= DOC_WAIT_WARN; }).length;
                       var owner = primaryAssignee(data);
+                      // ── 다중선택 일괄 수령완료 (2026-08-24) ───────────────────────────
+                      // 실행 대상은 항상 reqedList ∩ selDocs 다. 그 사이 수령완료·취소로 요청함에서
+                      // 빠진 서류는 조용히 제외되므로 "보이는 것 = 선택된 것 = 실행되는 것"이 유지된다.
+                      // 하나씩 처리하는 기존 경로(칩 클릭 → 액션 줄)는 그대로 살아 있다.
+                      var selectedReqed = reqedList.filter(function(d) { return selDocs.indexOf(d) >= 0; });
+                      var allSelected = reqedList.length > 0 && selectedReqed.length === reqedList.length;
+                      var toggleSelDoc = function(doc) {
+                        setSelDocs(function(prev) {
+                          return prev.indexOf(doc) >= 0 ? prev.filter(function(x) { return x !== doc; }) : prev.concat([doc]);
+                        });
+                      };
+                      var toggleAllSel = function() { setSelDocs(allSelected ? [] : reqedList.slice()); };
+                      var receiveSelected = function() {
+                        var docs = selectedReqed.slice();
+                        if (!docs.length) return;
+                        receiveDocs(docs);
+                        setSelDocs([]);
+                        if (docs.indexOf(openDocAction) >= 0) setOpenDocAction(null);
+                      };
                       return (
                     <div style={{ background: "#FFFBEB", borderRadius: 8, padding: "12px 14px", marginBottom: 10, border: "1px solid #FDE68A" }}>
                       <div style={{ fontSize: 11, color: "#B45309", marginBottom: 8, fontWeight: 700 }}>
                         📤 요청함 — 요청했으나 아직 못 받은 서류 · {reqedList.length}개
                         {waitCount > 0 && <span style={{ color: "#B91C1C" }}> · 방치 {waitCount}건</span>}
                       </div>
+
+                      {/* 일괄 처리 줄 — 체크박스로 고른 여러 건을 한 번에 수령완료 */}
+                      {reqedList.length > 0 && (
+                        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 9, paddingBottom: 9, borderBottom: "1px dashed #FDE68A" }}>
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "#92400E", fontWeight: 700, cursor: "pointer" }}>
+                            <input type="checkbox" checked={allSelected} onChange={toggleAllSel} style={{ margin: 0, cursor: "pointer" }} />
+                            전체 선택
+                          </label>
+                          <button onClick={receiveSelected} disabled={selectedReqed.length === 0}
+                            title={selectedReqed.length === 0 ? "먼저 서류를 체크하세요" : "체크한 서류를 한 번에 수령완료로 옮깁니다"}
+                            style={{ fontSize: 11, padding: "5px 11px", borderRadius: 99, fontWeight: 700,
+                              border: "1px solid " + (selectedReqed.length ? "#15803D" : "#E5E7EB"),
+                              background: selectedReqed.length ? "#15803D" : "#F3F4F6",
+                              color: selectedReqed.length ? "#fff" : "#B0AEA8",
+                              cursor: selectedReqed.length ? "pointer" : "default" }}>
+                            ✓ 선택 {selectedReqed.length}건 수령완료
+                          </button>
+                          {selectedReqed.length > 0 && (
+                            <button onClick={function() { setSelDocs([]); }}
+                              style={{ fontSize: 11, padding: "5px 9px", borderRadius: 99, border: "1px solid transparent", background: "transparent", color: "#B0AEA8", cursor: "pointer" }}>선택 해제</button>
+                          )}
+                        </div>
+                      )}
+
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                         {reqedList.map(function(doc) {
                           var days = docWaitDays(reqDates[doc]);
                           var overdue = days !== null && days >= DOC_WAIT_WARN;
                           var open = openDocAction === doc;
-                          return <button key={doc} onClick={function() { setOpenDocAction(open ? null : doc); }}
+                          var checked = selDocs.indexOf(doc) >= 0;
+                          return <span key={doc} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            <input type="checkbox" checked={checked} onChange={function() { toggleSelDoc(doc); }}
+                              title="여러 건을 한 번에 수령완료하려면 체크하세요"
+                              style={{ margin: 0, cursor: "pointer" }} />
+                            <button onClick={function() { setOpenDocAction(open ? null : doc); }}
                             title={overdue ? "누르면 처리 방법을 고를 수 있어요" : "누르면 처리 방법을 고를 수 있어요"}
                             style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: open ? "1px solid #92400E" : (overdue ? "1px solid #DC2626" : "1px solid #FBBF24"), background: overdue ? "#FEE2E2" : "#FEF3C7", color: overdue ? "#DC2626" : "#B45309", cursor: "pointer", fontWeight: 600, outline: open ? "2px solid #FDE68A" : "none" }}>
                             {overdue ? "🔴" : "⏳"} {doc}{scanMark(doc)}{days !== null ? " (" + (days === 0 ? "오늘" : days + "일째") + ")" : ""}
-                          </button>;
+                          </button>
+                          </span>;
                         })}
                         {reqedList.length === 0 && <span style={{ fontSize: 11, color: "#888" }}>요청 대기 중인 서류가 없어요</span>}
                       </div>
