@@ -2346,6 +2346,57 @@ function extractLeadingAmount(raw, unitHint) {
   return { ok: false, raw: s, num: neg ? -pn : pn, reason: "단위 확인 필요" };
 }
 
+// ── 금액 셀 단위 확정 (기업현황표 전용) ──────────────────────────────────────
+//  extractLeadingAmount가 "단위 확인 필요"로 돌려준 맨숫자를, 문서가 알려주는 근거가 있을 때만 확정한다.
+//  우선순위: ① 셀 자체에 적힌 단위("28,886백만원")가 언제나 이긴다
+//            ② 표 머리글의 괄호 단위("매출액 (원)")
+//            ③ 9자리(1억) 이상이면 원 — 이 규모를 만/백만으로 읽으면 조 단위가 되어 성립하지 않는다
+//  ⚠️ 기대출 금액(parseLoanAmount)은 이 경로를 쓰지 않는다. 그쪽은 사람이 자유롭게 적는 칸이라
+//     같은 규칙을 넣으면 옛 "1억 → 1원" 계열 사고가 재발한다. 절대 연결하지 말 것.
+
+// 표 머리글에 적힌 단위 → 원 환산 배수. "매출액 (원)"→1 · "부채총계 (백만원)"→1e6 · 표기 없으면 null.
+//  ⚠️ 괄호 안만 본다 — 라벨 본문 글자를 단위로 오독하지 않기 위해서다("천만매출액" 같은 칸 이름 방어).
+function headerUnitMult(label) {
+  var s = String(label === null || label === undefined ? "" : label).replace(/\s/g, "");
+  if (!s) return null;
+  var m = /[(（]([^)）]*)[)）]/.exec(s);
+  if (!m || !m[1]) return null;
+  return parseCreditUnit(m[1]).mult;
+}
+// 위와 같은 괄호 안 문자열 — 안내문에 "(백만원)"처럼 근거를 그대로 보여주려고 따로 뽑는다
+function headerUnitRawOf(label) {
+  var m = /[(（]([^)）]*)[)）]/.exec(String(label === null || label === undefined ? "" : label).replace(/\s/g, ""));
+  return m ? m[1] : "";
+}
+// 단위 표기가 없어도 원으로 확정하는 하한 — 9자리(1억). 이보다 작으면 지금처럼 '확인 필요'로 남긴다.
+var AMOUNT_WON_FLOOR = 1e8;
+// 안내문에 쓸 금액 표기. 당기순이익은 음수가 정상이라 부호를 살린다(wonToKorExact는 양수 전제).
+//  ⚠️ wonToKorExact는 1만 미만이면 이미 "6,652원"처럼 원까지 붙여 준다 → 중복해서 붙이지 않는다.
+function amountNoteText(v) {
+  var t = wonToKorExact(Math.abs(v));
+  if (!/원$/.test(t)) t += "원";
+  return (v < 0 ? "△" : "") + t;
+}
+// 반환: extractLeadingAmount와 같은 모양 + note(사람에게 보여줄 해석 근거, 확정했을 때만)
+function resolveAmountCell(raw, headerLabel) {
+  var r = extractLeadingAmount(raw, "");
+  if (r.ok) return r;                                   // ① 셀 자체 단위 — 그대로 둔다
+  var n = r.num;
+  if (typeof n !== "number" || isNaN(n)) return r;      // 숫자 자체를 못 읽음 → 확인 필요 그대로
+  var mult = headerUnitMult(headerLabel);
+  if (mult != null) {                                   // ② 머리글 단위
+    var v = n * mult;
+    // 안내문은 "코드가 판단해서 값이 달라진 경우"에만 남긴다.
+    //  (원)이면 적힌 숫자를 그대로 쓴 것이라 설명할 게 없다 → 매년 4줄씩 파란 안내가 쌓이는 걸 막는다.
+    return { ok: true, value: v, raw: r.raw, unit: "머리글",
+      note: mult === 1 ? "" : "표 머리글의 단위 표기(" + parseCreditUnit(headerUnitRawOf(headerLabel)).label + ")를 따라 " + amountNoteText(v) + "으로 넣었습니다" };
+  }
+  if (Math.abs(n) >= AMOUNT_WON_FLOOR) {                // ③ 자릿수
+    return { ok: true, value: n, raw: r.raw, unit: "원(자릿수)", note: "단위 표기가 없지만 9자리 이상이라 원 단위로 해석했습니다 (" + amountNoteText(n) + ")" };
+  }
+  return r;                                             // ③에도 못 미치면 지금처럼 비워둔다
+}
+
 // 셀에 숫자 말고 담당자가 적은 맥락이 섞여 있는지 — 원문을 메모에 보존할지 판단용
 function cellHasContext(raw) { return /[^0-9,.\s]/.test(String(raw === null || raw === undefined ? "" : raw)); }
 
@@ -3341,6 +3392,16 @@ function findJungingongBranch(regionStr) {
 }
 
 // 매출액 포맷 함수
+// 매출액 입력칸 정규화 — 숫자만 남기고 앞 0을 없앤 뒤 12자리(9,999억)까지만 받는다.
+//  ⚠️ type="number" 를 쓰면 "3,002,936,000" 처럼 콤마째 붙여넣었을 때 브라우저가 값을 통째로
+//     빈칸으로 만든다(무엇이 사라졌는지 화면에 안 보인다). 그래서 text + inputMode 로 받고
+//     여기서 직접 거른다. parseInt 는 "3e9" 를 3 으로 읽어 버리므로 지수 표기도 여기서 막힌다.
+//  ⚠️ 자릿수를 줄이지 않는다 — 12자리는 상한이지 반올림이 아니다. 넘겨 친 자리만 안 받는다.
+var REVENUE_MAX_DIGITS = 12;
+function normalizeRevenueInput(raw) {
+  var d = String(raw === null || raw === undefined ? "" : raw).replace(/[^0-9]/g, "").replace(/^0+(?=[0-9])/, "");
+  return d.slice(0, REVENUE_MAX_DIGITS);
+}
 const formatRevenue = (val) => {
   if (!val && val !== 0) return '-';
   const n = typeof val === 'string' ? parseInt(val.replace(/[^0-9]/g, '')) : val;
@@ -3381,6 +3442,9 @@ const formatRevenue = (val) => {
       parts.push(man + '만');
     }
   }
+  // 만 미만 나머지 — 천 단위까지만 보여준다(3,002,936,000 → "30억 293만 6천").
+  //  예전엔 통째로 버려서 "30억 293만"으로 보였다. 대부분의 매출은 나머지가 0이라 표시가 그대로다.
+  if (won >= 1000) parts.push(Math.floor(won / 1000) + '천');
   return parts.length > 0 ? parts.join(' ') : n.toLocaleString();
 };
 
@@ -3482,14 +3546,18 @@ async function parseHyeonhwangpyo(file) {
   // 숫자 못 뽑은 칸 목록 + 숫자 칸 원문 보존 (신규 양식 파서와 같은 규칙)
   var issues = [];
   var addIssue = function(label, r) { issues.push({ label: label, raw: (r && r.raw) || "", reason: (r && r.reason) || "확인 필요" }); };
+  // 값은 넣었지만 단위를 코드가 판단한 칸 — 빨간 "확인 필요"와 달리 파란 안내로 보여준다(무엇을 어떻게 읽었는지 밝힌다)
+  var notes = [];
+  var addNote = function(label, raw, note) { notes.push({ label: label, raw: String(raw == null ? "" : raw).trim(), note: note }); };
   var rawNotes = [];
   var keepRaw = function(label, raw) { if (cellHasContext(raw)) rawNotes.push(label + ": " + String(raw).trim()); };
-  // 구 양식은 매출칸에 단위가 명시돼 있지 않다(라벨이 "매출 (2025년)") → 단위 없는 숫자는 환산하지 않는다
+  // 구 양식은 매출칸 머리글에 단위가 없다(라벨 "매출 (2025년)"의 괄호는 연도지 단위가 아니다).
+  //  → 머리글은 넘기지 않고, 9자리(1억) 이상일 때만 원으로 확정한다(resolveAmountCell ③).
   var parseRevenue = function(s, label) {
     if (!s) return "";
-    var r = extractLeadingAmount(s, "");
+    var r = resolveAmountCell(s, "");
     keepRaw(label, s);
-    if (r.ok) return Math.round(r.value);
+    if (r.ok) { if (r.note) addNote(label, s, r.note); return Math.round(r.value); }
     addIssue(label, r);
     return "";
   };
@@ -3597,7 +3665,7 @@ async function parseHyeonhwangpyo(file) {
   if (bigoMemo) memoParts.push(bigoMemo);
   if (rawNotes.length) memoParts.push("[원문 보존]\n" + rawNotes.join("\n"));
   if (memoParts.length) { updates.company_info_memo = memoParts.join("\n\n"); auto.company_info_memo = true; }
-  return { updates: updates, auto: auto, issues: issues };
+  return { updates: updates, auto: auto, issues: issues, notes: notes };
 }
 
 // SheetJS(XLSX) 라이브러리 로더 - 여러 파서에서 공용.
@@ -3730,6 +3798,9 @@ function parseHyeonhwangpyoV2(rows) {
   // 숫자 못 뽑은 칸 목록 — 0으로 채우지 않고 비워둔 뒤 화면에 그대로 보여준다(콘솔 안 열어도 보이게)
   var issues = [];
   var addIssue = function(label, r) { issues.push({ label: label, raw: (r && r.raw) || "", reason: (r && r.reason) || "확인 필요" }); };
+  // 값은 넣었지만 단위를 코드가 판단한 칸 — 빨간 "확인 필요"와 달리 파란 안내로 보여준다(무엇을 어떻게 읽었는지 밝힌다)
+  var notes = [];
+  var addNote = function(label, raw, note) { notes.push({ label: label, raw: String(raw == null ? "" : raw).trim(), note: note }); };
   // 숫자 칸의 원문 보존 — 숫자 컬럼에 들어가면서 사라질 맥락을 메모에 남긴다(스크립트 작성 재료)
   var rawNotes = [];
   var keepRaw = function(label, raw) { if (cellHasContext(raw)) rawNotes.push(label + ": " + String(raw).trim()); };
@@ -3775,9 +3846,16 @@ function parseHyeonhwangpyoV2(rows) {
 
   // ── 3. 매출 추이 — 연도칸은 매년 수정되므로 '읽어서' 매핑한다(고정 가정 금지) ──
   var yearRow = idx[norm("연도")];
+  var profitInfo = [];
   if (yearRow) {
-    // 라벨이 "매출액 (원)"이어도 담당자는 그 칸에 "28,886백만원"이라고 적는다 → 라벨의 단위를 믿으면 안 된다.
-    // 단위 없는 숫자는 환산하지 않고 "단위 확인 필요"로 넘긴다(6,652를 6,652원으로 저장하는 사고 방지).
+    // 단위 확정은 resolveAmountCell 한 곳에 있다: 셀에 적힌 단위("28,886백만원") > 머리글 "(원)" > 9자리↑.
+    // 담당자가 셀에 직접 쓴 단위가 언제나 이기므로, 머리글을 읽어도 옛 사고(6,652를 6,652원으로 저장)는 안 난다.
+    var hdrRow = rows[yearRow.r] || [];
+    var findHdr = function(re) {
+      for (var hc = 0; hc < hdrRow.length; hc++) { var t = cellStr(hdrRow[hc]); if (t && re.test(t)) return t; }
+      return "";
+    };
+    var amtHdr = findHdr(/매출/), profitHdr = findHdr(/순이익/);   // 머리글 칸 자체를 찾는다 — 열 위치가 밀려도 따라간다
     for (var r = yearRow.r + 1; r < rows.length; r++) {
       var row = rows[r];
       if (!row) continue;
@@ -3793,17 +3871,29 @@ function parseHyeonhwangpyoV2(rows) {
           + (bigo ? " / 비고: " + bigo : "");
         if (cellHasContext(amt) || profit || bigo) rawNotes.push(line);
       }
-      if (!amt) continue;
       var ym = head.match(/(\d{4})/);
+      var isForecast = /예상/.test(head);             // 예상치는 실적으로 담지 않는다
+      // 당기순이익도 (원) 단위 칸이라 매출액과 같은 규칙으로 확정해 기업정보에 남긴다.
+      //  ⚠️ 숫자가 아예 없는 칸("-", "적자")은 원문이 위 rawNotes에 보존되므로 조용히 넘긴다.
+      if (profit && ym && !isForecast) {
+        var pR = resolveAmountCell(profit, profitHdr);
+        if (pR.ok) {
+          profitInfo.push({ label: head + " 당기순이익", value: Math.round(pR.value).toLocaleString() + "원" });
+          if (pR.note) addNote(head + " 당기순이익", profit, pR.note);
+        } else if (pR.reason === "단위 확인 필요") addIssue(head + " 당기순이익", pR);
+      }
+      if (!amt) continue;
       if (!ym) continue;
       var yr = ym[1];
-      if (/예상/.test(head)) continue;                 // 예상 매출은 실적 컬럼에 넣지 않는다
+      if (isForecast) continue;
       var field = /상반기/.test(head) ? "revenue_2026_h1"
         : (yr === "2025" ? "revenue_2025" : (yr === "2024" ? "revenue_2024" : (yr === "2023" ? "revenue_2023" : "")));
       if (!field) continue;
-      var amtR = extractLeadingAmount(amt, "");
-      if (amtR.ok) setF(field, Math.round(amtR.value));
-      else addIssue(head + " 매출액", amtR);            // 실패해도 이 칸만 비우고 나머지는 정상 저장
+      var amtR = resolveAmountCell(amt, amtHdr);
+      if (amtR.ok) {
+        setF(field, Math.round(amtR.value));
+        if (amtR.note) addNote(head + " 매출액", amt, amtR.note);
+      } else addIssue(head + " 매출액", amtR);        // 실패해도 이 칸만 비우고 나머지는 정상 저장
     }
   }
 
@@ -3851,6 +3941,8 @@ function parseHyeonhwangpyoV2(rows) {
   //     부채비율·이자보상배율을 자동 계산한다. 라벨 문자열을 바꾸지 말 것.
   var infoItems = [];
   var addInfo = function(label, val) { if (val && String(val).trim()) infoItems.push({ label: label, value: String(val).trim() }); };
+  // 매출 추이 표의 당기순이익 — 위에서 단위를 확정한 값만 담는다(부채총계 등과 같은 (원) 단위 항목)
+  profitInfo.forEach(function(pi) { addInfo(pi.label, pi.value); });
   addInfo("부채총계", get("부채총계 (원)"));
   addInfo("자본총계", get("자본총계 (원)"));
   addInfo("영업이익", get("영업이익 (원)"));
@@ -3944,7 +4036,7 @@ function parseHyeonhwangpyoV2(rows) {
 
   // 법인/개인 유형은 위(기업체명·사업자등록번호 직후)에서 이미 판정했다.
 
-  return { updates: updates, auto: auto, commText: commParts.join("\n"), issues: issues };
+  return { updates: updates, auto: auto, commText: commParts.join("\n"), issues: issues, notes: notes };
 }
 
 // 신규 통합 양식인지 판정 — 시트명에 의존하지 않고 고유 라벨이 몇 개 잡히는지로 본다.
@@ -3976,7 +4068,7 @@ async function parseUploadedSheet(file) {
     var res = await parseHyeonhwangpyo(file);
     var commParts = [];
     if (res.updates.company_info_memo) commParts.push(res.updates.company_info_memo);
-    return { updates: res.updates, auto: res.auto, commText: commParts.join("\n"), kind: "기업현황표", issues: res.issues || [] };
+    return { updates: res.updates, auto: res.auto, commText: commParts.join("\n"), kind: "기업현황표", issues: res.issues || [], notes: res.notes || [] };
   }
   // 신규 통합 양식(시트명 "정보시트" 등) — 구 양식과 레이아웃이 완전히 달라 전용 파서 사용.
   //  범용 파서로 넘어가면 4개 항목만 인식되고 값까지 오염된다(2026-07-27 진단).
@@ -3987,13 +4079,13 @@ async function parseUploadedSheet(file) {
     var v2Comm = [];
     if (v2.commText) v2Comm.push(v2.commText);
     if (v2.updates.company_info_memo) v2Comm.push(v2.updates.company_info_memo);
-    return { updates: v2.updates, auto: v2.auto, commText: v2Comm.join("\n"), kind: "기업현황표(신규양식)", issues: v2.issues || [] };
+    return { updates: v2.updates, auto: v2.auto, commText: v2Comm.join("\n"), kind: "기업현황표(신규양식)", issues: v2.issues || [], notes: v2.notes || [] };
   }
   // 그 외: 첫 시트를 범용 파싱
   var ws = wb.Sheets[wb.SheetNames[0]];
   var rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
   var g = parseSheetGeneric(rows);
-  return { updates: g.updates, auto: g.auto, commText: g.commText, kind: "시트지", issues: [] };
+  return { updates: g.updates, auto: g.auto, commText: g.commText, kind: "시트지", issues: [], notes: [] };
 }
 
 const Icon = ({ name, size = 16, color = "currentColor" }) => {
@@ -15490,10 +15582,11 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                       <div style={{ fontSize: 11, color: "#AAA", marginBottom: 4 }}>{label}</div>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#4338CA", marginBottom: 4 }}>{formatRevenue(data[key])}</div>
                       <input
-                        type="number"
+                        type="text"
+                        inputMode="numeric"
                         placeholder="원 단위 입력"
-                        value={data[key] || ""}
-                        onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { [key]: v ? parseInt(v) : null }); }); }}
+                        value={data[key] === null || data[key] === undefined ? "" : data[key]}
+                        onChange={function(e) { var d = normalizeRevenueInput(e.target.value); setData(function(p) { return Object.assign({}, p, { [key]: d ? parseInt(d, 10) : null }); }); }}
                         style={{ width: "100%", fontSize: 11, textAlign: "center", border: "1px solid #E8E5E0", borderRadius: 5, padding: "4px", outline: "none", boxSizing: "border-box" }} />
                     </div>
                   ))}
@@ -16771,6 +16864,21 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                   <div style={{ fontSize: 10.5, color: "#991B1B", marginTop: 6 }}>원문은 비고 메모에 그대로 보존됩니다. 값은 직접 입력하면 됩니다.</div>
                 </div>
               )}
+              {/* ℹ️ 값은 넣었지만 단위를 코드가 판단한 칸 — 무엇을 어떻게 읽었는지 밝힌다 */}
+              {Array.isArray(xlsxPreview.notes) && xlsxPreview.notes.length > 0 && (
+                <div style={{ marginTop: 12, padding: "10px 12px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#1D4ED8", marginBottom: 6 }}>ℹ️ 단위 해석 {xlsxPreview.notes.length}건 — 값은 채워 넣었습니다</div>
+                  {xlsxPreview.notes.map(function(it, i) {
+                    return (
+                      <div key={i} style={{ fontSize: 11.5, color: "#1E3A8A", lineHeight: 1.6, paddingTop: 3 }}>
+                        · <b>{it.label}</b> — {it.note}
+                        {it.raw ? <span style={{ color: "#3B82F6" }}> · 원문 “{String(it.raw).length > 40 ? String(it.raw).slice(0, 40) + "…" : it.raw}”</span> : null}
+                      </div>
+                    );
+                  })}
+                  <div style={{ fontSize: 10.5, color: "#2563EB", marginTop: 6 }}>다르면 적용 후 해당 칸을 고쳐 주세요.</div>
+                </div>
+              )}
               {/* 📨 소통내역에 자동 기록될 내용 (수정 가능, 비우면 기록 안 함) */}
               <div style={{ marginTop: 14 }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: "#075985", marginBottom: 5 }}>📨 소통내역에 기록될 내용 <span style={{ fontSize: 10.5, color: "#888", fontWeight: 500 }}>(수정 가능 · 비우면 기록 안 함)</span></div>
@@ -17035,6 +17143,8 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
   const [attachedFile, setAttachedFile] = useState(null);
   // 첨부 파싱에서 숫자를 못 뽑은 칸 목록 (화면 표시용)
   const [sheetIssues, setSheetIssues] = useState([]);
+  // 값은 넣었지만 단위를 코드가 판단한 칸 (파란 안내) — 빨간 sheetIssues 와 짝이라 같이 비우고 같이 채운다
+  const [sheetNotes, setSheetNotes] = useState([]);
   // 끌어다 놓기 강조 / 파싱 중 / 실패 사유 (실패를 alert 하나로만 알리면 놓치므로 화면에도 남긴다)
   const [dragOver, setDragOver] = useState(false);
   const [sheetBusy, setSheetBusy] = useState(false);
@@ -17076,6 +17186,7 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
       });
       setAttachedFile(null);
       setSheetIssues([]);
+      setSheetNotes([]);
       return;
     }
     setSheetBusy(true);
@@ -17097,9 +17208,11 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
       }
       setAutoFilled(function(p) { return Object.assign({}, p, res.auto); });
       setSheetIssues(res.issues || []);
+      setSheetNotes(res.notes || []);
       var msg = "📄 자동 입력 " + Object.keys(res.auto).length + "개 완료!";
       if (extra) msg += "\n📝 인식 안 된 나머지 내용은 '비고'에 담았어요.";
       if (res.issues && res.issues.length) msg += "\n⚠️ 숫자를 못 읽은 칸 " + res.issues.length + "건은 아래 빨간 목록에 있어요.";
+      if (res.notes && res.notes.length) msg += "\nℹ️ 단위를 코드가 판단한 칸 " + res.notes.length + "건은 아래 파란 목록에 있어요.";
       alert(msg + "\n확인 후 빈 칸 보완해서 등록하세요.");
     } catch (err) {
       console.error("시트 파싱 오류:", err);
@@ -17111,6 +17224,7 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
       });
       setAttachedFile(null);
       setSheetIssues([]);
+      setSheetNotes([]);
     } finally {
       setSheetBusy(false);
     }
@@ -17215,6 +17329,21 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
               <div style={{ fontSize: 10, color: "#991B1B", marginTop: 5 }}>원문은 비고에 그대로 보존됩니다.</div>
             </div>
           )}
+          {/* ℹ️ 값은 넣었지만 단위를 코드가 판단한 칸 */}
+          {sheetNotes.length > 0 && (
+            <div style={{ marginTop: 8, padding: "9px 11px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 7 }}>
+              <div style={{ fontSize: 11.5, fontWeight: 700, color: "#1D4ED8", marginBottom: 5 }}>ℹ️ 단위 해석 {sheetNotes.length}건 — 값은 채워 넣었어요</div>
+              {sheetNotes.map(function(it, i) {
+                return (
+                  <div key={i} style={{ fontSize: 11, color: "#1E3A8A", lineHeight: 1.6 }}>
+                    · <b>{it.label}</b> — {it.note}
+                    {it.raw ? <span style={{ color: "#3B82F6" }}> · 원문 “{String(it.raw).length > 40 ? String(it.raw).slice(0, 40) + "…" : it.raw}”</span> : null}
+                  </div>
+                );
+              })}
+              <div style={{ fontSize: 10, color: "#2563EB", marginTop: 5 }}>다르면 아래 칸에서 고쳐 주세요.</div>
+            </div>
+          )}
         </div>
 
         <div style={{ padding: "18px 24px" }}>
@@ -17301,12 +17430,13 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
                     <div style={{ fontSize: 11, color: "#AAA", marginBottom: 4 }}>{label}</div>
                     <div style={{ fontSize: 13, fontWeight: 700, color: "#4338CA", marginBottom: 4 }}>{formatRevenue(form[key])}</div>
                     <input
-                      type="number"
+                      type="text"
+                      inputMode="numeric"
                       placeholder="원 단위 입력"
-                      value={form[key] || ""}
+                      value={form[key] === null || form[key] === undefined ? "" : form[key]}
                       onChange={function(e) {
-                        var v = e.target.value;
-                        setManual(key, v ? parseInt(v) || "" : "");
+                        var d = normalizeRevenueInput(e.target.value);
+                        setManual(key, d ? parseInt(d, 10) : "");
                       }}
                       style={{ width: "100%", fontSize: 11, textAlign: "center", border: "1px solid #E8E5E0", borderRadius: 5, padding: "4px", outline: "none", boxSizing: "border-box" }} />
                   </div>
