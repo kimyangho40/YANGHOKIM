@@ -2189,6 +2189,181 @@ function bankCertToLoans(result) {
   return out;
 }
 
+// ── 채권자변동정보 조회서(한국신용정보원) → 기대출 행 변환 ────────────────────
+//  여신정보·금융거래확인서와 문서 구조가 또 달라 세 번째 변환기를 나란히 둔다.
+//  ⚠️ 앞 두 변환기(creditReportToLoans·bankCertToLoans)는 한 줄도 건드리지 않았다 —
+//     기존 문서 경로의 회귀 사정권을 열지 않기 위해서다.
+//  · 「1. 채무현황」 표: 순번 / 구분 / 대출종류 / 기관명 / 발생일자 / 금액. 여러 페이지로 이어진다.
+//  · 금액 단위는 표 우상단 "(단위: 천원)" — parseCreditUnit 이 이미 천원을 ×1,000 으로 읽는다.
+//  · ⚠️ 단위 표기를 못 읽으면 "조회서니까 천원이겠지"라고 가정하지 않는다. 확인 필요로 남긴다.
+//    (앞 두 변환기와 같은 추측 금지 원칙. 가정하는 순간 옛 "1억"→1원 계열 사고가 재발한다.)
+
+// 소계/합계 행 판별 — 모델의 is_subtotal 을 그대로 믿지 않고 코드가 한 번 더 거른다.
+var DEBTOR_SUBTOTAL_RE = /^계$|^합계$|^소계$|^총계$|^누계$/;
+function isDebtorSubtotalRow(row) {
+  if (!row) return true;
+  if (row.is_subtotal) return true;
+  var inst = String(row.institution || "").replace(/\s/g, "");
+  var type = String(row.loan_type || "").replace(/\s/g, "");
+  if (DEBTOR_SUBTOTAL_RE.test(inst) || DEBTOR_SUBTOTAL_RE.test(type)) return true;
+  // 순번도 기관명도 없는데 금액만 있는 행 → 소계로 의심
+  if (!String(row.seq || "").trim() && !inst && String(row.amount_raw || "").trim()) return true;
+  return false;
+}
+// 문서의 '구분' 열 → 기대출 구분(LOAN_KINDS).
+//  ⚠️ 추정이 아니라 문서에 적힌 값을 옮기는 것이다. 조회서에만 이 열이 있고,
+//     여신정보·금융거래확인서에는 없어 그쪽은 지금도 전건 미분류다.
+//  · 개인사업자대출 → 사업자(biz) · 개인대출정보 → 대표자 개인(personal)
+//  · 그 외 문구는 미분류로 둔다(모르는 어휘를 억지로 매핑하지 않는다).
+function debtorKindFromRaw(raw) {
+  var s = String(raw || "").replace(/\s/g, "");
+  if (!s) return "";
+  if (/개인사업자/.test(s)) return "biz";
+  if (/개인대출|개인신용/.test(s)) return "personal";
+  return "";
+}
+function debtorChangeToLoans(result) {
+  var out = { loans: [], dropped: 0, checksum: null, unitLabel: "", asOf: "", countedWon: 0, autoKind: 0 };
+  if (!result) return out;
+  var unit = parseCreditUnit(result.unit_raw);
+  out.unitLabel = unit.label;
+  out.asOf = String(result.as_of || "").trim();
+  var rows = Array.isArray(result.debt_rows) ? result.debt_rows : [];
+  var sumRaw = 0;
+
+  rows.forEach(function(row) {
+    if (isDebtorSubtotalRow(row)) { out.dropped++; return; }
+    var inst = String(row.institution || "").trim();
+    var type = String(row.loan_type || "").trim();
+    var rawAmt = String(row.amount_raw || "").replace(/[,\s]/g, "");
+    var amount = "", needsReview = false, reason = "";
+
+    if (!rawAmt || isNaN(parseFloat(rawAmt))) {
+      // 금액을 못 읽음 → 0으로 채우지 않고 비워둔다('부채 없음'으로 오독되면 안 된다)
+      needsReview = true; reason = "금액을 읽지 못함";
+    } else if (unit.mult == null) {
+      amount = rawAmt;
+      needsReview = true; reason = "단위 확인 필요 (문서에 단위 표기 없음)";
+      sumRaw += parseFloat(rawAmt);
+    } else {
+      var won = Math.round(parseFloat(rawAmt) * unit.mult);
+      var str = String(won);
+      // 왕복 검증 — parseLoanAmount 로 되읽어 값이 일치할 때만 확정한다(앞 두 변환기와 동일)
+      var back = parseLoanAmount(str);
+      if (back.won === won) { amount = str; out.countedWon += won; }
+      else { needsReview = true; reason = "금액 확인 필요 (" + rawAmt + " " + unit.label + ")"; }
+      sumRaw += parseFloat(rawAmt);
+    }
+
+    var kindRaw = String(row.kind_raw || "").trim();
+    var kind = debtorKindFromRaw(kindRaw);
+    if (kind) out.autoKind++;
+
+    out.loans.push({
+      inst: inst + (type ? " " + type : ""),
+      amount: amount,
+      bank: inst,
+      start: String(row.start_date || "").trim(),   // 발생일자 — 이 문서에는 적혀 있다
+      end: "",                                      // 만기일은 문서에 없다 — 추측하지 않는다
+      kind: kind,                                   // 문서의 '구분' 열 그대로 (없으면 미분류)
+      kind_raw: kindRaw,
+      kind_src: kind ? "문서표기" : "",
+      as_of: out.asOf,
+      loan_type: type,
+      seq: String(row.seq || "").trim(),
+      src: "debtor_change",
+      needs_review: needsReview,
+      review_reason: reason,
+    });
+  });
+
+  // 검산: 개별 행 합 == 합계 행? 불일치면 페이지를 놓쳤을 수 있다는 신호.
+  var subtotal = String(result.subtotal_raw || "").replace(/[,\s]/g, "");
+  if (subtotal && !isNaN(parseFloat(subtotal)) && rows.length > 0) {
+    var expect = parseFloat(subtotal);
+    out.checksum = {
+      expect: expect, actual: sumRaw,
+      ok: Math.abs(sumRaw - expect) < Math.max(1, expect * 0.005),
+      unitLabel: unit.label,
+    };
+  }
+  return out;
+}
+
+// ── 「2. 연체채권의 채권자 변동 현황」 → 연체 이력 요약 ────────────────────────
+//  ⚠️ 연체 행은 기대출(loans)에 절대 넣지 않는다 — 연체 금액을 대출로 넣으면 부채가 두 배가 된다.
+//     (금융거래확인서 파서가 담보·연체 섹션을 통째로 버리는 것과 같은 이유다.)
+//  저장은 companies 컬럼을 새로 만들지 않고 company_info 의 「연체 이력」 항목 한 줄로만 한다.
+var OVERDUE_INFO_LABEL = "연체 이력";
+function debtorChangeOverdue(result) {
+  var rows = Array.isArray(result && result.overdue_rows) ? result.overdue_rows : [];
+  var list = [];
+  rows.forEach(function(r) {
+    if (!r) return;
+    var inst = String(r.institution || "").trim();
+    var at = String(r.event_date || "").trim();
+    var relDate = String(r.release_date || "").trim();
+    var relReason = String(r.release_reason || "").trim();
+    if (!inst && !at && !relDate && !relReason) return;   // 빈 행은 버린다
+    list.push({
+      inst: inst,
+      category: String(r.debt_category || "").trim(),
+      at: at,
+      principal: String(r.principal_raw || "").trim(),
+      interest: String(r.interest_raw || "").trim(),
+      releaseReason: relReason,
+      releaseDate: relDate,
+      // 해제일자나 해제사유(변제완료 등)가 있으면 해제된 건으로 본다
+      released: !!(relDate || relReason),
+    });
+  });
+  var open = list.filter(function(r) { return !r.released; }).length;
+  return { rows: list, count: list.length, open: open, released: list.length - open };
+}
+// company_info 「연체 이력」에 넣을 요약 한 줄. 0건도 "없음"으로 남긴다 — 확인했다는 사실이 정보다.
+function debtorOverdueSummary(ov, asOf) {
+  var tail = asOf ? " · 기준 " + asOf : "";
+  if (!ov || !ov.count) return "없음" + tail;
+  var parts = ov.rows.slice(0, 5).map(function(r) {
+    return (r.inst || "기관미상") + (r.at ? " " + r.at : "")
+      + (r.released ? "(해제" + (r.releaseDate ? " " + r.releaseDate : "") + ")" : "(미해제)");
+  });
+  if (ov.rows.length > 5) parts.push("외 " + (ov.rows.length - 5) + "건");
+  return ov.count + "건(미해제 " + ov.open + ") · " + parts.join(" · ") + tail;
+}
+// 조회서를 여러 장 넣었을 때 연체 행을 이어 붙인다(건수는 다시 센다).
+function mergeOverdue(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  var rows = a.rows.concat(b.rows);
+  return {
+    rows: rows, count: rows.length,
+    open: rows.filter(function(r) { return !r.released; }).length,
+    released: rows.filter(function(r) { return r.released; }).length,
+  };
+}
+
+// ── 같은 조회서를 다시 첨부했을 때 중복으로 쌓이지 않게 ───────────────────────
+//  열쇠 = 기관명 | 발생일(실행일) | 금액(원). 셋이 모두 같으면 같은 건으로 본다.
+//  ⚠️ 이것은 미리보기의 '이미 있음' 배지와 체크 해제용 힌트다. 손으로 적은 행은 기관명 표기가
+//     달라 안 걸릴 수 있다 — 확실한 중복 제거는 '같은 출처만 교체'(replace_src) 모드가 한다.
+function loanDupKey(ln) {
+  var p = parseLoanAmount(ln && ln.amount);
+  var inst = String((ln && (ln.bank || ln.inst)) || "").replace(/\s/g, "");
+  return inst + "|" + String((ln && ln.start) || "").trim() + "|" + (p.won == null ? "?" : String(p.won));
+}
+function loanDupKeySet(loans) {
+  var set = {};
+  (Array.isArray(loans) ? loans : []).forEach(function(l) {
+    if (!l || isLoanRejected(l)) return;
+    set[loanDupKey(l)] = true;
+  });
+  return set;
+}
+function countLoansBySrc(loans, src) {
+  return (Array.isArray(loans) ? loans : []).filter(function(l) { return l && l.src === src; }).length;
+}
+
 // ── 여신정보 기준일자 신선도 ────────────────────────────────────────────────
 //  여신정보는 시점 데이터라 오래되면 현재 채무 상태와 어긋난다.
 //  기준일이 이 일수를 넘으면 '최신화 필요'로 표시한다(삭제·경고만, 값은 그대로 둔다).
@@ -2226,6 +2401,9 @@ function wonToKor(won) {
 }
 // 기대출 금액 표시용 — wonToKor는 천만 단위로 반올림해서 2,500만이 "3천만"으로 보인다.
 // 대출 금액은 판단 근거라 왜곡되면 안 되므로 억/만을 정확히 끊어 쓴다.
+// ⚠️ 천 단위까지 표시한다 — 예전에는 만 미만을 통째로 버려 419,138,000원이 "4억 1,913만"으로
+//    보였다(뒤 8천이 사라짐). 2026-08-26 formatRevenue 와 같은 성격의 수정이다.
+//    표시 전용 함수이고 합계·판정 로직은 이 값을 쓰지 않는다.
 function wonToKorExact(won) {
   var n = Math.round(Number(won) || 0);
   if (!n) return "0원";
@@ -2234,6 +2412,7 @@ function wonToKorExact(won) {
   if (eok) out.push(eok.toLocaleString() + "억");
   if (man) out.push(man.toLocaleString() + "만");
   if (!eok && !man) out.push(rest.toLocaleString() + "원");
+  else if (Math.floor(rest / 1000)) out.push(Math.floor(rest / 1000).toLocaleString() + "천");
   return out.join(" ");
 }
 // 담당기관 문자열에 특정 기관 포함 여부
@@ -16935,17 +17114,25 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
           hideButton
           openSignal={creditSignal}
           existingCount={Array.isArray(data.loans) ? data.loans.length : 0}
-          onApply={function(rows, applyMode, asOf) {
+          existingLoans={Array.isArray(data.loans) ? data.loans : []}
+          onApply={function(rows, applyMode, asOf, extraInfo) {
             setData(function(p) {
               var prev = Array.isArray(p.loans) ? p.loans : [];
-              var next = applyMode === "replace" ? rows.slice() : prev.concat(rows);
-              // 기준일자는 company_info에 함께 남긴다('최신화 필요' 판정에 쓰임)
+              var next = applyMode === "replace"
+                ? rows.slice()
+                : applyMode === "replace_src"
+                  // 채권자변동정보로 넣었던 행만 걷어낸다 — 손으로 넣은 행·다른 문서로 넣은 행은 그대로 둔다
+                  ? prev.filter(function(l) { return !(l && l.src === "debtor_change"); }).concat(rows)
+                  : prev.concat(rows);
+              // 기준일자·연체 이력은 company_info에 함께 남긴다(같은 라벨이면 덮어써서 쌓이지 않는다)
               var info = Array.isArray(p.company_info) ? p.company_info.slice() : [];
-              if (asOf) {
-                var idx = info.findIndex(function(it) { return it && it.label === "여신정보 기준일자"; });
-                if (idx >= 0) info[idx] = { label: "여신정보 기준일자", value: asOf };
-                else info.push({ label: "여신정보 기준일자", value: asOf });
-              }
+              var putInfo = function(label, value) {
+                var idx = info.findIndex(function(it) { return it && it.label === label; });
+                if (idx >= 0) info[idx] = { label: label, value: value };
+                else info.push({ label: label, value: value });
+              };
+              if (asOf) putInfo("여신정보 기준일자", asOf);
+              (extraInfo || []).forEach(function(it) { if (it && it.label) putInfo(it.label, it.value); });
               return Object.assign({}, p, { loans: next, company_info: info });
             });
           }}
@@ -18789,6 +18976,7 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
 var DOC_TYPES = {
   credit_report: { label: "기업 여신정보", desc: "'세부신용공여' 표가 있는 신용조회 문서" },
   bank_certificate: { label: "금융거래확인서", desc: "은행이 발급한 대출 명세 확인서" },
+  debtor_change: { label: "채권자변동정보 조회서", desc: "‘1. 채무현황’ 표가 있는 한국신용정보원 발급 문서" },
 };
 // 여러 문서의 파싱 결과를 하나로 합친다. 기준일은 가장 최근 것을 쓰고, 검산은 문서마다 달라 합치지 않는다.
 function mergeParsed(a, b, kind) {
@@ -18801,6 +18989,8 @@ function mergeParsed(a, b, kind) {
     unitLabel: a.unitLabel === b.unitLabel ? a.unitLabel : "문서마다 다름",
     asOf: (b.asOf && (!a.asOf || b.asOf > a.asOf)) ? b.asOf : a.asOf,
     countedWon: (a.countedWon || 0) + (b.countedWon || 0),
+    autoKind: (a.autoKind || 0) + (b.autoKind || 0),
+    overdue: mergeOverdue(a.overdue, b.overdue),
     sectionTitle: a.sectionTitle || b.sectionTitle,
     sectionOk: a.sectionOk && (b.sectionOk !== false || !b.sectionTitle),
     sectionBad: false,
@@ -18810,7 +19000,7 @@ function mergeParsed(a, b, kind) {
 // hideButton / openSignal: "자료 첨부" 버튼 하나로 합치면서 추가된 것.
 //   버튼 없이 렌더해 두고, 부모가 PDF·이미지를 고르면 openSignal({seq, files})로 창을 연다.
 //   두 prop 을 안 넘기면 예전처럼 자기 버튼을 그린다(다른 화면에서 그대로 쓸 수 있게 남겨 둠).
-function CreditReportImport({ existingCount, onApply, hideButton, openSignal }) {
+function CreditReportImport({ existingCount, existingLoans, onApply, hideButton, openSignal }) {
   var [open, setOpen] = useState(false);
   var [busy, setBusy] = useState(false);
   var [err, setErr] = useState("");
@@ -18830,6 +19020,11 @@ function CreditReportImport({ existingCount, onApply, hideButton, openSignal }) 
     setDocType(""); setAskType(null); setPendingFile(null); setQueue([]); setDone([]);
   };
   var close = function() { setOpen(false); reset(); };
+  // 이미 기대출에 들어 있는 행은 체크를 풀어 둔다 — 같은 조회서를 다시 첨부해도 중복으로 쌓이지 않게.
+  var applyPicked = function(acc) {
+    var dup = loanDupKeySet(existingLoans);
+    setPicked(acc.loans.map(function(l) { return !dup[loanDupKey(l)]; }));
+  };
 
   // 여러 파일을 순서대로 읽어 결과를 합친다. 종류를 판별 못 한 파일에서 멈추고 물어본 뒤 이어서 진행한다.
   var runQueue = async function(files, hint, accIn, doneIn) {
@@ -18858,20 +19053,25 @@ function CreditReportImport({ existingCount, onApply, hideButton, openSignal }) 
           // 판별 실패 — 추측하지 않고 담당자에게 묻고, 나머지 파일은 큐에 남겨둔다
           setPendingFile(file); setQueue(files.slice(fi + 1)); setDone(doneList);
           setAskType({ reason: String(res.doc_type_reason || "").trim(), name: file.name });
-          if (acc) { setParsed(acc); setPicked(acc.loans.map(function() { return true; })); }
+          if (acc) { setParsed(acc); applyPicked(acc); }
           return;
         }
-        var conv = kind === "bank_certificate" ? bankCertToLoans(res) : creditReportToLoans(res);
+        var conv = kind === "bank_certificate" ? bankCertToLoans(res)
+                 : kind === "debtor_change" ? debtorChangeToLoans(res)
+                 : creditReportToLoans(res);
+        // 연체채권 변동 현황은 '대출'이 아니라 '이력'이다 — loans 에 넣지 않고 따로 들고 간다.
+        if (kind === "debtor_change") conv.overdue = debtorChangeOverdue(res);
         if (conv.sectionBad) {
           setErr("‘" + conv.sectionTitle + "’ 섹션을 읽어와 이 파일은 통째로 버렸습니다 — 담보·연체 섹션의 금액을 대출로 넣으면 부채가 두 배가 됩니다. (" + file.name + ")");
           doneList.push(file.name + " (버림)");
           continue;
         }
-        if (!conv.loans.length) {
+        // 조회서는 채무 0건이어도 연체 이력만 반영할 수 있다 → 둘 다 비었을 때만 되묻는다
+        if (!conv.loans.length && !(conv.overdue && conv.overdue.count)) {
           setPendingFile(file); setQueue(files.slice(fi + 1)); setDone(doneList);
           setErr(DOC_TYPES[kind].label + "으로 읽었지만 대출 행을 찾지 못했습니다(" + file.name + "). 문서 종류가 맞는지 다시 골라주세요.");
           setAskType({ reason: String(res.doc_type_reason || "").trim(), name: file.name });
-          if (acc) { setParsed(acc); setPicked(acc.loans.map(function() { return true; })); }
+          if (acc) { setParsed(acc); applyPicked(acc); }
           return;
         }
         conv.loans.forEach(function(l) { l.src_file = file.name; });
@@ -18880,9 +19080,11 @@ function CreditReportImport({ existingCount, onApply, hideButton, openSignal }) 
         setDocType(acc.docTypes.length > 1 ? "mixed" : acc.docTypes[0]);
       }
       setQueue([]); setDone(doneList);
-      if (!acc || !acc.loans.length) { setErr(function(p) { return p || "대출 행을 찾지 못했습니다."; }); return; }
+      if (!acc || (!acc.loans.length && !(acc.overdue && acc.overdue.count))) { setErr(function(p) { return p || "대출 행을 찾지 못했습니다."; }); return; }
       setParsed(acc);
-      setPicked(acc.loans.map(function() { return true; }));
+      applyPicked(acc);
+      // 같은 출처(채권자변동정보)로 넣어 둔 행이 이미 있으면 '같은 출처만 교체'를 기본값으로 고른다
+      if (acc.docTypes.indexOf("debtor_change") >= 0 && countLoansBySrc(existingLoans, "debtor_change") > 0) setMode("replace_src");
     } catch (e) {
       setErr("분석 실패: " + (e && e.message ? e.message : e));
     } finally {
@@ -18914,11 +19116,20 @@ function CreditReportImport({ existingCount, onApply, hideButton, openSignal }) 
   var apply = function() {
     if (!parsed) return;
     var rows = mode === "pick" ? parsed.loans.filter(function(_, i) { return picked[i]; }) : parsed.loans;
-    if (!rows.length) { setErr("반영할 행을 하나 이상 선택해주세요."); return; }
-    if (mode === "replace" && existingCount > 0) {
+    // 연체 이력은 기업정보 「연체 이력」 항목 한 줄로만 남긴다 — 기대출 행에는 절대 넣지 않는다.
+    var extra = [];
+    if (parsed.overdue) extra.push({ label: OVERDUE_INFO_LABEL, value: debtorOverdueSummary(parsed.overdue, parsed.asOf) });
+    if (!rows.length && !extra.length) { setErr("반영할 행을 하나 이상 선택해주세요."); return; }
+    // 넣을 행이 없으면 기존 행을 지우는 모드로 가지 않는다(연체 요약만 반영한다)
+    var applyMode = !rows.length ? "append" : mode === "pick" ? "append" : mode;
+    if (applyMode === "replace" && existingCount > 0) {
       if (!window.confirm("기존 기대출 " + existingCount + "건을 모두 지우고 " + rows.length + "건으로 교체합니다.\n되돌릴 수 없습니다. 계속할까요?")) return;
     }
-    onApply(rows, mode === "replace" ? "replace" : "append", parsed.asOf);
+    if (applyMode === "replace_src") {
+      var srcN = countLoansBySrc(existingLoans, "debtor_change");
+      if (srcN > 0 && !window.confirm("채권자변동정보 조회서로 넣었던 기존 " + srcN + "건을 지우고 " + rows.length + "건으로 교체합니다.\n손으로 넣은 행과 다른 문서로 넣은 행은 그대로 둡니다. 계속할까요?")) return;
+    }
+    onApply(rows, applyMode, parsed.asOf, extra);
     close();
   };
 
@@ -18934,6 +19145,9 @@ function CreditReportImport({ existingCount, onApply, hideButton, openSignal }) 
   }
 
   var reviewCount = parsed ? parsed.loans.filter(function(l) { return l.needs_review; }).length : 0;
+  var dupSet = loanDupKeySet(existingLoans);
+  var srcExistingCount = countLoansBySrc(existingLoans, "debtor_change");
+  var dupCount = parsed ? parsed.loans.filter(function(l) { return dupSet[loanDupKey(l)]; }).length : 0;
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
       /* 바깥 클릭으로는 닫지 않는다 — 작성 중이던 내용이 날아간다. 닫기는 ✕/취소 버튼으로만. */>
@@ -18946,15 +19160,16 @@ function CreditReportImport({ existingCount, onApply, hideButton, openSignal }) 
         {!parsed && !askType && (
           <div>
             <p style={{ fontSize: 12.5, color: "#666", lineHeight: 1.7, margin: "0 0 12px" }}>
-              <b>기업 여신정보</b>(세부신용공여 표) 또는 <b>금융거래확인서</b>를 읽어 기대출 내역에 넣습니다. PDF·이미지(캡처) 모두 됩니다.<br />
+              <b>기업 여신정보</b>(세부신용공여 표) · <b>금융거래확인서</b> · <b>채권자변동정보 조회서</b>(한국신용정보원)를 읽어 기대출 내역에 넣습니다. PDF·이미지(캡처) 모두 됩니다.<br />
+              채권자변동정보 조회서는 <b>여러 쪽 PDF 전체</b>를 그대로 넣으면 「1. 채무현황」을 마지막 쪽까지 이어서 읽고, <b>연체 이력</b>도 함께 정리해 드립니다.<br />
               은행별로 여러 장이면 <b>한 번에 여러 파일</b>을 고르세요. 나뉜 페이지(1/3, 2/3)도 함께 넣으면 됩니다.<br />
               문서 종류는 자동으로 판별하고, <b>확실하지 않으면 어느 문서인지 여쭤봅니다.</b><br />
               <span style={{ color: "#B45309", fontWeight: 700 }}>바로 저장되지 않습니다.</span> 읽은 내용을 표로 보여드리고, 확인하신 뒤에 반영합니다.
             </p>
             <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "10px 13px", fontSize: 11.5, color: "#92400E", lineHeight: 1.7, marginBottom: 14 }}>
-              문서 내용이 AI 분석 서버로 전송됩니다. 금액 단위는 문서에 적힌 표기를 그대로 따르고(금융거래확인서는 <b>천원</b>이 많습니다), <b>표기가 없으면 환산하지 않습니다</b>.
+              문서 내용이 AI 분석 서버로 전송됩니다. 금액 단위는 문서에 적힌 표기를 그대로 따르고(금융거래확인서·채권자변동정보 조회서는 <b>천원</b>이 많습니다), <b>표기가 없으면 환산하지 않습니다</b>.
               금융거래확인서는 <b>대출금 거래상황·여신현황 표만</b> 읽고 <b>담보내용·연체 섹션은 읽지 않습니다</b>.
-              구분(법인/개인)은 문서로 알 수 없어 전건 <b>미분류</b>로 넣습니다.
+              구분(법인/개인)은 문서로 알 수 없어 <b>미분류</b>로 넣습니다 — 다만 채권자변동정보 조회서는 ‘구분’ 열이 있어 그 값을 그대로 씁니다.
             </div>
             <input ref={fileRef} type="file" multiple accept="application/pdf,image/png,image/jpeg,image/webp"
               disabled={busy} onChange={function(e) { handleFiles(e.target.files); }}
@@ -19009,7 +19224,33 @@ function CreditReportImport({ existingCount, onApply, hideButton, openSignal }) 
               </span>
               {parsed.asOf && <span style={{ background: "#F3F4F6", borderRadius: 6, padding: "3px 9px", fontWeight: 700 }}>기준일 {parsed.asOf}</span>}
               {reviewCount > 0 && <span style={{ background: "#FEF2F2", color: "#B91C1C", borderRadius: 6, padding: "3px 9px", fontWeight: 800 }}>확인 필요 {reviewCount}건</span>}
+              {dupCount > 0 && <span title="기관명·발생일·금액이 같은 행이 기대출 내역에 이미 있습니다." style={{ background: "#FEF3C7", color: "#92400E", borderRadius: 6, padding: "3px 9px", fontWeight: 800 }}>이미 있음 {dupCount}건</span>}
             </div>
+
+            {/* 연체채권 변동 현황 — 대출이 아니라 '이력'이라 기대출 표에 넣지 않는다.
+                여기서 보여주고, 반영 시 기업정보의 「연체 이력」 항목 한 줄로만 저장한다. */}
+            {parsed.overdue && (
+              <div style={{ background: parsed.overdue.count ? "#FEF2F2" : "#ECFDF5", border: "1px solid " + (parsed.overdue.count ? "#FECACA" : "#A7F3D0"), borderRadius: 8, padding: "10px 13px", fontSize: 11.5, color: parsed.overdue.count ? "#B91C1C" : "#047857", lineHeight: 1.7, marginBottom: 10 }}>
+                <b>{parsed.overdue.count ? "⚠ 연체 이력 " + parsed.overdue.count + "건 (미해제 " + parsed.overdue.open + "건 · 해제 " + parsed.overdue.released + "건)" : "연체 이력 없음"}</b>
+                {parsed.overdue.count > 0 && (
+                  <div style={{ marginTop: 5 }}>
+                    {parsed.overdue.rows.map(function(r, i) {
+                      return (
+                        <div key={i} style={{ fontSize: 11 }}>
+                          · {r.inst || "기관미상"}{r.category ? " (" + r.category + ")" : ""}{r.at ? " · 발생 " + r.at : ""}
+                          {r.released
+                            ? <span style={{ color: "#047857", fontWeight: 700 }}> · 해제{r.releaseDate ? " " + r.releaseDate : ""}{r.releaseReason ? " (" + r.releaseReason + ")" : ""}</span>
+                            : <span style={{ fontWeight: 800 }}> · 미해제</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <div style={{ fontSize: 10.5, color: "#92400E", marginTop: 6 }}>
+                  연체 금액은 <b>기대출 내역에 넣지 않습니다</b>(부채 이중계상 방지). 기업정보의 <b>「연체 이력」</b> 항목에 요약 한 줄로 저장됩니다.
+                </div>
+              </div>
+            )}
 
             {parsed.checksum && !parsed.checksum.ok && (
               <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "9px 12px", fontSize: 11.5, color: "#B91C1C", fontWeight: 700, marginBottom: 10 }}>
@@ -19023,7 +19264,9 @@ function CreditReportImport({ existingCount, onApply, hideButton, openSignal }) 
                   {mode === "pick" && <th style={{ padding: "6px 5px", width: 34 }}></th>}
                   {(docType === "credit_report"
                     ? ["기관", "금액", "만기구조", "상태"]
-                    : ["기관 · 상품", "금액", "실행일", "만기일", "비고 · 상태"]).map(function(h) {
+                    : docType === "debtor_change"
+                      ? ["기관 · 대출종류", "금액", "발생일", "구분", "상태"]
+                      : ["기관 · 상품", "금액", "실행일", "만기일", "비고 · 상태"]).map(function(h) {
                     return <th key={h} style={{ padding: "6px 7px", textAlign: "left", fontWeight: 700, borderBottom: "1px solid #E8E5E0" }}>{h}</th>;
                   })}
                 </tr></thead>
@@ -19047,6 +19290,21 @@ function CreditReportImport({ existingCount, onApply, hideButton, openSignal }) 
                         </td>
                         {docType === "credit_report" ? (
                           <td style={{ padding: "5px 7px", borderBottom: "1px solid #F0EEEA", color: "#888" }}>{l.maturity_bucket || "-"}</td>
+                        ) : docType === "debtor_change" ? (
+                          <>
+                            <td style={{ padding: "5px 7px", borderBottom: "1px solid #F0EEEA", color: l.start ? "#333" : "#B91C1C" }}>{l.start || "없음"}</td>
+                            <td style={{ padding: "5px 7px", borderBottom: "1px solid #F0EEEA" }}>
+                              {(function() {
+                                var meta = loanKindMeta(l.kind);
+                                return (
+                                  <span title={l.kind_raw ? "문서의 ‘구분’ 열: " + l.kind_raw : "문서에 구분이 적혀 있지 않아 미분류로 넣습니다"}
+                                    style={{ background: meta.bg, color: meta.color, borderRadius: 5, padding: "2px 6px", fontWeight: 800, fontSize: 10 }}>
+                                    {meta.short}{l.kind_src ? " · 문서표기" : ""}
+                                  </span>
+                                );
+                              })()}
+                            </td>
+                          </>
                         ) : (
                           <>
                             <td style={{ padding: "5px 7px", borderBottom: "1px solid #F0EEEA", color: l.start ? "#333" : "#B91C1C" }}>{l.start || "없음"}</td>
@@ -19056,6 +19314,7 @@ function CreditReportImport({ existingCount, onApply, hideButton, openSignal }) 
                         <td style={{ padding: "5px 7px", borderBottom: "1px solid #F0EEEA", fontSize: 10.5 }}>
                           {l.remark ? <div style={{ color: "#6B7280", marginBottom: 2 }}>{l.remark}</div> : null}
                           {l.src_file && done.length > 1 ? <div style={{ color: "#94A3B8", fontSize: 9.5 }}>{l.src_file}</div> : null}
+                          {dupSet[loanDupKey(l)] ? <div><span title="기관명·발생일·금액이 같은 행이 기대출 내역에 이미 있습니다. ‘행별 선택’ 모드에서는 체크가 풀린 상태로 시작합니다." style={{ background: "#FEF3C7", color: "#92400E", borderRadius: 5, padding: "1px 5px", fontWeight: 800, fontSize: 9.5 }}>이미 있음</span></div> : null}
                           {l.needs_review ? <span style={{ color: "#B45309", fontWeight: 800 }}>⚠ {l.review_reason}</span>
                                           : <span style={{ color: "#047857", fontWeight: 700 }}>정상</span>}
                         </td>
@@ -19068,13 +19327,23 @@ function CreditReportImport({ existingCount, onApply, hideButton, openSignal }) 
 
             <div style={{ fontSize: 11.5, color: "#666", marginBottom: 8, lineHeight: 1.7 }}>
               {docType === "credit_report"
-                ? <>실행일·만기일은 문서에 없어 <b>비워둡니다</b>.</>
-                : <>실행일·만기일은 <b>문서에 적혀 있을 때만</b> 채웁니다(없으면 비움). 금액은 <b>잔액 우선</b>이고, 잔액 열이 없을 때만 차입금액을 씁니다. 잔액 0인 건은 <b>미실행</b>으로 남기며 합계에 넣지 않습니다.</>}
-              {" "}구분은 전건 <b>미분류</b>이며, 법인기업은 담당자가 구분을 지정해야 부채비율에 반영됩니다.
+                ? <>실행일·만기일은 문서에 없어 <b>비워둡니다</b>. 구분은 전건 <b>미분류</b>이며, 법인기업은 담당자가 구분을 지정해야 부채비율에 반영됩니다.</>
+                : docType === "debtor_change"
+                  ? <>실행일에는 <b>발생일자</b>를 넣고, 만기일은 문서에 없어 비웁니다. 금액은 문서의 단위 표기(<b>{parsed.unitLabel || "표기 없음"}</b>)로 환산했습니다. 구분은 문서의 <b>‘구분’ 열 그대로</b> {parsed.autoKind || 0}건을 지정했고, 적혀 있지 않은 행은 미분류입니다 — 반영 후 한 번 확인해주세요.</>
+                  : <>실행일·만기일은 <b>문서에 적혀 있을 때만</b> 채웁니다(없으면 비움). 금액은 <b>잔액 우선</b>이고, 잔액 열이 없을 때만 차입금액을 씁니다. 잔액 0인 건은 <b>미실행</b>으로 남기며 합계에 넣지 않습니다. 구분은 전건 <b>미분류</b>이며, 법인기업은 담당자가 구분을 지정해야 부채비율에 반영됩니다.</>}
             </div>
 
             <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 14, fontSize: 12 }}>
-              {[["append", "기존에 추가 (" + existingCount + "건 유지)"], ["replace", "전부 교체 (기존 삭제)"], ["pick", "행별 선택"]].map(function(m) {
+              {(function() {
+                var opts = [["append", "기존에 추가 (" + existingCount + "건 유지)"]];
+                // 같은 조회서를 다시 첨부한 경우 — 그 출처로 넣었던 행만 갈아끼운다(손으로 넣은 행은 그대로)
+                if (srcExistingCount > 0 && parsed.docTypes && parsed.docTypes.indexOf("debtor_change") >= 0) {
+                  opts.push(["replace_src", "채권자변동정보로 넣은 " + srcExistingCount + "건만 교체 (나머지 유지)"]);
+                }
+                opts.push(["replace", "전부 교체 (기존 삭제)"]);
+                opts.push(["pick", "행별 선택"]);
+                return opts;
+              })().map(function(m) {
                 return (
                   <label key={m[0]} style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", fontWeight: mode === m[0] ? 800 : 500 }}>
                     <input type="radio" name="creditMode" checked={mode === m[0]} onChange={function() { setMode(m[0]); }} />

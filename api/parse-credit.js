@@ -63,16 +63,19 @@ const MODEL = "claude-opus-5";
 const SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["doc_type", "doc_type_reason", "issuer", "section_title", "as_of", "queried_at", "unit_raw", "rows", "bank_rows", "subtotal_raw", "notes"],
+  required: ["doc_type", "doc_type_reason", "issuer", "section_title", "as_of", "queried_at", "unit_raw", "rows", "bank_rows", "debt_rows", "overdue_rows", "subtotal_raw", "notes"],
   properties: {
     doc_type: {
       type: "string",
-      enum: ["credit_report", "bank_certificate", "unknown"],
+      enum: ["credit_report", "bank_certificate", "debtor_change", "unknown"],
       description:
         "문서 종류. 문서 제목으로 판단한다. " +
         "bank_certificate = 제목에 '금융거래확인서'가 있는 문서. " +
         "credit_report = '기업 여신정보' 또는 '세부신용공여' 표가 있는 신용조회 문서. " +
-        "둘 중 어느 쪽인지 확신할 수 없으면 반드시 unknown. 추측해서 고르지 말 것.",
+        "debtor_change = 제목에 '채권자변동정보 조회서'가 있는 문서(발급기관: 한국신용정보원). " +
+        "'1. 채무현황' 표(순번/구분/대출종류/기관명/발생일자/금액)와 " +
+        "'2. 연체채권의 채권자 변동 현황' 표가 있는 것이 특징이다. " +
+        "셋 중 어느 것인지 확신할 수 없으면 반드시 unknown. 추측해서 고르지 말 것.",
     },
     doc_type_reason: {
       type: "string",
@@ -178,6 +181,65 @@ const SCHEMA = {
         },
       },
     },
+    debt_rows: {
+      type: "array",
+      description:
+        "doc_type=debtor_change 일 때만 채운다(아니면 빈 배열). " +
+        "'1. 채무현황' 표의 각 행을 문서 순서 그대로 1:1로 담는다. " +
+        "이 표는 여러 페이지에 걸쳐 이어진다(1쪽에 1건, 2쪽에 2~9번 식). 모든 페이지의 행을 빠짐없이 담을 것. " +
+        "같은 기관에 여러 건이면 각각 별도 행으로 담고 절대 합치지 않는다. " +
+        "'2. 연체채권의 채권자 변동 현황' 표의 행은 여기에 단 한 줄도 담지 않는다(overdue_rows 전용).",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["seq", "kind_raw", "loan_type", "institution", "start_date", "amount_raw", "is_subtotal"],
+        properties: {
+          seq: { type: "string", description: "순번 열의 값. 없으면 빈 문자열." },
+          kind_raw: {
+            type: "string",
+            description:
+              "'구분' 열 원문 그대로 (예: '개인사업자대출', '개인대출정보'). " +
+              "요약하거나 바꿔 적지 말 것. 없으면 빈 문자열.",
+          },
+          loan_type: { type: "string", description: "'대출종류' 열 원문 (예: 일반자금대출, 할부금융). 없으면 빈 문자열." },
+          institution: { type: "string", description: "'기관명' 열의 금융기관명. 없으면 빈 문자열." },
+          start_date: { type: "string", description: "'발생일자' 열. YYYY-MM-DD 로 정규화. 없으면 빈 문자열. 추측 금지." },
+          amount_raw: {
+            type: "string",
+            description:
+              "'금액' 열의 숫자를 원문 그대로 (쉼표 제거, 숫자와 소수점만). 단위 환산하지 말 것. " +
+              "읽을 수 없으면 빈 문자열.",
+          },
+          is_subtotal: {
+            type: "boolean",
+            description: "개별 채무가 아니라 소계/합계 행이면 true. '합계', '계', '소계', '총계' 등이 해당.",
+          },
+        },
+      },
+    },
+    overdue_rows: {
+      type: "array",
+      description:
+        "doc_type=debtor_change 일 때만 채운다(아니면 빈 배열). " +
+        "'2. 연체채권의 채권자 변동 현황' 표의 각 행을 문서 순서 그대로 1:1로 담는다. " +
+        "⚠️ 이 행들은 연체 이력 표시 전용이다. debt_rows·rows·bank_rows 에는 절대 넣지 않는다 " +
+        "(연체 금액을 대출로 넣으면 부채가 두 배가 된다). " +
+        "표가 없거나 '해당 없음'이면 빈 배열.",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["institution", "debt_category", "event_date", "principal_raw", "interest_raw", "release_reason", "release_date"],
+        properties: {
+          institution: { type: "string", description: "'금융기관명' 열. 없으면 빈 문자열." },
+          debt_category: { type: "string", description: "'채권구분' 열 원문. 없으면 빈 문자열." },
+          event_date: { type: "string", description: "'등록사유 발생일자'. YYYY-MM-DD 로 정규화. 없으면 빈 문자열." },
+          principal_raw: { type: "string", description: "'변제예정금액'의 원금 숫자 원문 (쉼표 제거). 단위 환산 금지. 없으면 빈 문자열." },
+          interest_raw: { type: "string", description: "'변제예정금액'의 이자 숫자 원문 (쉼표 제거). 단위 환산 금지. 없으면 빈 문자열." },
+          release_reason: { type: "string", description: "'해제사유' 열 원문 (예: 변제완료). 없으면 빈 문자열." },
+          release_date: { type: "string", description: "'해제일자'. YYYY-MM-DD 로 정규화. 해제되지 않았으면 빈 문자열." },
+        },
+      },
+    },
     subtotal_raw: {
       type: "string",
       description: "합계 행의 금액 숫자 (쉼표 제거). 여신정보는 '신용공여합계', 금융거래확인서는 대출잔액 합계. 검산용. 없으면 빈 문자열.",
@@ -196,7 +258,9 @@ const SYSTEM = [
   "먼저 문서 제목으로 종류를 판별하세요.",
   "· bank_certificate — 제목에 '금융거래확인서'가 있는 문서.",
   "· credit_report — '기업 여신정보' 조회 문서. '세부신용공여' 표, '금잔', '만기구조' 같은 머리글이 있습니다.",
-  "· 둘 중 무엇인지 확신할 수 없으면 doc_type=unknown 으로 두고 rows·bank_rows를 모두 빈 배열로 두세요.",
+  "· debtor_change — '채권자변동정보 조회서'(한국신용정보원 발급). '1. 채무현황' 과",
+  "  '2. 연체채권의 채권자 변동 현황' 두 표가 있고, 여러 페이지(보통 4쪽)로 이어집니다.",
+  "· 셋 중 무엇인지 확신할 수 없으면 doc_type=unknown 으로 두고 rows·bank_rows·debt_rows·overdue_rows를 모두 빈 배열로 두세요.",
   "  이때는 사용자가 직접 문서 종류를 고르게 됩니다. 애매한데 하나를 골라버리면 잘못된 값이 저장됩니다.",
   "",
   "공통 규칙:",
@@ -215,17 +279,27 @@ const SYSTEM = [
   "· bank_certificate → bank_rows 에만 담습니다. rows 는 빈 배열.",
   "  대출일자·만기일자는 문서에 적혀 있을 때만 YYYY-MM-DD 로 담고, 없으면 빈 문자열입니다.",
   "  차입금액(한도)과 잔액은 서로 다른 열입니다. 한 쪽만 있으면 있는 쪽만 담고 다른 쪽은 빈 문자열로 두세요.",
+  "· debtor_change → '1. 채무현황' 표는 debt_rows 에, '2. 연체채권의 채권자 변동 현황' 표는 overdue_rows 에 담습니다.",
+  "  rows·bank_rows 는 빈 배열입니다.",
+  "  표가 페이지를 넘어 이어집니다(1쪽에 1건, 2쪽에 2~9번 식). 마지막 페이지까지 모두 확인하고 순번을 빠뜨리지 마세요.",
+  "  금액 단위는 표 우상단에 '(단위: 천원)' 처럼 적혀 있습니다 — 그 표기를 unit_raw 에 원문 그대로 담고,",
+  "  금액 자체는 절대 환산하지 말고 문서의 숫자 그대로 담으세요(환산은 앱이 합니다).",
+  "  '구분' 열('개인사업자대출'·'개인대출정보')은 kind_raw 에 원문 그대로 담습니다. 바꿔 적지 마세요.",
   "",
   "★★ 금융거래확인서에서 읽을 섹션 (이것만 읽습니다) ★★",
   "  '1. 대출금 거래상황' / '1. 여신현황' / '1. 대출금 거래현황' / '2. 금융상품 거래현황'",
   "  이 중 문서에 있는 섹션의 표만 bank_rows에 담고, 그 섹션 제목 원문을 section_title에 적으세요.",
   "  넷 중 어느 것도 없으면 section_title을 빈 문자열, bank_rows를 빈 배열로 두세요.",
   "",
-  "★★ 절대 담으면 안 되는 섹션 ★★",
+  "★★ 금융거래확인서에서 절대 담으면 안 되는 섹션 ★★",
   "  · '2. 담보내용' / '2. 담보현황' — 여기의 설정금액을 대출로 담으면 부채가 두 배가 됩니다. 가장 위험합니다.",
   "  · '3. 최근 당좌 결제내용' / '카드결제현황'",
   "  · '4~6. 당좌부도 / 연체 여부 / 연체명세'",
   "  이 섹션들의 행은 단 한 줄도 bank_rows에 넣지 마세요.",
+  "",
+  "★★ 연체 표에 대한 예외 (debtor_change 에만 해당) ★★",
+  "  채권자변동정보 조회서의 '2. 연체채권의 채권자 변동 현황' 표는 overdue_rows 에 담습니다.",
+  "  단 그 행을 debt_rows·rows·bank_rows 에 넣는 것은 여전히 금지입니다 — 연체 금액을 대출로 넣으면 부채가 두 배가 됩니다.",
 ].join("\n");
 
 export default async function handler(req, res) {
@@ -262,7 +336,9 @@ export default async function handler(req, res) {
         ? "이 문서는 '기업 여신정보'입니다. doc_type=credit_report 로 두고 '세부신용공여' 표를 rows에 그대로 옮겨 적어주세요."
         : hint === "bank_certificate"
           ? "이 문서는 '금융거래확인서'입니다. doc_type=bank_certificate 로 두고 대출 명세를 bank_rows에 그대로 옮겨 적어주세요."
-          : "먼저 이 문서가 '기업 여신정보'인지 '금융거래확인서'인지 판별하고, 해당 표를 스키마에 맞춰 그대로 옮겨 적어주세요. 확신할 수 없으면 doc_type=unknown 으로 두세요. 금융거래확인서라면 허용된 1번 섹션만 읽고 담보내용 섹션은 절대 읽지 마세요.";
+          : hint === "debtor_change"
+            ? "이 문서는 '채권자변동정보 조회서'입니다. doc_type=debtor_change 로 두고 '1. 채무현황' 표를 debt_rows 에, '2. 연체채권의 채권자 변동 현황' 표를 overdue_rows 에 그대로 옮겨 적어주세요. 표가 여러 페이지로 이어지니 마지막 쪽까지 확인하고, 금액은 환산하지 말고 단위 표기는 unit_raw 에 담아주세요."
+            : "먼저 이 문서가 '기업 여신정보'·'금융거래확인서'·'채권자변동정보 조회서' 중 어느 것인지 판별하고, 해당 표를 스키마에 맞춰 그대로 옮겨 적어주세요. 확신할 수 없으면 doc_type=unknown 으로 두세요. 금융거래확인서라면 허용된 1번 섹션만 읽고 담보내용 섹션은 절대 읽지 마세요.";
 
     // PDF는 document 블록, 이미지는 image 블록. 둘 다 텍스트 블록보다 앞에 둔다.
     const docBlock = isPdf
