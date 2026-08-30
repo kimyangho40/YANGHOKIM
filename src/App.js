@@ -1,6 +1,7 @@
 /* eslint-disable no-unused-vars, react-hooks/exhaustive-deps, no-redeclare */
 import { useState, useMemo, useEffect, useLayoutEffect, useCallback, useRef, Fragment } from "react";
 import { createClient } from "@supabase/supabase-js";
+import AgencySites from "./pages/AgencySites";
 
 // ── Supabase 설정 ─────────────────────────────────────────────────────────────
 // 내보내기(목록 복사) 권한을 가진 계정 이메일 — 이 계정만 내보내기 버튼이 보임
@@ -8553,6 +8554,7 @@ function CRMApp({ profile, session }) {
             { id: "worknotes",  label: "업무 노트",   icon: "edit" },
             { id: "chat",       label: "채팅",        icon: "chat" },
             { id: "list",       label: "기업 목록",   icon: "list" },
+            { id: "agency-sites", label: "기관 사이트", icon: "building" },
             { id: "pipeline",   label: "파이프라인",  icon: "pipeline" },
             { id: "cases",      label: "사례집",      icon: "folder" },
             { id: "signoff",    label: "결재함",      icon: "save" },
@@ -8907,6 +8909,10 @@ function CRMApp({ profile, session }) {
             {/* 전체 담당자 보기는 업무노트 열람 권한(wnIsAdmin=양호)과 같은 기준으로. role='admin' 만으로는 DB(RLS)가 남의 노트를 안 준다 */}
             {view === "mytodo" && <MyTodoView currentUser={profile?.name} isAdmin={wnIsAdmin(profile?.name)} onSelectCompany={setSelectedCompany} setView={setView} companies={companies} />}
             {view === "list" && <ListView filtered={filtered} companies={companies} search={search} setSearch={setSearch} filterStage={filterStage} setFilterStage={setFilterStage} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} filterType={filterType} setFilterType={setFilterType} filterAgency={filterAgency} setFilterAgency={setFilterAgency} filterTeam={filterTeam} setFilterTeam={setFilterTeam} creditFilter={creditFilter} setCreditFilter={setCreditFilter} creditMode={creditMode} setCreditMode={setCreditMode} assignees={assignees} onSelect={openCompany} onAdd={() => setShowAdd(true)} setCompanies={setCompanies} showToast={showToast} dashboardFilter={dashboardFilter} setDashboardFilter={setDashboardFilter} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
+            {/* 🏛 기관 사이트 — supabase 를 prop 으로 받는 자체 완결 컴포넌트(src/pages/AgencySites.jsx).
+                모듈 최상단의 기존 클라이언트를 그대로 넘긴다. 새로 createClient 하면 GoTrueClient 가
+                두 개가 되어 토큰 갱신이 서로 싸운다. */}
+            {view === "agency-sites" && <AgencySites supabase={supabase} />}
             {view === "stagnant" && <StagnantView stagnant={stagnant} onSelect={setSelectedCompany} />}
             {view === "olddocs" && <OldDocsView companies={companies} setCompanies={setCompanies} onSelect={setSelectedCompany} />}
             {view === "members" && profile.role === "admin" && <MembersView profiles={profiles} onRefresh={fetchAll} showToast={showToast} />}
