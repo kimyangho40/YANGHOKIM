@@ -7692,6 +7692,23 @@ function CRMApp({ profile, session }) {
     return { rows: rows, hiddenByList: all.length - listed.length };
   }, [pipelineCards, companyById, search, filterStage, filterAssignee, filterType, filterAgency, filterTeam, creditFilter, creditMode]);
   const pipelineCardRows = pipelineCardData.rows;
+  // 🃏 살아있는 카드가 한 장도 없는 기업 — 파이프라인 보드의 「＋ 카드 없는 기업」 버튼용. (2026-08-30)
+  // 카드를 만드는 경로는 전부 agency_cases INSERT 에 붙어 있어(CLAUDE.md 🃏 절), 기관현황에 줄이
+  // 한 번도 안 생긴 기업은 보드에 나타날 방법이 아예 없다. 기업상세에서 companies.stage 만 올려 둔
+  // 업체가 실제로 있다(2026-08-30 실측 10개 · 그중 4개는 이미 진행 중 단계).
+  // ⚠️ 새 쿼리를 쓰지 않는다 — companies·pipelineCards 둘 다 이미 이 컴포넌트가 들고 있다.
+  // ⚠️ 목록 필터(search/filterStage/…)를 일부러 안 탄다. 이 버튼은 "보드에 없는 것"을 찾는 장치라
+  //    보드 필터로 또 거르면 정작 찾으려던 기업이 안 보인다.
+  const companiesWithoutCard = useMemo(() => {
+    const has = new Set();
+    (pipelineCards || []).forEach(card => {
+      if (card.deleted_at || !card.company_id) return;   // 🗑 휴지통 카드는 "있다"로 치지 않는다(복구 안내는 dupAlert 담당)
+      has.add(card.company_id);
+    });
+    return (companies || [])
+      .filter(co => !co.deleted_at && !has.has(co.id))
+      .sort((a, b) => (a.name || "").localeCompare(b.name || "", "ko"));
+  }, [companies, pipelineCards]);
   // 파이프라인 화면에서 목록 필터를 한 번에 해제
   const clearListFilters = () => {
     setSearch(""); setFilterStage("전체"); setFilterType("전체");
@@ -8884,7 +8901,7 @@ function CRMApp({ profile, session }) {
             {view === "calendar" && <CalendarView companies={companies} onSelectCompany={setSelectedCompany} profile={profile} />}
             {view === "manual" && <ManualView />}
             {view === "quicklinks" && <QuickLinksView />}
-            {view === "pipeline" && <PipelineView cardRows={pipelineCardRows} hiddenByList={pipelineCardData.hiddenByList} onClearListFilters={clearListFilters} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setPipelineCards={setPipelineCards} setStagnConfig={setStagnConfig} canEditMapping={profile?.name === "양호"} myName={profile?.name} stagnRows={stagnRows} />}
+            {view === "pipeline" && <PipelineView cardRows={pipelineCardRows} hiddenByList={pipelineCardData.hiddenByList} onClearListFilters={clearListFilters} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setPipelineCards={setPipelineCards} setStagnConfig={setStagnConfig} canEditMapping={profile?.name === "양호"} myName={profile?.name} stagnRows={stagnRows} noCardCompanies={companiesWithoutCard} />}
             {view === "cases" && <ApprovalCasesView profile={profile} />}
             {view === "signoff" && <SignOffView profile={profile} onBadgeUpdate={setSignOffBadge} />}
             {/* 전체 담당자 보기는 업무노트 열람 권한(wnIsAdmin=양호)과 같은 기준으로. role='admin' 만으로는 DB(RLS)가 남의 노트를 안 준다 */}
@@ -11227,9 +11244,14 @@ function MappingModal({ onClose, setPipelineCards, setStagnConfig, canEdit }) {
 // ── 기관 선택 모달 ────────────────────────────────────────────────────────────
 // mode="add"   : 새 기관 추가 신청 → 같은 회사 + 고른 기관 조합 카드를 STEP1로 생성
 // mode="assign": 기관 미지정 카드에 기관 지정
+// mode="new"   : 카드가 한 장도 없는 기업의 첫 카드 생성 (2026-08-30)
+//   ⚠️ "add" 와 동작이 완전히 같다 — 부르는 쪽에서 row.card 를 가짜로 만들어 넘긴다(아래 openNewCardPick).
+//      다른 것은 안내 문구뿐이다. "add" 문구는 "(현재 카드: …)" 를 적는데, 카드가 없는 기업에
+//      그걸 띄우면 "(기관 미지정)" 이라는 거짓말이 된다.
 function AgencyPickModal({ row, mode, onClose, onPick }) {
   const [busy, setBusy] = useState(false);
-  var isAdd = mode === "add";
+  var isNew = mode === "new";
+  var isAdd = mode === "add" || isNew;
   var pick = async function(id) {
     if (busy) return;
     setBusy(true);
@@ -11241,12 +11263,15 @@ function AgencyPickModal({ row, mode, onClose, onPick }) {
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div onClick={function(e) { e.stopPropagation(); }} style={{ background: "#fff", borderRadius: 16, width: "min(420px, 96vw)", padding: 22 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>{isAdd ? "새 기관 추가 신청" : "기관 지정"}</h2>
+          <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>{isNew ? "첫 카드 만들기" : isAdd ? "새 기관 추가 신청" : "기관 지정"}</h2>
           <button onClick={onClose} style={{ border: "none", background: "#F0EFEB", borderRadius: 8, padding: "5px 10px", cursor: "pointer", fontSize: 13 }}>닫기</button>
         </div>
         <p style={{ fontSize: 12, color: "#888", margin: "0 0 14px", lineHeight: 1.6 }}>
           <b style={{ color: "#1A1917" }}>{row.co.name}</b>
-          {isAdd
+          {isNew
+            ? <> — 신청할 기관을 고르면 <b>STEP1 ({STAGES[0]})</b>에 첫 카드가 생깁니다.<br />
+                <span style={{ color: "#B45309" }}>이 기업은 지금 보드에 카드가 한 장도 없습니다.</span></>
+            : isAdd
             ? <> — 추가로 신청할 기관을 고르면 <b>STEP1 ({STAGES[0]})</b>에 새 카드가 생깁니다.<br />(현재 카드: {agencyLabel(row.card.agency_group)})</>
             : <> — 이 카드가 어느 기관 건인지 지정합니다. 지정하면 기관현황과 자동 연동됩니다.</>}
         </p>
@@ -11260,6 +11285,67 @@ function AgencyPickModal({ row, mode, onClose, onPick }) {
                 <span style={{ width: 8, height: 8, borderRadius: 99, background: g.color, flexShrink: 0 }} />
                 <span style={{ fontSize: 13, fontWeight: 700, color: same ? "#AAA" : "#1A1917" }}>{g.label}</span>
                 {same && <span style={{ fontSize: 11, color: "#AAA", marginLeft: "auto" }}>현재 기관</span>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── 🃏 카드 없는 기업 고르기 (2026-08-30) ────────────────────────────────────
+// 파이프라인 보드 헤더의 「＋ 카드 없는 기업 N」 → 이 모달에서 기업을 고르면
+// 곧바로 AgencyPickModal(mode="new") 이 열려 기관을 고른다. 2단계인 이유는
+// **기존 카드 생성 경로(addAgencyCard)를 한 줄도 안 고치고 그대로 쓰기 위해서**다.
+// ⚠️ 여기서는 아무것도 저장하지 않는다 — 고른 기업을 돌려줄 뿐이다(MemoEditModal 과 같은 원칙).
+function NoCardCompanyModal({ list, onClose, onPick }) {
+  const [q, setQ] = useState("");
+  var nq = (q || "").trim().toLowerCase();
+  var shown = !nq ? list : list.filter(function(co) {
+    return (co.name || "").toLowerCase().includes(nq)
+      || (co.representative || "").toLowerCase().includes(nq)
+      || (co.assignee || "").toLowerCase().includes(nq);
+  });
+  return (
+    <div
+      /* 바깥 클릭으로는 닫지 않는다 — 다른 모달과 같은 규칙. */
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div onClick={function(e) { e.stopPropagation(); }} style={{ background: "#fff", borderRadius: 16, width: "min(520px, 96vw)", maxHeight: "86vh", padding: 22, display: "flex", flexDirection: "column" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>＋ 카드 없는 기업 ({list.length}개)</h2>
+          <button onClick={onClose} style={{ border: "none", background: "#F0EFEB", borderRadius: 8, padding: "5px 10px", cursor: "pointer", fontSize: 13 }}>닫기</button>
+        </div>
+        <p style={{ fontSize: 12, color: "#888", margin: "0 0 12px", lineHeight: 1.6 }}>
+          기업목록에는 있는데 <b style={{ color: "#1A1917" }}>파이프라인 보드에 카드가 한 장도 없는</b> 기업입니다.
+          기관현황에 줄이 한 번도 안 생기면 카드가 만들어질 방법이 없어 여기 남습니다.<br />
+          기업을 고르면 기관을 골라 <b>STEP1 ({STAGES[0]})</b>에 첫 카드를 만듭니다.
+        </p>
+        <input value={q} onChange={function(e) { setQ(e.target.value); }} placeholder="업체·대표자·담당자 검색"
+          style={{ padding: "8px 11px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, outline: "none", marginBottom: 10 }} />
+        <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+          {shown.length === 0 && (
+            <div style={{ fontSize: 13, color: "#999", textAlign: "center", padding: "24px 0" }}>
+              {list.length === 0 ? "카드 없는 기업이 없습니다. 👍" : "검색 결과가 없습니다."}
+            </div>
+          )}
+          {shown.map(function(co) {
+            // companies.stage 는 아무도 자동으로 안 고치는 값이지만(CLAUDE.md 1절), 여기서는
+            // "사람이 어디까지 진행했다고 적어 뒀나"를 보여주는 힌트로 딱 맞다.
+            var st = co.stage || "";
+            var busyStage = st && st !== STAGES[0];
+            return (
+              <button key={co.id} onClick={function() { onPick(co); }}
+                style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 12px", borderRadius: 9, cursor: "pointer",
+                  border: "1px solid #E8E5E0", background: "#fff", textAlign: "left" }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#1A1917", flexShrink: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{co.name}</span>
+                {co.assignee && <span style={{ fontSize: 11, color: "#888", flexShrink: 0 }}>{co.assignee}</span>}
+                {st && (
+                  <span title={busyStage ? "기업상세에는 이미 진행 중으로 적혀 있는데 보드에는 카드가 없습니다." : ""}
+                    style={{ marginLeft: "auto", flexShrink: 0, fontSize: 11, fontWeight: 700, borderRadius: 99, padding: "3px 9px",
+                      color: busyStage ? "#B45309" : "#888", background: busyStage ? "#FEF3C7" : "#F7F6F3",
+                      border: "1px solid " + (busyStage ? "#FDE68A" : "#E8E5E0") }}>{st}</span>
+                )}
               </button>
             );
           })}
@@ -11339,7 +11425,7 @@ function normPipeSearchName(s) {
 }
 function onlyDigits(s) { return String(s == null ? "" : s).replace(/[^0-9]/g, ""); }
 
-function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssignee, setFilterAssignee, assignees, onSelect, setPipelineCards, setStagnConfig, canEditMapping, myName, stagnRows }) {
+function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssignee, setFilterAssignee, assignees, onSelect, setPipelineCards, setStagnConfig, canEditMapping, myName, stagnRows, noCardCompanies }) {
   // 파이프라인 탭 진입 시 카드 최신화 (기관현황 자동동기화 결과 반영)
   useEffect(function() {
     var alive = true;
@@ -11381,7 +11467,8 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
   const [mineOnly, setMineOnly] = useState(false);   // 내 담당 건만 보기
   const [stagnOnly, setStagnOnly] = useState(false); // 정체 카드만 모아보기
   const [showClosed, setShowClosed] = useState(false); // 종결(부결/반려) 카드 포함
-  const [agencyPick, setAgencyPick] = useState(null); // { row, mode: "add" | "assign" }
+  const [agencyPick, setAgencyPick] = useState(null); // { row, mode: "add" | "assign" | "new" }
+  const [showNoCard, setShowNoCard] = useState(false); // 🃏 카드 없는 기업 고르기 모달
   const [reasonEdit, setReasonEdit] = useState(null); // 기타 사유 지정 대상 row
   const [holdOnly, setHoldOnly] = useState(false);   // ⏸ 보류 카드만 모아보기
 
@@ -11607,6 +11694,16 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
     if (setPipelineCards) setPipelineCards(function(prev) { return prev.concat([ins.data]); });
     setAgencyPick(null);
     alert("'" + row.co.name + " · " + agencyLabel(agencyId) + "' 카드를 STEP1(" + STAGES[0] + ")에 만들었습니다.");
+  };
+
+  // ①-2 카드가 한 장도 없는 기업의 첫 카드 (2026-08-30)
+  // ⚠️ 새 저장 경로를 만들지 않는다 — 가짜 row 를 만들어 위 addAgencyCard 를 그대로 태운다.
+  //    findDupCard 도 card.company_id / card.business_name 두 필드만 읽으므로 이걸로 충분하고,
+  //    같은 조합 카드가 휴지통에 있으면 dupAlert 의 "복구해 주세요" 안내가 공짜로 붙는다.
+  //    (unique index 는 (company_id, agency_group) 이라 삭제분이 슬롯을 쥔 채라 insert 가 실패한다 — CLAUDE.md 파이프라인 휴지통 절)
+  var openNewCardPick = function(co) {
+    setShowNoCard(false);
+    setAgencyPick({ mode: "new", row: { co: co, card: { company_id: co.id, business_name: co.name || "", agency_group: null } } });
   };
 
   // ② 기관 미지정 카드에 기관 지정
@@ -11922,6 +12019,13 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{ fontSize: 12, color: "#888" }}>표시 <b style={{ color: "#1A1917" }}>{visibleRows.length}</b> / 전체 {(cardRows || []).length}장</span>
+          {(noCardCompanies || []).length > 0 && (
+            // 🃏 보드에 카드가 없는 기업 — 기관현황에 줄이 없으면 카드가 생길 방법이 없어 보드에서 통째로 빠진다.
+            <button onClick={function() { setShowNoCard(true); }}
+              title={"파이프라인 보드에 카드가 한 장도 없는 기업 " + noCardCompanies.length + "개 — 기관을 골라 첫 카드를 만들 수 있습니다."}
+              style={{ padding: "7px 12px", border: "1px solid #FDE68A", borderRadius: 7, fontSize: 13, background: "#FFFBEB", cursor: "pointer", fontWeight: 700, color: "#B45309" }}>
+              ＋ 카드 없는 기업 ({noCardCompanies.length})</button>
+          )}
           <button onClick={openTrash} title="삭제한 카드 보기 · 복구 (기업 정보와 기관현황은 지워지지 않습니다)"
             style={{ padding: "7px 12px", border: "1px solid " + (trashCount ? "#E5E7EB" : "#E8E5E0"), borderRadius: 7, fontSize: 13, background: "#fff", cursor: "pointer", fontWeight: 600, color: "#6B7280" }}>
             🗑️ 휴지통{trashCount ? " (" + trashCount + ")" : ""}</button>
@@ -12054,7 +12158,8 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
       )}
       {showMapping && <MappingModal onClose={function() { setShowMapping(false); }} setPipelineCards={setPipelineCards} setStagnConfig={setStagnConfig} canEdit={!!canEditMapping} />}
       {agencyPick && <AgencyPickModal row={agencyPick.row} mode={agencyPick.mode} onClose={function() { setAgencyPick(null); }}
-        onPick={function(agId) { return agencyPick.mode === "add" ? addAgencyCard(agencyPick.row, agId) : assignAgency(agencyPick.row, agId); }} />}
+        onPick={function(agId) { return agencyPick.mode === "assign" ? assignAgency(agencyPick.row, agId) : addAgencyCard(agencyPick.row, agId); }} />}
+      {showNoCard && <NoCardCompanyModal list={noCardCompanies || []} onClose={function() { setShowNoCard(false); }} onPick={openNewCardPick} />}
       {reasonEdit && <OtherReasonModal row={reasonEdit} onClose={function() { setReasonEdit(null); }}
         onSave={function(rid, note) { return saveOtherReason(reasonEdit, rid, note); }} />}
 

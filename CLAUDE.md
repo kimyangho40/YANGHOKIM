@@ -782,6 +782,51 @@ unique index 는 `(company_id, agency_group)` 이라 `company_id` 가 null 인 �
 - 카드 지문(id+stage+stage_changed_at+sync_mode) **배포 전후 동일** — 코드 변경만으로는 한 장도 안 움직인다.
 - `CI=true npx react-scripts build` 통과 · `node scripts/audit-select-columns.mjs` 0건.
 
+## 🃏 보드에 카드가 없는 기업 — 「＋ 카드 없는 기업」 (2026-08-30, **DB 변경 0건 · 새 쿼리 0건**)
+
+### 왜 필요했나 — 임팩트레이드 실측
+카드를 만드는 경로는 **6곳 전부 `agency_cases` INSERT 에 붙어 있다**(위 🃏 절). 그래서
+**기관현황에 줄이 한 번도 안 생긴 기업은 보드에 나타날 방법이 아예 없다.**
+`주식회사 임팩트레이드 (IMPACTRADE)` 실측(2026-08-30): 기업 살아있음 · `companies.stage`=`필수서류 및 인증서요청` ·
+**`agency_cases` 0건 · `pipeline_cards` 0장(삭제분 포함)**. 버그가 아니라 구조다.
+→ 기업목록엔 진행 중으로 보이는데 보드에선 통째로 빠진다.
+
+**같은 처지 10개 / 살아있는 기업 404**(2026-08-30). 그중 카드 0장인데 **기관현황 줄이 있는 기업은 0개** —
+즉 "줄은 있는데 카드가 안 생긴" 진짜 버그는 없다. 단계가 이미 진행 중인 4개:
+임팩트레이드·천씨씨커피(방어점)[필수서류 및 인증서요청] · 비즈팟(일반과세자)·선사현대창의사고력수학교습소[기타].
+
+### 만든 것 — 진입점 하나. **저장 경로는 새로 만들지 않았다**
+보드 헤더 `＋ 카드 없는 기업 (N)` → `NoCardCompanyModal`(기업 고르기) → 기존 `AgencyPickModal`(기관 고르기)
+→ **기존 `addAgencyCard` 를 그대로 호출**.
+- ⚠️ **가짜 row 를 만들어 넘긴다**(`openNewCardPick`): `{ co, card: { company_id, business_name, agency_group: null } }`.
+  `findDupCard` 도 `company_id`/`business_name` 두 필드만 읽으므로 이걸로 충분하고,
+  **같은 조합 카드가 휴지통에 있으면 `dupAlert` 의 "복구해 주세요" 안내가 공짜로 붙는다**
+  (unique index 가 `(company_id, agency_group)` 라 삭제분이 슬롯을 쥔 채여서 insert 가 실패한다 — 휴지통 절 참고).
+- `AgencyPickModal` 에 **`mode="new"` 는 문구 분기만** 추가했다. `isAdd = mode==="add" || isNew` 라 동작은 "add"와 동일.
+  ⚠️ `onPick` 삼항을 `mode==="add"?add:assign` → **`mode==="assign"?assign:add`** 로 뒤집었다(기본값이 add).
+  기존 두 모드의 동작은 완전히 그대로다.
+- `companiesWithoutCard` memo 는 **`companies`·`pipelineCards` 를 그대로 쓴다 — supabase 호출 0건 추가.**
+- ⚠️ **보드 필터(검색·단계·기관·담당자)를 일부러 안 탄다.** 이 버튼은 "보드에 없는 것"을 찾는 장치라
+  보드 필터로 또 거르면 정작 찾으려던 기업이 안 보인다.
+- ⚠️ **`agency_cases` 줄은 만들지 않는다** — 기존 「새 기관 추가 신청」과 같다. C가 원본이라는 원칙상
+  기관현황 등록은 기관현황 화면에서 해야 하고, 여기서 만들면 **쓰기 경로가 7번째로 늘어난다.**
+- ⚠️ `companies.stage` 도 안 건드린다(A는 아무도 자동으로 안 고친다는 현행 규칙 유지).
+  모달 목록의 단계 배지는 **"사람이 어디까지 적어 뒀나" 힌트로만** 쓴다(STEP1 이 아니면 주황색).
+
+### ⚠️ 같이 발견한 별건 — 보드에서 조용히 사라진 살아있는 카드 13장 (미조치)
+`App.js` `pipelineCardData` 가 `companyById.get(card.company_id)` 로 기업을 못 찾으면 **`null` 로 버린다.**
+그 버림은 `hiddenByList`("필터로 숨겨진 N장") **집계보다 앞이라 화면에 아무 흔적도 안 남는다.**
+실측 13장 = `company_id` 없는 이름 카드 8장 + **기업이 휴지통인 카드 5장**
+(진성스포츠·하랑소곱창×2·조은상사×2 — 기업을 soft delete 하면 그 카드가 조용히 사라진다는 뜻).
+→ 이번 범위 밖. 고칠 거면 "버려진 장수"를 세어 배너에 띄우는 것부터가 안전하다.
+
+### 검증
+- `node scripts/test-nocard.mjs` **5/5** — **App.js 소스에서 memo 콜백을 떼어내** 실제 DB 덤프(기업 1,050행·카드 816장)로 실행.
+  JS 결과 10개가 SQL 기대값과 **완전 일치**(건수·목록·임팩트레이드 포함·휴지통 기업 제외·카드 있는 기업 제외).
+- **카드 지문(id+stage+stage_changed_at+sync_mode) 배포 전후 동일** `82af5755…` (816장/살아있는 814장)
+  → 코드 변경만으로는 한 장도 안 움직인다.
+- `node scripts/audit-select-columns.mjs` 0건 · `CI=true npx react-scripts build` 통과(main.js +896 B).
+
 ## 📝 메모 확대 편집 팝업 (2026-08-21, **DB 변경 0건 · 저장 로직 0줄**)
 
 좁은 칸(표 한 줄짜리 input · 사이드패널 rows=3~4 textarea)을 누르면 넉넉한 창이 열린다.
