@@ -14702,6 +14702,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
   const [commLogs, setCommLogs] = useState([]);
   // 🕒 타임라인 탭: 연결된 업무노트 + 전체 활동로그 병합
   const [timelineNotes, setTimelineNotes] = useState([]);
+  const [timelineLinks, setTimelineLinks] = useState([]);   // @기업 태그로 연결된 업무노트 항목(note_company_links)
   const [timelineLogs, setTimelineLogs] = useState([]);
   const [timelineLoaded, setTimelineLoaded] = useState(false);
   const [timelineLoading, setTimelineLoading] = useState(false);
@@ -15215,16 +15216,21 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
     });
   }, [company.id, company.name]);
 
-  // 🕒 타임라인 로드: 연결 업무노트 + 전체 활동로그(company_id·case_id 둘 다)
+  // 🕒 타임라인 로드: 연결 업무노트 + 전체 활동로그(company_id·case_id 둘 다) + @태그된 업무노트 항목
   var loadTimeline = async function() {
     if (!company.id) return;
     setTimelineLoading(true);
     var results = await Promise.all([
       supabase.from("activity_logs").select("*").or("company_id.eq." + company.id + ",case_id.eq." + company.id).is("deleted_at", null).order("created_at", { ascending: false }),
       supabase.from("work_notes").select("id,title,content,created_at,note_date,assignee,is_done").eq("company_id", company.id).is("deleted_at", null).order("created_at", { ascending: false }),
+      // 📌 @기업 태그로 연결된 업무노트 항목. 기업당 최대 19행(2026-08-31 실측)이라
+      //    fetchAllRows 가 필요 없다 — PostgREST 1000행 상한과 무관하다.
+      supabase.from("note_company_links").select("id,source,item_text,at,author")
+        .eq("company_id", company.id).is("deleted_at", null).order("at", { ascending: false }),
     ]);
     if (!results[0].error) setTimelineLogs(results[0].data || []);
     if (!results[1].error) setTimelineNotes(results[1].data || []);
+    if (!results[2].error) setTimelineLinks(results[2].data || []);
     setTimelineLoading(false);
     setTimelineLoaded(true);
   };
@@ -16760,12 +16766,13 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
           {/* 🕒 타임라인 탭 — 소통내역 + 연결 업무노트 + 단계변경 시간순 병합 */}
           {tab === "timeline" && (
             <div>
-              <div style={{ fontSize: 12, color: "#888", marginBottom: 12 }}>소통내역 · 연결된 업무노트 · 진행단계 변경을 시간순으로 모았어요.</div>
+              <div style={{ fontSize: 12, color: "#888", marginBottom: 12 }}>소통내역 · 연결된 업무노트 · @태그된 업무노트 항목 · 진행단계 변경을 시간순으로 모았어요.</div>
               {timelineLoading ? (
                 <div style={{ padding: "40px 0", textAlign: "center", color: "#AAA", fontSize: 13 }}>타임라인 불러오는 중...</div>
               ) : (function() {
                 var SRC = {
                   "업무노트": { bg: "#F0FDF4", color: "#15803D", border: "#BBF7D0" },
+                  "업무노트항목": { bg: "#EFF6FF", color: "#1D4ED8", border: "#BFDBFE" },
                   "소통내역": { bg: "#F0F9FF", color: "#075985", border: "#BAE6FD" },
                   "단계변경": { bg: "#F5F3FF", color: "#7C3AED", border: "#DDD6FE" },
                 };
@@ -16778,6 +16785,12 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                 (timelineNotes || []).forEach(function(n) {
                   var preview = (n.title && n.title.trim()) ? n.title.trim() : ((n.content || "").split("\n").map(function(s) { return s.replace(/^- \[[ x]\]\s*/i, "").trim(); }).filter(Boolean)[0] || "(내용 없음)");
                   items.push({ at: n.created_at || (n.note_date ? n.note_date + "T00:00:00" : null), kind: "업무노트", text: (n.is_done ? "✅ " : "📝 ") + preview, by: n.assignee || "" });
+                });
+                // 📌 @기업 태그로 연결된 업무노트 항목(팀 체크리스트 · 개인 노트 줄)
+                // ⚠️ 위 "업무노트"(note_auto)와 내용이 겹치는 것이 있다 — 그쪽은 **완료 체크 시** 남는 기록이고
+                //    이쪽은 **항목을 쓴 시점**이라 사건이 다르다. 뱃지를 나눠 둘 다 보여준다.
+                (timelineLinks || []).forEach(function(l) {
+                  items.push({ at: l.at, kind: "업무노트항목", text: l.item_text || "", by: l.author || "", mention: true });
                 });
                 items = items.filter(function(x) { return x.at; }).sort(function(a, b) { return new Date(b.at) - new Date(a.at); });
                 if (items.length === 0) return (<div style={{ padding: "40px 0", textAlign: "center", color: "#AAA", fontSize: 13 }}>표시할 타임라인 기록이 없어요.</div>);
@@ -16796,7 +16809,9 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                               <span style={{ fontSize: 10, fontWeight: 700, color: s.color, background: s.bg, border: "1px solid " + s.border, borderRadius: 99, padding: "1px 7px" }}>{it.kind}</span>
                               <span style={{ fontSize: 10, color: "#999" }}>{it.by || "-"} · {it.at ? new Date(it.at).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "numeric", minute: "numeric" }) : "-"}</span>
                             </div>
-                            <div style={{ fontSize: 13, color: "#333", lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{it.text || "-"}</div>
+                            <div style={{ fontSize: 13, color: "#333", lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                              {it.mention ? renderMentionText(it.text || "-", companies) : (it.text || "-")}
+                            </div>
                           </div>
                         </div>
                       );
