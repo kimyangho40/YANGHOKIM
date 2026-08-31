@@ -14703,6 +14703,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
   // 🕒 타임라인 탭: 연결된 업무노트 + 전체 활동로그 병합
   const [timelineNotes, setTimelineNotes] = useState([]);
   const [timelineLinks, setTimelineLinks] = useState([]);   // @기업 태그로 연결된 업무노트 항목(note_company_links)
+  const [openRepeat, setOpenRepeat] = useState({});         // 이월·가져가기로 반복된 항목의 날짜 펼침 상태
   const [timelineLogs, setTimelineLogs] = useState([]);
   const [timelineLoaded, setTimelineLoaded] = useState(false);
   const [timelineLoading, setTimelineLoading] = useState(false);
@@ -16789,8 +16790,30 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                 // 📌 @기업 태그로 연결된 업무노트 항목(팀 체크리스트 · 개인 노트 줄)
                 // ⚠️ 위 "업무노트"(note_auto)와 내용이 겹치는 것이 있다 — 그쪽은 **완료 체크 시** 남는 기록이고
                 //    이쪽은 **항목을 쓴 시점**이라 사건이 다르다. 뱃지를 나눠 둘 다 보여준다.
+                //
+                // ⚠️ 같은 문장이 여러 번 들어온다. 원인이 둘이다(2026-08-31 실측 277건 중 고유 166문장):
+                //    ① 이월 — 다음 날로 넘기면 그 줄이 날마다 노트에 복사된다(최다 9회)
+                //    ② 가져가기 — 팀 항목을 가져가면 개인 노트에 같은 문장이 복사된다(같은 날 2줄, 41건)
+                //    둘 다 데이터가 틀린 게 아니라 **실제로 그날 그 업무가 살아 있었다**는 기록이다.
+                //    그래서 DB 는 그대로 두고 **표시할 때만** 접는다 — 되돌리기 쉽고 이월 이력도 보존된다.
+                var linkNorm = function(s) {
+                  return String(s || "").replace(/\(?→\s*\d{1,2}\/\d{1,2}\s*이월\)?/g, "").replace(/\s+/g, " ").trim();
+                };
+                var linkGroups = {};
                 (timelineLinks || []).forEach(function(l) {
-                  items.push({ at: l.at, kind: "업무노트항목", text: l.item_text || "", by: l.author || "", mention: true });
+                  var k = linkNorm(l.item_text);
+                  if (!linkGroups[k]) linkGroups[k] = [];
+                  linkGroups[k].push(l);
+                });
+                Object.keys(linkGroups).forEach(function(k) {
+                  var g = linkGroups[k].slice().sort(function(a, b) { return new Date(b.at) - new Date(a.at); });
+                  var dayMap = {};
+                  g.forEach(function(x) { dayMap[String(x.at).slice(0, 10)] = 1; });
+                  var days = Object.keys(dayMap).sort().reverse();
+                  items.push({
+                    at: g[0].at, kind: "업무노트항목", text: g[0].item_text || "", by: g[0].author || "",
+                    mention: true, repeatKey: k, repeatDays: days.length > 1 ? days : null,
+                  });
                 });
                 items = items.filter(function(x) { return x.at; }).sort(function(a, b) { return new Date(b.at) - new Date(a.at); });
                 if (items.length === 0) return (<div style={{ padding: "40px 0", textAlign: "center", color: "#AAA", fontSize: 13 }}>표시할 타임라인 기록이 없어요.</div>);
@@ -16808,10 +16831,22 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3, flexWrap: "wrap" }}>
                               <span style={{ fontSize: 10, fontWeight: 700, color: s.color, background: s.bg, border: "1px solid " + s.border, borderRadius: 99, padding: "1px 7px" }}>{it.kind}</span>
                               <span style={{ fontSize: 10, color: "#999" }}>{it.by || "-"} · {it.at ? new Date(it.at).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "numeric", minute: "numeric" }) : "-"}</span>
+                              {it.repeatDays && (
+                                <span onClick={function() { setOpenRepeat(function(p) { var n = Object.assign({}, p); if (n[it.repeatKey]) delete n[it.repeatKey]; else n[it.repeatKey] = 1; return n; }); }}
+                                  title="이월·가져가기로 같은 항목이 여러 날에 걸쳐 있었어요. 눌러서 날짜를 펼칩니다."
+                                  style={{ fontSize: 9, fontWeight: 700, color: "#1D4ED8", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 99, padding: "1px 6px", cursor: "pointer" }}>
+                                  ↺ {it.repeatDays.length}일 {openRepeat[it.repeatKey] ? "▲" : "▼"}
+                                </span>
+                              )}
                             </div>
                             <div style={{ fontSize: 13, color: "#333", lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                               {it.mention ? renderMentionText(it.text || "-", companies) : (it.text || "-")}
                             </div>
+                            {it.repeatDays && openRepeat[it.repeatKey] && (
+                              <div style={{ fontSize: 10, color: "#888", marginTop: 4, lineHeight: 1.6 }}>
+                                📅 {it.repeatDays.join(" · ")}
+                              </div>
+                            )}
                           </div>
                         </div>
                       );
