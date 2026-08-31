@@ -4361,6 +4361,99 @@ function findTaggedCompanies(text, companiesList) {
   });
   return out;
 }
+// ── note-link BEGIN ──────────────────────────────────────────────────────────
+// 업무노트 @기업 태그 → 기업 타임라인 링크 (2026-08-31)
+//
+// ⚠️ 바로 위 findTaggedCompanies 를 고치지 않고 **따로 만든 이유**:
+//    저건 채팅 말풍선 전용이라 고치면 채팅이 통째로 회귀 사정권에 들어온다.
+//    그리고 저건 정렬만 하고 매칭 구간을 소비하지 않아 접두 과매칭이 있다
+//    (실측 139쌍 중 17쌍 — "@(주)A상사" 가 "(주)A" 에도 걸린다).
+//
+// 여기서 지키는 규칙 2가지 — 둘 다 MentionField 의 표시 규칙과 같아야 한다.
+//   ① @ 앞은 줄머리이거나 공백 → 이메일 주소(basegilt@gmail.com)가 배제된다
+//   ② 이름 뒤는 공백이거나 문자열 끝 + 매칭 구간을 소비 → 접두 과매칭이 사라진다
+function taggedCompanyRefs(text, companiesList) {
+  var t = String(text == null ? "" : text);
+  if (!t || !companiesList || companiesList.length === 0) return [];
+  var byLen = companiesList.filter(function(c) { return c && c.name; })
+    .slice().sort(function(a, b) { return b.name.length - a.name.length; });
+  var out = [], seen = {}, i = 0;
+  while (i < t.length) {
+    if (t.charAt(i) === "@" && (i === 0 || /\s/.test(t.charAt(i - 1)))) {
+      var hit = null;
+      for (var k = 0; k < byLen.length; k++) {
+        var nm = byLen[k].name;
+        if (t.substr(i + 1, nm.length) === nm) {
+          var after = t.charAt(i + 1 + nm.length);
+          if (after === "" || /\s/.test(after)) { hit = byLen[k]; break; }
+        }
+      }
+      if (hit) {
+        if (!seen[hit.id]) { seen[hit.id] = 1; out.push({ id: hit.id, name: hit.name, index: i }); }
+        i += 1 + hit.name.length;   // 매칭 구간 소비
+        continue;
+      }
+    }
+    i++;
+  }
+  return out;
+}
+
+// 개인 노트 content 의 한 줄 → 화면에 보이는 텍스트.
+// NoteCard 의 parseChecklist 와 같은 처리다: 마커 제거 → 대기사유 분리 → 리터럴 \n 디코드.
+//
+// ⚠️ **디코드가 핵심이다.** work_notes.content 에는 리터럴 \n(역슬래시+n 두 글자)이 섞여 있어
+//    디코드 없이 태그를 찾으면 "…컴퍼니  \n@해광알앤에프" 의 두 번째 태그를
+//    (@ 앞 글자가 'n' 이라) 통째로 놓친다. 실측 5건이 그렇게 누락됐다.
+//    팀 항목(item.text)은 이미 디코드된 상태라 여기를 태우면 안 된다.
+function workLineDisplayText(line) {
+  var s = String(line == null ? "" : line);
+  var m = s.trim().match(/^- \[([ x])\] (.+)/);
+  if (!m) return decodeItemText(s);                    // 체크박스가 아닌 일반 글줄
+  return decodeItemText(splitItemWait(m[2]).rest);
+}
+
+// 타임라인 정렬 기준 시각.
+// 업무 날짜 09:00 KST == 그 날짜의 자정 UTC (KST = UTC+9) — 별도 변환이 필요 없다.
+function noteLinkAt(dateStr, fallbackIso) {
+  if (dateStr && /^\d{4}-\d{2}-\d{2}$/.test(String(dateStr))) return String(dateStr) + "T00:00:00.000Z";
+  if (fallbackIso) return new Date(fallbackIso).toISOString();
+  return new Date().toISOString();
+}
+
+// 노트 1장 → 링크 행 목록("원하는 상태"). DB 를 읽지도 쓰지도 않는 순수 함수다.
+//   source: "team_item" | "work_line"
+function noteLinkRows(source, note, companiesList) {
+  if (!note || !note.id || note.deleted_at) return [];
+  var rows = [];
+  var push = function(itemKey, text, at, author) {
+    var refs = taggedCompanyRefs(text, companiesList);
+    for (var i = 0; i < refs.length; i++) {
+      rows.push({
+        source: source, note_id: note.id, item_key: String(itemKey),
+        company_id: refs[i].id, item_text: text, at: at, author: author || null,
+      });
+    }
+  };
+  if (source === "team_item") {
+    var base = noteLinkAt(note.work_date, note.created_at);
+    var list = Array.isArray(note.checklist) ? note.checklist : [];
+    list.forEach(function(it, idx) {
+      if (!it) return;
+      // 옛 항목엔 id 가 없을 수 있다(실측 257/257 은 있지만 방어).
+      push(it.id || ("idx:" + idx), String(it.text || ""), it.created_at || base, note.posted_by);
+    });
+  } else if (source === "work_line") {
+    var at = noteLinkAt(note.note_date, note.created_at);
+    // ⚠️ 진짜 줄바꿈으로만 나눈다. 리터럴 \n 은 줄 안에 남긴다(앱 parseChecklist 와 동일).
+    //    리터럴까지 쪼개면 앱과 줄 번호가 어긋나 item_key 가 통째로 틀어진다.
+    String(note.content || "").split("\n").forEach(function(line, idx) {
+      push(idx, workLineDisplayText(line), at, note.assignee);
+    });
+  }
+  return rows;
+}
+// ── note-link END ────────────────────────────────────────────────────────────
 // 업체명 정규식 캐시 — 팀 업무 카드는 카드×항목마다 호출돼서, 매번 수천 개 이름으로
 // 정규식을 다시 만들면 렌더가 눈에 띄게 느려진다. 목록 배열 자체를 키로 재사용한다.
 // (setState로 새 배열이 들어오면 자동으로 새 정규식 → 결과는 캐시 없을 때와 동일)
