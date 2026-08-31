@@ -13,12 +13,13 @@
 
 # misc
 .DS_Store
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
 # 저장소가 public 이라 .env 계열은 전부 막는다. 키를 넣는 순간 전 세계에 공개된다.
-.env.production
+# ⚠️ 파생 파일(.env.local.bak 등)까지 막으려고 와일드카드로 둔다 — 2026-08-30 에 실제로
+#    그런 백업 파일이 생겼다가 gitignore 밖이라는 걸 발견했다.
+.env*
+# .env.production 은 이미 추적 중이라 예외로 둔다(내용은 DISABLE_ESLINT_PLUGIN=true 뿐).
+# gitignore 는 이미 tracked 인 파일에 영향을 주지 않으므로, 이 줄은 "의도적으로 남긴 것" 표시다.
+!.env.production
 
 npm-debug.log*
 yarn-debug.log*
