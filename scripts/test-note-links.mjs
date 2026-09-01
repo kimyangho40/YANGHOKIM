@@ -28,9 +28,10 @@ const deps =
 const block = cut("// ── note-link BEGIN ──", "// ── note-link END ──", "note-link 블록");
 console.log(`── App.js 에서 떼어낸 소스 ${(deps + block).trim().split("\n").length}줄 ──`);
 
-const api = new Function(deps + "\n" + block +
-  "\nreturn { taggedCompanyRefs, workLineDisplayText, noteLinkAt, noteLinkRows };")();
-const { taggedCompanyRefs, workLineDisplayText, noteLinkAt, noteLinkRows } = api;
+// ⚠️ reconcileNoteLinks 는 supabase 를 쓴다 → 가짜를 주입해 **판단만** 검증한다(DB 접속 없음).
+const api = new Function("supabase", deps + "\n" + block +
+  "\nreturn { taggedCompanyRefs, workLineDisplayText, noteLinkAt, noteLinkRows, reconcileNoteLinks };");
+const { taggedCompanyRefs, workLineDisplayText, noteLinkAt, noteLinkRows } = api(null);
 
 // 실제 DB 에 있는 이름들로 짰다(과매칭·경계 케이스를 실물로 재현하기 위해)
 const CO = [
@@ -127,6 +128,83 @@ check("개인 item_text 에 마커가 없다", wRows.every(r => r.item_text.inde
 check("삭제된 노트는 0행",
   noteLinkRows("work_line", Object.assign({}, workNote, { deleted_at: "2026-08-05T00:00:00Z" }), CO).length === 0, "");
 check("id 없는 노트는 0행", noteLinkRows("work_line", { content: "@(주)로컬" }, CO).length === 0, "");
+
+// ⑪ reconcileNoteLinks — 가짜 supabase 를 주입해 **어떤 쓰기를 결정하는지**만 본다.
+//    DB 에 접속하지 않는다. 체인(from→select/insert/update→eq/is/in)을 그대로 흉내 낸다.
+console.log("\n⑪ reconcileNoteLinks — insert/update/soft delete 판단");
+
+function stubSupabase(existingRows, opts) {
+  var o = opts || {};
+  var log = [];
+  return {
+    log: log,
+    from: function() {
+      var st = { op: null, payload: null, filters: {} };
+      var chain = {
+        select: function() { st.op = "select"; return chain; },
+        insert: function(rows) { st.op = "insert"; st.payload = rows; log.push(st); return chain; },
+        update: function(obj) { st.op = "update"; st.payload = obj; log.push(st); return chain; },
+        eq: function(k, v) { st.filters[k] = v; return chain; },
+        is: function(k, v) { st.filters[k] = v; return chain; },
+        in: function(k, v) { st.filters[k] = v; return chain; },
+        then: function(res, rej) {
+          var out = st.op === "select"
+            ? (o.selectError ? { data: null, error: { message: "boom" } } : { data: existingRows, error: null })
+            : { data: null, error: null };
+          return Promise.resolve(out).then(res, rej);
+        },
+      };
+      return chain;
+    },
+  };
+}
+// 링크가 붙어야 하는 팀 카드 하나 — 항목 i1 에 @(주)로컬
+const RNote = { id: "n9", work_date: "2026-08-31", posted_by: "관호",
+  checklist: [{ id: "i1", text: "@(주)로컬 자료 전달" }] };
+const AT = "2026-08-31T00:00:00.000Z";
+const existingRow = { id: "L1", item_key: "i1", company_id: "c2", item_text: "@(주)로컬 자료 전달", at: AT };
+
+async function reconcileWith(note, existingRows, opts) {
+  const db = stubSupabase(existingRows, opts);
+  const res = await api(db).reconcileNoteLinks("team_item", note, CO);
+  return { res: res, writes: db.log };
+}
+
+const R = {};
+R.a = await reconcileWith(RNote, []);                                   // 새 태그
+R.b = await reconcileWith(RNote, [existingRow]);                        // 이미 같은 것이 있음
+R.c = await reconcileWith(RNote, [Object.assign({}, existingRow, { item_text: "옛 문구" })]);
+R.d = await reconcileWith(RNote, [Object.assign({}, existingRow, { at: "2026-08-01T00:00:00.000Z" })]);
+R.e = await reconcileWith(Object.assign({}, RNote, { checklist: [{ id: "i1", text: "태그를 지웠다" }] }), [existingRow]);
+R.f = await reconcileWith(Object.assign({}, RNote, { checklist: [{ id: "i1", text: "@(주)애슐런컴퍼니 로 바꿈" }] }), [existingRow]);
+R.g = await reconcileWith(Object.assign({}, RNote, { deleted_at: "2026-09-01T00:00:00Z" }), [existingRow]);
+R.h = await reconcileWith(RNote, [], { selectError: true });
+R.i = await reconcileWith({ id: "n9", work_date: "2026-08-31", posted_by: "관호",
+  checklist: [{ id: "i1", text: "@(주)로컬 자료 전달" }, { id: "i1", text: "@(주)로컬 중복 키" }] }, []);
+
+const cnt = (x) => x.res.inserted + "/" + x.res.updated + "/" + x.res.removed;
+const writeOps = (x) => x.writes.map(w => w.op).join(",");
+
+check("새 태그 → insert 1건만", cnt(R.a) === "1/0/0" && writeOps(R.a) === "insert", cnt(R.a) + " " + writeOps(R.a));
+check("insert 페이로드가 원하는 행 그대로",
+  R.a.writes[0].payload.length === 1 && R.a.writes[0].payload[0].company_id === "c2"
+  && R.a.writes[0].payload[0].item_key === "i1" && R.a.writes[0].payload[0].at === AT,
+  JSON.stringify(R.a.writes[0].payload));
+check("변화 없으면 쓰기 0건", cnt(R.b) === "0/0/0" && R.b.writes.length === 0, cnt(R.b) + " writes=" + R.b.writes.length);
+check("문구가 바뀌면 update", cnt(R.c) === "0/1/0" && writeOps(R.c) === "update", cnt(R.c) + " " + writeOps(R.c));
+check("update 는 id 로 1행만", R.c.writes[0].filters.id === "L1"
+  && R.c.writes[0].payload.item_text === "@(주)로컬 자료 전달", JSON.stringify(R.c.writes[0]));
+check("시각이 바뀌면 update", cnt(R.d) === "0/1/0", cnt(R.d));
+check("태그가 사라지면 soft delete", cnt(R.e) === "0/0/1" && writeOps(R.e) === "update", cnt(R.e) + " " + writeOps(R.e));
+check("soft delete 는 deleted_at 을 채운다(하드 삭제 아님)",
+  !!R.e.writes[0].payload.deleted_at && Array.isArray(R.e.writes[0].filters.id)
+  && R.e.writes[0].filters.id[0] === "L1", JSON.stringify(R.e.writes[0]));
+check("태그를 바꾸면 새로 넣고 옛것은 지운다", cnt(R.f) === "1/0/1" && writeOps(R.f) === "insert,update",
+  cnt(R.f) + " " + writeOps(R.f));
+check("삭제된 노트는 링크를 전부 정리", cnt(R.g) === "0/0/1", cnt(R.g));
+check("조회 실패하면 아무것도 쓰지 않는다", R.h.res.ok === false && R.h.writes.length === 0,
+  JSON.stringify(R.h.res) + " writes=" + R.h.writes.length);
+check("같은 키가 두 번 나와도 1행만 넣는다(유니크 방어)", cnt(R.i) === "1/0/0", cnt(R.i));
 
 console.log(`\n결과: ${pass}/${pass + fail} 통과`);
 process.exit(fail ? 1 : 0);

@@ -4453,6 +4453,57 @@ function noteLinkRows(source, note, companiesList) {
   }
   return rows;
 }
+
+// 노트 1장의 링크를 통째로 다시 맞춘다(재조정).
+//   없으면 insert · 문구/시각이 달라졌으면 update · 사라진 태그는 soft delete.
+//
+// ⚠️ 이벤트가 아니라 **재조정**인 이유: team_notes 쓰기 경로가 여러 곳이라
+//    이벤트라면 하나만 빠뜨려도 조용히 어긋나지만, 재조정은 한 번 늦게 불려도
+//    **다음 저장에서 스스로 복구**된다.
+// ⚠️ 쓴 사람의 브라우저에서만 부른다. Realtime 수신자 전원이 부르면 같은 일을 N번 한다.
+// ⚠️ 실패해도 노트 저장 자체를 되돌리지 않는다 — 타임라인 표시는 부가 기능이고,
+//    다음 저장 때 재조정이 다시 맞춘다. 그래서 await 하지 않고 불러도 된다.
+async function reconcileNoteLinks(source, note, companiesList) {
+  if (!note || !note.id) return { ok: false, inserted: 0, updated: 0, removed: 0 };
+  var desired = noteLinkRows(source, note, companiesList);   // 삭제된 노트면 [] 가 온다
+  var cur = await supabase.from("note_company_links")
+    .select("id,item_key,company_id,item_text,at")
+    .eq("source", source).eq("note_id", note.id).is("deleted_at", null);
+  if (cur.error) { console.warn("[note-link] 조회 실패", cur.error.message); return { ok: false, inserted: 0, updated: 0, removed: 0 }; }
+  var keyOf = function(r) { return r.item_key + "|" + r.company_id; };
+  var curMap = {};
+  (cur.data || []).forEach(function(r) { curMap[keyOf(r)] = r; });
+
+  var seen = {}, toInsert = [], toUpdate = [];
+  desired.forEach(function(d) {
+    var k = keyOf(d);
+    if (seen[k]) return;          // 방어: 같은 키가 두 번 나오면 유니크 위반이다
+    seen[k] = 1;
+    var ex = curMap[k];
+    if (!ex) { toInsert.push(d); return; }
+    var sameAt = new Date(ex.at).getTime() === new Date(d.at).getTime();
+    if (ex.item_text !== d.item_text || !sameAt) toUpdate.push({ id: ex.id, item_text: d.item_text, at: d.at });
+  });
+  var toRemove = (cur.data || []).filter(function(r) { return !seen[keyOf(r)]; }).map(function(r) { return r.id; });
+
+  var nowIso = new Date().toISOString();
+  if (toInsert.length) {
+    var ir = await supabase.from("note_company_links").insert(toInsert);
+    if (ir.error) console.warn("[note-link] insert 실패", ir.error.message);
+  }
+  for (var i = 0; i < toUpdate.length; i++) {
+    var u = toUpdate[i];
+    var ur = await supabase.from("note_company_links")
+      .update({ item_text: u.item_text, at: u.at, updated_at: nowIso }).eq("id", u.id);
+    if (ur.error) console.warn("[note-link] update 실패", ur.error.message);
+  }
+  if (toRemove.length) {
+    var dr = await supabase.from("note_company_links")
+      .update({ deleted_at: nowIso, updated_at: nowIso }).in("id", toRemove);
+    if (dr.error) console.warn("[note-link] delete 실패", dr.error.message);
+  }
+  return { ok: true, inserted: toInsert.length, updated: toUpdate.length, removed: toRemove.length };
+}
 // ── note-link END ────────────────────────────────────────────────────────────
 // 업체명 정규식 캐시 — 팀 업무 카드는 카드×항목마다 호출돼서, 매번 수천 개 이름으로
 // 정규식을 다시 만들면 렌더가 눈에 띄게 느려진다. 목록 배열 자체를 키로 재사용한다.
@@ -31398,13 +31449,17 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
         var u = await supabase.from("team_notes")
           .update({ checklist: nextList, updated_at: new Date().toISOString() }).eq("id", dest.id);
         if (u.error) throw u.error;
+        reconcileNoteLinks("team_item", Object.assign({}, dest, { checklist: nextList }), companiesList);
       } else {
         // posted_by 는 트리거(trg_team_notes_protect)가 본인으로 강제하므로 보내지 않는다.
+        // .select().single() 은 새 카드의 id 를 받아 링크를 재조정하기 위한 것이다
+        // (트리거가 채운 posted_by 도 같이 돌아온다 — 링크의 author 가 정확해진다).
         var ins = await supabase.from("team_notes").insert({
           team: newSched.team, title: teamNoteAutoTitle(newSched.date), work_date: newSched.date,
           priority: "normal", status: "open", checklist: [item], is_announcement: false,
-        });
+        }).select().single();
         if (ins.error) throw ins.error;
+        if (ins.data) reconcileNoteLinks("team_item", ins.data, companiesList);
       }
       setShowSched(false);
       setNewSched(null);
@@ -31428,7 +31483,10 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       // 실패하면 화면을 되돌린다 — 저장된 것처럼 보이면 안 된다
       setAllTeamNotes(function(prev) { return prev.map(function(x) { return x.id === note.id ? Object.assign({}, x, { checklist: list }) : x; }); });
       alert(failMsg + ": " + r.error.message);
+      return;
     }
+    // 🔗 타임라인 링크 재조정 — 항목 문구가 바뀌었을 수 있다(완료·삭제·결과메모 포함).
+    reconcileNoteLinks("team_item", Object.assign({}, note, { checklist: nextList }), companiesList);
   };
   // 체크(다녀옴) 토글 · 결과 메모 저장 — 저장 자체는 saveTeamChecklist 한 곳으로 모았다(동작 동일).
   var patchSchedItem = async function(note, itemId, patch, failMsg) {
@@ -31538,14 +31596,17 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
         var u = await supabase.from("team_notes")
           .update({ checklist: nextList, updated_at: new Date().toISOString() }).eq("id", dest.id);
         if (u.error) throw u.error;
+        reconcileNoteLinks("team_item", Object.assign({}, dest, { checklist: nextList }), companiesList);
       } else {
         // 2) 그 날짜 카드가 없으면 새로 만든다.
         //    posted_by 는 트리거(trg_team_notes_protect)가 본인으로 강제하므로 보내지 않는다.
+        //    .select().single() 은 새 카드의 id 를 받아 링크를 재조정하기 위한 것이다.
         var ins = await supabase.from("team_notes").insert({
           team: src.team, title: teamNoteAutoTitle(teamCarryDate), work_date: teamCarryDate,
           priority: src.priority || "normal", status: "open", checklist: [newItem], is_announcement: false,
-        });
+        }).select().single();
         if (ins.error) throw ins.error;
+        if (ins.data) reconcileNoteLinks("team_item", ins.data, companiesList);
       }
 
       // 3) 원본 항목에는 이월 표시만 남긴다 — 언제부터 밀렸는지 추적하려고 지우지 않는다
@@ -31555,6 +31616,8 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       var u2 = await supabase.from("team_notes")
         .update({ checklist: markedList, updated_at: new Date().toISOString() }).eq("id", src.id);
       if (u2.error) throw u2.error;
+      // 원본 항목의 문구가 " (→ M/D 이월)" 로 바뀌었다 → 원본 카드 쪽 링크도 다시 맞춘다.
+      reconcileNoteLinks("team_item", Object.assign({}, src, { checklist: markedList }), companiesList);
 
       setAllTeamNotes(function(prev) {
         return prev.map(function(n) { return n.id === src.id ? Object.assign({}, n, { checklist: markedList }) : n; });
@@ -31635,6 +31698,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       r = await supabase.from("team_notes").insert(p2).select().single();
     }
     if (r.error) { alert("등록 실패: " + r.error.message); return; }
+    reconcileNoteLinks("team_item", r.data, companiesList);
     setAllTeamNotes(function(prev) { return [r.data].concat(prev); });
     setNewNote(blankNewNote());
     setShowAdd(false);
@@ -31978,6 +32042,8 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
 
     var r = await supabase.from("team_notes").update(payload).eq("id", noteId);
     if (r.error) { alert("수정 실패: " + r.error.message); return; }
+    // 🔗 prevNote 를 밑에 깔아 work_date·posted_by 등 payload 에 없는 값까지 채운다(링크의 at·author 근거).
+    reconcileNoteLinks("team_item", Object.assign({}, prevNote || {}, payload, { id: noteId }), companiesList);
     setAllTeamNotes(function(prev) {
       return prev.map(function(n) { return n.id === noteId ? Object.assign({}, n, payload) : n; });
     });
@@ -31992,6 +32058,8 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     if (!confirm("이 팀 노트를 삭제하시겠습니까?")) return;
     var r = await supabase.from("team_notes").update({ deleted_at: new Date().toISOString() }).eq("id", id);
     if (r.error) { alert("삭제 실패: " + r.error.message); return; }
+    // 🔗 noteLinkRows 는 deleted_at 이 있으면 [] 를 돌려준다 → 이 카드의 링크가 전부 정리된다.
+    reconcileNoteLinks("team_item", { id: id, deleted_at: new Date().toISOString() }, companiesList);
     setAllTeamNotes(function(prev) { return prev.filter(function(n) { return n.id !== id; }); });
   };
 
