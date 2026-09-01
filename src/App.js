@@ -14785,6 +14785,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
   const [timelineLogs, setTimelineLogs] = useState([]);
   const [timelineLoaded, setTimelineLoaded] = useState(false);
   const [timelineLoading, setTimelineLoading] = useState(false);
+  const [resyncMsg, setResyncMsg] = useState("");            // 🔄 업무노트 링크 재동기화 진행 상황("" = 안 돌고 있음)
   const [partnersList, setPartnersList] = useState([]);
   useEffect(function() {
     supabase.from("partners").select("id,name").order("created_at", { ascending: true }).then(function(r) {
@@ -16845,7 +16846,39 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
           {/* 🕒 타임라인 탭 — 소통내역 + 연결 업무노트 + 단계변경 시간순 병합 */}
           {tab === "timeline" && (
             <div>
-              <div style={{ fontSize: 12, color: "#888", marginBottom: 12 }}>소통내역 · 연결된 업무노트 · @태그된 업무노트 항목 · 진행단계 변경을 시간순으로 모았어요.</div>
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 12 }}>
+                <div style={{ fontSize: 12, color: "#888" }}>
+                  소통내역 · 연결된 업무노트 · @태그된 업무노트 항목 · 진행단계 변경을 시간순으로 모았어요.
+                  <div style={{ fontSize: 11, color: "#AAA", marginTop: 2 }}>
+                    🔄 는 업무노트의 @태그를 다시 훑어 이 목록을 맞춥니다(업무노트 내용은 바뀌지 않아요).
+                    개인노트는 <b>내가 볼 수 있는 것만</b> 맞춰지므로, 전체를 맞추려면 관리자가 눌러야 합니다.
+                  </div>
+                </div>
+                <button
+                  disabled={!!resyncMsg || timelineLoading}
+                  onClick={async function() {
+                    if (!window.confirm("이 기업에 연결된 업무노트 항목을 다시 맞출까요?\n\n업무노트 내용은 바뀌지 않습니다.\n노트 수에 따라 수십 초 걸릴 수 있어요.")) return;
+                    setResyncMsg("불러오는 중…");
+                    // ⚠️ fetchAllRows 로 받는다 — 전체를 훑어야 하는 조회라, .limit 을 걸면
+                    //    1000행 상한에 조용히 걸려 뒷부분 노트가 통째로 안 맞춰진다(CLAUDE.md 2-5).
+                    var tn = await fetchAllRows("team_notes", "*", { build: function(q) { return q.is("deleted_at", null); } });
+                    var wn = await fetchAllRows("work_notes", "*", { build: function(q) { return q.is("deleted_at", null); } });
+                    if (!tn.data && !wn.data) { setResyncMsg(""); alert("업무노트를 불러오지 못했습니다. 잠시 후 다시 시도해주세요."); return; }
+                    var tl = tn.data || [], wl = wn.data || [];
+                    var total = tl.length + wl.length, done = 0;
+                    // 진행 표시는 25건마다만 갱신한다 — 매건 setState 하면 큰 모달이 수백 번 다시 그려진다.
+                    var tick = function() { done++; if (done % 25 === 0 || done === total) setResyncMsg("맞추는 중… " + done + "/" + total); };
+                    for (var i = 0; i < tl.length; i++) { await reconcileNoteLinks("team_item", tl[i], companies); tick(); }
+                    for (var j = 0; j < wl.length; j++) { await reconcileNoteLinks("work_line", wl[j], companies); tick(); }
+                    setResyncMsg("");
+                    await loadTimeline();
+                  }}
+                  style={{ flexShrink: 0, fontSize: 11, padding: "4px 10px", border: "1px solid #E8E5E0", borderRadius: 6,
+                    background: resyncMsg ? "#F7F6F3" : "#fff", color: resyncMsg ? "#AAA" : "#555",
+                    cursor: (resyncMsg || timelineLoading) ? "default" : "pointer", whiteSpace: "nowrap" }}>
+                  {resyncMsg || "🔄 재동기화"}
+                </button>
+              </div>
               {timelineLoading ? (
                 <div style={{ padding: "40px 0", textAlign: "center", color: "#AAA", fontSize: 13 }}>타임라인 불러오는 중...</div>
               ) : (function() {

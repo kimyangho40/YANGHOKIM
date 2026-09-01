@@ -32,7 +32,10 @@ const deps =
   cut("function splitItemWait(", "\n}", "splitItemWait") + "\n" +
   cut("function decodeItemText(", "\n}", "decodeItemText") + "\n";
 const block = cut("// ── note-link BEGIN ──", "// ── note-link END ──", "note-link 블록");
-const { noteLinkRows } = new Function(deps + "\n" + block + "\nreturn { noteLinkRows };")();
+// ⚠️ 블록 안 reconcileNoteLinks/appendNoteLinksForLine 은 supabase 를 참조하지만
+//    **부르지 않으므로** 정의만 되고 끝난다(여기선 순수 함수 둘만 쓴다).
+const { noteLinkRows, workLineDisplayText } =
+  new Function("supabase", deps + "\n" + block + "\nreturn { noteLinkRows, workLineDisplayText };")(null);
 console.log(`── App.js 에서 떼어낸 소스 ${(deps + block).trim().split("\n").length}줄 ──`);
 
 function runSql(sql) {
@@ -99,6 +102,43 @@ const perCo = new Map();
 rows.forEach(r => perCo.set(r.company_id, (perCo.get(r.company_id) || 0) + 1));
 [...perCo.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)
   .forEach(([cid, n]) => console.log(`  ${String(n).padStart(3)}건  ${byCo.get(cid)}`));
+
+// ── ⚠️ 미연결 @태그 리포트 ────────────────────────────────────────────────────
+// @ 는 붙어 있는데 살아있는 기업과 안 맞는 것. **자동 보정하지 않는다** —
+// 유사도로 붙이면 오연결이 난다(CLAUDE.md 2절 "이름을 조인키로 쓰지 말 것").
+// ⚠️ 경계 검사는 taggedCompanyRefs 와 같은 규칙(@ 앞이 줄머리이거나 공백)이라야
+//    이메일이 목록에 안 섞인다. **매처 자체는 건드리지 않는다.**
+const unlinked = [];
+const scan = (label, key, text, date) => {
+  const t = String(text || "");
+  for (let i = 0; i < t.length; i++) {
+    if (t.charAt(i) !== "@") continue;
+    if (i > 0 && !/\s/.test(t.charAt(i - 1))) continue;          // 이메일(앞이 공백이 아님) 배제
+    const tail = t.slice(i + 1, i + 61);
+    // 정상 태그(이름이 맞고 뒤 경계도 맞음)면 건너뛴다 — 매처와 같은 판정이다
+    const ok = companies.some(c => {
+      if (tail.indexOf(c.name) !== 0) return false;
+      const after = tail.charAt(c.name.length);
+      return after === "" || /\s/.test(after);
+    });
+    if (ok) continue;
+    unlinked.push({
+      label, key, date,
+      probe: tail.split(/\s{2,}|\n/)[0].slice(0, 30),
+      text: t.replace(/\s+/g, " ").slice(0, 70),
+    });
+  }
+};
+team.forEach(n => (Array.isArray(n.checklist) ? n.checklist : []).forEach((it, idx) => {
+  // 팀 항목 text 는 이미 디코드된 상태다 — 여기서 또 디코드하면 안 된다.
+  if (it) scan("팀", it.id || ("idx:" + idx), it.text, n.work_date || String(n.created_at).slice(0, 10));
+}));
+work.forEach(n => String(n.content || "").split("\n").forEach((line, idx) => {
+  // 개인 노트는 리터럴 \n 을 풀어야 그 뒤 태그가 보인다(매처와 같은 규칙).
+  scan("개인", String(idx), workLineDisplayText(line), n.note_date);
+}));
+console.log(`\n── ⚠️ 연결 안 된 @태그 ${unlinked.length}건 (자동 보정하지 않음 — 사람이 원본을 봐야 한다) ──`);
+unlinked.forEach(u => console.log(`  [${u.label}] ${u.date}  @${u.probe}\n       ${u.text}`));
 
 console.log("\n── 샘플 20건 ──");
 fresh.slice(0, 20).forEach(r => {
