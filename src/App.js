@@ -31484,6 +31484,9 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
         id: "ck_" + Math.random().toString(36).slice(2, 11),
         text: schedItemText(kind, newSched.company_name),
         taken_by: null, taken_at: null, taken_work_note_id: null, done: false,
+        // 🕘 항목이 처음 만들어진 때. 타임라인 시각의 근거다(없으면 카드 work_date 09:00 로 폴백).
+        //    ⚠️ taken_at(가져간 때)·done_at(다녀온 때)과 헷갈리지 말 것 — 셋 다 다른 축이다.
+        created_at: new Date().toISOString(),
         is_sched: true, sched_kind: kind,
         company_id: newSched.company_id || null,
         company_name: newSched.company_name || "",
@@ -31621,8 +31624,11 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
       var md = mdLabel(teamCarryDate);
       // 이미 이월 표시가 있으면 떼고 새 날짜로 다시 붙인다(누적 금지 — 개인 이월과 같은 규칙)
       var baseText = String(item.text || "").replace(/\s*\(→\s*\d{1,2}\/\d{1,2}\s*이월\)\s*$/, "").trim();
+      // 🕘 created_at 은 **옮기지 않고 새로 찍는다** — 연기된 일정은 "그 날짜에 새로 잡힌 일"이고,
+      //    원본 항목의 링크는 원본 카드에 그대로 남는다.
       var newItem = { id: "ck_" + Math.random().toString(36).slice(2, 11), text: baseText,
-        taken_by: null, taken_at: null, taken_work_note_id: null, done: false };
+        taken_by: null, taken_at: null, taken_work_note_id: null, done: false,
+        created_at: new Date().toISOString() };
       // 📅 일정 항목이면 종류·업체·담당자를 같이 옮긴다 — 안 옮기면 연기한 순간 평범한 글줄이 된다.
       //    결과·완료 표시는 **일부러 안 옮긴다** — 연기된 일정은 아직 안 다녀온 것이다.
       if (item.is_sched) {
@@ -31728,6 +31734,8 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
         taken_at: null,
         taken_work_note_id: null,
         done: false,
+        // 🕘 새로 만드는 카드라 항목이 전부 새것이다 — 지금 시각을 찍는다.
+        created_at: it.created_at || new Date().toISOString(),
       };
     });
     var payload = {
@@ -32070,7 +32078,7 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     if (!editingDraft) return;
     // 빈 항목 제거 + 신규 항목은 ID 부여
     var cleanChecklist = (editingDraft.checklist || []).filter(function(it) { return it && it.text && it.text.trim(); }).map(function(it) {
-      return {
+      var o = {
         id: it.id || ("ck_" + Math.random().toString(36).slice(2, 11)),
         text: it.text.trim(),
         taken_by: it.taken_by || null,
@@ -32078,6 +32086,15 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
         taken_work_note_id: it.taken_work_note_id || null,
         done: !!it.done,
       };
+      // 🕘 created_at — 있으면 그대로 지킨다.
+      // ⚠️ 없는 **옛 항목에는 찍지 않는다.** 찍으면 그 항목의 타임라인 시각이
+      //    카드 날짜(work_date 09:00)에서 "수정한 지금"으로 통째로 옮겨간다.
+      //    이번 편집에서 새로 만든 항목만 찍는다 — [+ 추가] 버튼이 주는 `tmp_` 접두 id 가 그 표식이다
+      //    (id 가 아예 없는 경우도 같이 본다).
+      var isNewItem = !it.id || String(it.id).indexOf("tmp_") === 0;
+      if (it.created_at) o.created_at = it.created_at;
+      else if (isNewItem) o.created_at = new Date().toISOString();
+      return o;
     });
     var payload = {
       title: editingDraft.title.trim() || null,
