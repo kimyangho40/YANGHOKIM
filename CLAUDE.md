@@ -827,6 +827,119 @@ unique index 는 `(company_id, agency_group)` 이라 `company_id` 가 null 인 �
   → 코드 변경만으로는 한 장도 안 움직인다.
 - `node scripts/audit-select-columns.mjs` 0건 · `CI=true npx react-scripts build` 통과(main.js +896 B).
 
+## 🕒 업무노트 @기업 태그 → 기업 타임라인 (2026-09-01, **새 테이블 1개 · 기존 테이블 변경 0건**)
+
+업무노트(팀 체크리스트 항목 · 개인 노트 줄)에 `@기업명` 을 쓰면 그 기업 상세 🕒 타임라인에
+항목 내용이 작성 시각으로 뜬다. 소급분 277쌍도 이미 들어가 있다.
+
+### 원칙 — **(항목 × 기업) 하나당 링크 1행.** 저장 위치는 `note_company_links` 하나뿐이다
+컬럼 `source('team_item'|'work_line') · note_id · item_key · company_id · item_text · at · author`.
+유니크 `(source, note_id, item_key, company_id) where deleted_at is null` → **몇 번을 돌려도 안 불어난다.**
+⚠️ `note_id` 에 **FK 를 걸지 않았다** — 원본이 `team_notes` / `work_notes` 두 곳이라 한 컬럼으로 못 건다.
+(SQL: `업무노트태그_타임라인_테이블.sql` / `_rollback` / `_검증` — RLS·anon 회수 포함. CLAUDE.md 2-2 체크리스트 전부 통과)
+
+### ❌ `activity_logs` 를 쓰지 않은 이유 — 읽는 곳 11곳 중 **9곳이 오염된다**
+기업상세 「이슈·액션」 탭 배지 숫자 · AI 상담 프롬프트 · 소통내역 200건 창 · 팀 활동 위젯 건수가
+전부 그 테이블을 센다. 작성 항목을 거기 넣으면 **숫자가 조용히 부풀고 되돌릴 방법이 없다.**
+→ **앞으로도 타임라인 표시를 위해 `activity_logs` 에 행을 추가하지 말 것.**
+
+### ⚠️ 매처 — `findTaggedCompanies` 를 쓰지 말고 **`taggedCompanyRefs`** 를 쓸 것
+`findTaggedCompanies` 는 **채팅 말풍선 전용**이고 매칭 구간을 소비하지 않아 **접두 과매칭**이 있다
+(실측 139쌍 중 17쌍 — `@(주)A상사` 가 `(주)A` 에도 걸린다). 고치면 채팅이 회귀 사정권이라 **안 건드렸다.**
+`taggedCompanyRefs` 는 규칙이 둘이다: ① `@` 앞은 줄머리이거나 공백(→ 이메일 `basegilt@gmail.com` 배제)
+② 이름 뒤는 공백이거나 끝 + **매칭 구간 소비**(→ 과매칭 제거).
+
+### ⚠️ 텍스트를 다루는 함정 3개 — 전부 실측으로 확인한 것이다
+1. **개인 노트는 `decodeItemText` 로 푼 뒤에 매처를 돌린다.** `work_notes.content` 에는
+   **리터럴 `\n`(역슬래시+n 두 글자)** 이 섞여 있어, 디코드 없이 경계 검사를 하면
+   `…컴퍼니  \n@해광알앤에프` 의 두 번째 `@` 는 **앞 글자가 `n`** 이라 **진짜 태그 5건이 조용히 누락된다.**
+   → 그 처리를 모은 것이 `workLineDisplayText(line)`(마커 제거 → 대기사유 분리 → 디코드).
+2. **팀 항목(`item.text`)은 디코드하면 안 된다** — 이미 디코드된 상태다.
+3. **줄 분리는 `content.split("\n")`(진짜 줄바꿈)만.** 리터럴 `\n` 까지 쪼개면 앱 `parseChecklist` 와
+   줄 번호가 어긋나 `item_key` 가 통째로 틀어진다.
+
+### 구조 — **이벤트가 아니라 재조정(reconcile)이다**
+`reconcileNoteLinks(source, note, companiesList)` 가 노트 1장의 링크를 통째로 다시 맞춘다:
+없으면 insert · 문구/시각이 달라졌으면 update · 사라진 태그는 **soft delete**.
+쓰기 경로가 많아 이벤트로 만들면 하나만 빠뜨려도 조용히 어긋나지만, 재조정은 **한 번 늦게 불려도
+다음 저장에서 스스로 복구**된다. 순수 계산은 `noteLinkRows(source, note, companiesList)` 가 한다(DB 안 건드림).
+- ⚠️ **쓴 사람의 브라우저에서만 부른다.** Realtime 수신자 전원이 부르면 같은 일을 N번 한다.
+- ⚠️ **실패해도 노트 저장을 되돌리지 않는다** — 타임라인은 부가 기능이고 다음 저장이 다시 맞춘다.
+
+### 쓰기 경로 전수 표 — **새 경로를 만들면 여기 추가하고 재조정을 붙일 것**
+| 테이블 | 경로 | 재조정 | 비고 |
+|---|---|---|---|
+| `team_notes` | `saveTeamChecklist` | ✅ | 완료·되돌리기·삭제·일정체크·결과메모가 **전부 여기 경유** |
+| 〃 | `addSchedule` update / insert | ✅ | insert 에 `.select().single()` 을 붙였다(새 카드 id 가 없으면 재조정 불가) |
+| 〃 | `confirmTeamCarry` dest / new / **src** | ✅ | src 는 문구가 `" (→ M/D 이월)"` 로 바뀌므로 포함 |
+| 〃 | 새 팀 노트 insert | ✅ | 컬럼 없는 환경 재시도 분기까지 덮는다 |
+| 〃 | `saveEditNote` | ✅ | |
+| 〃 | `deleteTeamNote`(soft delete) | ✅ | `noteLinkRows` 가 `[]` 를 줘 그 카드 링크가 정리된다 |
+| 〃 | 채팅→팀 업무 insert | ❌ | `checklist: []` 고정이라 링크가 생길 수 없다 |
+| 〃 | `takeToMyNote` · 가져가기 취소 · 완료/완료취소 · 공지확인 | ❌ | 문구·항목 id 가 안 바뀐다 = 링크가 달라질 수 없다 |
+| `work_notes` | `onChecklistChange` | ✅ | ⚠️ 아래 |
+| 〃 | 개인 `saveEdit` | ✅ | ⚠️ `setEditingId(null)` **앞**에서 부른다(뒤면 `editNote.id` 가 비어 있다) |
+| 〃 | 새 노트 insert | ✅ | |
+| 〃 | `saveEditorContent` | ✅ | 자동저장·편집창 체크박스의 **유일한 관문**(호출부 2곳) |
+| 〃 | `wn_append_todo` RPC 5곳 | ⚠ 예외 | 아래 절 |
+
+⚠️ **`onChecklistChange` 는 `newContent` 가 아니라 실제 저장된 합본(`savedContent`)으로 재조정한다.**
+`saveContentWithRetry` 가 다른 곳에서 늘어난 줄을 합칠 수 있어, 화면 값으로 맞추면 줄 번호가 DB 와 어긋난다.
+
+⚠️ **`saveEditorContent` 는 onBlur 마다 돈다.** `note.content` 는 편집창을 연 시점 값이라 자동저장 뒤에도
+안 바뀌므로, 마지막으로 재조정한 본문을 `linkedContentRef`(NoteEditCard 지역 ref)에 남겨
+**내용이 실제로 바뀔 때만** 부른다. 안 그러면 칸을 벗어날 때마다 조회를 쏴 편집이 굼떠진다.
+
+### ⚠️ `wn_append_todo` 만 예외 — 재조정이 **불가능**하다
+업무요청·빠른업무는 **남의 노트**에 줄을 덧붙이는데, 개인노트 RLS 때문에 내 브라우저가 그 노트를
+읽을 수 없어 "원하는 상태"를 계산할 수가 없다. → 그 5곳만 `appendNoteLinksForLine` 으로 **직접 insert** 한다.
+`item_key` 는 `"append:<ISO>"` — **노트 주인이 나중에 저장하면 재조정이 정상 줄번호 키로 바꾸고 이 행을 정리한다.**
+⚠️ **RPC 호출 자체(인자·순서)는 건드리지 말 것** — 직접 select 후 update 로 바꾸면 상대에게 같은 날 노트가 두 장 생긴다.
+
+### 🕘 시각(`at`) 을 정하는 규칙
+`noteLinkAt(dateStr, fallbackIso)` — 업무 날짜 **09:00 KST == 그 날짜의 자정 UTC**(KST=UTC+9)라 변환이 없다.
+- 팀 항목: `item.created_at` 우선 → 없으면 카드 `work_date`
+- 개인 줄: 노트 `note_date`
+- **개인 노트 줄은 "실제 작성 시각"을 쓸 수 없다** — `work_notes.content` 는 통짜 텍스트라 줄마다 시각이 없고,
+  포맷을 바꾸면 이월 꼬리표·대기사유·리터럴 `\n` 인코딩이 전부 회귀 사정권에 들어온다.
+
+⚠️ **팀 항목 `created_at` 은 새 항목에만 찍는다.** `saveEditNote` 는 기존 카드를 다시 저장하는 자리라,
+`created_at` 없는 옛 항목에 지금 시각을 찍으면 그 항목의 타임라인 위치가 **카드 날짜에서 "수정한 지금"으로
+통째로 옮겨간다**(제목만 고쳐도 항목 전부가 오늘로 튄다). 새 항목 판정은 `!it.id` 가 아니라
+**`tmp_` 접두 id** 다 — 수정창 `[+ 추가]` 버튼이 항목에 `tmp_xxx` id 를 미리 붙인다(`App.js:32484`).
+
+### ⚠️ 기존 `note_auto` 와 내용이 겹치는 건 **정상이다. 고치지 말 것**
+개인 노트 항목을 **체크할 때** `detectCompaniesInText` + `logToActivity` 가 `log_type='note_auto'` 로
+이미 기록한다(2026-09-01 실측 **1,098건 · 125개 기업**). 그래서 타임라인에 **"작성"과 "완료"가 나란히** 뜬다.
+**의미가 다른 두 사건이라 둘 다 남기고 뱃지만 다르게 했다**(`업무노트항목`=작성 / `업무노트`=완료).
+기존 `note_auto` 경로를 건드리면 완료 기록 전체가 회귀 사정권이다.
+
+### 🔄 재동기화 · 미연결 태그
+- 기업상세 🕒 탭의 `🔄 재동기화` — 살아있는 노트를 전부 훑어 재조정한다.
+  ⚠️ **`fetchAllRows` 로 받는다**(CLAUDE.md 2-5). `.select()` 직접 호출은 1000행 상한에 조용히 걸려
+  뒷부분 노트가 통째로 안 맞춰진다. 개인노트는 RLS 때문에 **누른 사람이 볼 수 있는 것만** 맞춰진다.
+- `node scripts/migrate-note-links.mjs` (기본 dry-run, `--apply` 로 반영) — 소급 마이그레이션 +
+  **연결 안 된 @태그 목록**. **자동 보정하지 않는다** — 유사도로 붙이면 오연결이 난다(위 2절 "이름을 조인키로 쓰지 말 것").
+  현재 2건: `@(주)에이원커뮤니케이션코리`(→…코리아) · `@조선제일한우`(→농업회사법인(주)조선제일한우).
+
+### 실측 (2026-09-01) — **인용 전에 그날 다시 셀 것**
+| | 값 |
+|---|---:|
+| 들어가 있는 링크 | **277** (팀 96 · 개인 181) · 기업 68 · 2026-07-18~08-31 |
+| 지금 코드로 계산되는 링크 | **295** (팀 103 · 개인 192) · 항목/줄 265 · 기업 71 |
+| **아직 안 넣은 것** | **18쌍** — Task 5·6 배포 전에 달린 태그. `--apply` 나 🔄 로 메운다 |
+| 원본 | 팀노트 76 · 개인노트 588 · 기업 406 |
+
+재측정: `node scripts/migrate-note-links.mjs` (읽기 전용) · 검증은 `scripts/test-note-links.mjs` **52/52**
+(App.js 소스를 떼어내 가짜 supabase 를 주입 — 손으로 옮겨 적지 않는다).
+
+### 🐞 같이 발견한 **별건 버그** (아직 안 고침)
+`saveEditNote` 의 `cleanChecklist` 가 항목을 **처음부터 다시 만들어** 6개 필드만 남긴다
+→ 팀 카드를 한 번 수정 저장하면 그 안 **일정 항목의 `is_sched`·`sched_kind`·`company_id`·`company_name`·
+`assignee`·`result`·`done_at`·`done_by` 가 통째로 사라진다**(일정이 평범한 글줄이 된다).
+이 기능 이전부터 있던 버그다. 고치려면 `return { … }` → `return Object.assign({}, it, { … })` 한 줄이지만
+**팀 일정 기능 전체가 회귀 사정권**이라 별도 건으로 뒀다.
+
 ## 📝 메모 확대 편집 팝업 (2026-08-21, **DB 변경 0건 · 저장 로직 0줄**)
 
 좁은 칸(표 한 줄짜리 input · 사이드패널 rows=3~4 textarea)을 누르면 넉넉한 창이 열린다.
