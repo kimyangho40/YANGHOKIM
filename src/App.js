@@ -4504,6 +4504,27 @@ async function reconcileNoteLinks(source, note, companiesList) {
   }
   return { ok: true, inserted: toInsert.length, updated: toUpdate.length, removed: toRemove.length };
 }
+
+// 📩 업무요청·빠른업무는 wn_append_todo RPC 로 **남의 노트**에 줄을 덧붙인다.
+// 개인노트 RLS 때문에 내 브라우저가 그 노트를 읽을 수 없어 재조정("원하는 상태" 계산)이 불가능하다.
+// → 그 경로만 링크를 직접 넣는다. **재조정이 아니라 추가다.**
+// ⚠️ 줄 번호를 모르므로 item_key 를 "append:<ISO>" 로 둔다.
+//    그 노트의 주인이 나중에 저장하면 재조정이 돌아 정상 줄 번호 키로 바뀌고 이 행은 정리된다.
+async function appendNoteLinksForLine(noteId, lineText, assignee, noteDate, companiesList) {
+  if (!noteId || !lineText) return;
+  var text = workLineDisplayText(lineText);
+  var refs = taggedCompanyRefs(text, companiesList);
+  if (refs.length === 0) return;
+  var key = "append:" + new Date().toISOString();
+  var rows = refs.map(function(r) {
+    return {
+      source: "work_line", note_id: noteId, item_key: key, company_id: r.id,
+      item_text: text, at: noteLinkAt(noteDate, new Date().toISOString()), author: assignee || null,
+    };
+  });
+  var ins = await supabase.from("note_company_links").insert(rows);
+  if (ins.error) console.warn("[note-link] append 실패", ins.error.message);
+}
 // ── note-link END ────────────────────────────────────────────────────────────
 // 업체명 정규식 캐시 — 팀 업무 카드는 카드×항목마다 호출돼서, 매번 수천 개 이름으로
 // 정규식을 다시 만들면 렌더가 눈에 띄게 느려진다. 목록 배열 자체를 키로 재사용한다.
@@ -4863,6 +4884,7 @@ function MobileApp({ profile, session }) {
         p_company_id: null, p_title: noteAutoTitle(to, today),
       });
       if (rq.error) { alert("요청 노트 생성 실패: " + rq.error.message); return; }
+      appendNoteLinksForLine(rq.data, itemLine, to, today, companiesList);
       var reqRow = { request_from: myName, request_to: to, content: text, urgent: mReqUrgent, note_id: rq.data || null, status: "pending" };
       var rr = await supabase.from("work_requests").insert(reqRow).select().single();
       if (!rr.error && rr.data) setMSent(function(prev) { return [rr.data].concat(prev || []); });
@@ -8588,6 +8610,8 @@ function CRMApp({ profile, session }) {
           });
           if (qtRes.error) { alert("저장 실패: " + qtRes.error.message); return; }
           var noteId = qtRes.data || null;
+          // 🔗 @기업 태그가 있으면 그 기업 타임라인에 남긴다(줄마다 따로 — block 은 여러 줄이다).
+          lines.forEach(function(ln) { appendNoteLinksForLine(noteId, ln, to, qtDate, companies); });
           // 다른 사람이면 업무 요청으로도 기록(항목별 1건) + 푸시 알림
           if (!isMe) {
             for (var i = 0; i < qtItems.length; i++) {
@@ -9562,6 +9586,7 @@ function VoiceModeOverlay({ myName, onClose }) {
       p_company_id: companyId || null, p_title: noteAutoTitle(assignee, day),
     });
     if (ar.error) throw new Error(ar.error.message);
+    appendNoteLinksForLine(ar.data, line, assignee, day, ctxRef.current.companyRows || []);
     return ar.data || null;
   };
 
@@ -14635,6 +14660,8 @@ function SummaryDistributeModal({ companyId, companyName, staffNames, defaultAss
           p_company_id: companyId || null, p_title: noteAutoTitle(it.assignee, today),
         });
         if (ar.error) failed.push(it.assignee + ": " + ar.error.message);
+        // 🔗 이 모달은 기업 하나에 대한 분배라, 매칭 대상도 그 기업 하나뿐이다.
+        else if (companyId && companyName) appendNoteLinksForLine(ar.data, line, it.assignee, today, [{ id: companyId, name: companyName }]);
       }
     } catch (e) {
       setSaving(false); setErr("저장 중 오류: " + (e && e.message ? e.message : e)); return;
@@ -19017,6 +19044,9 @@ function MentionField(props) {
 function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, companiesList, draft }) {
   // @업체 태그 자동완성: { type:'title'|'freeContent'|'item', idx, query }
   var [mention, setMention] = useState(null);
+  // 🔗 마지막으로 타임라인 링크를 맞춰 둔 본문(saveEditorContent 에서만 쓴다).
+  //    null 이면 "아직 한 번도 안 맞췄다" = 편집창을 연 시점의 note.content 가 기준이다.
+  var linkedContentRef = useRef(null);
   // content가 변경되면 checkItems와 freeText로 분리
   // editNote.checkItems가 이미 있으면 그걸 우선 사용 (사용자가 편집 중인 상태)
   
@@ -19082,7 +19112,19 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
       payload: { content: newContent, updated_at: stamp }, label: label,
       expectedUpdatedAt: expectedAt }).then(function(r) {
         // 성공하면 최신 시각을 들고 있어야 다음 자동저장이 자기 자신과 충돌하지 않는다.
-        if (r.ok) setEditNote(function(q) { return q && q.id === noteId ? Object.assign({}, q, { updated_at: stamp }) : q; });
+        if (r.ok) {
+          setEditNote(function(q) { return q && q.id === noteId ? Object.assign({}, q, { updated_at: stamp }) : q; });
+          // 🔗 타임라인 링크 재조정 — 내용이 **실제로 바뀐 경우에만** 부른다.
+          //    이 함수는 칸을 벗어날 때마다(onBlur) 도는데, 매번 조회를 쏘면 편집이 굼떠진다.
+          // ⚠️ note.content 는 편집창을 연 시점의 값이라 자동저장 뒤에도 그대로다 →
+          //    마지막으로 재조정한 본문을 ref 에 남겨 같은 일을 두 번 하지 않게 한다.
+          var lastLinked = linkedContentRef.current == null ? ((note && note.content) || "") : linkedContentRef.current;
+          if (lastLinked !== newContent) {
+            linkedContentRef.current = newContent;
+            reconcileNoteLinks("work_line",
+              Object.assign({}, note || {}, { id: noteId, content: newContent }), companiesList);
+          }
+        }
         else if (r.conflict) pushSaveAlert({ id: "wnconf_" + noteId, level: "error", label: label, kind: "conflict",
           text: "다른 곳에서 이 노트가 먼저 저장돼 자동저장을 멈췄습니다. [저장]을 눌러 어떻게 할지 정해주세요.", retryable: false });
         return r;
@@ -20938,6 +20980,7 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
     });
     if (rq.error) { alert("요청 노트 생성 실패: " + rq.error.message); return; }
     var noteId = rq.data || null;
+    appendNoteLinksForLine(noteId, itemLine, to, today, companiesList);
     // 나에게 보낸 요청이면 내 목록에 바로 보이도록 다시 읽는다(남에게 보낸 건은 원래 내 목록에 안 보임)
     if (to === from) fetchNotes();
     // work_requests 기록 (테이블 없으면 조용히 skip)
@@ -21044,6 +21087,8 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
     if (!r.error && r.data) {
       newDraft.done();
       setNotes(function(prev) { return [r.data].concat(prev); });
+      // 🔗 r.data 는 .select().single() 결과라 content·note_date·assignee 가 전부 들어 있다.
+      reconcileNoteLinks("work_line", r.data, companiesList);
       setShowAdd(false);
       // 담당자에게 브라우저 푸시 알림 전송
       if (assigneeName !== (profile?.name || "")) {
@@ -21110,6 +21155,11 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
       // 합쳐진 본문은 줄 순서가 달라질 수 있어 index 비교에 쓰면 오탐이 난다.
       var savedContent = r.data.content;
       setNotes(function(prev) { return prev.map(function(n) { return n.id === noteId ? Object.assign({}, n, { content: savedContent, updated_at: r.data.updated_at }) : n; }); });
+      // 🔗 타임라인 링크 재조정 — ⚠️ newContent 가 아니라 **실제 저장된 합본**(savedContent)을 쓴다.
+      //    saveContentWithRetry 가 다른 곳에서 늘어난 줄을 합칠 수 있어, 화면 값으로 재조정하면
+      //    item_key(줄 번호)가 DB 와 어긋난다.
+      reconcileNoteLinks("work_line",
+        Object.assign({}, prevNoteForReq || {}, { id: noteId, content: savedContent }), companiesList);
       // 📩 받은 요청 항목 완료 시 보낸 사람 쪽에 반영
       if (prevNoteForReq) syncRequestDone(prevNoteForReq.content, newContent);
       // 방금 체크 완료된 항목 → 활동로그 기록
@@ -21207,6 +21257,11 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
       // ⚠️ updated_at 을 같이 갱신해야 한다 — editNote 의 옛 값이 목록에 남으면 다음 저장이
       //    자기 자신과 충돌한 것처럼 판정된다.
       setNotes(function(prev) { return prev.map(function(n) { return n.id === editNote.id ? Object.assign({}, n, editNote, { content: finalContent, updated_at: upd.updated_at }) : n; }); });
+      // 🔗 setEditingId(null) **앞**에서 불러야 한다 — 뒤면 editNote.id 가 이미 비어 있다.
+      //    at·author 는 note_date·assignee 에서 나오므로 목록의 원본 행을 밑에 깐다.
+      var savedNote = notes.find(function(n) { return n.id === editNote.id; }) || {};
+      reconcileNoteLinks("work_line",
+        Object.assign({}, savedNote, { id: editNote.id, content: finalContent }), companiesList);
       setEditingId(null); setEditNote({});
       if (onBadgeUpdate) onBadgeUpdate();
     }

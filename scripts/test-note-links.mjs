@@ -30,7 +30,7 @@ console.log(`── App.js 에서 떼어낸 소스 ${(deps + block).trim().split
 
 // ⚠️ reconcileNoteLinks 는 supabase 를 쓴다 → 가짜를 주입해 **판단만** 검증한다(DB 접속 없음).
 const api = new Function("supabase", deps + "\n" + block +
-  "\nreturn { taggedCompanyRefs, workLineDisplayText, noteLinkAt, noteLinkRows, reconcileNoteLinks };");
+  "\nreturn { taggedCompanyRefs, workLineDisplayText, noteLinkAt, noteLinkRows, reconcileNoteLinks, appendNoteLinksForLine };");
 const { taggedCompanyRefs, workLineDisplayText, noteLinkAt, noteLinkRows } = api(null);
 
 // 실제 DB 에 있는 이름들로 짰다(과매칭·경계 케이스를 실물로 재현하기 위해)
@@ -205,6 +205,41 @@ check("삭제된 노트는 링크를 전부 정리", cnt(R.g) === "0/0/1", cnt(R
 check("조회 실패하면 아무것도 쓰지 않는다", R.h.res.ok === false && R.h.writes.length === 0,
   JSON.stringify(R.h.res) + " writes=" + R.h.writes.length);
 check("같은 키가 두 번 나와도 1행만 넣는다(유니크 방어)", cnt(R.i) === "1/0/0", cnt(R.i));
+
+// ⑫ appendNoteLinksForLine — wn_append_todo(남의 노트) 예외 경로.
+//    재조정이 아니라 **추가**다. 남의 노트는 RLS 때문에 읽을 수 없어 "원하는 상태"를 계산할 수 없다.
+console.log("\n⑫ appendNoteLinksForLine — 남의 노트에 덧붙인 줄");
+
+async function appendWith(noteId, line) {
+  const db = stubSupabase([]);
+  await api(db).appendNoteLinksForLine(noteId, line, "관호", "2026-08-31", CO);
+  return db.log;
+}
+const A = {};
+A.tagged = await appendWith("n7", "- [ ] 📩 양호 요청: @(주)로컬 자료 부탁드립니다");
+A.plain = await appendWith("n7", "- [ ] 태그 없는 요청");
+A.email = await appendWith("n7", "- [ ] basegilt@gmail.com 로 회신");
+A.two = await appendWith("n7", "- [ ] @(주)로컬 과 @(주)애슐런컴퍼니 둘 다");
+A.noId = await appendWith(null, "- [ ] @(주)로컬 자료 부탁드립니다");
+A.wait = await appendWith("n7", "- [ ] @(주)로컬 자료 부탁드립니다 {응답대기:2026-08-01}");
+
+check("태그가 있으면 insert 1건", A.tagged.length === 1 && A.tagged[0].payload.length === 1,
+  JSON.stringify(A.tagged.map(w => w.op)));
+check("item_key 는 append: 로 시작", String(A.tagged[0].payload[0].item_key).indexOf("append:") === 0,
+  A.tagged[0].payload[0].item_key);
+check("at 은 노트 날짜 자정 UTC", A.tagged[0].payload[0].at === "2026-08-31T00:00:00.000Z",
+  A.tagged[0].payload[0].at);
+check("item_text 에 체크박스 마커가 없다", A.tagged[0].payload[0].item_text.indexOf("- [") !== 0,
+  A.tagged[0].payload[0].item_text);
+check("대기사유는 떼고 저장한다", A.wait[0].payload[0].item_text.indexOf("{응답대기") < 0,
+  A.wait[0].payload[0].item_text);
+check("태그가 없으면 아무것도 안 쓴다", A.plain.length === 0, String(A.plain.length));
+check("이메일만 있으면 아무것도 안 쓴다", A.email.length === 0, String(A.email.length));
+check("기업 2곳이면 2행", A.two.length === 1 && A.two[0].payload.length === 2,
+  JSON.stringify(A.two[0] && A.two[0].payload.map(r => r.company_id)));
+check("같은 줄의 두 행은 item_key 가 같다",
+  A.two[0].payload[0].item_key === A.two[0].payload[1].item_key, "");
+check("노트 id 가 없으면 아무것도 안 쓴다", A.noId.length === 0, String(A.noId.length));
 
 console.log(`\n결과: ${pass}/${pass + fail} 통과`);
 process.exit(fail ? 1 : 0);
