@@ -949,6 +949,72 @@ unique index 는 `(company_id, agency_group)` 이라 `company_id` 가 null 인 �
 이 기능 이전부터 있던 버그다. 고치려면 `return { … }` → `return Object.assign({}, it, { … })` 한 줄이지만
 **팀 일정 기능 전체가 회귀 사정권**이라 별도 건으로 뒀다.
 
+## 🧭 성장 로드맵 (2026-09-02, **새 테이블 2개 · 기존 테이블 변경 0건 · App.js 기존 코드 수정 0줄**)
+
+업종 7개 × 성장 경로 16건을 보여주는 읽기 전용 참조 화면. 사이드바 `주요 메뉴 → 성장 로드맵`
+(`view === "growth-roadmap"`, `src/pages/GrowthRoadmap.jsx`). **「기관 사이트」(`AgencySites.jsx`)와 같은 방식**이다.
+
+- SQL: `성장로드맵_growth_paths.sql` / `_rollback.sql` / `_검증.sql` · 테스트 `scripts/test-growth-roadmap.mjs`
+- 원본 패키지는 `growth-roadmap-package/` 에 참고용으로 그대로 뒀다(첨부 SQL·JSX·CSV·README).
+
+### ⚠️ 사이드바 배열과 렌더 분기는 **한 쌍**이다
+`App.js:8730` 배열 1줄 + `App.js:9093` 렌더 분기 1줄 + `App.js:5` import 1줄, 전부 **추가만** 했다(삭제 0줄).
+한쪽만 넣으면 **메뉴는 뜨는데 화면이 빈 채로 남는다.** 새 메뉴를 만들 때도 같다.
+- **이 앱에는 react-router 가 없다.** 첨부 README 의 `<Route path="/growth-roadmap">` 방식은 못 쓴다 — `view` 문자열 상태다.
+- 아이콘은 `Icon`(App.js:4271)이 아는 이름만 쓸 것. 모르는 이름은 **에러 없이 `null`** 이라 아이콘 자리만 조용히 빈칸이 된다.
+- `view` 는 화이트리스트 없이 `params.get("view")` 를 그대로 받는다 → `?view=growth-roadmap` 이 **공짜로 동작**한다.
+- `supabase` 는 모듈 최상단 기존 클라이언트를 넘긴다. 새로 `createClient` 하면 **GoTrueClient 가 둘**이 되어 토큰 갱신이 싸운다.
+- **모바일 영향 0** — `MobileApp` 은 이 컴포넌트를 렌더하지 않는다(`AgencySites` 와 같음, `TeamNotesSection` 과 다른 점).
+
+### 🔍 미검증(원문 대조 필요) 표시 — **판정 지점은 `isUnverified` 하나뿐이다**
+경로 16건 중 **12건은 원본 영상 판독(`source='video'`)**, **4건은 영상에 없던 업종을 같은 문체로 채운 것(`source='authored'`)**이다.
+authored 4건에는 「가맹사업 정보공개서 등록」·「위탁훈련기관 인정」·「원격평생교육시설 신고」처럼 **실제 법적 요건 명칭**이
+들어 있어, 공고 원문 대조 전까지 사실로 취급하면 안 된다.
+
+- 판정은 `isUnverified(p) = !!p.source && p.source !== "video"` **한 줄뿐**이다. 배지를 다는 자리가 늘면 이걸 쓸 것.
+- **화면에 id 를 박아 두지 않았다. DB 의 `source` 가 유일한 원본이다** → 대조가 끝나 `source` 를 `'video'` 로 바꾸면
+  배지·필터·건수가 **코드 수정 없이** 같이 사라진다.
+- 표시 3곳 + 필터 1곳: 카드 헤더 배지 · 펼친 본문 안내줄 · **분석 모달 결과 줄** · 상단 `☐ 미검증 N건만 보기`.
+  ⚠️ **분석 모달을 빼먹으면 안 된다** — 같은 데이터를 쓰는 자리라 미검증 경로가 1위로 올라올 수 있다.
+- 필터를 켜면 **업종 탭을 무시하고 전 업종에서 모아 본다**(대조는 업종을 넘나들며 하므로). 대신 업종 탭을 누르면
+  필터가 꺼진다 — 안 끄면 "제조를 눌렀는데 교육이 보이는" 상태가 된다.
+- `source` 가 빈 행은 **미검증으로 치지 않는다.** 멀쩡한 경로를 의심하게 만드는 쪽이 더 나쁘다.
+
+### ⚠️ 첨부 SQL 을 그대로 쓰지 않았다 — CLAUDE.md 2-2 위반 3가지
+「기관 사이트」때와 **똑같은 문제**라 `기관사이트_agency_sites_보안보정.sql` 을 선례로 삼았다.
+**데이터·컬럼·시드 16건은 첨부 원본에서 기계적으로 잘라 붙였다**(옮겨 적기 오류 방지).
+
+| 첨부 원본 | 바꾼 것 | 왜 |
+|---|---|---|
+| `using (true)` | `using (public.is_approved())` | 미승인·퇴사 계정도 세션만 살아 있으면 읽힌다(2-3·2-4) |
+| anon GRANT 회수 없음 | `revoke all ... from anon` | postgres 기본권한 `anon=arwdm` 이라 **새 테이블에 자동으로 붙는다** |
+| — | `revoke truncate, references, trigger` | 2-2 필수 |
+| — | **`revoke insert, update, delete`** | ⚠️ 아래 |
+
+⚠️ **truncate 회수만으로는 부족했다 — 실측으로 잡았다.** 기본권한이 `authenticated=arwdm` 이라
+`INSERT/UPDATE/DELETE` 6건이 그대로 남아 있었다. 쓰기 정책이 없어 RLS 가 막지만, 정책 하나가 느슨해지면
+남은 GRANT 로 뚫린다(2026-07-27 사고 패턴). **읽기 전용 참조 테이블이면 쓰기 권한도 회수할 것.**
+경로 수정은 Supabase 대시보드(service_role)에서 하므로 앱 사용자에게 쓰기 권한이 필요 없다.
+
+### 실측 (2026-09-02) — **인용 전에 그날 다시 셀 것**
+`growth_paths` 16행(전부 `is_active`) · `growth_roadmap_copy` 1행 · **video 12 / authored 4** ·
+authored = **id 5(서비스→다점포·가맹) · 7(도소매→수출·해외 판로) · 9(교육→온라인 콘텐츠·구독) · 10(교육→기업·기관 교육)**.
+
+### 안 만든 것
+- **기업 상세 드로어 임베드**(첨부 README 5번) — `companies` 에 업종 코드(`food`/`mfg`…)가 없어 텍스트→코드 매핑을
+  새로 만들고 `CompanyModal` 을 건드려야 한다. 이번 범위 밖(사용자 결정).
+- `roadmap.json`/`roadmap.csv` 를 `src/` 로 복사 — **DB 가 원본**이라 죽은 사본을 만들지 않는다.
+  컴포넌트의 `staticData` 폴백 분기는 원본 그대로 남겼지만 현재 호출부는 항상 `supabase` 를 넘긴다.
+
+### 검증
+- `node scripts/test-growth-roadmap.mjs` **7/7** — **소스에서 `isUnverified` 를 정규식으로 떼어내** 실제 DB 16행에 먹였다.
+  ⚠️ 대조가 끝나 `source` 를 고치면 이 테스트는 **실패하는 게 정상**이다. 기대값을 같이 줄일 것.
+- 보안 검증은 **실행 파일에 딸린 SELECT 가 아니라 별도 조회로**(2-2): RLS 꺼진 테이블 0행 · anon GRANT 0행 ·
+  authenticated 비-SELECT 권한 0행 · 정책 2행 전부 `is_approved()`.
+- ⚠️ `node scripts/audit-select-columns.mjs` 0건 — 다만 이 도구는 **`src/App.js`·`api/ai-search.js` 만 훑고 `src/pages/` 는 안 본다.**
+  그래서 컴포넌트가 읽는 컬럼 13개를 `information_schema` 와 **따로 대조했다**(13/13 실재).
+- `CI=true npx react-scripts build` 통과(main.js +4.78 kB) · `src/App.js` diff **10줄 추가 · 0줄 삭제**.
+
 ## 📝 메모 확대 편집 팝업 (2026-08-21, **DB 변경 0건 · 저장 로직 0줄**)
 
 좁은 칸(표 한 줄짜리 input · 사이드패널 rows=3~4 textarea)을 누르면 넉넉한 창이 열린다.
