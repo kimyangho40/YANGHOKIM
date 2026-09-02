@@ -2,6 +2,7 @@
 import { useState, useMemo, useEffect, useLayoutEffect, useCallback, useRef, Fragment } from "react";
 import { createClient } from "@supabase/supabase-js";
 import AgencySites from "./pages/AgencySites";
+import GrowthRoadmap from "./pages/GrowthRoadmap";
 
 // ── Supabase 설정 ─────────────────────────────────────────────────────────────
 // 내보내기(목록 복사) 권한을 가진 계정 이메일 — 이 계정만 내보내기 버튼이 보임
@@ -8723,6 +8724,10 @@ function CRMApp({ profile, session }) {
             { id: "chat",       label: "채팅",        icon: "chat" },
             { id: "list",       label: "기업 목록",   icon: "list" },
             { id: "agency-sites", label: "기관 사이트", icon: "building" },
+            // ⚠️ 이 배열과 아래 렌더 분기(`view === "growth-roadmap"`)는 한 쌍이다.
+            //    한쪽만 넣으면 메뉴는 뜨는데 화면이 빈 채로 남는다.
+            //    아이콘은 Icon 이 아는 이름만 쓸 것 — 모르는 이름은 에러 없이 null 이라 아이콘만 조용히 빈칸이 된다.
+            { id: "growth-roadmap", label: "성장 로드맵", icon: "activity" },
             { id: "pipeline",   label: "파이프라인",  icon: "pipeline" },
             { id: "cases",      label: "사례집",      icon: "folder" },
             { id: "signoff",    label: "결재함",      icon: "save" },
@@ -9081,6 +9086,11 @@ function CRMApp({ profile, session }) {
                 모듈 최상단의 기존 클라이언트를 그대로 넘긴다. 새로 createClient 하면 GoTrueClient 가
                 두 개가 되어 토큰 갱신이 서로 싸운다. */}
             {view === "agency-sites" && <AgencySites supabase={supabase} />}
+            {/* 🧭 성장 로드맵 — 업종별 성장 경로 16건(읽기 전용). 기관 사이트와 같은 방식이다.
+                supabase 는 모듈 최상단의 기존 클라이언트를 그대로 넘긴다 — 새로 createClient 하면
+                GoTrueClient 가 두 개가 되어 토큰 갱신이 서로 싸운다.
+                짝: src/pages/GrowthRoadmap.jsx · 성장로드맵_growth_paths.sql */}
+            {view === "growth-roadmap" && <GrowthRoadmap supabase={supabase} />}
             {view === "stagnant" && <StagnantView stagnant={stagnant} onSelect={setSelectedCompany} />}
             {view === "olddocs" && <OldDocsView companies={companies} setCompanies={setCompanies} onSelect={setSelectedCompany} />}
             {view === "members" && profile.role === "admin" && <MembersView profiles={profiles} onRefresh={fetchAll} showToast={showToast} />}
