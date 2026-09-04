@@ -14437,6 +14437,84 @@ function memoPreview(v, max) {
   return t.length > n ? t.slice(0, n) + "…" : t;
 }
 
+// ── 🎯 파이프라인 카드 「현재 상태」 코멘트 — 자동표시 계산 ────────────────────
+// 설계서: docs/superpowers/specs/2026-09-04-pipeline-comment-design.md
+//
+// ⚠️ 아래 두 마커 사이는 `scripts/test-status-comment.mjs` 가 **소스째 떼어내 실행**한다.
+//    supabase·React 를 절대 참조하지 말 것 — 순수 계산만 둔다. 참조하는 순간 테스트가 못 돈다.
+//    마커 문구를 바꿔도 테스트가 통째로 죽는다.
+// ⛳ 현재상태-자동표시 계산 시작
+// 자동표시에 쓸 activity_logs 종류 — **사람이 직접 쓴 것만.**
+// ⚠️ note_auto 를 넣지 말 것. 그건 업무노트 항목을 **완료 체크할 때** 자동으로 남는 기록이라
+//    "지금 상태"가 아니다(2026-09-04 결정 D2).
+// ⚠️ pipeline_move·stage_change·assignee_change 도 넣지 말 것. 2026-09-04 실측으로
+//    필터 없이 최신 1건을 고르면 카드 기업 145/331(44%)에
+//    "소진공 카드를 '상담/진단완료' → '기관신청대기/방문예정'(으)로 이동" 이 뜬다.
+// ⚠️ issue_update·status_change·action_update 는 애초에 company_id 가 전 행 비어 있어 못 잇는다.
+var STATUS_COMM_TYPES = ["manual_memo", "quick_memo", "chat_memo"];
+
+// 선두 "@업체명" 만 떼어낸다. chat_memo 는 "@달성종합중기(지원중기) 2026.8 거주지 가압류" 처럼 저장된다.
+// ⚠️ taggedCompanyRefs / findTaggedCompanies 를 쓰지 않는다 — 저건 본문 전체에서 태그를 찾는
+//    매처라 목적이 다르고, 후자는 접두 과매칭이 있는 채팅 전용이다(CLAUDE.md 🕒 절).
+//    여기 필요한 건 "이 줄이 이 회사 이름으로 시작하면 그만큼 잘라낸다" 뿐이다.
+function stripLeadingTag(text, coName) {
+  var t = String(text == null ? "" : text).trim();
+  var n = String(coName == null ? "" : coName).trim();
+  if (!n || t.charAt(0) !== "@") return t;
+  if (t.slice(1, 1 + n.length) !== n) return t;
+  var after = t.slice(1 + n.length);
+  // 이름 바로 뒤가 글자면 **다른 업체 이름**이다(@달성종합중기상사) → 손대지 않는다.
+  if (after && !/^[\s.,·:;)\]]/.test(after)) return t;
+  var body = after.replace(/^[\s.,·:;]+/, "").trim();
+  return body || t;   // 태그밖에 없으면 원문을 남긴다(빈 줄보다 낫다)
+}
+
+// "8/13" 꼴 짧은 날짜. 못 읽으면 빈 문자열.
+function statusCommentDate(iso) {
+  if (!iso) return "";
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return (d.getMonth() + 1) + "/" + d.getDate();
+}
+
+// activity_logs + note_company_links → Map<company_id, { comm, note }> (기업당 최신 1건씩)
+//   comm = 사람이 쓴 소통내역 · note = @기업 태그가 붙은 업무노트 항목
+//   각 값: { text, by, at(ms), iso }
+// ⚠️ 최신 판정을 JS 에서 한다 — fetchAllRows 의 정렬 기본값(created_at→id 오름차순)을
+//    바꾸지 않기 위해서다(CLAUDE.md 2-5).
+function buildStatusAutoMap(logs, links) {
+  var m = new Map();
+  var put = function(id, slot, row) {
+    if (!id || !row.text) return;
+    var cur = m.get(id);
+    if (!cur) { cur = { comm: null, note: null }; m.set(id, cur); }
+    if (!cur[slot] || row.at > cur[slot].at) cur[slot] = row;
+  };
+  (logs || []).forEach(function(l) {
+    if (!l || l.deleted_at) return;
+    if (STATUS_COMM_TYPES.indexOf(l.log_type) < 0) return;
+    var t = Date.parse(l.created_at);
+    put(l.company_id, "comm", {
+      text: String(l.memo == null ? "" : l.memo).trim(),
+      by: l.logged_by || l.assignee || "",
+      at: isNaN(t) ? 0 : t,
+      iso: l.created_at || null,
+    });
+  });
+  (links || []).forEach(function(k) {
+    if (!k || k.deleted_at) return;
+    var t2 = Date.parse(k.at);
+    put(k.company_id, "note", {
+      text: String(k.item_text == null ? "" : k.item_text).trim(),
+      by: k.author || "",
+      at: isNaN(t2) ? 0 : t2,
+      iso: k.at || null,
+    });
+  });
+  return m;
+}
+// ⛳ 현재상태-자동표시 계산 끝
+
 // ── 🔍 확대 입력 모드 ─────────────────────────────────────────────────────────
 // 사이드패널은 폭이 좁아 항목이 많은 섹션은 입력이 불편하다.
 // "크게 보기"를 누르면 그 섹션만 화면 중앙 큰 창으로 열어 넉넉하게 입력한다.
