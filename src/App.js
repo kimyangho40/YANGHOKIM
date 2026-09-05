@@ -11645,6 +11645,25 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
     });
     return function() { alive = false; };
   }, []);
+
+  // ✎ 「현재 상태」 수동 문구 — 저장은 companies 한 곳. **새 저장 경로를 만들지 않는다.**
+  // ⚠️ 기업 단위다(2026-09-04 결정 D1). 저장하면 companyById → pipelineCardData 가 다시 계산돼
+  //    그 기업 카드 2~6장이 한꺼번에 바뀐다. 카드 단위 덮어쓰기는 이번 범위 밖이다.
+  // ⚠️ 빈칸으로 저장하면 세 컬럼 모두 null → 자동표시로 돌아간다(요구사항 4).
+  const [commentEdit, setCommentEdit] = useState(null);   // 편집 중인 기업 co | null
+  var saveStatusComment = async function(co, text) {
+    var t = String(text == null ? "" : text).trim();
+    var patch = t
+      ? { status_comment: t, status_comment_at: new Date().toISOString(), status_comment_by: myName || null }
+      : { status_comment: null, status_comment_at: null, status_comment_by: null };
+    setCommentEdit(null);
+    // writeGuarded 재시도 큐를 그대로 쓴다 — 저장 뒤에 딸린 연동이 없다(CLAUDE.md 2-7 해당 없음).
+    var r = await writeGuarded({
+      table: "companies", op: "update", id: co.id, payload: patch,
+      label: (co.name || "업체") + " 현재 상태",
+    });
+    if (r && r.ok && onPatchCompany) onPatchCompany(co.id, patch);
+  };
   const [draggingId, setDraggingId] = useState(null); // 드래그 중인 카드 id(pipeline_cards.id)
   const [draggingFrom, setDraggingFrom] = useState(null); // 출발 stage
   const [dragOverStage, setDragOverStage] = useState(null); // 드롭 대상 stage (하이라이트)
@@ -12374,6 +12393,19 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
       {reasonEdit && <OtherReasonModal row={reasonEdit} onClose={function() { setReasonEdit(null); }}
         onSave={function(rid, note) { return saveOtherReason(reasonEdit, rid, note); }} />}
 
+      {/* ✎ 「현재 상태」 직접 쓰기 — 기존 공용 MemoEditModal 을 그대로 쓴다(CLAUDE.md 📝 절).
+          ⚠️ 이 컴포넌트에 supabase 를 들이지 않는다. 값만 돌려받고 저장은 saveStatusComment 가 한다. */}
+      {commentEdit && (
+        <MemoEditModal
+          title="🎯 현재 상태"
+          subject={commentEdit.name}
+          hint="비우고 저장하면 최신 소통내역·업무노트로 자동표시가 돌아갑니다"
+          placeholder="예) 2026.8 거주지 가압류 — 삭제도 상담예정도 못 넣는 상태"
+          initial={commentEdit.status_comment || ""}
+          onSave={function(text) { saveStatusComment(commentEdit, text); }}
+          onCancel={function() { setCommentEdit(null); }} />
+      )}
+
       {/* 🗑️ 파이프라인 휴지통 — 기업목록 휴지통과 같은 UX(복구 / 영구삭제) */}
       {showTrash && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -12625,6 +12657,61 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
                         </div>
                         <span style={{ fontSize: 9, color: "#AAA", flexShrink: 0 }}>서류 {docPct}%</span>
                       </div>
+
+                      {/* 🎯 현재 상태 — 수동 문구가 있으면 그것, 없으면 최신 소통내역·업무노트 태그.
+                          ⚠️ 기업 단위라 같은 기업 카드 2~6장에 같은 내용이 뜬다(결정 D1).
+                          ⚠️ 둘 다 없으면 아무것도 안 그린다 — 빈 자리를 만들면 보드 밀도가 무너진다
+                             (2026-09-04 실측 카드 51%가 여기 해당). */}
+                      {(function() {
+                        var manual = String(co.status_comment == null ? "" : co.status_comment).trim();
+                        var auto = statusAuto ? statusAuto.get(co.id) : null;
+                        var comm = (!manual && auto && auto.comm) ? auto.comm : null;
+                        var note = (!manual && auto && auto.note) ? auto.note : null;
+                        if (!manual && !comm && !note) return null;
+                        // ⚠️ stopPropagation 필수 — 카드 onClick 이 기업상세를 연다.
+                        var openEdit = function(e) { e.stopPropagation(); setCommentEdit(co); };
+                        var lineStyle = {
+                          display: "flex", gap: 4, alignItems: "baseline", fontSize: 9, color: "#6B7280",
+                          lineHeight: 1.4, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis",
+                        };
+                        if (manual) {
+                          return (
+                            <div onClick={openEdit} title={manual + (co.status_comment_by ? "\n\n— " + co.status_comment_by : "") + " (클릭하면 수정)"}
+                              style={{ marginTop: 6, background: "#EFF6FF", borderLeft: "3px solid #3B82F6",
+                                borderRadius: 5, padding: "5px 7px", cursor: "pointer" }}>
+                              <div style={{ fontSize: 10, fontWeight: 700, color: "#1D4ED8", lineHeight: 1.4,
+                                display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+                                ✎ {manual}
+                              </div>
+                              {(co.status_comment_by || co.status_comment_at) && (
+                                <div style={{ fontSize: 9, color: "#60A5FA", marginTop: 2 }}>
+                                  {co.status_comment_by || "-"}{co.status_comment_at ? " · " + statusCommentDate(co.status_comment_at) : ""}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+                        return (
+                          <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 2 }}>
+                            {comm && (
+                              <div style={lineStyle} title={"소통내역 · " + (comm.by || "-") + "\n" + stripLeadingTag(comm.text, co.name)}>
+                                <span style={{ flexShrink: 0 }}>💬</span>
+                                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{memoPreview(stripLeadingTag(comm.text, co.name), 34)}</span>
+                                <span style={{ flexShrink: 0, color: "#B8B5AE" }}>{(comm.by || "") + (comm.iso ? "·" + statusCommentDate(comm.iso) : "")}</span>
+                              </div>
+                            )}
+                            {note && (
+                              <div style={lineStyle} title={"업무노트 태그 · " + (note.by || "-") + "\n" + note.text}>
+                                <span style={{ flexShrink: 0 }}>📝</span>
+                                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{memoPreview(note.text, 34)}</span>
+                                <span style={{ flexShrink: 0, color: "#B8B5AE" }}>{(note.by || "") + (note.iso ? "·" + statusCommentDate(note.iso) : "")}</span>
+                              </div>
+                            )}
+                            <div onClick={openEdit} title="이 기업의 「현재 상태」를 직접 적습니다 (적으면 위 자동표시 대신 그 문구가 뜹니다)"
+                              style={{ fontSize: 9, color: "#B8B5AE", cursor: "pointer", alignSelf: "flex-start" }}>✎ 직접 쓰기</div>
+                          </div>
+                        );
+                      })()}
 
                       {/* 폐지 단계(STEP11/12)에서 옮겨온 카드 — 담당자 확인 후 재배치 */}
                       {needsReview && (
