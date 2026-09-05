@@ -9076,7 +9076,7 @@ function CRMApp({ profile, session }) {
             {view === "calendar" && <CalendarView companies={companies} onSelectCompany={setSelectedCompany} profile={profile} />}
             {view === "manual" && <ManualView />}
             {view === "quicklinks" && <QuickLinksView />}
-            {view === "pipeline" && <PipelineView cardRows={pipelineCardRows} hiddenByList={pipelineCardData.hiddenByList} onClearListFilters={clearListFilters} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setPipelineCards={setPipelineCards} setStagnConfig={setStagnConfig} canEditMapping={profile?.name === "양호"} myName={profile?.name} stagnRows={stagnRows} noCardCompanies={companiesWithoutCard} />}
+            {view === "pipeline" && <PipelineView cardRows={pipelineCardRows} hiddenByList={pipelineCardData.hiddenByList} onClearListFilters={clearListFilters} filterAssignee={filterAssignee} setFilterAssignee={setFilterAssignee} assignees={assignees} onSelect={setSelectedCompany} setPipelineCards={setPipelineCards} setStagnConfig={setStagnConfig} canEditMapping={profile?.name === "양호"} myName={profile?.name} stagnRows={stagnRows} noCardCompanies={companiesWithoutCard} onPatchCompany={function(id, patch) { setCompanies(function(prev) { return prev.map(function(c) { return c.id === id ? Object.assign({}, c, patch) : c; }); }); }} />}
             {view === "cases" && <ApprovalCasesView profile={profile} />}
             {view === "signoff" && <SignOffView profile={profile} onBadgeUpdate={setSignOffBadge} />}
             {/* 전체 담당자 보기는 업무노트 열람 권한(wnIsAdmin=양호)과 같은 기준으로. role='admin' 만으로는 DB(RLS)가 남의 노트를 안 준다 */}
@@ -11610,12 +11610,38 @@ function normPipeSearchName(s) {
 }
 function onlyDigits(s) { return String(s == null ? "" : s).replace(/[^0-9]/g, ""); }
 
-function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssignee, setFilterAssignee, assignees, onSelect, setPipelineCards, setStagnConfig, canEditMapping, myName, stagnRows, noCardCompanies }) {
+function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssignee, setFilterAssignee, assignees, onSelect, setPipelineCards, setStagnConfig, canEditMapping, myName, stagnRows, noCardCompanies, onPatchCompany }) {
   // 파이프라인 탭 진입 시 카드 최신화 (기관현황 자동동기화 결과 반영)
   useEffect(function() {
     var alive = true;
     supabase.from("pipeline_cards").select("*").is("deleted_at", null).then(function(r) {
       if (alive && r.data && setPipelineCards) setPipelineCards(r.data);
+    });
+    return function() { alive = false; };
+  }, []);
+
+  // 💬📝 카드 「현재 상태」 자동표시 — 사람이 직접 쓴 소통내역 + @기업 태그 업무노트 항목.
+  // ⚠️ fetchAllRows 로 받는다. `.select()` 직접 호출은 PostgREST 1000행 상한에 **조용히** 걸린다
+  //    (CLAUDE.md 2-5). 2026-09-04 실측 448 + 309 = 757행이라 지금은 안 넘지만,
+  //    판단 기준은 "지금 넘느냐"가 아니라 "전체를 받아야 하는 조회냐"다.
+  // ⚠️ 정렬은 기본값 그대로 두고 **최신 1건은 buildStatusAutoMap 이 JS 에서 고른다.**
+  // ⚠️ 실패하면 fetchAllRows 가 📛 배너를 띄우고 data:null 을 준다 → 빈 Map 이라 자동표시만 안 뜬다.
+  //    카드·단계에는 아무 영향이 없다.
+  const [statusAuto, setStatusAuto] = useState(null);   // Map<company_id,{comm,note}> · null = 로딩 중
+  useEffect(function() {
+    var alive = true;
+    Promise.all([
+      fetchAllRows("activity_logs", "id, company_id, log_type, memo, logged_by, assignee, created_at", {
+        label: "카드 현재상태(소통내역)",
+        build: function(q) { return q.is("deleted_at", null).in("log_type", STATUS_COMM_TYPES); },
+      }),
+      fetchAllRows("note_company_links", "id, company_id, source, item_text, at, author", {
+        label: "카드 현재상태(업무노트 태그)",
+        build: function(q) { return q.is("deleted_at", null); },
+      }),
+    ]).then(function(res) {
+      if (!alive) return;
+      setStatusAuto(buildStatusAutoMap((res[0] && res[0].data) || [], (res[1] && res[1].data) || []));
     });
     return function() { alive = false; };
   }, []);
