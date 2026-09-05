@@ -1015,6 +1015,85 @@ authored = **id 5(서비스→다점포·가맹) · 7(도소매→수출·해외
   그래서 컴포넌트가 읽는 컬럼 13개를 `information_schema` 와 **따로 대조했다**(13/13 실재).
 - `CI=true npx react-scripts build` 통과(main.js +4.78 kB) · `src/App.js` diff **10줄 추가 · 0줄 삭제**.
 
+## 🎯 파이프라인 카드 「현재 상태」 코멘트 (2026-09-04~05, **새 테이블 0개 · 새 저장 경로 0개**)
+
+카드에 "지금 왜 여기 멈춰 있나"를 한 줄로 띄운다. 사람이 직접 쓰면 그 문구,
+안 쓰면 그 기업의 **최신 소통내역 + 최신 @기업 태그 업무노트 항목**이 자동으로 뜬다.
+설계서 `docs/superpowers/specs/2026-09-04-pipeline-comment-design.md` · 계획 `docs/superpowers/plans/2026-09-04-pipeline-comment.md`
+
+### 저장 — `companies` 컬럼 3개. **기업 단위다**
+`status_comment` · `status_comment_at` · `status_comment_by`.
+**`status_comment` 가 비어 있으면 자동표시**, 값이 있으면 그 문구 — 이 한 줄이 전환 규칙 전부다.
+- ⚠️ **`companies.issue`(현재 이슈)와 다른 칸이다.** issue 는 카드 있는 기업 401개 중 **237개에
+  이미 평균 68자(최대 786자)** 가 들어 있어, 재사용하면 켜는 즉시 카드 237장이 장문으로 덮인다.
+- ⚠️ **기업 단위라 카드 2~6장에 같은 문구가 뜬다**(카드 2장 이상인 기업 242개). 의도한 결과다.
+  기관별로 다르게 쓰고 싶다면 `pipeline_cards` 쪽 덮어쓰기를 **새로 설계**해야 한다.
+- SQL: `파이프라인_현재상태_코멘트_컬럼추가.sql` / `_rollback` / `_검증`
+
+### ⚠️ 자동표시에 넣으면 안 되는 log_type — 이게 이 기능의 핵심 함정
+`activity_logs` 는 **사람이 쓴 메모와 시스템 이벤트가 한 테이블에 섞여 있다.**
+2026-09-04 실측: 필터 없이 "최신 1건"을 고르면 **카드 기업 145/331(44%)** 에
+`"소진공 카드를 '상담/진단완료' → '기관신청대기/방문예정'(으)로 이동"` 이 뜬다.
+
+| 쓰는 것 | 안 쓰는 것 | 왜 |
+|---|---|---|
+| `manual_memo`·`quick_memo`·`chat_memo` | `pipeline_move`·`stage_change`·`assignee_change` | 시스템 이벤트다 |
+| `note_company_links` 전건 | `note_auto` | 항목을 **완료 체크할 때** 남는 기록이라 "지금 상태"가 아니다 |
+| | `issue_update`·`status_change`·`action_update` | **`company_id` 가 전 행 비어 있어** 애초에 못 잇는다 |
+
+→ 목록은 **`STATUS_COMM_TYPES` 한 곳**에만 있다. 늘리기 전에 위 표를 다시 볼 것.
+
+### 계산은 순수 함수 — **supabase·React 를 들이지 말 것**
+`App.js` 의 `⛳ 현재상태-자동표시 계산 시작/끝` 마커 사이가 전부다
+(`STATUS_COMM_TYPES` · `stripLeadingTag` · `statusCommentDate` · `buildStatusAutoMap`).
+`scripts/test-status-comment.mjs` 가 **이 구간을 소스째 떼어내 실행**한다 — 무엇이든 참조하는 순간 테스트가 못 돈다.
+- ⚠️ **마커 문구를 바꾸면 테스트가 통째로 죽는다.**
+- ⚠️ **최신 1건은 JS 에서 고른다.** `fetchAllRows` 의 정렬 기본값(`created_at`→`id` 오름차순)을
+  바꾸지 않기 위해서다(CLAUDE.md 2-5).
+- ⚠️ **`taggedCompanyRefs`/`findTaggedCompanies` 를 쓰지 않는다.** `chat_memo` 의 선두 `@업체명` 만
+  떼면 되는 자리라 `stripLeadingTag` 하나로 충분하고, 후자는 접두 과매칭이 있는 채팅 전용이다.
+
+### 읽기 — `fetchAllRows` 2회 (보드 진입 시 1번)
+`activity_logs`(3종만) · `note_company_links`. **합계 약 770행으로 지금은 1000행 미만이지만
+`fetchAllRows` 를 쓴다** — 판단 기준은 "지금 넘느냐"가 아니라 "전체를 받아야 하는 조회냐"다(2-5).
+실패하면 📛 배너가 뜨고 빈 Map 이 되어 **자동표시만 안 뜬다. 카드·단계에는 영향이 없다.**
+
+### 쓰기 — **새 저장 경로 0개**
+편집은 기존 공용 `MemoEditModal`, 저장은 기존 `writeGuarded` + 기존 `onPatchCompany(id, patch)` 패턴.
+`companyById` → `pipelineCardData` 가 다시 계산돼 **같은 기업 카드가 한꺼번에 바뀐다.**
+- ⚠️ **`✎` 에 `stopPropagation` 필수** — 카드 `onClick` 이 기업상세를 연다. 기관현황 우선도 셀·기업목록 「기타」와 같은 함정.
+- ⚠️ **빈칸 저장 = 세 컬럼 모두 `null`** → 자동표시 복귀. 빈 문자열로 두면 "썼는데 안 보이는" 상태가 된다.
+- `writeGuarded` 재시도 큐를 그대로 쓴다 — 저장 뒤에 딸린 연동이 없다(2-7 해당 없음).
+
+### ⚠️ 자동표시도 수동 문구도 없는 카드에는 **✎ 진입점이 없다** (알려진 한계)
+`if (!manual && !comm && !note) return null;` — 빈 자리를 만들지 않으려고 통째로 안 그린다.
+그래서 **카드 절반(2026-09-05 실측 833장 중 423장)에는 직접 쓰기 버튼이 아예 안 보인다.**
+설계 단계에서 "보드 밀도"를 우선한 결과지 버그가 아니지만, "정작 쓸 말이 있는 카드에 못 쓴다"가 되기 쉽다.
+→ 고칠 거면 **자동표시가 없을 때만 흐린 `✎` 한 줄을 남기는 것**이 최소 변경이다(그 분기 한 곳만 고치면 된다).
+
+### 실측 (2026-09-05) — **인용 전에 그날 다시 셀 것**
+살아있는 카드 **833장** / 카드 있는 기업 **404개** ·
+자동표시가 뜨는 기업 **162개(40%)** · 카드 **410장(49%)** → **나머지 절반엔 아무것도 안 뜬다. 버그가 아니다.**
+수동 문구가 들어간 기업 **0개**(아직 아무도 안 썼다 — 이 숫자가 늘기 시작하면 기능이 실제로 쓰이는 것이다).
+
+### 안 만든 것
+기업상세에 이 칸 노출 · 기관(카드)별로 다른 문구 · 코멘트 이력 · Realtime 구독 · `note_auto` 포함.
+**모바일 영향 0** — `PipelineView` 렌더 지점은 `CRMApp` 한 곳뿐이다(`TeamNotesSection` 과 다른 점).
+
+### 검증 (2026-09-05)
+- `node scripts/test-status-comment.mjs` **37/37** — 계산 블록을 소스째 떼어내 실제 DB(소통내역 453행 ·
+  태그링크 317행 · 카드 기업 401개)로 실행. 손으로 옮겨 적지 않는다.
+- **카드 지문(id+stage+stage_changed_at+sync_mode) 작업 전후 동일** `e2d8db84…` (835장/살아있는 833장)
+  → 이 기능은 카드를 한 장도 움직이지 않는다.
+- 기존 테스트 5종 전부 통과: `test-nocard` 5/5 · `test-note-links` 52/52 · `test-amount-unit` 42/42 ·
+  `test-revenue-input` 14/14 · `test-growth-roadmap` 7/7.
+- `node scripts/audit-select-columns.mjs` **0건** · `CI=true npx react-scripts build` 통과(main.js 442.81 → 443.8 kB).
+- **`src/App.js` diff 195줄 추가 · 수정 2줄뿐**(둘 다 `PipelineView` 에 `onPatchCompany` 프롭을 더한 줄) →
+  `pipelineCardData`·`moveCards`·`syncPipelineFromCase`·카드 이동/삭제/종결/기타사유는 **한 줄도 안 건드렸다.**
+- ⚠️ **화면 클릭 회귀(드래그 이동·일괄 이동·휴지통·종결/복원·동기화 토글)는 사람이 확인해야 한다.**
+  이것들은 **운영 DB 를 실제로 바꾼다** — 에이전트가 재현 테스트로 돌리면 안 된다
+  (2026-08-17 사고: 카드 2장의 `stage_changed_at` 이 테스트 시각으로 남아 복구 불가).
+
 ## 📝 메모 확대 편집 팝업 (2026-08-21, **DB 변경 0건 · 저장 로직 0줄**)
 
 좁은 칸(표 한 줄짜리 input · 사이드패널 rows=3~4 textarea)을 누르면 넉넉한 창이 열린다.
