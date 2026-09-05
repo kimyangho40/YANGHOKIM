@@ -12660,14 +12660,15 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
 
                       {/* 🎯 현재 상태 — 수동 문구가 있으면 그것, 없으면 최신 소통내역·업무노트 태그.
                           ⚠️ 기업 단위라 같은 기업 카드 2~6장에 같은 내용이 뜬다(결정 D1).
-                          ⚠️ 둘 다 없으면 아무것도 안 그린다 — 빈 자리를 만들면 보드 밀도가 무너진다
-                             (2026-09-04 실측 카드 51%가 여기 해당). */}
+                          ⚠️ 셋 다 없어도 `✎ 직접 쓰기` 한 줄은 남긴다(2026-09-05 결정).
+                             처음엔 여기서 통째로 `return null` 했는데, 그러면 자동표시가 없는
+                             카드 절반(833장 중 423장)에 **직접 쓰기 진입점 자체가 안 보였다.**
+                             정작 조용한 카드일수록 적을 말이 있어서 뒤집었다. */}
                       {(function() {
                         var manual = String(co.status_comment == null ? "" : co.status_comment).trim();
                         var auto = statusAuto ? statusAuto.get(co.id) : null;
                         var comm = (!manual && auto && auto.comm) ? auto.comm : null;
                         var note = (!manual && auto && auto.note) ? auto.note : null;
-                        if (!manual && !comm && !note) return null;
                         // ⚠️ stopPropagation 필수 — 카드 onClick 이 기업상세를 연다.
                         var openEdit = function(e) { e.stopPropagation(); setCommentEdit(co); };
                         var lineStyle = {
@@ -12707,7 +12708,10 @@ function PipelineView({ cardRows, hiddenByList, onClearListFilters, filterAssign
                                 <span style={{ flexShrink: 0, color: "#B8B5AE" }}>{(note.by || "") + (note.iso ? "·" + statusCommentDate(note.iso) : "")}</span>
                               </div>
                             )}
-                            <div onClick={openEdit} title="이 기업의 「현재 상태」를 직접 적습니다 (적으면 위 자동표시 대신 그 문구가 뜹니다)"
+                            {/* ⚠️ 위에 자동표시가 없을 때는 "대신 뜹니다" 가 거짓말이 된다 — 문구를 나눈다. */}
+                            <div onClick={openEdit} title={(comm || note)
+                                ? "이 기업의 「현재 상태」를 직접 적습니다 (적으면 위 자동표시 대신 그 문구가 뜹니다)"
+                                : "이 기업의 「현재 상태」를 직접 적습니다 (지금은 소통내역·업무노트 태그가 없어 자동으로 뜰 내용이 없습니다)"}
                               style={{ fontSize: 9, color: "#B8B5AE", cursor: "pointer", alignSelf: "flex-start" }}>✎ 직접 쓰기</div>
                           </div>
                         );
