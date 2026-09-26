@@ -311,6 +311,9 @@ commission_fee·contract_date·fee_received·settlement_notes` 를 **또** 들�
 - 💰 **`SETTLEMENT_ADMINS` 에는 일부러 넣지 않았다**(사용자 결정: 본인 담당 건만).
   `canViewSettlement` 가 이미 "본인 담당만"이라 **코드 수정이 필요 없었다** — `ASSIGNEES` 에
   이름이 생기니 담당자로 배정만 하면 보인다. ⚠️ 배정 전에는 **정산 화면이 0건으로 보인다**(정상).
+  > 🔻 **이 결정은 2026-09-26 에 뒤집혔다.** `SETTLEMENT_ADMINS` 상수 자체가 사라지고
+  > DB 테이블 `settlement_permissions` 로 옮겨졌으며, 이만나미는 `scope='all'`(전체 열람·작성)이다.
+  > → 아래 **💰 정산 열람·작성 권한** 절이 최신이다.
 - ⚠️ **"전체채팅 접근 불가"는 실재하지 않는 증상이었다.** `canAccessChannel` 은 `general` 이면
   무조건 true 고, DB 도 같다. 실측: 이만나미가 **2026-09-11 에 general 로 메시지 3건을 실제로 보냈다.**
   → 증상 신고를 코드보다 먼저 믿지 말 것. 실제로는 "채널 목록에 전체 하나만 보인다"였다.
@@ -338,6 +341,87 @@ commission_fee·contract_date·fee_received·settlement_notes` 를 **또** 들�
 - `src/App.js` diff **배열 3줄 + 주석뿐** — 판정 함수(`canAccessChannel`·`canViewSettlement`)는 0줄.
 - ⚠️ **화면 클릭 확인은 사람이 해야 한다** — 이만나미 계정으로 로그인해 개인팀 탭 · 정산 작성 ·
   팀원 관리 메뉴 사라짐을 눌러 볼 것. 에이전트가 운영 DB 로 재현하면 안 된다(2026-08-17 사고).
+  > 🔻 2026-09-26 이후 이 테스트는 **54/54** 다(정산 부분이 DB 기준으로 바뀌며 검사가 늘었다).
+
+## 💰 정산 열람·작성 권한 — 화면에서 사람별 설정 (2026-09-26, **새 테이블 1개 · 기존 테이블 변경 0건**)
+
+정산 전체 열람이 `SETTLEMENT_ADMINS = ["관호","동일","양호","유진"]` 상수 하나였다 →
+**상수를 없애고** DB 테이블 `settlement_permissions` 로 옮겨, 관리자가 「팀원 관리」에서 직접 켜고 끈다.
+SQL: `정산권한_settlement_permissions.sql` / `_rollback` / `_검증` · 테스트 `scripts/test-settlement-scope.mjs`
+
+### 저장 — `settlement_permissions(name, scope, updated_by, updated_at)`
+**키는 uuid 가 아니라 이름이다. 행이 없으면 `own`(본인 담당만).** `scope in ('own','all')`.
+
+⚠️ **uuid 로 하면 안 되는 이유 — 실측 2가지.** 다음에 비슷한 걸 만들 때도 같다.
+1. **중복 계정이 살아 있다.** `profiles` 20행 / 이름 12개. 지혜는 3계정 중 **2개가 최근 로그인 중**
+   (2026-09-16 · 09-09), 권구현 2개(둘 다 admin), 동일·유진·미현도 2~3개.
+   uuid 에 붙이면 **"A계정에 켰는데 B계정으로 들어와 안 먹는"** 상태가 실제로 난다.
+2. **`profiles` 에 컬럼을 붙이면 자가 승격 구멍이 난다.** `p_profiles_update` 가
+   `using (id = auth.uid() or is_admin())` 로 본인 행 수정을 허용하는데 `trg_protect_profile` 은
+   **`role`·`status` 두 개만** 되돌린다 → 누구나 자기 행에 `'all'` 을 써넣을 수 있다
+   (2026-07-29 권한상승 사고와 같은 모양). 막으려면 로그인·승인제의 뿌리인 profiles 트리거를 수술해야 한다.
+
+→ 이 앱의 다른 권한 게이트(`CHAT_TEAMS`·`WN_ADMINS`·`WEEKLY_REVIEW_MEMBERS`)와 **같은 이름 축**이다.
+- check 제약 `name = so_normalize_name(name)` 으로 **비정규 표기를 아예 못 넣게** 했다
+  (`' 동일 '`·`'김동일이사'` 가 들어가면 화면 판정과 어긋나 조용히 안 먹는다).
+- **DELETE 정책 없음 = 삭제 불가.** 권한 회수는 `scope='own'` 으로 바꾸는 것이다(누가 언제 거뒀는지 남는다).
+- `updated_by`/`updated_at` 은 **트리거가 로그인한 사람으로 덮어쓴다**(위조 방지). 쓰기는 RLS + 트리거 이중으로 `is_admin()`.
+
+### 판정은 `⛳ 정산-권한` 마커 사이 한 곳뿐
+`settlementScopeOf(name, map)` · `canViewSettlement(row, myName, **scope**)` ·
+`canCreateSettlement` · `settlementAssigneeChoices` · `canSaveSettlementAssignee`.
+`scripts/test-settlement-scope.mjs` 가 **소스째 떼어내 실행**한다 — supabase·React 를 참조하지 말 것.
+⚠️ **마커 문구를 바꾸면 테스트가 통째로 죽는다.**
+- `canViewSettlement` 에 **인자가 하나 늘었다.** 호출부는 `allFiltered` 한 곳뿐이다.
+- `settlementAssignees` 는 **한 줄도 안 바꿨다**(별칭 보정·콤마 분리 규칙 그대로).
+
+### 🔴 권한 조회가 실패하면 **표를 아예 안 그린다** — 이 설계에서 가장 중요한 한 줄
+전원 `own` 으로 떨어뜨리면 "전체를 보던 사람이 **조용히 적게 보는**" 상태가 되는데, 정산은 돈이라 그게 최악이다.
+→ 📛 배너 + [다시 시도] 를 띄우고 `allFiltered` 가 `[]` 를 준다.
+⚠️ **폴백 명단을 코드에 남기지 않는다** — 명단이 두 벌이 되면 반드시 어긋난다(이 작업을 한 이유 자체가 그것이다).
+
+### 작성 규칙 (사용자 결정 D1)
+**등록은 전원 가능. 단 `own` 은 담당자가 본인으로 고정**(드롭다운 잠금 + 저장 가드).
+막지 않는 이유: 2026-09-11 이만나미 건에서 *"담당자 드롭다운에 자기 이름이 없어 정산에
+자기 담당 건을 만들 수조차 없었다"* 를 문제로 봤다. 같은 상태를 다시 만들지 않는다.
+- ⚠️ 담당자 `<select>` 는 **저장된 공동 담당 값(`"양호, 관호"`)을 옵션으로 보존**한다.
+  안 보존하면 칸이 빈 것처럼 보이고, 무심코 고르면 **공동 담당이 조용히 한 명으로 줄어든다.**
+
+### 팀원 관리 화면
+「권한」 오른쪽에 **「정산 권한」 열**(`본인 담당만` / `전체 열람·작성`). 저장은 upsert.
+- ⚠️ **이름 키라 같은 이름 계정이 전부 같이 바뀐다.** 그게 맞는 동작이라 `ⓘ 같은 이름 N계정 · 함께 적용` 안내를 붙였다.
+- `status !== 'approved'` 계정은 드롭다운 비활성 · `onRefresh`(무거운 전체 재조회)는 **안 부른다**.
+
+### ⚠️ 이건 화면 권한이다 — DB 는 아직 전건을 준다
+`settlement_manual`·`agency_cases` 의 RLS 는 여전히 `is_approved()` 하나라, 승인된 사용자는
+API 로 352건 전부 받을 수 있다. `work_notes`(2026-08-05) · `chat_messages`(2026-08-10) 와
+**같은 계열의 미조치**다. 2026-09-26 사용자 결정으로 **별건 분리**
+(`agency_cases` 는 기관현황·파이프라인·대시보드가 다 읽어서 조이면 회귀 사정권이 통째로 열린다).
+
+### 실측 (2026-09-26) — **인용 전에 그날 다시 셀 것**
+정산 대상 **352건**. `scope='all'` **7명** = **관호·동일·양호·유진·이만나미·정원·지혜**(전건).
+`own` = 인선 7 · 미현 6 · 권구현 0 · 기랑 0.
+
+✅ **전체 열람이 줄어든 사람이 0명이다.** 옛 `SETTLEMENT_ADMINS` 4명(관호·동일·양호·유진)이
+**전원 그대로 `all`** 이고, `own` 으로 남은 4명은 변경 전에도 본인 담당만 보고 있었다.
+→ 이번 변경으로 **기존에 보이던 것이 안 보이게 되는 사람은 없다.** 새로 넓어진 사람만 3명
+(이만나미 0 → 352 · 지혜 5 → 352 · 정원 4 → 352).
+검증 SQL 에 `옛 SETTLEMENT_ADMINS 4명이 전원 all` 검사를 넣어 이 성질을 고정했다.
+
+### 검증
+- `node scripts/test-settlement-scope.mjs` **69/69** — 판정 블록을 소스째 떼어내 실제 DB 로 실행.
+  ⚠️ 건수 기대값을 **상수로 박지 않았다**(매일 변한다) — "all = 전건 / own = 본인 담당 건수"라는 **관계식**으로 검사한다.
+- `정산권한_settlement_permissions_검증.sql` **18/18 PASS** — 검사를 `union all` 로 묶어 **SELECT 하나**로 만들었다
+  (`run-sql.js` 는 마지막 SELECT 하나만 출력하므로 — 2-2). RLS·정책·anon GRANT 0건·트리거·시드·이름 무결성·회귀 건수.
+- 테스트 10종 전부 통과(settlement-scope 69/69 · nocard 5/5 · note-links 52/52 · amount-unit 42/42 ·
+  revenue-input 14/14 · growth-roadmap 7/7 · status-comment 37/37 · gujo-reject 16/16 · weekly-members 12/12 ·
+  imannami-access **51/51**) · `audit-select-columns` **0건** · `CI=true npx react-scripts build` 통과(main.js +2.12 kB).
+  · ⚠️ imannami-access 는 45 → 54 → **51** 로 변했다. 정산 부분을 DB 기준으로 바꾸면서 검사가 늘었고,
+    `own` 표본을 **하드코딩이 아니라 DB 에서 골라** 양호가 `all` 이 되자 그 3건이 자동으로 빠졌다. 정상이다.
+- `syncSettlementFromCompany` 는 **diff 에 0건** — `settlement_manual.commission_fee`(수수료 금액)는 안 건드렸다.
+- ⚠️ **화면 클릭 확인은 사람이 해야 한다**(2026-08-17 사고). 확인할 것: 관호·유진·양호 = 전체 열람 배지 +
+  건수가 예전 그대로 · 이만나미·지혜·정원 = 전건으로 넓어짐 · 인선/미현 = 예전 그대로 7·6건 +
+  등록 시 담당자 잠금 · 팀원 관리에서 지혜 3계정이 같이 바뀌는지.
 
 ## 1. 수정 전 — 공용 로직 영향 범위 먼저 확인
 - 바꾸려는 함수/변수/상태(state)를 **어디서 쓰는지 grep으로 전부 찾고**, 이 변경이
