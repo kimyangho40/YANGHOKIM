@@ -1832,8 +1832,27 @@ function wnViewable(name) {
   WN_SHARE_GROUPS.forEach(function(g) { if (g.indexOf(name) >= 0) g.forEach(function(n) { if (s.indexOf(n) < 0) s.push(n); }); });
   return s;
 }
-// 💰 정산관리(수수료·계약금) 열람 권한 — 본인이 담당자로 들어간 건만. 아래 4명은 예외로 전체 열람.
-const SETTLEMENT_ADMINS = ["관호", "동일", "양호", "유진"];
+// ── 💰 정산관리 열람·작성 권한 ───────────────────────────────────────────────
+// 2026-09-26: 하드코딩 명단(`SETTLEMENT_ADMINS = ["관호","동일","양호","유진"]`)을 **없애고**
+//   DB 테이블 `settlement_permissions`(이름 → 'own'|'all')로 옮겼다.
+//   관리자가 「팀원 관리」 화면에서 직접 켜고 끈다.
+//   SQL: 정산권한_settlement_permissions.sql / _rollback / _검증
+//
+// ⚠️ 키가 uuid 가 아니라 **이름**인 이유: profiles 에 같은 사람 계정이 여러 개 살아 있다
+//    (2026-09-26 실측 20행/12명. 지혜는 3계정 중 2개가 최근 로그인 중).
+//    uuid 로 붙이면 "A계정에 켰는데 B계정으로 들어와 안 먹는" 상태가 실제로 난다.
+//    이 앱의 다른 권한 게이트(CHAT_TEAMS·WN_ADMINS·WEEKLY_REVIEW_MEMBERS)와도 같은 축이다.
+//
+// ⚠️ 이건 **화면 표시 권한**이다. settlement_manual·agency_cases 의 RLS 는 아직
+//    is_approved() 하나라 DB 는 전건을 준다(work_notes·chat DM 과 같은 계열의 미조치).
+//    2026-09-26 사용자 결정으로 DB 차단은 별건으로 분리했다.
+//
+// ⛳ 정산-권한 시작
+//    ⚠️ 아래 두 마커 사이는 `scripts/test-settlement-scope.mjs` 가 **소스째 떼어내 실행**한다.
+//       supabase·React 를 절대 참조하지 말 것 — 순수 계산만 둔다.
+//       마커 문구를 바꾸면 테스트가 통째로 죽는다.
+const SETTLEMENT_SCOPES = ["own", "all"];
+
 // assignee 는 "양호, 미현, 인선" 처럼 콤마로 여러 명이 들어 있고, "김동일이사" 같은 옛 표기도 섞여 있다.
 //   → 콤마로 쪼갠 뒤 normalizeStaffName 으로 정규화해서 비교한다(단순 일치 비교로는 안 걸린다).
 function settlementAssignees(raw) {
@@ -1841,14 +1860,45 @@ function settlementAssignees(raw) {
     .map(function(s) { return normalizeStaffName(s); })
     .filter(function(s) { return !!s; });
 }
+
+// 이름 → 'own' | 'all'.  맵에 없으면 'own'(기본값) — 새 가입자는 자동으로 본인 담당만.
+//   모르는 값('admin' 같은 오타)도 'own' 으로 떨어뜨린다. 안전한 쪽이 기본이다.
+function settlementScopeOf(myName, scopeMap) {
+  var me = normalizeStaffName(myName);
+  if (!me) return "own";
+  return (scopeMap && scopeMap[me]) === "all" ? "all" : "own";
+}
+
 // 이 사람이 이 정산 건을 볼 수 있는가.
-//   담당자가 비어 있는 건은 예외 4명에게만 보인다(주인 없는 건을 전원에게 열지 않는다).
-function canViewSettlement(row, myName) {
+//   담당자가 비어 있는 건(주인 없는 건)은 'all' 인 사람에게만 보인다 — 예전 규칙 그대로다.
+function canViewSettlement(row, myName, scope) {
   var me = normalizeStaffName(myName);
   if (!me) return false;
-  if (SETTLEMENT_ADMINS.indexOf(me) >= 0) return true;
+  if (scope === "all") return true;
   return settlementAssignees(row && row.assignee).indexOf(me) >= 0;
 }
+
+// 직접 등록은 전원 가능하다. 단 'own' 인 사람은 담당자가 본인으로 고정된다(아래 함수).
+//   ⚠️ 등록 자체를 막지 않는 이유: 2026-09-11 이만나미 건에서 "담당자 드롭다운에 자기 이름이
+//      없어 정산에 자기 담당 건을 만들 수조차 없었다"를 문제로 봤다. 같은 상태를 다시 만들지 않는다.
+function canCreateSettlement(scope) { return scope === "own" || scope === "all"; }
+
+// 'own' 인 사람이 고를 수 있는 담당자 = 본인뿐. 'all' 이면 전체 목록.
+function settlementAssigneeChoices(myName, scope, allAssignees) {
+  var me = normalizeStaffName(myName);
+  if (scope === "all") return (allAssignees || []).slice();
+  return me ? [me] : [];
+}
+
+// 저장하려는 담당자 값이 이 사람에게 허용되는가.
+//   'own' 이 본인을 빼고 저장하면 그 줄은 저장 즉시 화면에서 사라진다 → 막는다.
+function canSaveSettlementAssignee(assigneeRaw, myName, scope) {
+  if (scope === "all") return true;
+  var me = normalizeStaffName(myName);
+  if (!me) return false;
+  return settlementAssignees(assigneeRaw).indexOf(me) >= 0;
+}
+// ⛳ 정산-권한 끝
 const INDUSTRY_OPTIONS = ["제조업","농업·어업","숙박업","음식점업","전자상거래업","정보통신업","도소매업","서비스업","창고업","자동차임대업"];
 
 // ── 정책자금 신규 기능: 상수 & 계산 로직 ─────────────────────────────────────────
@@ -14434,7 +14484,46 @@ function StagnantView({ stagnant, onSelect }) {
 }
 
 // ── 팀원 관리 (관리자 전용) ───────────────────────────────────────────────────
+// 💰 2026-09-26: 「정산 권한」 열 추가. settlement_permissions(이름 → 'own'|'all') 를 직접 켜고 끈다.
+//    ⚠️ 키가 **이름**이라 같은 이름 계정이 여러 개면 한 줄을 바꾸면 전부 같이 바뀐다.
+//       그게 맞는 동작이다(사람 단위 권한). 오해하지 않도록 화면에 안내 배지를 붙인다.
 function MembersView({ profiles, onRefresh, showToast }) {
+  // 정산 권한 맵 — 이 화면에서만 쓰므로 여기서 직접 불러온다(App 상태를 늘리지 않는다).
+  const [scopeMap, setScopeMap] = useState(null);
+  const [scopeErr, setScopeErr] = useState("");
+  const [savingName, setSavingName] = useState("");
+
+  const loadScopes = useCallback(async function() {
+    var r = await fetchAllRows("settlement_permissions", "name,scope", { label: "정산 권한(팀원 관리)" });
+    if (r.error || !r.data) { setScopeMap(null); setScopeErr((r.error && r.error.message) || "불러오지 못했습니다."); return; }
+    var m = {};
+    r.data.forEach(function(x) { if (x && x.name) m[normalizeStaffName(x.name)] = x.scope; });
+    setScopeMap(m); setScopeErr("");
+  }, []);
+  useEffect(function() { loadScopes(); }, [loadScopes]);
+
+  // 이름당 계정 수 — 중복 계정이면 "함께 적용" 안내를 띄운다(profiles 20행 / 이름 12개, 2026-09-26).
+  const nameCounts = useMemo(function() {
+    var c = {};
+    profiles.forEach(function(p) { var n = normalizeStaffName(p.name); if (n) c[n] = (c[n] || 0) + 1; });
+    return c;
+  }, [profiles]);
+
+  const updateScope = async (rawName, scope) => {
+    var name = normalizeStaffName(rawName);
+    if (!name) { showToast("이름이 없는 계정입니다.", "error"); return; }
+    setSavingName(name);
+    // upsert — 행이 없으면 만들고 있으면 고친다. 'own' 도 행으로 남겨 "누가 언제 거뒀나"가 보이게 한다.
+    // updated_by·updated_at 은 DB 트리거가 로그인한 사람으로 덮어쓴다(위조 방지).
+    const { error } = await supabase.from("settlement_permissions")
+      .upsert({ name: name, scope: scope }, { onConflict: "name" });
+    setSavingName("");
+    if (error) { showToast("정산 권한 변경 실패: " + error.message, "error"); return; }
+    setScopeMap(function(prev) { return Object.assign({}, prev || {}, { [name]: scope }); });
+    showToast(name + " → " + (scope === "all" ? "정산 전체 열람·작성" : "본인 담당 건만"));
+    // ⚠️ onRefresh(전체 재조회)를 부르지 않는다 — 드롭다운 하나에 쓰기엔 너무 무겁다(역할 변경과 다른 점).
+  };
+
   const updateRole = async (id, role) => {
     const { error } = await supabase.from("profiles").update({ role }).eq("id", id);
     if (error) { showToast("변경 실패: " + error.message, "error"); return; }
@@ -14454,6 +14543,8 @@ function MembersView({ profiles, onRefresh, showToast }) {
     rejected: { label: "거절됨",   bg: "#FEE2E2", color: "#DC2626" },
   };
   const pendingCount = profiles.filter(p => p.status === "pending").length;
+  const scopeAllCount = scopeMap
+    ? Object.keys(scopeMap).filter(function(n) { return scopeMap[n] === "all"; }).length : 0;
 
   return (
     <>
@@ -14464,13 +14555,19 @@ function MembersView({ profiles, onRefresh, showToast }) {
             승인 대기 {pendingCount}명
           </span>
         )}
+        {scopeMap && (
+          <span title="정산관리에서 전체 건을 보고 쓸 수 있는 사람 수(이름 기준)"
+            style={{ fontSize: 12, fontWeight: 700, background: "#FFF7ED", color: "#C2410C", borderRadius: 99, padding: "4px 11px" }}>
+            💰 정산 전체 권한 {scopeAllCount}명
+          </span>
+        )}
       </div>
       <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ background: "#F7F6F3", borderBottom: "1px solid #E8E5E0" }}>
-              {["이름","소속팀","상태","권한","가입일","승인"].map(h => (
-                <th key={h} style={{ padding: "11px 16px", fontSize: 11, fontWeight: 600, color: "#888", textAlign: "left" }}>{h}</th>
+              {["이름","소속팀","상태","권한","정산 권한","가입일","승인"].map(h => (
+                <th key={h} style={{ padding: "11px 16px", fontSize: 11, fontWeight: 600, color: h === "정산 권한" ? "#C2410C" : "#888", textAlign: "left", whiteSpace: "nowrap" }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -14498,6 +14595,39 @@ function MembersView({ profiles, onRefresh, showToast }) {
                     <option value="admin">관리자</option>
                   </select>
                 </td>
+                {/* 💰 정산 권한 — settlement_permissions. 이름 기준이라 같은 이름 계정에 함께 적용된다. */}
+                <td style={{ padding: "13px 16px" }}>
+                  {(function() {
+                    var nm = normalizeStaffName(p.name);
+                    var sc = (scopeMap && scopeMap[nm]) === "all" ? "all" : "own";
+                    var dup = nameCounts[nm] || 0;
+                    var off = p.status !== "approved";   // 거절·대기 계정에 권한을 주는 건 의미가 없다
+                    if (!scopeMap) {
+                      return <span style={{ fontSize: 11, color: "#C4C0BA" }}>{scopeErr ? "📛 불러오기 실패" : "불러오는 중…"}</span>;
+                    }
+                    return (
+                      <div>
+                        <select value={sc} disabled={off || savingName === nm}
+                          onChange={e => updateScope(p.name, e.target.value)}
+                          title={off ? "승인된 계정에만 정산 권한을 줄 수 있습니다" : "정산관리에서 볼 수 있는 범위"}
+                          style={{ padding: "5px 9px", borderRadius: 6, fontSize: 12, cursor: off ? "default" : "pointer",
+                            border: "1px solid " + (sc === "all" ? "#FDBA74" : "#E8E5E0"),
+                            background: off ? "#F7F6F3" : (sc === "all" ? "#FFF7ED" : "#fff"),
+                            color: off ? "#BBB" : (sc === "all" ? "#C2410C" : "#555"),
+                            fontWeight: sc === "all" ? 700 : 400 }}>
+                          <option value="own">본인 담당만</option>
+                          <option value="all">전체 열람·작성</option>
+                        </select>
+                        {dup > 1 && (
+                          <div title="정산 권한은 사람(이름) 단위입니다. 같은 이름 계정이 여러 개면 모두 같은 값이 됩니다."
+                            style={{ fontSize: 10, color: "#A16207", marginTop: 3, whiteSpace: "nowrap" }}>
+                            ⓘ 같은 이름 {dup}계정 · 함께 적용
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </td>
                 <td style={{ padding: "13px 16px", fontSize: 12, color: "#888" }}>{p.created_at?.slice(0,10)}</td>
                 <td style={{ padding: "13px 16px" }}>
                   <div style={{ display: "flex", gap: 6 }}>
@@ -14519,6 +14649,17 @@ function MembersView({ profiles, onRefresh, showToast }) {
       </div>
       <div style={{ marginTop: 16, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "14px 18px", fontSize: 13, color: "#92400E" }}>
         💡 새 팀원 추가: 팀원에게 앱 주소를 공유하고 이메일로 회원가입하게 하세요. 가입하면 이 화면에 <b>승인 대기</b>로 나타나고, <b>승인</b> 버튼을 눌러야 로그인·데이터 접근이 가능해요.
+      </div>
+      <div style={{ marginTop: 10, background: "#FFF7ED", border: "1px solid #FDBA74", borderRadius: 10, padding: "14px 18px", fontSize: 13, color: "#9A3412", lineHeight: 1.75 }}>
+        💰 <b>정산 권한</b>은 정산관리 화면에서 <b>무엇이 보이고 무엇을 쓸 수 있는지</b>를 정해요.
+        <div style={{ marginTop: 6 }}>
+          · <b>본인 담당만</b>(기본) — 자기가 담당자로 들어간 건만 보이고, 직접 등록도 본인 담당으로만 돼요.<br />
+          · <b>전체 열람·작성</b> — 모든 건을 보고 담당자도 자유롭게 지정할 수 있어요. 담당자가 비어 있는 건도 이 사람에게만 보여요.
+        </div>
+        <div style={{ marginTop: 8, fontSize: 12, color: "#B45309" }}>
+          ⓘ 권한은 <b>사람(이름) 단위</b>예요. 같은 이름으로 계정이 여러 개면 한 곳만 바꿔도 모두 같이 적용돼요.
+          새로 가입한 사람은 자동으로 <b>본인 담당만</b>으로 시작해요.
+        </div>
       </div>
     </>
   );
@@ -23233,6 +23374,12 @@ function SettlementView({ profile }) {
   const [newManual, setNewManual] = useState({});
   const [teamFilter, setTeamFilter] = useState("전체"); // 전체 / 법인팀 / 개인팀
   const [assigneeFilter, setAssigneeFilter] = useState("전체"); // 전체 / 담당자 이름 / 미지정
+  // 💰 열람·작성 범위 — settlement_permissions(이름 → 'own'|'all'). 행이 없으면 'own'.
+  //   ⚠️ 조회가 실패하면 전원이 'own' 으로 떨어져 "전체를 보던 사람이 조용히 적게 보는" 상태가 된다.
+  //      정산은 돈이라 그게 최악이다 → 실패하면 표를 아예 안 그리고 📛 배너를 띄운다(아래 scopeError).
+  //      폴백 명단을 코드에 남기지 않는다 — 명단이 두 벌이 되면 반드시 어긋난다.
+  const [scopeMap, setScopeMap] = useState(null);   // null = 아직 안 불러옴
+  const [scopeError, setScopeError] = useState("");
 
   // 정산 건의 팀 = 사업자명 기준 자동 분류 (기업목록과 동일 규칙)
   var teamOfRow = function(row) { return teamByName(row && row.business_name); };
@@ -23261,6 +23408,19 @@ function SettlementView({ profile }) {
     ]);
     var pick = function(r) { return (!r.error && r.data && r.data[0] && r.data[0].year) || null; };
     setDataYearBounds({ min: pick(yb[0]), max: pick(yb[1]) });
+
+    // 💰 열람·작성 범위. 20행 미만이지만 **전체를 받아야 하는 조회**라 fetchAllRows 를 쓴다
+    //    (CLAUDE.md 2-5: 판단 기준은 "지금 1000행을 넘느냐"가 아니라 "전체가 필요하냐"다).
+    var rp = await fetchAllRows("settlement_permissions", "name,scope", { label: "정산 권한" });
+    if (rp.error || !rp.data) {
+      setScopeMap(null);
+      setScopeError((rp.error && rp.error.message) || "정산 권한을 불러오지 못했습니다.");
+    } else {
+      var m = {};
+      rp.data.forEach(function(r) { if (r && r.name) m[normalizeStaffName(r.name)] = r.scope; });
+      setScopeMap(m);
+      setScopeError("");
+    }
     setLoading(false);
   };
 
@@ -23273,14 +23433,22 @@ function SettlementView({ profile }) {
     return manuals.filter(function(m) { return m.month === activeMonth && m.year === activeYear; });
   }, [manuals, activeMonth, activeYear]);
 
+  // 💰 내 범위 — settlement_permissions 에 'all' 이 있으면 전체, 없으면 본인 담당만.
+  var myName = profile?.name || "";
+  var myScope = useMemo(function() {
+    return settlementScopeOf(myName, scopeMap);
+  }, [myName, scopeMap]);
+
   var allFiltered = useMemo(function() {
     var auto = filteredAuto.map(function(c) { return Object.assign({}, c, { _source: "auto" }); });
     var manual = filteredManual.map(function(m) { return Object.assign({}, m, { _source: "manual" }); });
-    // 🔒 열람 권한: 본인이 담당자인 건만. 예외 4명(SETTLEMENT_ADMINS)은 전체.
+    // 🔒 열람 권한: 기본은 본인이 담당자인 건만. 'all' 인 사람만 전체.
     //    여기서 한 번 거르면 팀 필터·팀별 건수·합계가 모두 따라온다.
-    var myName = profile?.name || "";
-    return auto.concat(manual).filter(function(r) { return canViewSettlement(r, myName); });
-  }, [filteredAuto, filteredManual, profile?.name]);
+    //    ⚠️ 권한 맵을 못 불러왔으면(scopeMap === null) 아무것도 안 보여준다 —
+    //       전원 'own' 으로 떨어뜨리면 "전체를 보던 사람이 조용히 적게 보는" 상태가 된다.
+    if (!scopeMap) return [];
+    return auto.concat(manual).filter(function(r) { return canViewSettlement(r, myName, myScope); });
+  }, [filteredAuto, filteredManual, myName, myScope, scopeMap]);
 
   // 👤 담당자 판정 — assignee 는 "양호, 유진" 처럼 여러 명이 들어 있고 "김동일이사" 같은 옛 표기도 섞여 있다.
   //    settlementAssignees() 로 쪼개고 정규화해서 비교한다(열람 권한 판정과 같은 함수 = 규칙이 어긋나지 않는다).
@@ -23311,7 +23479,14 @@ function SettlementView({ profile }) {
     return { 전체: byAssignee.length, 법인팀: corp, 개인팀: indi };
   }, [byAssignee]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 담당자 버튼 목록 — 정산 담당 4명(SETTLEMENT_ADMINS)은 건수가 0이어도 항상 보이게 고정하고,
+  // 💰 전체 열람 권한자 이름 목록 — 담당자 칩을 "0건이어도 항상 표시"할 대상.
+  //   예전에는 SETTLEMENT_ADMINS 상수였다. 이제 DB 설정에서 'all' 인 사람을 쓴다(뜻이 같다).
+  var scopeAllNames = useMemo(function() {
+    if (!scopeMap) return [];
+    return Object.keys(scopeMap).filter(function(n) { return scopeMap[n] === "all"; }).sort();
+  }, [scopeMap]);
+
+  // 담당자 버튼 목록 — 전체 권한자는 건수가 0이어도 항상 보이게 고정하고,
   //   그 밖에 실제 데이터에 있는 이름은 뒤에 붙인다(이름이 필터에서 빠져 건이 숨는 일이 없도록).
   var assigneeOpts = useMemo(function() {
     var counts = {}, unassigned = 0;
@@ -23321,13 +23496,13 @@ function SettlementView({ profile }) {
       list.forEach(function(n) { counts[n] = (counts[n] || 0) + 1; });
     });
     var opts = [{ key: "전체", n: byTeam.length }];
-    SETTLEMENT_ADMINS.forEach(function(n) { opts.push({ key: n, n: counts[n] || 0 }); });
+    scopeAllNames.forEach(function(n) { opts.push({ key: n, n: counts[n] || 0 }); });
     Object.keys(counts).sort(function(a, b) { return counts[b] - counts[a]; }).forEach(function(n) {
-      if (SETTLEMENT_ADMINS.indexOf(n) < 0) opts.push({ key: n, n: counts[n] });
+      if (scopeAllNames.indexOf(n) < 0) opts.push({ key: n, n: counts[n] });
     });
     if (unassigned > 0) opts.push({ key: "미지정", n: unassigned });
     return opts;
-  }, [byTeam]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [byTeam, scopeAllNames]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 월 탭용 - 선택한 연도에 데이터 있는 월
   var monthsWithData = useMemo(function() {
@@ -23430,6 +23605,12 @@ function SettlementView({ profile }) {
 
   // 수동 건 저장
   var saveEditManual = async function() {
+    // 💰 'own' 인 사람이 담당자에서 본인을 빼면 저장 즉시 그 줄이 화면에서 사라진다 → 막는다.
+    //    ('all' 은 제한 없음. 자동 건(agency_cases)은 담당자 칸이 읽기 전용이라 해당 없다)
+    if (!canSaveSettlementAssignee(editData.assignee, myName, myScope)) {
+      alert("담당자에서 본인을 뺄 수 없습니다.\n(전체 권한이 없으면 본인 담당 건만 다룰 수 있습니다)");
+      return;
+    }
     var base = {
       business_name: editData.business_name || null,
       agency_group: editData.agency_group || null,
@@ -23474,14 +23655,28 @@ function SettlementView({ profile }) {
     if (!r.error) setManuals(function(prev) { return prev.filter(function(m) { return m.id !== id; }); });
   };
 
+  // 💰 등록 모달에서 고를 수 있는 담당자 — 'own' 이면 본인 하나뿐(고정), 'all' 이면 전체.
+  var assigneeChoices = useMemo(function() {
+    return settlementAssigneeChoices(myName, myScope, ASSIGNEES);
+  }, [myName, myScope]);
+  var assigneeLocked = myScope !== "all";
+
   // 수동 신규 등록
+  //  ⚠️ 'own' 인 사람은 담당자를 **본인으로 채워서** 연다. 빈칸으로 두면 저장하자마자
+  //     "담당자 없는 건"이 되어 본인 화면에서 사라진다(그 건은 'all' 인 사람에게만 보인다).
   var openAddManual = function() {
-    setNewManual({ year: activeYear, month: activeMonth, business_name: "", agency_group: "", assignee: "", request_amount: "", contract_fee: "", commission_rate: "", approval_amount: "", approval_date: "", commission_fee: "", received_amount: "", contract_date: "", invoice_issued: false, fee_received: false, fee_received_date: "", settlement_notes: "" });
+    setNewManual({ year: activeYear, month: activeMonth, business_name: "", agency_group: "",
+      assignee: assigneeLocked ? (normalizeStaffName(myName) || "") : "",
+      request_amount: "", contract_fee: "", commission_rate: "", approval_amount: "", approval_date: "", commission_fee: "", received_amount: "", contract_date: "", invoice_issued: false, fee_received: false, fee_received_date: "", settlement_notes: "" });
     setShowAddManual(true);
   };
 
   var saveNewManual = async function() {
     if (!newManual.business_name) { alert("사업자명은 필수입니다."); return; }
+    if (!canSaveSettlementAssignee(newManual.assignee, myName, myScope)) {
+      alert("담당자는 본인으로만 등록할 수 있습니다.\n(전체 권한이 없으면 본인 담당 건만 다룰 수 있습니다)");
+      return;
+    }
     var dataToSave = Object.assign({}, newManual, {
       contract_date: newManual.contract_date || null,
       approval_date: newManual.approval_date || null,
@@ -23535,9 +23730,18 @@ function SettlementView({ profile }) {
         </td>
         <td style={{ padding: "6px 8px" }}>
           {isManual
-            ? <select value={editData.assignee || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { assignee: e.target.value }); }); }} style={{ width: 70, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11 }}>
+            ? <select value={editData.assignee || ""} disabled={assigneeLocked}
+                title={assigneeLocked ? "전체 권한이 없어 담당자를 바꿀 수 없습니다" : null}
+                onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { assignee: e.target.value }); }); }}
+                style={{ width: 70, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 11,
+                  background: assigneeLocked ? "#F7F6F3" : "#fff", color: assigneeLocked ? "#888" : "inherit" }}>
                 <option value="">선택</option>
-                {ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
+                {/* 이미 저장된 값이 목록에 없으면(예: "양호, 관호" 공동 담당) 그대로 한 줄 넣어 둔다.
+                    안 넣으면 칸이 빈 것처럼 보이고, 무심코 고르면 공동 담당이 조용히 한 명으로 줄어든다. */}
+                {editData.assignee && assigneeChoices.indexOf(editData.assignee) < 0 && (
+                  <option value={editData.assignee}>{editData.assignee}</option>
+                )}
+                {assigneeChoices.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
               </select>
             : <span style={{ fontSize: 12, color: "#555" }}>{row.assignee || "-"}</span>}
         </td>
@@ -23670,16 +23874,47 @@ function SettlementView({ profile }) {
           <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>정산관리</h1>
           <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>계약금 · 수수료 · 세금계산서 관리</p>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={openAddManual} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-            <Icon name="plus" size={15} color="#F7F6F3" /> 직접 등록
-          </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {/* 💰 내 열람 범위 — 왜 적게/많이 보이는지 화면에 밝힌다(문의를 줄이는 게 목적) */}
+          {scopeMap && (
+            <span title={myScope === "all"
+                ? "관리자가 전체 열람·작성 권한을 켰습니다. 「팀원 관리」에서 바꿀 수 있습니다."
+                : "본인이 담당자로 들어간 건만 보입니다. 전체가 필요하면 관리자에게 요청하세요."}
+              style={{ fontSize: 11, fontWeight: 700, borderRadius: 99, padding: "4px 11px", whiteSpace: "nowrap",
+                background: myScope === "all" ? "#FFF7ED" : "#F7F6F3",
+                color: myScope === "all" ? "#C2410C" : "#888" }}>
+              {myScope === "all" ? "전체 열람" : "본인 담당만"}
+            </span>
+          )}
+          {canCreateSettlement(myScope) && (
+            <button onClick={openAddManual} disabled={!scopeMap}
+              style={{ display: "flex", alignItems: "center", gap: 6, background: scopeMap ? "#1A1917" : "#C4C0BA", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: scopeMap ? "pointer" : "default" }}>
+              <Icon name="plus" size={15} color="#F7F6F3" /> 직접 등록
+            </button>
+          )}
           <button onClick={fetchData} style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", color: "#555", border: "1px solid #E8E5E0", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer" }}>
             <Icon name="refresh" size={13} color="#555" /> 새로고침
           </button>
         </div>
       </div>
 
+      {/* 📛 권한을 못 불러왔으면 표를 아예 그리지 않는다.
+          전원 'own' 으로 떨어뜨리면 "전체를 보던 사람이 조용히 적게 보는" 상태가 되는데,
+          정산은 돈이라 그게 가장 위험하다. 폴백 명단을 코드에 두지 않는 이유도 같다. */}
+      {!scopeMap && !loading && (
+        <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 10, padding: "16px 18px", color: "#991B1B", fontSize: 13, lineHeight: 1.7 }}>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>📛 정산 열람 권한을 불러오지 못했습니다.</div>
+          <div>권한을 확인할 수 없어 정산 내역을 표시하지 않습니다. 잘못된 범위로 보여 주는 것보다 안전합니다.</div>
+          {scopeError && <div style={{ marginTop: 6, fontSize: 11.5, color: "#B91C1C", wordBreak: "break-all" }}>사유: {scopeError}</div>}
+          <button onClick={fetchData}
+            style={{ marginTop: 10, background: "#fff", border: "1px solid #FECACA", color: "#991B1B", borderRadius: 7, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+            다시 시도
+          </button>
+        </div>
+      )}
+
+      {/* 권한을 불러온 뒤에만 연도·월·필터·표를 그린다 (바로 위 📛 배너 참고) */}
+      {scopeMap && (<>
       {/* 연도 선택 — 좌우 화살표. 월 탭 바로 위에 둔다(월을 고르기 전에 해를 먼저 정하는 순서) */}
       {(function() {
         var canPrev = activeYear > yearRange.min, canNext = activeYear < yearRange.max;
@@ -23812,6 +24047,7 @@ function SettlementView({ profile }) {
           </div>
         )}
       </div>
+      </>)}
 
       {/* 직접 등록 모달 */}
       {showAddManual && (
@@ -23839,11 +24075,17 @@ function SettlementView({ profile }) {
                 </div>
                 <div>
                   <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>담당자</label>
-                  <select value={newManual.assignee || ""} onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { assignee: e.target.value }); }); }}
-                    style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>
-                    <option value="">선택</option>
-                    {ASSIGNEES.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
+                  <select value={newManual.assignee || ""} disabled={assigneeLocked}
+                    title={assigneeLocked ? "전체 권한이 없어 본인 담당으로만 등록됩니다" : null}
+                    onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { assignee: e.target.value }); }); }}
+                    style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13,
+                      background: assigneeLocked ? "#F7F6F3" : "#fff", color: assigneeLocked ? "#666" : "inherit" }}>
+                    {!assigneeLocked && <option value="">선택</option>}
+                    {assigneeChoices.map(function(a) { return <option key={a} value={a}>{a}</option>; })}
                   </select>
+                  {assigneeLocked && (
+                    <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>본인 담당으로 등록됩니다.</div>
+                  )}
                 </div>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 13 }}>

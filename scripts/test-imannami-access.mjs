@@ -41,15 +41,17 @@ const pick = (re, label) => {
 const bundle = [
   grab(/const CHAT_TEAMS = \{[\s\S]*?\n\};/, "CHAT_TEAMS"),
   grab(/function canAccessChannel\(channel, name\) \{[\s\S]*?\n\}/, "canAccessChannel"),
-  grab(/const SETTLEMENT_ADMINS = \[[^\]]*\];/, "SETTLEMENT_ADMINS"),
   grab(/function normalizeStaffName\(rawName\) \{[\s\S]*?\n\}/, "normalizeStaffName"),
+  // 💰 2026-09-26: SETTLEMENT_ADMINS 상수가 사라지고 DB 테이블(settlement_permissions)로 옮겨졌다.
+  //    그래서 여기서는 판정 함수만 떼어내고, 범위 값은 아래 ⑦ DB 대조에서 실제로 읽어 온다.
   grab(/function settlementAssignees\(raw\) \{[\s\S]*?\n\}/, "settlementAssignees"),
-  grab(/function canViewSettlement\(row, myName\) \{[\s\S]*?\n\}/, "canViewSettlement"),
+  grab(/function settlementScopeOf\(myName, scopeMap\) \{[\s\S]*?\n\}/, "settlementScopeOf"),
+  grab(/function canViewSettlement\(row, myName, scope\) \{[\s\S]*?\n\}/, "canViewSettlement"),
 ].join("\n\n");
 
 // eslint-disable-next-line no-new-func
 const M = new Function(bundle + `
-  return { CHAT_TEAMS, canAccessChannel, SETTLEMENT_ADMINS, canViewSettlement, settlementAssignees };
+  return { CHAT_TEAMS, canAccessChannel, canViewSettlement, settlementAssignees, settlementScopeOf };
 `)();
 
 const ASSIGNEES    = pick(/const ASSIGNEES = (\[[^\]]*\]);/, "ASSIGNEES");
@@ -60,7 +62,7 @@ console.log(`   CHAT_TEAMS.individual  = ${JSON.stringify(M.CHAT_TEAMS.individua
 console.log(`   CHAT_TEAMS.corporate   = ${JSON.stringify(M.CHAT_TEAMS.corporate)}`);
 console.log(`   ASSIGNEES              = ${JSON.stringify(ASSIGNEES)}`);
 console.log(`   TEAM_MEMBERS.individual= ${JSON.stringify(TEAM_MEMBERS.individual)}`);
-console.log(`   SETTLEMENT_ADMINS      = ${JSON.stringify(M.SETTLEMENT_ADMINS)}\n`);
+console.log(`   (정산 범위는 상수가 아니라 DB settlement_permissions 에 있다 — 아래 ⑦)\n`);
 
 // ── ② 명단 자체
 console.log("■ 명단 (App.js)");
@@ -72,8 +74,10 @@ ok(`ASSIGNEES 에 ${ME} 있다`, ASSIGNEES.indexOf(ME) >= 0);
 ok(`TEAM_MEMBERS.individual 에 ${ME} 있다`, TEAM_MEMBERS.individual.indexOf(ME) >= 0);
 ok(`TEAM_MEMBERS.all 에 ${ME} 있다 (합집합 계산)`,
   TEAM_MEMBERS.individual.concat(TEAM_MEMBERS.corporate).indexOf(ME) >= 0);
-// 결정 2: 전체 열람 명단에는 넣지 않는다 — 본인 담당 건만 본다
-ok(`SETTLEMENT_ADMINS 에 ${ME} 없다 (결정: 본인 담당만)`, M.SETTLEMENT_ADMINS.indexOf(ME) < 0);
+// ⚠️ 2026-09-11 결정 2("전체 열람 명단에는 넣지 않는다")는 **2026-09-26 에 뒤집혔다.**
+//    이만나미는 이제 settlement_permissions 에서 scope='all' 이다. 아래 ④ 에서 DB 로 확인한다.
+ok("정산 명단이 App.js 상수에서 사라졌다 (DB 로 옮김)",
+  !/const\s+SETTLEMENT_ADMINS\s*=/.test(src));
 
 console.log("\n■ 퇴사·제외자가 어느 명단에도 없다");
 GONE.forEach((n) => {
@@ -101,19 +105,46 @@ ok("기존 사람들의 접근이 그대로다",
   EXPECT_INDIVIDUAL.every((n) => M.canAccessChannel("individual", n) === true) &&
   EXPECT_CORPORATE.every((n) => M.canAccessChannel("corporate", n) === true));
 
-// ── ④ 정산 열람 범위 (증상 3) — 본인 담당 건만
-console.log("\n■ 정산 열람 (canViewSettlement) — 본인 담당만");
+// ── ④ 정산 열람 범위 — 2026-09-26 부터 DB(settlement_permissions)가 원본이다
+//    ⚠️ 2026-09-11 에는 "이만나미 = 본인 담당만"이 결정이었고 이 테스트도 그걸 검사했다.
+//       2026-09-26 에 "전체 열람·작성"으로 **바뀌었다**. 기대값을 같이 고친 것이 정상이다.
+console.log("\n■ 정산 열람 (canViewSettlement) — 범위는 DB 에서 읽는다");
+const permTmp = "scripts/.imannami-perm.sql";
+fs.writeFileSync(permTmp, "select name, scope from public.settlement_permissions order by name;");
+let perms;
+try {
+  const out = execFileSync("node", ["scripts/run-sql.js", permTmp], { encoding: "utf8" });
+  perms = JSON.parse(out.slice(out.indexOf("[", out.indexOf("결과:"))));
+} finally { fs.unlinkSync(permTmp); }
+const scopeMap = {};
+perms.forEach((p) => { scopeMap[p.name] = p.scope; });
+const allNames = perms.filter((p) => p.scope === "all").map((p) => p.name).sort();
+console.log(`   DB scope='all' = ${JSON.stringify(allNames)}`);
+
 const row = (assignee) => ({ assignee });
-ok(`${ME} 담당 건 → 보인다`,            M.canViewSettlement(row(ME), ME) === true);
-ok(`공동담당 "양호, ${ME}" → 보인다`,   M.canViewSettlement(row("양호, " + ME), ME) === true);
-ok("남의 단독 건 → 안 보인다",          M.canViewSettlement(row("양호"), ME) === false);
-ok("담당자 빈 건 → 안 보인다",          M.canViewSettlement(row(""), ME) === false);
-ok("담당자 null 건 → 안 보인다",        M.canViewSettlement(row(null), ME) === false);
-ok(`${ME} 는 전체 열람이 아니다 (49건 중 본인 것만)`,
-  M.canViewSettlement(row("관호"), ME) === false && M.canViewSettlement(row("유진, 동일"), ME) === false);
-ok("기존 4명의 전체 열람은 그대로",
-  M.SETTLEMENT_ADMINS.every((n) => M.canViewSettlement(row(""), n) === true));
+const see = (name, assignee) =>
+  M.canViewSettlement(row(assignee), name, M.settlementScopeOf(name, scopeMap));
+
+ok(`${ME} 범위가 'all' 이다 (2026-09-26 결정)`, M.settlementScopeOf(ME, scopeMap) === "all");
+ok(`${ME} 담당 건 → 보인다`,          see(ME, ME) === true);
+ok(`공동담당 "양호, ${ME}" → 보인다`, see(ME, "양호, " + ME) === true);
+ok(`${ME} 남의 단독 건 → 보인다 (전체 권한)`, see(ME, "양호") === true);
+ok(`${ME} 담당자 빈 건 → 보인다 (전체 권한)`, see(ME, "") === true);
+
+// 'own' 인 사람은 예전 규칙 그대로여야 한다 — 여기서 회귀를 잡는다
+const ownSample = ["양호", "인선", "미현"].filter((n) => M.settlementScopeOf(n, scopeMap) === "own");
+console.log(`   own 으로 남은 사람(표본) = ${JSON.stringify(ownSample)}`);
+ownSample.forEach((n) => {
+  ok(`'${n}'(own) 본인 담당 건 → 보인다`, see(n, n) === true);
+  ok(`'${n}'(own) 남의 단독 건 → 안 보인다`, see(n, ME) === false);
+  ok(`'${n}'(own) 담당자 빈 건 → 안 보인다`, see(n, "") === false);
+});
+ok("scope='all' 인 사람은 담당자 빈 건도 전부 본다",
+  allNames.every((n) => see(n, "") === true));
 ok(`${ME} 를 담당자로 고를 수 있다 (드롭다운은 ASSIGNEES)`, ASSIGNEES.indexOf(ME) >= 0);
+ok("DB 의 정산 권한 이름이 전부 ASSIGNEES 에 있다 (드롭다운에서 고를 수 있어야 한다)",
+  perms.every((p) => ASSIGNEES.indexOf(p.name) >= 0),
+  perms.filter((p) => ASSIGNEES.indexOf(p.name) < 0).map((p) => p.name).join(","));
 
 // ── ⑤ 팀원 관리 메뉴는 role 기준 → member 로 낮추면 사라진다
 console.log("\n■ 팀원 관리 메뉴 게이트");
