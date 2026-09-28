@@ -14494,7 +14494,8 @@ function MembersView({ profiles, onRefresh, showToast }) {
   const [savingName, setSavingName] = useState("");
 
   const loadScopes = useCallback(async function() {
-    var r = await fetchAllRows("settlement_permissions", "name,scope", { label: "정산 권한(팀원 관리)" });
+    // ⚠️ created_at·id 없는 테이블(PK=name) — 기본 정렬을 쓰면 400. 정산관리 쪽 호출과 같은 이유.
+    var r = await fetchAllRows("settlement_permissions", "name,scope", { label: "정산 권한(팀원 관리)", orderBy: "name", tieBreak: null });
     if (r.error || !r.data) { setScopeMap(null); setScopeErr((r.error && r.error.message) || "불러오지 못했습니다."); return; }
     var m = {};
     r.data.forEach(function(x) { if (x && x.name) m[normalizeStaffName(x.name)] = x.scope; });
@@ -23411,7 +23412,9 @@ function SettlementView({ profile }) {
 
     // 💰 열람·작성 범위. 20행 미만이지만 **전체를 받아야 하는 조회**라 fetchAllRows 를 쓴다
     //    (CLAUDE.md 2-5: 판단 기준은 "지금 1000행을 넘느냐"가 아니라 "전체가 필요하냐"다).
-    var rp = await fetchAllRows("settlement_permissions", "name,scope", { label: "정산 권한" });
+    //    ⚠️ 이 테이블엔 created_at·id 가 없다(PK=name) → fetchAllRows 기본 정렬을 쓰면 400.
+    //       (2026-09-28 사고: 정산관리 화면이 전원에게 안 떴다.) name 이 PK 라 tieBreak 불필요.
+    var rp = await fetchAllRows("settlement_permissions", "name,scope", { label: "정산 권한", orderBy: "name", tieBreak: null });
     if (rp.error || !rp.data) {
       setScopeMap(null);
       setScopeError((rp.error && rp.error.message) || "정산 권한을 불러오지 못했습니다.");

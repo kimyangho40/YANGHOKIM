@@ -380,6 +380,15 @@ SQL: `정산권한_settlement_permissions.sql` / `_rollback` / `_검증` · 테�
 → 📛 배너 + [다시 시도] 를 띄우고 `allFiltered` 가 `[]` 를 준다.
 ⚠️ **폴백 명단을 코드에 남기지 않는다** — 명단이 두 벌이 되면 반드시 어긋난다(이 작업을 한 이유 자체가 그것이다).
 
+### 🔥 2026-09-28 사고 — 배포 직후 정산관리가 전원에게 안 떴다
+`column settlement_permissions.created_at does not exist`. **DB·SQL 은 정상이었다**(컬럼 4개 = SQL 파일 그대로).
+원인은 `fetchAllRows` 의 **기본 정렬 `created_at → id`** — 이 테이블은 PK 가 `name` 이라 둘 다 없다.
+→ 두 호출부에 `orderBy: "name", tieBreak: null` 을 줬다. **DB 에 컬럼을 추가하는 쪽으로 고치지 않았다.**
+- 테스트가 못 잡은 이유: DB 대조를 **raw SQL 로 따로** 해서 화면이 보내는 조회를 한 번도 안 탔다.
+  `test-settlement-scope.mjs` ⑦ 에 "fetchAllRows 정렬 컬럼이 실제 테이블에 있는가" 검사를 넣었다(옛 코드에서 4건 실패 확인).
+- ⚠️ **`created_at`·`id` 가 없는 테이블을 새로 만들고 `fetchAllRows` 로 읽으면 반드시 `orderBy` 를 줄 것.**
+  `audit-select-columns` 는 select 컬럼만 보고 **정렬 컬럼은 안 본다.**
+
 ### 작성 규칙 (사용자 결정 D1)
 **등록은 전원 가능. 단 `own` 은 담당자가 본인으로 고정**(드롭다운 잠금 + 저장 가드).
 막지 않는 이유: 2026-09-11 이만나미 건에서 *"담당자 드롭다운에 자기 이름이 없어 정산에

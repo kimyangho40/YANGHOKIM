@@ -201,5 +201,22 @@ ok("화면은 scopeMap 이 없으면 표를 안 그린다",
 ok("폴백 명단을 코드에 남기지 않았다",
   !/관호[^\n]*동일[^\n]*양호[^\n]*유진/.test(src.replace(/^\s*\/\/.*$/gm, "")));
 
+// ── ⑦ 화면이 실제로 보내는 조회의 정렬 컬럼이 테이블에 있는가 (2026-09-28 사고) ──
+//    fetchAllRows 기본 정렬은 created_at→id 인데 이 테이블엔 둘 다 없다(PK=name).
+//    ④ 는 raw SQL 로 따로 읽어서 이 경로를 한 번도 안 탔다 → 화면이 전원에게 400 인데 테스트는 통과했다.
+console.log("\n■ 화면 조회(fetchAllRows) 정렬 컬럼 실재 확인");
+const tableCols = runSql(
+  "select column_name from information_schema.columns where table_schema='public' and table_name='settlement_permissions';",
+  "cols").map((r) => r.column_name);
+const spCalls = [...src.matchAll(/fetchAllRows\("settlement_permissions",[^\n]*/g)].map((m) => m[0]);
+ok("fetchAllRows(settlement_permissions) 호출이 2곳 이상 있다", spCalls.length >= 2, `found ${spCalls.length}`);
+spCalls.forEach((c, i) => {
+  const ob = (c.match(/orderBy:\s*"([^"]+)"/) || [])[1] || "created_at";
+  const tbNull = /tieBreak:\s*null/.test(c);
+  const tb = tbNull ? null : ((c.match(/tieBreak:\s*"([^"]+)"/) || [])[1] || "id");
+  ok(`호출 #${i + 1} 정렬 컬럼 '${ob}' 이 테이블에 있다`, tableCols.includes(ob), c);
+  ok(`호출 #${i + 1} tieBreak(${tb}) 가 없거나 테이블에 있다`, tb === null || tableCols.includes(tb), c);
+});
+
 console.log(`\n결과: ${pass}/${pass + fail} 통과`);
 process.exit(fail ? 1 : 0);
