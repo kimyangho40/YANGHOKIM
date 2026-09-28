@@ -27162,9 +27162,13 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
     setCompanySuggestions([]);
   };
 
+  // 신규 추가·붙여넣기가 들어갈 월. "전체" 탭이면 현재 월 — 복사·이동(openBulk)·붙여넣기와 같은 규칙.
+  // 예전엔 Number("all")=NaN → JSON 에서 null 이 되어 month 가 빈 채로 저장돼 어느 월 탭에도 안 떴다.
+  var addTargetMonth = function() { return activeMonth === "all" ? (new Date().getMonth() + 1) : Number(activeMonth); };
+
   var openAddCase = function() {
     setNewCase({
-      agency_group: activeGroup, year: activeYear, month: Number(activeMonth),
+      agency_group: activeGroup, year: activeYear, month: addTargetMonth(),
       business_name: "", representative: "", business_number: "",
       assignee: "", status: "시작 전", request_amount: "", region: "", notes: "",
     });
@@ -27191,7 +27195,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
     var insertData = {
       agency_group: activeGroup,
       year: activeYear,
-      month: Number(activeMonth),
+      month: addTargetMonth(),
       business_name: newCase.business_name,
       representative: newCase.representative || null,
       business_number: newCase.business_number || null,
@@ -27210,7 +27214,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
     if (result.error) {
       console.warn("agency_cases insert 1차 실패, 핵심 컬럼만 재시도:", result.error.message);
       var minimal = {
-        agency_group: activeGroup, year: activeYear, month: Number(activeMonth),
+        agency_group: activeGroup, year: activeYear, month: addTargetMonth(),
         business_name: newCase.business_name, representative: newCase.representative || null,
         business_number: newCase.business_number || null, assignee: newCase.assignee || null,
         status: newCase.status || "시작 전", request_amount: newCase.request_amount || null,
@@ -27671,7 +27675,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
           </button>
           {clipboardCase && (
             <button onClick={async function() {
-              if (!confirm("'" + clipboardCase.business_name + "'을(를) " + activeGroup + " " + activeMonth + "월에 추가할까요?")) return;
+              if (!confirm("'" + clipboardCase.business_name + "'을(를) " + activeGroup + " " + addTargetMonth() + "월에 추가할까요?")) return;
               // 핵심 필수 컬럼만 먼저 시도
               var baseData = {
                 agency_group: activeGroup,
@@ -28764,7 +28768,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
           >
           <div style={{ background: "#fff", borderRadius: 14, width: 520, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>신규 진행건 추가 ({activeGroup} {activeMonth}월)</h2>
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>신규 진행건 추가 ({activeGroup} {addTargetMonth()}월)</h2>
               <button onClick={function() { if (confirmDiscard(["business_name","representative","business_number","assignee","request_amount","region","notes"].some(function(k){ return (newCase[k]||"").toString().trim(); }))) { setShowAddCase(false); setCompanySuggestions([]); } }} style={{ background: "none", border: "none", cursor: "pointer" }}>
                 <Icon name="x" size={18} color="#888" />
               </button>
