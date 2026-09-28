@@ -10506,6 +10506,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
     { id: "기금", label: "보증기금", color: "#0F6E56", ids: ["신용보증기금"] },
     { id: "농협신보", label: "농협신보", color: "#0D9488", ids: ["농협신용보증기금"] },
     { id: "재단", label: "보증재단", color: "#B45309", ids: ["신용보증재단"] },
+    { id: "경기육성", label: "경기도 육성자금", color: "#15803D", ids: ["경기도 육성자금"] },
     { id: "기타", label: "경정청구/기타", color: "#555", ids: ["경정청구","기타"] },
   ];
   const agencyStats = DASHBOARD_AGENCY_GROUPS.map(function(g) {
