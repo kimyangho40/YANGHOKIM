@@ -4617,6 +4617,154 @@ async function appendNoteLinksForLine(noteId, lineText, assignee, noteDate, comp
   if (ins.error) console.warn("[note-link] append 실패", ins.error.message);
 }
 // ── note-link END ────────────────────────────────────────────────────────────
+
+// ── 📩 업무요청 완료상태 동기화 · 이슈·액션 자동 표시 (2026-10-04) ─────────────
+// 받는 사람 개인노트의 "- [ ] 📩 A 요청: 내용" 줄 체크 상태를 work_requests 에 옮겨 적는다.
+//   체크      → status 'done' + done_at(지금)
+//   체크 해제 → status 'read' + done_at null   (흐름 pending → read → done 을 한 칸 되돌린다)
+// 왜 옮겨 적나: 개인노트는 RLS 로 본인·양호만 읽는다. 다른 직원(기업상세 이슈·액션)은
+//   노트를 못 읽으므로, **노트 주인의 브라우저가 저장할 때** 상태를 work_requests 에 남기고
+//   다른 사람은 그것만 읽는다(work_requests 는 승인된 사용자 전원 읽기 — p_work_requests_all).
+//
+// ⛳ 업무요청-동기화 시작 — 이 구간은 scripts/test-request-sync.mjs 와
+//    scripts/backfill-request-status.mjs 가 소스째 떼어내 실행한다.
+//    ⚠️ supabase·React 를 참조하지 말 것(떼어내면 못 돈다). 마커 문구를 바꾸지 말 것.
+// 줄 형태: "- [ ] 📩 A 요청: 텍스트 [마감일] (→ M/D 이월) {대기사유:since}" — 꼬리표는 뒤에서부터 뗀다.
+var REQ_LINE_RE = /^\s*- \[([ xX])\]\s*(.*)$/;
+var REQ_HEAD_RE = /^📩\s*(\S+)\s*요청:\s*/;
+var REQ_WAIT_TAIL_RE = /\s*\{(응답대기|서류대기)(?::\d{4}-\d{2}-\d{2})?\}\s*$/;
+var REQ_CARRY_TAIL_RE = /(\s*\(?→\s*\d{1,2}\/\d{1,2}\s*이월\)?)+\s*$/;
+var REQ_DUE_TAIL_RE = /\s*\[\d{4}-\d{2}-\d{2}\]\s*$/;
+// 리터럴 \n(체크리스트 인코딩)과 공백 차이를 지우고 비교한다 — 요청 content 는 원문, 줄은 인코딩본이다.
+function reqNormText(s) {
+  return String(s == null ? "" : s).replace(/\\n/g, "\n").replace(/\s+/g, " ").trim();
+}
+// 노트 본문에서 📩 요청 줄만 뽑는다. carried = 이월 표시가 붙은 원본 줄(상태는 사본이 들고 있다)
+function parseRequestLines(content) {
+  var out = [];
+  String(content || "").split("\n").forEach(function(line, idx) {
+    var m = line.match(REQ_LINE_RE);
+    if (!m) return;
+    var body = m[2].replace(REQ_WAIT_TAIL_RE, "");
+    var carried = REQ_CARRY_TAIL_RE.test(body);
+    body = body.replace(REQ_CARRY_TAIL_RE, "").replace(REQ_DUE_TAIL_RE, "");
+    var h = body.match(REQ_HEAD_RE);
+    if (!h) return;
+    var text = reqNormText(body.slice(h[0].length));
+    if (!text) return;
+    out.push({ lineIdx: idx, checked: m[1].toLowerCase() === "x", from: h[1], text: text, carried: carried });
+  });
+  return out;
+}
+// 줄 하나에 맞는 요청 하나. 보낸 사람 + 내용(정규화) 완전일치가 원칙.
+//   같은 내용이 여러 건이면 이 노트를 가리키는(note_id) 것 → 먼저 만든 것 순.
+//   ② 받은 사람이 줄 끝에 결과를 덧붙인 경우("요청 내용 -> 신청 완료") — 실측 7줄. 요청 내용 전체가
+//      줄 앞부분이고 바로 뒤가 공백일 때만(→ "확인" 요청이 "확인서 받기" 줄에 붙지 않게). 가장 긴 내용 우선.
+//   ③ 그래도 없으면 옛 규칙(앞 60자)으로 찾되 **후보가 딱 하나일 때만** — 엉뚱한 건을 완료시키지 않는다.
+function matchRequestForLine(line, noteId, requests, claimed) {
+  var free = (requests || []).filter(function(r) { return r && !claimed[r.id] && (r.request_from || "") === line.from; });
+  var hit = free.filter(function(r) { return reqNormText(r.content) === line.text; });
+  if (!hit.length) {
+    var best = 0;
+    hit = free.filter(function(r) {
+      var c = reqNormText(r.content);
+      return c && line.text.indexOf(c + " ") === 0;
+    });
+    hit.forEach(function(r) { best = Math.max(best, reqNormText(r.content).length); });
+    hit = hit.filter(function(r) { return reqNormText(r.content).length === best; });
+  }
+  if (!hit.length) {
+    var p = line.text.slice(0, 60);
+    hit = free.filter(function(r) { return reqNormText(r.content).slice(0, 60) === p; });
+    if (hit.length !== 1) return null;
+  }
+  hit.sort(function(a, b) {
+    var sa = a.note_id === noteId ? 0 : 1, sb = b.note_id === noteId ? 0 : 1;
+    if (sa !== sb) return sa - sb;
+    return String(a.created_at || "").localeCompare(String(b.created_at || ""));
+  });
+  return hit[0];
+}
+// 노트 1장 → 바꿔야 할 요청 목록 [{id, prevStatus, patch}]. 이미 맞는 건 안 넣는다(헛 UPDATE 없음).
+function planRequestSync(content, noteId, requests, nowIso) {
+  var claimed = {}, plan = [];
+  parseRequestLines(content).forEach(function(ln) {
+    if (ln.carried) return;
+    var r = matchRequestForLine(ln, noteId, requests, claimed);
+    if (!r) return;
+    claimed[r.id] = 1;
+    if (ln.checked && r.status !== "done") {
+      plan.push({ id: r.id, prevStatus: r.status == null ? null : r.status, patch: { status: "done", done_at: nowIso || null } });
+    } else if (!ln.checked && r.status === "done") {
+      plan.push({ id: r.id, prevStatus: "done", patch: { status: "read", done_at: null } });
+    }
+  });
+  return plan;
+}
+// 과거분 1회 보정용 — 받는 사람의 노트를 날짜순으로 훑어 "마지막에 본 줄"이 이긴다(이월 사슬의 끝이 살아있는 줄).
+//   과거에 새로 완료로 바뀌는 건은 실제 체크 시각을 알 수 없어 done_at 을 비운다(지어내지 않는다).
+function planRequestBackfill(notes, requests) {
+  var state = {}, byTo = {};
+  (requests || []).forEach(function(r) {
+    state[r.id] = Object.assign({}, r);
+    (byTo[r.request_to] = byTo[r.request_to] || []).push(r.id);
+  });
+  (notes || []).slice().sort(function(a, b) {
+    var ka = String(a.note_date || "") + "|" + String(a.created_at || "");
+    var kb = String(b.note_date || "") + "|" + String(b.created_at || "");
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  }).forEach(function(n) {
+    var mine = (byTo[n.assignee] || []).map(function(id) { return state[id]; });
+    if (!mine.length) return;
+    planRequestSync(n.content, n.id, mine, null).forEach(function(p) { Object.assign(state[p.id], p.patch); });
+  });
+  return (requests || []).filter(function(r) { return state[r.id].status !== r.status; }).map(function(r) {
+    return { id: r.id, prevStatus: r.status, patch: { status: state[r.id].status, done_at: state[r.id].done_at || null } };
+  });
+}
+// 기업상세 이슈·액션 — 이 기업에 걸린 요청만. company_id 가 같거나 내용에 @이 기업 태그가 있으면.
+//   빠른업무·모바일 요청은 company_id 를 안 넣으므로 태그 판정이 필요하다.
+//   중복 제거는 요청 id — 같은 노트(note_id)·같은 받는 사람이어도 빠른업무는 항목마다 요청이 따로다.
+function pickCompanyRequests(rows, companyId, taggedIdsOf) {
+  var seen = {}, out = [];
+  (rows || []).forEach(function(r) {
+    if (!r || !r.id || seen[r.id]) return;
+    var hit = r.company_id === companyId || (taggedIdsOf(r.content || "") || []).indexOf(companyId) >= 0;
+    if (!hit) return;
+    seen[r.id] = 1;
+    out.push(r);
+  });
+  return out;
+}
+// 누적 내역(사람 기록)과 자동 요청 행을 최신순으로 합친다.
+function mergeCommEntries(logs, reqs) {
+  var out = [];
+  (logs || []).forEach(function(l) { out.push({ kind: "log", at: l.created_at || "", log: l }); });
+  (reqs || []).forEach(function(r) { out.push({ kind: "req", at: r.created_at || "", req: r }); });
+  out.sort(function(a, b) { return a.at < b.at ? 1 : a.at > b.at ? -1 : 0; });
+  return out;
+}
+// ⛳ 업무요청-동기화 끝
+
+// 노트 1장을 저장한 뒤 부른다 — 어떤 경로로 체크하든 상태가 맞게.
+// ⚠️ note.assignee(노트 주인 = 받는 사람) 기준이다. 로그인한 사람이 아니다 — 양호가 남의 노트를 체크해도 맞는다.
+// ⚠️ 실패해도 노트 저장을 되돌리지 않는다. 다음 저장이 다시 맞춘다(재조정 방식).
+// ⚠️ prevStatus 를 조건으로 걸어 그 사이 남이 바꾼 건은 덮지 않는다.
+async function syncRequestsFromNote(note) {
+  if (!note || !note.id || !note.assignee) return;
+  if (!parseRequestLines(note.content).length) return; // 📩 줄이 없으면 조회도 안 한다
+  var r = await supabase.from("work_requests")
+    .select("id,request_from,content,status,note_id,done_at,created_at")
+    .eq("request_to", note.assignee);
+  if (r.error || !r.data) { console.warn("[req-sync] 조회 실패", r.error && r.error.message); return; }
+  var plan = planRequestSync(note.content, note.id, r.data, new Date().toISOString());
+  for (var i = 0; i < plan.length; i++) {
+    var q = supabase.from("work_requests").update(plan[i].patch).eq("id", plan[i].id);
+    q = plan[i].prevStatus == null ? q.is("status", null) : q.eq("status", plan[i].prevStatus);
+    var u = await q;
+    if (u.error) console.warn("[req-sync] 갱신 실패", plan[i].id, u.error.message);
+  }
+}
 // 업체명 정규식 캐시 — 팀 업무 카드는 카드×항목마다 호출돼서, 매번 수천 개 이름으로
 // 정규식을 다시 만들면 렌더가 눈에 띄게 느려진다. 목록 배열 자체를 키로 재사용한다.
 // (setState로 새 배열이 들어오면 자동으로 새 정규식 → 결과는 캐시 없을 때와 동일)
@@ -5031,6 +5179,8 @@ function MobileApp({ profile, session }) {
     }, "노트 항목 체크");
     if (r.ok) {
       setNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { content: r.data.content, updated_at: r.data.updated_at }) : n; }); });
+      // 📩 받은 업무요청 줄이면 완료/미완료를 work_requests 에 반영 (실제 저장된 본문 기준)
+      syncRequestsFromNote(Object.assign({}, note, { content: r.data.content }));
     } else {
       // 실패하면 화면도 되돌린다 — 저장 안 된 것이 저장된 것처럼 보이면 안 된다
       var latestRow = r.data;
@@ -13006,6 +13156,9 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView, companies 
         });
       });
       alert("저장 실패: " + r.error.message);
+    } else {
+      // 📩 받은 업무요청 줄이면 완료/미완료를 work_requests 에 반영
+      syncRequestsFromNote(Object.assign({}, note, { content: newContent }));
     }
   }
 
@@ -15166,6 +15319,8 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
   const [pipeCards, setPipeCards] = useState([]); // 이 회사의 파이프라인 조합카드(기관별 단계)
   const [settlements, setSettlements] = useState([]);
   const [commLogs, setCommLogs] = useState([]);
+  // 📩 이 기업에 걸린 업무요청 — 누적 내역에 자동 행으로 섞어 보여준다(DB 에 쓰지 않는다. 열 때마다 새로 읽음)
+  const [companyReqs, setCompanyReqs] = useState([]);
   // 🕒 타임라인 탭: 연결된 업무노트 + 전체 활동로그 병합
   const [timelineNotes, setTimelineNotes] = useState([]);
   const [timelineLinks, setTimelineLinks] = useState([]);   // @기업 태그로 연결된 업무노트 항목(note_company_links)
@@ -15682,7 +15837,25 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
       if (r4 && !r4.error) setPipeCards(r4.data || []);
       setLoadingExtra(false);
     });
-  }, [company.id, company.name]);
+    // 📩 이 기업에 걸린 업무요청 — company_id 로 1번 + 내용 @태그로 1번(빠른업무·모바일은 company_id 를 안 넣는다).
+    //    ilike 는 넓게 받고, 실제 판정은 taggedCompanyRefs 로 한다(접두 과매칭·이메일 배제).
+    //    ⚠️ 위 Promise.all 과 따로 둔다 — 이게 실패해도 누적 내역·기관진행 로드는 영향받지 않는다.
+    setCompanyReqs([]);
+    if (company.id) {
+      var reqCols = "id,request_from,request_to,content,status,read_at,done_at,created_at,company_id,note_id";
+      Promise.all([
+        supabase.from("work_requests").select(reqCols).eq("company_id", company.id),
+        supabase.from("work_requests").select(reqCols).ilike("content", "%@" + company.name + "%"),
+      ]).then(function(rs) {
+        var rows = [];
+        rs.forEach(function(r) { if (r && !r.error && r.data) rows = rows.concat(r.data); });
+        var list = companies || [];
+        setCompanyReqs(pickCompanyRequests(rows, company.id, function(text) {
+          return taggedCompanyRefs(text, list).map(function(x) { return x.id; });
+        }));
+      });
+    }
+  }, [company.id, company.name]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 🕒 타임라인 로드: 연결 업무노트 + 전체 활동로그(company_id·case_id 둘 다) + @태그된 업무노트 항목
   var loadTimeline = async function() {
@@ -17188,18 +17361,51 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                   style={{ width: "100%", marginTop: 6, padding: "8px", background: commInput.trim() ? "#075985" : "#E8E5E0", color: commInput.trim() ? "#F0F9FF" : "#AAA", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: commInput.trim() ? "pointer" : "not-allowed" }}>
                   💬 소통 내역 저장
                 </button>
-                {/* 누적 소통 내역 표시 */}
-                {commLogs.length > 0 && (
+                {/* 누적 소통 내역 표시 — 사람 기록(activity_logs) + 📩 업무요청 자동 행(work_requests, 화면 계산)
+                    ⚠️ 자동 행은 DB 에 쓰지 않는다. 탭 배지 숫자(commLogs.length)도 사람 기록만 센다. */}
+                {(commLogs.length > 0 || companyReqs.length > 0) && (function() {
+                  var commEntries = mergeCommEntries(commLogs, companyReqs);
+                  var fmtTs = function(iso) { return iso ? new Date(iso).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "numeric", minute: "numeric" }) : "-"; };
+                  return (
                   <div style={{ marginTop: 10, padding: "10px 12px", background: "#FAFAF8", borderRadius: 8, border: "1px solid #E8E5E0", maxHeight: 280, overflowY: "auto" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                      <div style={{ fontSize: 11, color: "#888", fontWeight: 600 }}>📋 누적 내역 ({commLogs.length}건)</div>
+                      <div style={{ fontSize: 11, color: "#888", fontWeight: 600 }}>📋 누적 내역 ({commLogs.length}건{companyReqs.length > 0 ? " + 🤖 자동 " + companyReqs.length : ""})</div>
                       <button onClick={openCommTrash} title="삭제된 소통 내역 (휴지통)" style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 11, padding: "0 4px" }}>🗑️ 휴지통</button>
                     </div>
-                    {commLogs.map(function(log, i) {
+                    {commEntries.map(function(ent, i) {
+                      var rowBorder = i < commEntries.length - 1 ? "1px solid #F0EDE8" : "none";
+                      if (ent.kind === "req") {
+                        // 📩 자동 행 — 수정·삭제 버튼 없음(원본은 업무노트·업무요청). 완료 여부는 work_requests 상태.
+                        var rq = ent.req;
+                        var isDone = rq.status === "done";
+                        return (
+                          <div key={"req_" + rq.id} style={{ paddingBottom: 8, marginBottom: 8, borderBottom: rowBorder }}>
+                            <div style={{ background: "#F5F3FF", borderLeft: "3px solid #8B5CF6", borderRadius: 6, padding: "6px 8px" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 4 }}>
+                                <span style={{ fontSize: 10, color: "#6D28D9", fontWeight: 700 }}>
+                                  🤖 자동 · 📩 업무요청 <span style={{ color: "#888", fontWeight: 600 }}>· 등록: 시스템 · {fmtTs(rq.created_at)}</span>
+                                </span>
+                                {isDone ? (
+                                  <span title="받은 사람이 업무노트에서 체크함" style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: "#DCFCE7", color: "#15803D", whiteSpace: "nowrap" }}>
+                                    ✅ 완료{rq.done_at ? " " + fmtTs(rq.done_at) : " (시각 기록 없음)"}
+                                  </span>
+                                ) : (
+                                  <span title={rq.status === "pending" ? "아직 확인 전" : "확인함 · 아직 체크 안 함"} style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: "#FEF3C7", color: "#B45309", whiteSpace: "nowrap" }}>
+                                    ⏳ 미완료{rq.status === "pending" ? " · 안 읽음" : ""}
+                                  </span>
+                                )}
+                              </div>
+                              <div style={{ fontSize: 11, color: "#555", fontWeight: 600, marginBottom: 2 }}>{rq.request_from || "-"} → {rq.request_to || "-"}</div>
+                              <div style={{ fontSize: 12, color: "#444", whiteSpace: "pre-wrap", lineHeight: 1.5, textDecoration: isDone ? "line-through" : "none", opacity: isDone ? 0.75 : 1 }}>{rq.content || ""}</div>
+                            </div>
+                          </div>
+                        );
+                      }
+                      var log = ent.log;
                       var isEditingThis = editingLogId === log.id;
                       var canEditThis = canEditLog(log);
                       return (
-                        <div key={log.id || i} style={{ paddingBottom: 8, marginBottom: 8, borderBottom: i < commLogs.length - 1 ? "1px solid #F0EDE8" : "none" }}>
+                        <div key={log.id || i} style={{ paddingBottom: 8, marginBottom: 8, borderBottom: rowBorder }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                             <span style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>{log.logged_by || "-"} · {log.created_at ? new Date(log.created_at).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "numeric", minute: "numeric" }) : "-"}</span>
                             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -17226,7 +17432,8 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                       );
                     })}
                   </div>
-                )}
+                  );
+                })()}
               </div>
             </>
           )}
@@ -19544,6 +19751,8 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
             linkedContentRef.current = newContent;
             reconcileNoteLinks("work_line",
               Object.assign({}, note || {}, { id: noteId, content: newContent }), companiesList);
+            // 📩 편집창 체크박스로 받은 요청을 체크/해제한 경우 — 링크와 같은 조건(내용이 바뀐 때만)
+            syncRequestsFromNote(Object.assign({}, note || {}, { id: noteId, content: newContent }));
           }
         }
         else if (r.conflict) pushSaveAlert({ id: "wnconf_" + noteId, level: "error", label: label, kind: "conflict",
@@ -21204,6 +21413,13 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
       if (todayInsert) next = [todayInsert].concat(next);
       return next;
     });
+    // 📩 일괄 완료·이월로 받은 요청 줄이 바뀌었을 수 있다 — 실제로 저장된 노트만 맞춘다.
+    //    이월된 원본 줄은 꼬리표가 붙어 건너뛰고, 새 날짜 사본 줄(미완료)이 상태를 들고 간다.
+    updates.forEach(function(uw) {
+      if (!uw.savedAt) return;
+      var base = notes.find(function(n) { return n.id === uw.id; });
+      if (base) syncRequestsFromNote(Object.assign({}, base, { content: uw.content }));
+    });
     if (weekConflicts > 0) alert("노트 " + weekConflicts + "건은 다른 곳에서 먼저 저장돼 반영하지 못했습니다.\n새로고침 후 다시 시도해주세요.");
     if (onBadgeUpdate) onBadgeUpdate();
     if (markDone) markWeeklyReviewed();
@@ -21421,23 +21637,8 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
     alert("📩 '" + to + "'님에게 요청을 보냈어요.");
   };
 
-  // 받은 요청 항목을 완료 체크하면 보낸 사람 쪽에 완료 반영(기능4)
-  var syncRequestDone = async function(prevContent, newContent) {
-    var me = profile?.name; if (!me || sentRequests == null) return;
-    var prevLines = (prevContent || "").split("\n");
-    var newLines = (newContent || "").split("\n");
-    for (var i = 0; i < newLines.length; i++) {
-      var wasUnchecked = /^\s*- \[ \]/.test(prevLines[i] || "");
-      var nowChecked = /^\s*- \[x\]/i.test(newLines[i] || "");
-      if (!(wasUnchecked && nowChecked)) continue;
-      var m = (newLines[i] || "").match(/📩\s*(\S+)\s*요청:\s*(.+?)\s*$/);
-      if (!m) continue;
-      var content = decodeItemText(splitItemWait(m[2]).rest).replace(/→.*이월\s*$/, "").trim();
-      // 나에게 온 pending/read 요청 중 내용 일치 건 done 처리
-      await supabase.from("work_requests").update({ status: "done", done_at: new Date().toISOString() })
-        .eq("request_to", me).neq("status", "done").ilike("content", content.slice(0, 60) + "%");
-    }
-  };
+  // 받은 요청 항목 체크 → 보낸 사람 쪽 완료 반영(기능4)은 모듈 공용 syncRequestsFromNote 로 옮겼다
+  // (2026-10-04). 예전엔 이 카드 체크 한 경로에서만, 체크 방향으로만, 내용 앞 60자로 찾아 반영했다.
 
   // 📩 요청 답장 스레드 추가 (받은이가 답장 → 원 요청자에게 안읽음 표시 + 상대 클라이언트가 실시간 소리/팝업)
   var addRequestReply = async function(reqRow, text) {
@@ -21586,8 +21787,8 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
       //    item_key(줄 번호)가 DB 와 어긋난다.
       reconcileNoteLinks("work_line",
         Object.assign({}, prevNoteForReq || {}, { id: noteId, content: savedContent }), companiesList);
-      // 📩 받은 요청 항목 완료 시 보낸 사람 쪽에 반영
-      if (prevNoteForReq) syncRequestDone(prevNoteForReq.content, newContent);
+      // 📩 받은 요청 항목 완료/해제 → work_requests 반영 (실제 저장된 합본 기준 · 양방향)
+      syncRequestsFromNote(Object.assign({}, prevNoteForReq || {}, { id: noteId, content: savedContent }));
       // 방금 체크 완료된 항목 → 활동로그 기록
       var prevNote = notes.find(function(n) { return n.id === noteId; });
       if (prevNote) {
@@ -21688,6 +21889,7 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
       var savedNote = notes.find(function(n) { return n.id === editNote.id; }) || {};
       reconcileNoteLinks("work_line",
         Object.assign({}, savedNote, { id: editNote.id, content: finalContent }), companiesList);
+      syncRequestsFromNote(Object.assign({}, savedNote, { id: editNote.id, content: finalContent }));
       setEditingId(null); setEditNote({});
       if (onBadgeUpdate) onBadgeUpdate();
     }
