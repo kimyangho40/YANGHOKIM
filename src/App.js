@@ -1392,6 +1392,63 @@ const REAPPLY_EXEMPT_GROUPS = ["구조혁신&사업전환"];
 function isReapplyExempt(g) { return REAPPLY_EXEMPT_GROUPS.indexOf(g) >= 0; }
 // ⛳ 재신청-제외 끝
 
+// ⛳ 기관현황-이월 시작 — 이 구간은 scripts/test-agency-carry.mjs 가 소스째 떼어내 실행한다.
+//    ⚠️ 마커 문구를 바꾸면 테스트가 통째로 죽는다. 무엇도 참조하지 말 것(순수해야 떼어낼 수 있다).
+//
+// ↪ 기관별현황 행별 「이월」 (2026-10-06) — 같은 기관의 다른 연·월로 **복사**(원본 유지, 새 id).
+//  · 이월 전용 **허용 목록**이다. COPY_FIELDS(다중 복사)에서 빼는 방식으로 만들지 않은 이유:
+//    누가 COPY_FIELDS 에 필드를 더하면 이월에도 조용히 따라 들어간다.
+//  · 일부러 안 가져가는 것(사용자 결정): 비고·추가메모 · 우선도 체크 · 로그인/비밀번호 · 인증서 ·
+//    아이핀 · 기관 로그인 · 주민번호 · 결과·정산·계약 전부.
+var CARRY_FIELDS = [
+  "business_name", "representative", "business_number", "assignee",
+  "region", "branch", "industry", "employee_count", "credit_score",
+  "request_amount", "request_fund", "fund_product", "agency_sub",
+];
+
+// 최초 신청월 — 이미 이월된 건을 다시 이월하면 **최초 값을 그대로 물려준다**(6월→9월→12월 = 6월).
+// 직전 건은 reapply_from_id 링크가 따로 가리킨다.
+function carryOriginOf(row) {
+  if (row && row.carried_from_year != null && row.carried_from_month != null) {
+    return { year: Number(row.carried_from_year), month: Number(row.carried_from_month) };
+  }
+  return { year: Number(row.year), month: Number(row.month) };
+}
+
+// 이월 insert payload. status 는 호출부가 목적지 기관 어휘로 골라 넘긴다(구조혁신 = "시작전").
+function buildCarryInsert(row, dest, status) {
+  var origin = carryOriginOf(row);
+  var ins = {
+    agency_group: row.agency_group, year: Number(dest.year), month: Number(dest.month),
+    company_id: row.company_id || null,
+    reapply_from_id: row.id,                 // 직전 건(영구삭제되면 DB 가 NULL 로 비운다)
+    carried_from_year: origin.year,          // 최초 신청월 — 원본이 지워져도 남는다
+    carried_from_month: origin.month,
+    status: status,
+  };
+  CARRY_FIELDS.forEach(function(f) { if (row[f] != null && row[f] !== "") ins[f] = row[f]; });
+  return ins;
+}
+
+// 팝업 기본값 = 원본 다음 달(12월이면 다음 해 1월)
+function nextCarryMonth(row) {
+  var y = Number(row.year), m = Number(row.month);
+  return m >= 12 ? { year: y + 1, month: 1 } : { year: y, month: m + 1 };
+}
+
+// 표 배지 판정. **이월 판정은 carried_from_* 로만 한다** — reapply_from_id 는 부결 재신청·다중 복사도
+// 채우므로 그것만 보면 이월과 재신청이 섞인다. 기존 행(carried_from_* NULL)은 예전과 똑같이 「재신청」.
+function caseOriginBadge(row) {
+  if (!row) return null;
+  if (row.carried_from_year != null && row.carried_from_month != null) {
+    var sameYear = Number(row.carried_from_year) === Number(row.year);
+    return { kind: "carry", label: "이월 · " + (sameYear ? "" : row.carried_from_year + "년 ") + row.carried_from_month + "월에서" };
+  }
+  if (row.reapply_from_id) return { kind: "reapply", label: "재신청" };
+  return null;
+}
+// ⛳ 기관현황-이월 끝
+
 // 📖 번역표 — 확정본(2026-08-21). status_stage_map 보다 **이게 이긴다.**
 //    매핑표는 사람이 화면에서 고칠 수 있어, 확정 규칙을 거기 두면 조용히 바뀔 수 있다.
 const SYNC_CREATE_ONLY_STATUS = ["시작 전", "시작전"];  // ⚠️ 구조혁신은 띄어쓰기가 없다
@@ -26874,7 +26931,8 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
   const [selectedIds, setSelectedIds] = useState([]);
   const selAnchorRef = useRef(-1);                  // Shift+클릭 범위 선택 기준(filtered 안 위치)
   const [bulkMode, setBulkMode] = useState(null);   // null | "copy" | "move"
-  const [bulkDest, setBulkDest] = useState(null);   // { group, year, month, keepMonth, keepStatus }
+  const [bulkDest, setBulkDest] = useState(null);   // { group, year, month, keepMonth, keepStatus, carryRow? }
+  //  ↪ carryRow 가 있으면 행별 「이월」 — 대상은 선택 목록이 아니라 그 한 줄이다(bulkTargetRows).
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkResult, setBulkResult] = useState(null);
   const [agencyToast, setAgencyToast] = useState(null);
@@ -26927,7 +26985,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
   const DEFAULT_COL_WIDTHS = {
     num: 40, business_name: 160, representative: 80, assignee: 80, amount: 70,
     product: 140, industry: 70, region: 80, contact: 130, status: 110, dup: 56, docs: 200,
-    script: 72, edu: 72, credit: 60, notes: 140, action: 120, priority: 84
+    script: 72, edu: 72, credit: 60, notes: 140, action: 170, priority: 84   // action 120→170: ↪ 이월 버튼 추가(2026-10-06)
   };
   const [colWidths, setColWidths] = useState(function() {
     try {
@@ -27710,6 +27768,26 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
   };
   var closeBulk = function() { setBulkMode(null); setBulkDest(null); };
 
+  // ↪ 행별 「이월」 — 다중 복사와 같은 실행부(bulkPlan·runBulk)를 탄다. 차이는 bulkDest.carryRow 하나.
+  //    기관은 원본 그대로(바꿀 수 없음), 상태는 항상 초기화, 기본 월은 원본 다음 달.
+  var openCarry = function(row) {
+    if (!row) return;
+    var nx = nextCarryMonth(row);
+    setBulkResult(null);
+    setBulkMode("copy");
+    setBulkDest({
+      group: row.agency_group || activeGroup,
+      year: nx.year, month: nx.month,
+      keepMonth: false, keepStatus: false,
+      carryRow: row,
+    });
+  };
+  // 실행 대상 — 이월이면 그 한 줄, 아니면 화면에서 선택한 줄
+  var carryRowSel = bulkDest && bulkDest.carryRow ? bulkDest.carryRow : null;
+  var bulkTargetRows = useMemo(function() {
+    return carryRowSel ? [carryRowSel] : selectedRows;
+  }, [carryRowSel, selectedRows]);
+
   // 목적지 중복 판정 키 — 조인키는 company_id 가 원본이고, 없을 때만 사업자명으로 떨어진다.
   // (사업자명은 작업 메모가 붙은 원문이 섞여 있어 조인키로 믿을 수 없다 — CLAUDE.md 2절)
   var destKeyOf = function(group, y, m, row) {
@@ -27725,7 +27803,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
       exist[destKeyOf(c.agency_group, Number(c.year), Number(c.month), c)] = 1;
     });
     var go = [], skip = [];
-    selectedRows.forEach(function(r) {
+    bulkTargetRows.forEach(function(r) {
       var m = bulkDest.keepMonth ? Number(r.month) : Number(bulkDest.month);
       var sameSpot = (r.agency_group || "") === bulkDest.group
         && Number(r.year) === Number(bulkDest.year) && Number(r.month) === m;
@@ -27734,9 +27812,9 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
       else go.push({ row: r, month: m });
     });
     // 구조혁신 ↔ 다른 기관 사이에서는 상태를 그대로 옮길 수 없다(어휘가 다르다).
-    var vocabDiffers = selectedRows.some(function(r) { return isGujo(r.agency_group) !== isGujo(bulkDest.group); });
+    var vocabDiffers = bulkTargetRows.some(function(r) { return isGujo(r.agency_group) !== isGujo(bulkDest.group); });
     return { go: go, skip: skip, vocabDiffers: vocabDiffers };
-  }, [bulkMode, bulkDest, selectedRows, cases]);
+  }, [bulkMode, bulkDest, bulkTargetRows, cases]);
 
   var goToDest = function(dest) {
     if (!dest) return;
@@ -27750,7 +27828,9 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
 
   var runBulk = async function() {
     if (!bulkMode || !bulkDest || !bulkPlan || bulkBusy) return;
-    if (!bulkPlan.go.length) { alert("실행할 건이 없습니다. (전부 건너뜀 대상)"); return; }
+    var isCarry = !!bulkDest.carryRow;
+    // ↪ 이월은 전부 건너뜀이어도 실행한다 — 결과 토스트에 "복사 0건 · 건너뜀 N건"을 그대로 보여 준다.
+    if (!bulkPlan.go.length && !isCarry) { alert("실행할 건이 없습니다. (전부 건너뜀 대상)"); return; }
     var isMove = bulkMode === "move";
     var destLabel = agencyLabel(bulkDest.group) + " " + bulkDest.year + "년"
       + (bulkDest.keepMonth ? " (원본 월 그대로)" : " " + bulkDest.month + "월");
@@ -27774,6 +27854,14 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
           if (mr.error) { fail.push({ row: r, why: mr.error.message }); continue; }
           pendingUpd.push({ id: r.id, upd: upd });
           ok.push({ row: r, month: it.month, status: upd.status || r.status });
+        } else if (isCarry) {
+          // ↪ 이월 — 허용 목록(CARRY_FIELDS)만 + 최초 신청월(carried_from_*) + 직전 건 링크. 상태는 항상 초기화.
+          //    재시도(최소 컬럼) 경로를 두지 않는다: 실패를 숨기고 원래 신청월이 빠진 사본을 만들면 안 된다.
+          var cins = buildCarryInsert(r, { year: bulkDest.year, month: it.month }, initialStatusFor(r.agency_group));
+          var cr3 = await supabase.from("agency_cases").insert(cins).select().single();
+          if (cr3.error || !cr3.data) { fail.push({ row: r, why: cr3.error ? cr3.error.message : "알 수 없는 에러" }); continue; }
+          pendingIns.push(cr3.data);
+          ok.push({ row: r, month: it.month, status: cr3.data.status });
         } else {
           var ins = {
             agency_group: bulkDest.group, year: Number(bulkDest.year), month: it.month,
@@ -27818,6 +27906,9 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
     //    카드가 뒤로 끌려갈 수 있어서다. 원본 기관에 행이 안 남으면 파이프라인 휴지통에서 사람이 지운다.
     for (var j = 0; j < ok.length; j++) {
       var o = ok[j];
+      // ↪ 이월은 기업 연결이 있을 때만 — 미연결 건으로 이름 카드를 새로 만들지 않는다(2026-08-21 결정: 미연결 98건 카드 안 만듦).
+      //    연결된 건은 같은 기관이라 카드가 이미 있어 createOnly 가 즉시 return 한다.
+      if (isCarry && !o.row.company_id) continue;
       await syncPipelineFromCase({
         company_id: o.row.company_id, business_name: o.row.business_name,
         agency_group: bulkDest.group, status: o.status,
@@ -27831,7 +27922,17 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
       month: ok.length ? ok[0].month : Number(bulkDest.month),
     };
     var movedAway = isMove && ok.length > 0;
-    if (!fail.length && !bulkPlan.skip.length) {
+    if (isCarry && !fail.length) {
+      // ↪ 이월 결과는 항상 토스트 — 복사된 건수와 건너뛴 건수(목적지에 이미 있음)를 둘 다 보여 준다.
+      //    ⚠️ clearSel 은 부르지 않는다. 이월은 선택 목록과 무관한 한 줄 작업이라, 다중 선택해 둔 것을 지우면 안 된다.
+      closeBulk();
+      setAgencyToast({
+        msg: (ok.length ? "✅ " : "⏭ ") + "이월 — " + agencyLabel(dest.group) + " " + dest.year + "년 " + dest.month + "월 · "
+          + "복사 " + ok.length + "건 · 건너뜀 " + bulkPlan.skip.length + "건"
+          + (bulkPlan.skip.length ? " (" + bulkPlan.skip.map(function(x) { return x.why; }).join(", ") + ")" : ""),
+        dest: dest, movedAway: false,
+      });
+    } else if (!fail.length && !bulkPlan.skip.length) {
       closeBulk(); clearSel();
       setAgencyToast({
         msg: "✅ " + ok.length + "건을 " + agencyLabel(dest.group) + " " + dest.year + "년"
@@ -27839,8 +27940,8 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
         dest: dest, movedAway: movedAway,
       });
     } else {
-      closeBulk(); clearSel();
-      setBulkResult({ ok: ok, fail: fail, skip: bulkPlan.skip, dest: dest, mode: bulkMode, keepMonth: bulkDest.keepMonth, movedAway: movedAway });
+      closeBulk(); if (!isCarry) clearSel();
+      setBulkResult({ ok: ok, fail: fail, skip: bulkPlan.skip, dest: dest, mode: isCarry ? "carry" : bulkMode, keepMonth: bulkDest.keepMonth, movedAway: movedAway });
     }
   };
 
@@ -28226,9 +28327,22 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
                         : (
                           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                             <span style={{ fontWeight: 600 }}>{row.business_name || "-"}</span>
-                            {row.reapply_from_id && (
-                              <span title="이전 부결/반려 건에서 재신청된 건" style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: "#FEF3C7", color: "#B45309", whiteSpace: "nowrap" }}>재신청</span>
-                            )}
+                            {(function() {
+                              // 이월 판정은 carried_from_* 로만 — 기존 reapply_from_id 행(재신청·다중 복사)은 예전과 똑같이 「재신청」
+                              var ob = caseOriginBadge(row);
+                              if (!ob) return null;
+                              if (ob.kind === "reapply") return (
+                                <span title="이전 부결/반려 건에서 재신청된 건" style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: "#FEF3C7", color: "#B45309", whiteSpace: "nowrap" }}>재신청</span>
+                              );
+                              var parent = row.reapply_from_id ? cases.find(function(c) { return c.id === row.reapply_from_id; }) : null;
+                              var tip = "최초 신청 " + row.carried_from_year + "년 " + row.carried_from_month + "월";
+                              if (parent && !(Number(parent.year) === Number(row.carried_from_year) && Number(parent.month) === Number(row.carried_from_month))) {
+                                tip += " · 직전 " + parent.year + "년 " + parent.month + "월 건에서 이월";
+                              }
+                              return (
+                                <span title={tip} style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: "#E0F2FE", color: "#0369A1", whiteSpace: "nowrap" }}>{ob.label}</span>
+                              );
+                            })()}
                             {activeGroup === "중소벤처기업진흥공단" && (
                               <button onClick={function(e) { e.stopPropagation(); openPriority(row); }}
                                 style={{ fontSize: 10, padding: "2px 7px", background: "#F3F0FF", color: "#7C3AED", border: "1px solid #DDD6FE", borderRadius: 4, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>
@@ -28495,11 +28609,13 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
                           <button onClick={function() { setEditingId(null); setEditData({}); }} style={{ background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 6, padding: "5px 8px", fontSize: 11, cursor: "pointer" }}>취소</button>
                         </div>
                       ) : (
-                        <div style={{ display: "flex", gap: 2, justifyContent: "center", alignItems: "center" }}>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 2, justifyContent: "center", alignItems: "center" }}>
                           <button onClick={function(e) { e.stopPropagation(); moveCaseOrder(row.id, -1); }} title="위로 이동"
                             style={{ background: "none", border: "1px solid #E8E5E0", borderRadius: 4, cursor: "pointer", padding: "2px 5px", fontSize: 10, color: "#888", lineHeight: 1 }}>▲</button>
                           <button onClick={function(e) { e.stopPropagation(); moveCaseOrder(row.id, +1); }} title="아래로 이동"
                             style={{ background: "none", border: "1px solid #E8E5E0", borderRadius: 4, cursor: "pointer", padding: "2px 5px", fontSize: 10, color: "#888", lineHeight: 1 }}>▼</button>
+                          <button onClick={function(e) { e.stopPropagation(); openCarry(row); }} title="이월 — 다른 달로 복사 (원본은 그대로 남습니다)"
+                            style={{ background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 4, cursor: "pointer", padding: "2px 6px", fontSize: 10, color: "#0369A1", fontWeight: 700, lineHeight: 1.2, whiteSpace: "nowrap" }}>↪ 이월</button>
                           <button onClick={function(e) { e.stopPropagation(); setEditingId(row.id); setEditData(Object.assign({}, row)); }} title="수정"
                             style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Icon name="edit" size={14} color="#888" /></button>
                           <button onClick={function(e) { e.stopPropagation(); deleteCase(row.id); }} title="삭제"
@@ -28636,8 +28752,87 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
         </div>
       )}
 
+      {/* ↪ 행별 이월 팝업 — 실행부는 다중 복사와 같다(runBulk). 기관 고정 · 상태 항상 초기화 */}
+      {bulkMode && bulkDest && bulkDest.carryRow && bulkPlan && (function() {
+        var src = bulkDest.carryRow;
+        var origin = carryOriginOf(src);
+        var srcY = Number(src.year), srcM = Number(src.month);
+        var minY = Math.min(yearRange.min, activeYear, srcY);
+        var maxY = new Date().getFullYear() + 2;
+        var setY = function(d) { setBulkDest(function(p) { return Object.assign({}, p, { year: p.year + d }); }); };
+        return (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1200, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ background: "#fff", borderRadius: 16, width: 460, maxWidth: "calc(100vw - 32px)", maxHeight: "88vh", overflowY: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.25)" }}>
+              <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div>
+                  <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700 }}>↪ 이월 — {src.business_name || "-"}</h2>
+                  <div style={{ fontSize: 12, color: "#888", marginTop: 3 }}>원본 줄은 그대로 두고 고른 달에 새 줄을 만듭니다</div>
+                </div>
+                <button onClick={closeBulk} disabled={bulkBusy} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#888" }}>✕</button>
+              </div>
+
+              <div style={{ padding: "18px 24px" }}>
+                <div style={{ fontSize: 12, color: "#555", marginBottom: 16, lineHeight: 1.7 }}>
+                  기관 <b>{agencyLabel(bulkDest.group)}</b> · 지금 {srcY}년 {srcM}월 건<br />
+                  원래 신청월 <b>{origin.year === srcY ? "" : origin.year + "년 "}{origin.month}월</b>
+                  <span style={{ color: "#888" }}> — 이월한 건에 계속 남습니다</span>
+                </div>
+
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>연도</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+                  <button onClick={function() { setY(-1); }} disabled={bulkDest.year <= minY}
+                    style={{ width: 30, height: 30, borderRadius: 8, border: "1px solid #E8E5E0", background: "#fff", cursor: bulkDest.year <= minY ? "not-allowed" : "pointer", fontSize: 14, color: "#555" }}>‹</button>
+                  <span style={{ fontSize: 16, fontWeight: 700, minWidth: 76, textAlign: "center" }}>{bulkDest.year}년</span>
+                  <button onClick={function() { setY(1); }} disabled={bulkDest.year >= maxY}
+                    style={{ width: 30, height: 30, borderRadius: 8, border: "1px solid #E8E5E0", background: "#fff", cursor: bulkDest.year >= maxY ? "not-allowed" : "pointer", fontSize: 14, color: "#555" }}>›</button>
+                </div>
+
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>월</div>
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 18 }}>
+                  {[1,2,3,4,5,6,7,8,9,10,11,12].map(function(m) {
+                    var on = Number(bulkDest.month) === m;
+                    var isSrc = Number(bulkDest.year) === srcY && m === srcM;   // 지금 자리 = 이월 대상 아님
+                    return (
+                      <div key={m} title={isSrc ? "지금 이 건이 있는 달" : ""}
+                        onClick={function() { if (isSrc) return; setBulkDest(function(p) { return Object.assign({}, p, { month: m }); }); }}
+                        style={{ padding: "5px 10px", borderRadius: 6, cursor: isSrc ? "not-allowed" : "pointer", fontSize: 12, fontWeight: on ? 700 : 400,
+                          opacity: isSrc ? 0.35 : 1,
+                          background: on ? "#1A1917" : "#fff", color: on ? "#fff" : "#333", border: on ? "none" : "1px solid #E8E5E0" }}>
+                        {m}월
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div style={{ background: "#FAFAF9", border: "1px solid #EDEBE8", borderRadius: 10, padding: "14px 16px" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#333", marginBottom: 6 }}>
+                    {agencyLabel(bulkDest.group)} · {bulkDest.year}년 {bulkDest.month}월 로
+                  </div>
+                  {bulkPlan.go.length > 0
+                    ? <div style={{ fontSize: 12, color: "#15803D", fontWeight: 600 }}>✅ 새로 만들 건 {bulkPlan.go.length}건 · 상태는 「{initialStatusFor(src.agency_group)}」</div>
+                    : <div style={{ fontSize: 12, color: "#B45309", fontWeight: 600 }}>⏭ 건너뜀 — {bulkPlan.skip.map(function(x) { return x.why; }).join(", ")}</div>}
+                  <div style={{ fontSize: 11, color: "#888", marginTop: 8, lineHeight: 1.6 }}>
+                    🔗 기업 연결·사업자명·대표자·사업자번호·담당자·지역·업종·금액·신청상품만 가져갑니다.<br />
+                    비고·메모·우선도·로그인/인증서·주민번호·결과·정산 값은 가져가지 않습니다.
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ padding: "0 24px 20px", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                <button onClick={closeBulk} disabled={bulkBusy}
+                  style={{ padding: "10px 18px", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, color: "#555", cursor: "pointer" }}>취소</button>
+                <button onClick={runBulk} disabled={bulkBusy}
+                  style={{ padding: "10px 20px", background: bulkBusy ? "#CCC" : "#0369A1", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: bulkBusy ? "not-allowed" : "pointer" }}>
+                  {bulkBusy ? "실행 중…" : "이월 실행"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* 📄 목적지 지정 팝업 (복사 / 이동 공용) */}
-      {bulkMode && bulkDest && bulkPlan && (
+      {bulkMode && bulkDest && !bulkDest.carryRow && bulkPlan && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1200, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ background: "#fff", borderRadius: 16, width: 560, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.25)" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -28774,7 +28969,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
           <div style={{ background: "#fff", borderRadius: 16, width: 520, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.25)" }}>
             <div style={{ padding: "20px 24px 14px", borderBottom: "1px solid #E8E5E0" }}>
               <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700 }}>
-                {bulkResult.mode === "move" ? "이동" : "복사"} 결과 — {agencyLabel(bulkResult.dest.group)} {bulkResult.dest.year}년{bulkResult.keepMonth ? "" : " " + bulkResult.dest.month + "월"}
+                {bulkResult.mode === "move" ? "이동" : bulkResult.mode === "carry" ? "이월" : "복사"} 결과 — {agencyLabel(bulkResult.dest.group)} {bulkResult.dest.year}년{bulkResult.keepMonth ? "" : " " + bulkResult.dest.month + "월"}
               </h2>
             </div>
             <div style={{ padding: "16px 24px" }}>
