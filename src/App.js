@@ -1626,6 +1626,124 @@ function growthIndustryCode(text) {
 }
 // ⛳ 상담체크 끝
 
+// ⛳ 공고매칭 시작 — scripts/test-notice-match.mjs 가 (⛳ 기업입력칸 구간과 함께) 소스째 떼어내 실행한다.
+//    ⚠️ 마커 문구를 바꾸면 테스트가 통째로 죽는다. 기업입력칸 함수 외에는 참조하지 말 것.
+//
+// 📢 기업마당 공고 매칭 (2026-10-08) — bizinfo_notices.req(저장소 밖 도구가 정규화해 넣은 요건)와 기업 값을 비교한다.
+//    탈락: 지역 밖 · 업종 제한 불일치 · 업력/매출/직원 범위 밖 · 공고명이 특정 업종 대상인데 기업 업종과 무관 · 마감 지남
+//    통과했지만 기업 값이 비어 단정 못 한 조건은 checks(확인할 것)로 남긴다(탈락시키지 않는다).
+//    ⚠️ 요건은 AI 가 공고문을 읽어 뽑은 값이라 틀릴 수 있다 — 화면에 원문 링크를 항상 같이 띄운다.
+const NOTICE_SIDO = ["서울", "경기", "인천", "부산", "대구", "대전", "광주", "울산", "세종", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주"];
+const NOTICE_SIDO_FULL = { "서울특별시": "서울", "서울시": "서울", "경기도": "경기", "인천광역시": "인천", "인천시": "인천", "부산광역시": "부산", "부산시": "부산",
+  "대구광역시": "대구", "대구시": "대구", "대전광역시": "대전", "대전시": "대전", "광주광역시": "광주", "울산광역시": "울산", "울산시": "울산", "세종특별자치시": "세종", "세종시": "세종",
+  "강원도": "강원", "강원특별자치도": "강원", "충청북도": "충북", "충청남도": "충남", "전라북도": "전북", "전북특별자치도": "전북", "전라남도": "전남",
+  "경상북도": "경북", "경상남도": "경남", "제주도": "제주", "제주특별자치도": "제주" };
+// 기업 지역 "서울_강남" "경기 안산시" "경상남도 김해시" → { sido, sigungu }
+function noticeCompanyRegion(text) {
+  var parts = String(text || "").replace(/[()]/g, " ").split(/[_\s,/]+/).filter(Boolean);
+  if (!parts.length) return { sido: "", sigungu: "" };
+  var first = parts[0];
+  var sido = NOTICE_SIDO_FULL[first] || (NOTICE_SIDO.indexOf(first.slice(0, 2)) >= 0 ? first.slice(0, 2) : "");
+  return { sido: sido, sigungu: sido && parts[1] ? parts[1] : "" };
+}
+// 업종 텍스트 → 요건 추출에 쓴 업종 분류(제조·도소매·음식점…). 매칭 도구 기업.py INDUSTRY_RULES 와 같은 규칙.
+const NOTICE_INDUSTRY_RULES = [
+  ["음식점", /음식|요식|외식|카페|식당|베이커리|치킨|주점|접객/], ["숙박", /숙박|호텔|펜션|모텔/], ["제조", /제조|공장|생산|가공/],
+  ["IT", /소프트웨어|IT|정보통신|플랫폼|앱|개발|솔루션|SW/i], ["건설", /건설|인테리어|시공|토목|설비|전기공사/],
+  ["도소매", /도소매|도매|소매|유통|판매|쇼핑몰|무역|수출입|통신판매|온라인/], ["운수", /운수|운송|물류|택배|화물/],
+  ["농림어업", /농업|축산|어업|임업|농산|수산/], ["교육", /교육|학원|강의/], ["서비스", /서비스|미용|뷰티|광고|디자인|컨설팅|임대|부동산|의료|병원|헬스|스포츠/],
+];
+function noticeIndustryCats(text) {
+  var t = String(text || ""), out = [];
+  NOTICE_INDUSTRY_RULES.forEach(function(r) { if (r[1].test(t)) out.push(r[0]); });
+  return out.length ? out : (t.trim() ? ["기타"] : []);
+}
+const NOTICE_TYPE_SCORE = { "무상지원금": 50, "융자": 45, "보증": 40, "이차보전": 40, "바우처": 25, "판로·수출": 15, "인력지원": 15, "교육·컨설팅": 10, "인증·지정": 5, "기타": 5 };
+const NOTICE_SPECIAL = ["장애인기업", "사회적경제기업", "여성기업", "농어업인"];
+const NOTICE_GENERAL = ["소상공인", "중소기업", "창업기업", "청년", "기타"];
+function noticeRangeText(lo, hi, unit) {
+  return (lo != null ? lo + unit + " 이상" : "") + (lo != null && hi != null ? " " : "") + (hi != null ? hi + unit + " 이하" : "");
+}
+// 한 기업 × 공고 하나 → null(탈락) 또는 { score, why[], checks[] }
+function judgeNotice(c, n, now) {
+  var r = (n && n.req) || {};
+  var why = [], checks = [];
+  var today = kstTodayParts(now);
+  var todayStr = today.y + "-" + String(today.m).padStart(2, "0") + "-" + String(today.d).padStart(2, "0");
+  if (n.deadline && String(n.deadline) < todayStr) return null;
+  var reg = noticeCompanyRegion(c.region);
+  var regions = r.regions || [];
+  var local = regions.length && regions.indexOf("전국") < 0;
+  if (local) {
+    if (!reg.sido) checks.push("소재지가 " + regions.join("·") + "인지");
+    else if (regions.indexOf(reg.sido) < 0) return null;
+    else why.push(reg.sido + " 소재 대상");
+  }
+  var sgg = r.sigungu || [];
+  if (sgg.length) {
+    if (!reg.sigungu) checks.push("소재지가 " + sgg.join("·") + "인지");
+    else if (!sgg.some(function(s) { return s.indexOf(reg.sigungu) === 0 || reg.sigungu.indexOf(s.replace(/(시|군|구)$/, "")) === 0; })) return null;
+    else why.push(sgg.join("·") + " 대상 사업");
+  }
+  var ind = String(c.industry || "");
+  var needs = r.niche_need || [];
+  for (var i = 0; i < needs.length; i++) { if (!new RegExp(needs[i]).test(ind)) return null; }
+  var cats = noticeIndustryCats(ind);
+  var out = r.ind_out || [], inc = r.ind_in || [];
+  if (cats.some(function(x) { return out.indexOf(x) >= 0; })) return null;
+  if (inc.length) {
+    if (!cats.length) checks.push("업종(" + inc.join("/") + ")");
+    else if (!cats.some(function(x) { return inc.indexOf(x) >= 0; })) return null;
+    else why.push(cats.filter(function(x) { return inc.indexOf(x) >= 0; }).join("/") + " 업종 한정 사업");
+  }
+  var biz = bizAgeMonths(c.founded_year, c.founded_month, now);
+  var rev = Number(c.revenue_2025) > 0 ? Number(c.revenue_2025) / 1e8 : (Number(c.revenue_2024) > 0 ? Number(c.revenue_2024) / 1e8 : null);
+  var emp = (c.employee_count === null || c.employee_count === undefined || c.employee_count === "") ? null : Number(c.employee_count);
+  var ranges = [["업력", biz ? biz.months / 12 : null, r.age_min, r.age_max, "년"], ["매출", rev, r.rev_min, r.rev_max, "억"], ["직원", emp, r.emp_min, r.emp_max, "명"]];
+  for (var k = 0; k < ranges.length; k++) {
+    var label = ranges[k][0], v = ranges[k][1], lo = ranges[k][2], hi = ranges[k][3], unit = ranges[k][4];
+    if (lo == null && hi == null) continue;
+    if (v === null) { checks.push(label + " " + noticeRangeText(lo, hi, unit)); continue; }
+    if ((lo != null && v < lo) || (hi != null && v > hi)) return null;
+    why.push(label + " " + noticeRangeText(lo, hi, unit) + " 충족");
+  }
+  var targets = r.targets || [];
+  var certs = normalizeCerts(c.certifications);
+  var special = targets.filter(function(t) { return NOTICE_SPECIAL.indexOf(t) >= 0; });
+  if (special.length && !targets.some(function(t) { return NOTICE_GENERAL.indexOf(t) >= 0; })) {
+    if (special.indexOf("여성기업") >= 0 && (certs.indexOf("여성기업확인서") >= 0 || c.representative_gender === "여")) why.push("여성기업 대상");
+    else if (special.indexOf("장애인기업") >= 0 && certs.indexOf("장애인기업확인서") >= 0) why.push("장애인기업 대상");
+    else if (special.indexOf("사회적경제기업") >= 0 && c.social_enterprise === true) why.push("사회적경제기업 대상");
+    else checks.push(special.join("·") + " 해당 여부");
+  }
+  var age = ageFromBirth(c.representative_birth, now);
+  if (targets.indexOf("청년") >= 0 && targets.length === 1) {
+    if (age === null) checks.push("대표 만 39세 이하(청년)인지");
+    else if (age > YOUTH_MAX_AGE) return null;
+    else why.push("청년 대표(만 " + age + "세)");
+  }
+  (r.extra || []).forEach(function(s) { if (checks.length < 6) checks.push(s); });
+  var types = r.types && r.types.length ? r.types : ["기타"];
+  var score = Math.max.apply(null, types.map(function(t) { return NOTICE_TYPE_SCORE[t] || 5; }));
+  if (sgg.length) score += 10;
+  if (local) score += 15;
+  if (inc.length) score += 5;
+  if (targets.indexOf("소상공인") >= 0 && emp !== null && emp < (/제조|건설|운수|운송|광업/.test(ind) ? 10 : 5)) { score += 10; why.push("소상공인 대상"); }
+  if (/폐업|재기|희망리턴|재창업/.test(n.title || "") && c.has_closed_business !== true) { score -= 20; checks.push("폐업·재기 상황일 때만 해당"); }
+  score -= 6 * checks.length;
+  return { score: score, why: why, checks: checks };
+}
+function matchNotices(c, notices, now, limit) {
+  var out = [];
+  (notices || []).forEach(function(n) {
+    var j = judgeNotice(c || {}, n, now);
+    if (j) out.push(Object.assign({ notice: n }, j));
+  });
+  out.sort(function(a, b) { return b.score - a.score || String(a.notice.deadline || "9999").localeCompare(String(b.notice.deadline || "9999")); });
+  return { total: out.length, top: out.slice(0, limit || 10) };
+}
+// ⛳ 공고매칭 끝
+
 // ⛳ 기관현황-이월 시작 — 이 구간은 scripts/test-agency-carry.mjs 가 소스째 떼어내 실행한다.
 //    ⚠️ 마커 문구를 바꾸면 테스트가 통째로 죽는다. 무엇도 참조하지 말 것(순수해야 떼어낼 수 있다).
 //
@@ -15624,6 +15742,16 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
   const [prevTab, setPrevTab] = useState(initialTab || "info");
   var goTab = function(id) { setPrevTab(tab); setTab(id); };
   const [data, setData] = useState({ ...company });
+  // 📢 기업마당 공고(2026-10-08) — 「지원사업」 탭을 처음 열 때 한 번만 불러온다(null=아직 안 불러옴, "error"=실패).
+  //    ⚠️ bizinfo_notices 엔 created_at·id 가 없다 → orderBy 를 반드시 준다(2026-09-28 정산권한 사고와 같은 함정).
+  const [bizNotices, setBizNotices] = useState(null);
+  useEffect(function() {
+    if (tab !== "notices" || bizNotices !== null) return;
+    fetchAllRows("bizinfo_notices", "pblanc_id,title,url,agency,category,deadline,deadline_text,req",
+      { orderBy: "pblanc_id", tieBreak: null, label: "기업마당 공고" }).then(function(r) {
+      setBizNotices(r.error || !r.data ? "error" : r.data);
+    });
+  }, [tab, bizNotices]);
   // 서류현황 탭에서 액션 줄(수령완료·재요청·요청취소)이 펼쳐진 서류명. 한 번에 하나만 연다.
   const [openDocAction, setOpenDocAction] = useState(null);
   // 📤 요청함 다중선택 — 체크한 서류명 배열. 실행 대상은 항상 (요청함 목록 ∩ 이 배열)이라
@@ -16708,6 +16836,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
             { id: "consult", label: "🗣 상담 체크", badge: buildConsultChecks(data).filter(function(x) { return x.cat === "ask"; }).length },
             { id: "firstcall", label: "📞 1차 콜", badge: firstCallSteps(data).filter(function(x) { return x.status === "todo"; }).length },
             { id: "growth", label: "🧭 성장 경로" },
+            { id: "notices", label: "📢 지원사업" },
             { id: "docs", label: "서류현황" },
             { id: "history", label: "이슈·액션", badge: commLogs.length },
             { id: "timeline", label: "🕒 타임라인" },
@@ -17104,6 +17233,44 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
             </>
           )}
 
+          {/* 📢 지원사업 (2026-10-08) — 기업마당 공고 × 이 기업 값 매칭(⛳ 공고매칭). 저장하지 않는 계산 화면 */}
+          {tab === "notices" && (function() {
+            if (bizNotices === null) return <div style={{ fontSize: 13, color: "#888", padding: 14 }}>기업마당 공고를 불러오는 중…</div>;
+            if (bizNotices === "error") return <div style={{ fontSize: 13, color: "#B91C1C", padding: 14 }}>📛 공고를 불러오지 못했습니다. 잠시 뒤 탭을 다시 열어 주세요.</div>;
+            var res = matchNotices(data, bizNotices, undefined, 12);
+            return (
+              <div>
+                <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 12, fontSize: 12, color: "#555", lineHeight: 1.6 }}>
+                  기업마당 공고 <b>{bizNotices.length}건</b> 중 이 기업 조건을 통과한 <b>{res.total}건</b> · 상위 {res.top.length}건 표시
+                  <span style={{ color: "#888" }}> · 신청 자격은 공고문을 AI 로 읽어 뽑은 값이라 틀릴 수 있습니다. 반드시 원문을 확인하세요.</span>
+                  <div style={{ color: "#888", marginTop: 3 }}>기본정보(지역·업종·설립연월·매출·직원 수·생년월일·인증)를 채울수록 정확해집니다.</div>
+                </div>
+                {res.top.length === 0 && <div style={{ fontSize: 13, color: "#AAA", padding: 10 }}>조건을 통과한 공고가 없습니다</div>}
+                {res.top.map(function(m, i) {
+                  var n = m.notice, r = n.req || {};
+                  var types = (r.types || []).slice(0, 2).join("·");
+                  return (
+                    <div key={n.pblanc_id} style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 9, padding: "11px 13px", marginBottom: 8 }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#1A1917" }}>{i + 1}. {n.title}</span>
+                        <a href={n.url} target="_blank" rel="noreferrer" onClick={function(e) { e.stopPropagation(); }} style={{ fontSize: 12, color: "#1F5FBF", whiteSpace: "nowrap" }}>원문 보기 ↗</a>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, fontSize: 11 }}>
+                        {types && <span style={{ background: "#EEF2FF", color: "#4338CA", borderRadius: 99, padding: "2px 8px", fontWeight: 700 }}>{types}</span>}
+                        {r.amount_manwon && r.amount_manwon <= 200000 ? <span style={{ background: "#F0FDF4", color: "#15803D", borderRadius: 99, padding: "2px 8px", fontWeight: 700 }}>최대 {Number(r.amount_manwon).toLocaleString()}만원</span> : null}
+                        {r.rate && <span style={{ background: "#F7F6F3", color: "#555", borderRadius: 99, padding: "2px 8px" }}>{r.rate}</span>}
+                        <span style={{ background: "#F7F6F3", color: "#555", borderRadius: 99, padding: "2px 8px" }}>마감 {n.deadline || n.deadline_text || "공고 확인"}</span>
+                        {n.agency && <span style={{ color: "#888", padding: "2px 2px" }}>{n.agency}</span>}
+                      </div>
+                      {(r.content || r.summary) && <div style={{ fontSize: 12, color: "#444", marginTop: 6 }}>{r.content || r.summary}</div>}
+                      {m.why.length > 0 && <div style={{ fontSize: 11.5, color: "#15803D", marginTop: 5 }}>✓ {m.why.join(" · ")}</div>}
+                      {m.checks.length > 0 && <div style={{ fontSize: 11.5, color: "#B45309", marginTop: 3 }}>확인할 것: {m.checks.join(" · ")}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
           {/* 🧭 성장 경로 (2026-10-08) — 기존 GrowthRoadmap 을 embedded 로 재사용. 업종 코드는 growthIndustryCode 로 고른다 */}
           {tab === "growth" && (function() {
             var code = growthIndustryCode(data.industry);
