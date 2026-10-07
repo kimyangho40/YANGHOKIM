@@ -1568,6 +1568,45 @@ function limitGuide(revenue, loanTotal) {
     return { id: g.id, agency: g.agency, pct: g.pct, gross: gross, net: net, note: g.note };
   });
 }
+// 📞 1차 콜 체크리스트 (2026-10-08) — 정책자금 강의의 1차 상담 순서를 그대로 옮긴 것.
+//    status: "done"(기본정보에 이미 있음) · "todo"(물어봐야 함) · "warn"(주의할 결과) · "talk"(말하기 단계, 자동 판정 없음)
+//    ⚠️ 저장하지 않는다 — 기본정보·서류현황 값으로 매번 계산한다. 체크 상태를 따로 두면 기본정보와 어긋난다.
+function firstCallSteps(c, now) {
+  c = c || {};
+  var recv = String(c.received_docs || "").split(",").map(function(s) { return s.trim(); });
+  var hasDoc = function(name) { return recv.indexOf(name) >= 0; };
+  var biz = bizAgeMonths(c.founded_year, c.founded_month, now);
+  var cnt = consultIsBlank(c.biz_reg_count) ? null : Number(c.biz_reg_count);
+  var credit = !consultIsBlank(c.credit_score_kcb) || !consultIsBlank(c.credit_score_nice);
+  var loans = Array.isArray(c.loans) ? c.loans.length : 0;
+  var s = [];
+  s.push({ id: "open", title: "첫 질문은 매출 구조부터", status: "talk",
+    script: "\"" + (c.region ? String(c.region).split(/[_\s]/)[0] + "에서 " : "") + "어떻게 매출을 내고 계세요?\" — 신용점수보다 먼저 묻습니다. 대표님이 '내 얘기를 듣는구나' 느끼게.",
+    detail: "이어서: \"정확한 한도를 보려면 신용정보와 매출 두 가지 확인이 필요합니다.\"" });
+  s.push({ id: "auth", title: "인증 요청 전에 이유부터 설명", status: "talk",
+    script: "\"대표님 대출 현황을 정확히 보려고 조회하는 거고, 개인정보라 인증을 보내드립니다. 인증 화면에 '타인에게 알려주지 말라'는 경고가 뜨는데 정상입니다.\"",
+    detail: "설명 없이 인증부터 보내면 금융사기로 오해받습니다." });
+  s.push({ id: "bizcount", title: "① 사업자가 1개인지 여러 개인지", status: cnt === null ? "todo" : (cnt >= 2 ? "warn" : "done"),
+    detail: cnt === null ? "기본정보 '사업자등록증 개수'가 비어 있습니다." : (cnt >= 2 ? cnt + "개 — 다른 사업자의 개업·폐업 시점을 확인하세요." : "1개") });
+  s.push({ id: "vat", title: "② 사업자등록증명보다 부가세 과세표준증명을 먼저", status: hasDoc("최근 3년치 부가세 증명원 (23년~25년)") ? "done" : "todo",
+    detail: "폐업·신규 이력과 연도별 매출이 한 번에 보입니다. (서류현황 '최근 3년치 부가세 증명원')" });
+  s.push({ id: "age3", title: "③ 업력 3년 이상인지", status: !biz ? "todo" : (biz.months >= 36 ? "done" : "warn"),
+    detail: !biz ? "설립연월이 비어 있습니다." : "업력 " + formatBizAge(biz) + (biz.months >= 36 ? "" : " — 3년 미만") });
+  s.push({ id: "closed", title: "④ 폐업 이력 · 폐업 전 매출", status: consultIsBlank(c.has_closed_business) ? "todo" : (c.has_closed_business ? "warn" : "done"),
+    detail: consultIsBlank(c.has_closed_business) ? "기본정보 '과거 폐업 이력'이 모름입니다." : (c.has_closed_business ? "폐업 이력 있음 — 폐업 전에 매출이 있었는지, 폐업일이 언제인지 여쭤보세요." : "폐업 이력 없음") });
+  s.push({ id: "rechallenge", title: "⑤ 재도전특별자금 해당 여부", status: c.has_closed_business === true ? "warn" : (consultIsBlank(c.has_closed_business) ? "todo" : "done"),
+    detail: c.has_closed_business === true ? "폐업 후 재창업이면 검토 대상. 지금 사업장이 가장 늦게 열렸고 나머지가 모두 폐업했는지 확인." : "폐업 이력이 없으면 해당 없음." });
+  s.push({ id: "smart", title: "⑥ 스마트기술 사용 여부", status: "talk",
+    detail: "키오스크·POS 연동·스마트 장비 등 사용 이력을 여쭤보세요(자동 판정 칸 없음)." });
+  s.push({ id: "credit", title: "신용점수 확인", status: credit ? "done" : "todo",
+    detail: credit ? "KCB " + (c.credit_score_kcb || "-") + " / NICE " + (c.credit_score_nice || "-") : "신용점수가 비어 있습니다." });
+  s.push({ id: "loans", title: "기대출 조회 → 이력부터 브리핑", status: loans > 0 ? "done" : "todo",
+    script: "\"○○은행에서 ○년 ○월에 ○○만원 받으셨네요\" — 이력을 먼저 맞추고 나서 솔루션을 말합니다.",
+    detail: loans > 0 ? "기대출 " + loans + "건 입력됨" : "기업정보 탭 기대출이 비어 있습니다. 솔루션을 먼저 말했다가 모르던 이력이 나오면 신뢰가 깨집니다." });
+  s.push({ id: "close", title: "솔루션 제시 → 계약", status: "talk",
+    detail: "한도는 '가이드'로만 말하고 승인을 약속하지 않습니다. 인증이 끝난 뒤 10~15분 안에 마무리하는 게 목표." });
+  return s;
+}
 // ⛳ 상담체크 끝
 
 // ⛳ 기관현황-이월 시작 — 이 구간은 scripts/test-agency-carry.mjs 가 소스째 떼어내 실행한다.
@@ -16650,6 +16689,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
             { id: "info", label: "기본정보" },
             { id: "bizinfo", label: "기업정보", badge: (Array.isArray(data.loans) ? data.loans.length : 0) + (Array.isArray(data.company_info) ? data.company_info.length : 0) },
             { id: "consult", label: "🗣 상담 체크", badge: buildConsultChecks(data).filter(function(x) { return x.cat === "ask"; }).length },
+            { id: "firstcall", label: "📞 1차 콜", badge: firstCallSteps(data).filter(function(x) { return x.status === "todo"; }).length },
             { id: "docs", label: "서류현황" },
             { id: "history", label: "이슈·액션", badge: commLogs.length },
             { id: "timeline", label: "🕒 타임라인" },
@@ -17046,6 +17086,38 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
             </>
           )}
 
+          {/* 📞 1차 콜 체크리스트 (2026-10-08) — 저장하지 않는 계산 화면(⛳ 상담체크 firstCallSteps) */}
+          {tab === "firstcall" && (function() {
+            var steps = firstCallSteps(data);
+            var ST = {
+              done: { icon: "✅", color: "#15803D", bg: "#F0FDF4", border: "#BBF7D0" },
+              todo: { icon: "☐", color: "#B91C1C", bg: "#FEF2F2", border: "#FECACA" },
+              warn: { icon: "⚠️", color: "#B45309", bg: "#FFFBEB", border: "#FDE68A" },
+              talk: { icon: "💬", color: "#1D4ED8", bg: "#EFF6FF", border: "#BFDBFE" },
+            };
+            var todo = steps.filter(function(s) { return s.status === "todo"; }).length;
+            return (
+              <div>
+                <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 12, fontSize: 12, color: "#555", lineHeight: 1.6 }}>
+                  1차 상담을 이 순서대로 진행합니다. <b style={{ color: todo ? "#B91C1C" : "#15803D" }}>{todo ? "물어볼 것 " + todo + "개" : "필요한 정보가 다 있습니다"}</b>
+                  <span style={{ color: "#888" }}> · ✅·⚠️·☐ 는 기본정보·서류현황 값으로 자동 표시 · 💬 는 말하기 단계</span>
+                </div>
+                {steps.map(function(s, i) {
+                  var st = ST[s.status];
+                  return (
+                    <div key={s.id} style={{ background: st.bg, border: "1px solid " + st.border, borderRadius: 9, padding: "10px 13px", marginBottom: 8 }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                        <span style={{ fontSize: 13 }}>{st.icon}</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#1A1917" }}>{i + 1}. {s.title}</span>
+                      </div>
+                      {s.script && <div style={{ fontSize: 12.5, color: "#1D4ED8", marginTop: 6, background: "#fff", borderRadius: 6, padding: "7px 9px", lineHeight: 1.55 }}>{s.script}</div>}
+                      {s.detail && <div style={{ fontSize: 12, color: st.color, marginTop: 5, lineHeight: 1.5 }}>{s.detail}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
           {/* 🗣 상담 체크 (2026-10-08) — 저장하지 않는 계산 화면. 기본정보를 고치면 즉시 다시 계산된다(⛳ 상담체크) */}
           {tab === "consult" && (function() {
             var checks = buildConsultChecks(data);

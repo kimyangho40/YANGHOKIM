@@ -18,7 +18,7 @@ const a = src.match(/\/\/ ⛳ 기업입력칸 시작[\s\S]*?⛳ 기업입력칸 
 const b = src.match(/\/\/ ⛳ 상담체크 시작[\s\S]*?⛳ 상담체크 끝/);
 if (!a || !b) { console.error("❌ 마커를 못 찾았다."); process.exit(1); }
 // eslint-disable-next-line no-new-func
-const F = new Function(a[0] + "\n" + b[0] + "\n return { buildConsultChecks, CONSULT_CATS, limitGuide };")();
+const F = new Function(a[0] + "\n" + b[0] + "\n return { buildConsultChecks, CONSULT_CATS, limitGuide, firstCallSteps };")();
 const NOW = new Date("2026-10-08T01:00:00Z");
 const ids = (c) => F.buildConsultChecks(c, NOW).map((x) => x.cat + ":" + x.id);
 const has = (c, id) => ids(c).some((s) => s.endsWith(":" + id));
@@ -72,6 +72,19 @@ ok("재도전 (1.8억−5천)×50% = 6,500만", by.rechallenge && by.rechallenge
 ok("기대출이 더 크면 0(음수 금지)", F.limitGuide(100000000, 900000000).every((x) => x.net === 0));
 ok("매출 없음 → []", F.limitGuide(0, 0).length === 0 && F.limitGuide(null, 0).length === 0);
 ok("화면에 '공식 기준이 아닙니다' 경고 문구", src.includes("공식 기준이 아닙니다 — 정책자금 강의의 강사 경험치입니다"));
+
+console.log("\n■ 1차 콜 체크리스트");
+const st = (c) => Object.fromEntries(F.firstCallSteps(c, NOW).map((x) => [x.id, x.status]));
+const sEmpty = st({});
+ok("빈 기업 → 데이터 단계 전부 todo", ["bizcount", "vat", "age3", "closed", "credit", "loans"].every((k) => sEmpty[k] === "todo"), JSON.stringify(sEmpty));
+const sFull = st({ ...FULL, loans: [{ amount: "1000만" }], received_docs: "사업자등록증, 최근 3년치 부가세 증명원 (23년~25년)" });
+ok("정상 기업 → 데이터 단계 전부 done", ["bizcount", "vat", "age3", "closed", "rechallenge", "credit", "loans"].every((k) => sFull[k] === "done"), JSON.stringify(sFull));
+ok("업력 2년 → age3 warn", st({ ...FULL, founded_year: "2024", founded_month: 9 }).age3 === "warn");
+ok("폐업 있음 → closed·rechallenge warn", (() => { const x = st({ ...FULL, has_closed_business: true }); return x.closed === "warn" && x.rechallenge === "warn"; })());
+ok("사업자 2개 → bizcount warn", st({ ...FULL, biz_reg_count: 2 }).bizcount === "warn");
+ok("말하기 단계 4개는 항상 talk", ["open", "auth", "smart", "close"].every((k) => sEmpty[k] === "talk" && sFull[k] === "talk"));
+ok("문장에 undefined/NaN 없음", F.firstCallSteps({ region: "서울_강남" }, NOW).every((x) => !/undefined|NaN/.test((x.script || "") + x.detail)));
+ok("탭이 있다", /id: "firstcall", label: "📞 1차 콜"/.test(src) && src.includes('tab === "firstcall" &&'));
 
 console.log("\n■ 정적 검사");
 ok("탭 배열에 consult 가 있다", /id: "consult", label: "🗣 상담 체크"/.test(src));
