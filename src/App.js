@@ -1392,6 +1392,73 @@ const REAPPLY_EXEMPT_GROUPS = ["구조혁신&사업전환"];
 function isReapplyExempt(g) { return REAPPLY_EXEMPT_GROUPS.indexOf(g) >= 0; }
 // ⛳ 재신청-제외 끝
 
+// ⛳ 기업입력칸 시작 — 이 구간은 scripts/test-company-input-fields.mjs 가 소스째 떼어내 실행한다.
+//    ⚠️ 마커 문구를 바꾸면 테스트가 통째로 죽는다. supabase·React 를 참조하지 말 것(순수해야 떼어낼 수 있다).
+//
+// 🧾 기업 입력칸 보강 (2026-10-08) — SQL: 기업입력칸_보강_컬럼추가.sql (+ _rollback / _검증)
+//    대표자 생년월일→만 나이 · 설립연월→업력 · 매출 증가율 · 보유 인증 체크.
+//    나이·업력·증가율은 **저장하지 않고 매번 계산**한다(시간이 지나면 저절로 바뀌는 값이라).
+//    날짜 기준은 KST 오늘. 테스트를 위해 now 를 인자로 받는다(안 주면 지금).
+//
+// 보유 인증 어휘 — certifications(jsonb 배열)에는 **이 key 만** 저장한다(normalizeCerts 가 걸러낸다).
+//    ⚠️ key 문구를 바꾸면 이미 저장된 값이 조용히 체크 해제된 것처럼 보인다. 바꾸려면 데이터부터 옮길 것.
+const CERT_OPTIONS = [
+  { key: "중소기업확인서", group: "기업확인서" },
+  { key: "소기업·소상공인확인서", group: "기업확인서" },
+  { key: "창업기업확인서", group: "기업확인서" },
+  { key: "여성기업확인서", group: "기업확인서" },
+  { key: "장애인기업확인서", group: "기업확인서" },
+  { key: "벤처기업확인", group: "혁신 인증" },
+  { key: "이노비즈", group: "혁신 인증" },
+  { key: "메인비즈", group: "혁신 인증" },
+  { key: "기업부설연구소·전담부서", group: "기술" },
+  { key: "특허 보유", group: "기술" },
+];
+const YOUTH_MAX_AGE = 39; // 청년 = 만 39세 이하 (중진공 청년전용창업자금 기준)
+function kstTodayParts(now) {
+  var t = new Date((now ? now.getTime() : Date.now()) + 9 * 3600 * 1000);
+  return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate() };
+}
+// "1989-03-17" → 만 나이. 형식이 틀리거나 미래 날짜면 null.
+function ageFromBirth(birth, now) {
+  var m = String(birth || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  var by = +m[1], bm = +m[2], bd = +m[3];
+  var t = kstTodayParts(now);
+  var age = t.y - by - ((t.m < bm || (t.m === bm && t.d < bd)) ? 1 : 0);
+  return age >= 0 && age < 130 ? age : null;
+}
+// 설립연월 → 업력 개월수. 월이 비면 1월로 보고 approx=true. 연도가 없거나 미래면 null.
+function bizAgeMonths(year, month, now) {
+  var y = parseInt(year, 10);
+  if (!y || y < 1900) return null;
+  var mo = parseInt(month, 10);
+  var approx = !(mo >= 1 && mo <= 12);
+  if (approx) mo = 1;
+  var t = kstTodayParts(now);
+  var months = (t.y - y) * 12 + (t.m - mo);
+  return months >= 0 ? { months: months, approx: approx } : null;
+}
+function formatBizAge(r) {
+  if (!r) return "";
+  var y = Math.floor(r.months / 12), mo = r.months % 12;
+  var s = (y > 0 ? y + "년 " : "") + mo + "개월";
+  return (r.approx ? "약 " : "") + s.trim();
+}
+// 전년 대비 증가율(%) — 소수 1자리. 전년이 없거나 0 이하면 null(나눌 수 없다).
+function revenueGrowthPct(prev, cur) {
+  var p = Number(prev), c = Number(cur);
+  if (prev === null || prev === undefined || prev === "" || cur === null || cur === undefined || cur === "") return null;
+  if (!isFinite(p) || !isFinite(c) || p <= 0) return null;
+  return Math.round(((c - p) / p) * 1000) / 10;
+}
+// 저장 직전 정리 — 모르는 값 제거 · 중복 제거 · CERT_OPTIONS 순서로 정렬.
+function normalizeCerts(arr) {
+  if (!Array.isArray(arr)) return [];
+  return CERT_OPTIONS.map(function(o) { return o.key; }).filter(function(k) { return arr.indexOf(k) >= 0; });
+}
+// ⛳ 기업입력칸 끝
+
 // ⛳ 기관현황-이월 시작 — 이 구간은 scripts/test-agency-carry.mjs 가 소스째 떼어내 실행한다.
 //    ⚠️ 마커 문구를 바꾸면 테스트가 통째로 죽는다. 무엇도 참조하지 말 것(순수해야 떼어낼 수 있다).
 //
@@ -8283,6 +8350,22 @@ function CRMApp({ profile, session }) {
     if (typeof rest.innovation_field === "boolean") {
       updateObj.innovation_field = rest.innovation_field;
     }
+    // 사회적경제기업 체크박스 — 화면엔 있었는데 저장 목록에 빠져 있어 **체크해도 저장이 안 됐다**(2026-10-08 발견).
+    // innovation_field 와 같은 규칙: boolean 으로 명시됐을 때만 보낸다(false 도 의미가 있다).
+    if (typeof rest.social_enterprise === "boolean") {
+      updateObj.social_enterprise = rest.social_enterprise;
+    }
+    // 🧾 기업입력칸 보강(2026-10-08) — 값을 넣으면 저장, **지우면 null 로 저장**(모름으로 되돌리기).
+    //    손대지 않은 칸(값도 없고 원래도 없던 칸)은 아예 안 보낸다 → 컬럼 생성 전에도 기존 저장이 안 깨진다.
+    //    allFields 에 안 넣은 이유: 거기는 "빈값이면 DB 기존값 유지"라 한번 넣은 값을 지울 수가 없다.
+    ["representative_birth", "representative_gender", "biz_reg_count", "has_closed_business"].forEach(function(k) {
+      var v = rest[k];
+      var prev = prevData ? prevData[k] : undefined;
+      var empty = v === "" || v === null || v === undefined;
+      if (!empty) updateObj[k] = (k === "biz_reg_count") ? numCol(v) : v;
+      else if (prev !== null && prev !== undefined && prev !== "") updateObj[k] = null;
+    });
+    if (Array.isArray(rest.certifications)) updateObj.certifications = normalizeCerts(rest.certifications);
     // 규모/기관 배지 수동 보정(biz_match_override, JSONB)도 사용자가 손댔을 때만 저장.
     // 손대지 않은 기업은 DB값이 null/undefined라 여기 안 걸림 → 컬럼 미생성 시에도 일반 저장이 안 깨진다.
     // 보정을 전부 해제하면 빈 객체 {} 가 오는데, 이때는 null로 기록해 자동판정으로 되돌린다.
@@ -16538,6 +16621,91 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                 <span style={{ fontSize: 13, fontWeight: data.social_enterprise ? 700 : 500, color: data.social_enterprise ? "#6D28D9" : "#555" }}>사회적경제기업</span>
                 <span style={{ fontSize: 11, color: "#888" }}>— 협동조합·사회적기업·마을기업 등 (중진공 예외 반영)</span>
               </label>
+              {/* 🧾 대표자·사업 이력 (2026-10-08) — 나이·업력은 저장하지 않고 매번 계산한다(⛳ 기업입력칸) */}
+              <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "12px 13px", marginBottom: 10 }}>
+                <div style={{ fontSize: 12, color: "#888", fontWeight: 600, marginBottom: 8 }}>🧾 대표자 · 사업 이력</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <div style={{ background: "#fff", borderRadius: 7, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>대표자 생년월일</div>
+                    <input type="date" value={data.representative_birth || ""}
+                      onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { representative_birth: v || null }); }); }}
+                      style={{ width: "100%", fontSize: 13, fontWeight: 600, border: "none", outline: "none", background: "transparent", boxSizing: "border-box" }} />
+                    {(function() {
+                      var age = ageFromBirth(data.representative_birth);
+                      if (age === null) return null;
+                      var youth = age <= YOUTH_MAX_AGE;
+                      return (
+                        <div style={{ display: "flex", gap: 5, alignItems: "center", marginTop: 4 }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#4338CA" }}>만 {age}세</span>
+                          {youth && <span style={{ fontSize: 10, fontWeight: 700, background: "#ECFDF5", color: "#047857", border: "1px solid #A7F3D0", borderRadius: 99, padding: "1px 7px" }}>청년(만 {YOUTH_MAX_AGE}세 이하)</span>}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  <div style={{ background: "#fff", borderRadius: 7, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>대표자 성별 <span style={{ color: "#AAA", fontSize: 10 }}>(다시 누르면 해제)</span></div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {["남", "여"].map(function(g) {
+                        var sel = data.representative_gender === g;
+                        return (
+                          <button key={g} type="button" onClick={function() { setData(function(p) { return Object.assign({}, p, { representative_gender: p.representative_gender === g ? null : g }); }); }}
+                            style={{ flex: 1, padding: "5px 8px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                              background: sel ? (g === "여" ? "#BE185D" : "#1D4ED8") : "#fff", color: sel ? "#fff" : "#666",
+                              border: sel ? "none" : "1px solid #E8E5E0" }}>{g}</button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div style={{ background: "#fff", borderRadius: 7, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>현재 사업자등록증 개수 <span style={{ color: "#AAA", fontSize: 10 }}>(개인+법인)</span></div>
+                    <input type="text" inputMode="numeric" value={data.biz_reg_count == null ? "" : data.biz_reg_count} placeholder="예: 1"
+                      onChange={function(e) { var d = e.target.value.replace(/[^0-9]/g, "").slice(0, 2); setData(function(p) { return Object.assign({}, p, { biz_reg_count: d === "" ? null : Math.min(parseInt(d, 10), 20) }); }); }}
+                      style={{ width: "100%", fontSize: 13, fontWeight: 600, border: "none", outline: "none", background: "transparent", boxSizing: "border-box" }} />
+                    {Number(data.biz_reg_count) >= 2 && <div style={{ fontSize: 10, color: "#B45309", marginTop: 3, fontWeight: 600 }}>2개 이상 — 창업기업 확인·재도전 자격을 따로 확인</div>}
+                  </div>
+                  <div style={{ background: "#fff", borderRadius: 7, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>과거 폐업 이력</div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {[["있음", true], ["없음", false], ["모름", null]].map(function(o) {
+                        var cur = data.has_closed_business === undefined ? null : data.has_closed_business;
+                        var sel = cur === o[1];
+                        return (
+                          <button key={o[0]} type="button" onClick={function() { setData(function(p) { return Object.assign({}, p, { has_closed_business: o[1] }); }); }}
+                            style={{ flex: 1, padding: "5px 6px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                              background: sel ? (o[1] === true ? "#B45309" : o[1] === false ? "#0F6E56" : "#6B7280") : "#fff", color: sel ? "#fff" : "#666",
+                              border: sel ? "none" : "1px solid #E8E5E0" }}>{o[0]}</button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {/* 🏅 보유 인증 (2026-10-08) — certifications 에는 CERT_OPTIONS key 만 저장된다(normalizeCerts) */}
+              <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "12px 13px", marginBottom: 10 }}>
+                <div style={{ fontSize: 12, color: "#888", fontWeight: 600, marginBottom: 8 }}>
+                  🏅 보유 인증 <span style={{ color: "#AAA", fontSize: 10, fontWeight: 400 }}>(누르면 체크 · 다시 누르면 해제)</span>
+                  {Array.isArray(data.certifications) && data.certifications.length > 0 && <span style={{ marginLeft: 6, fontSize: 11, color: "#4338CA", fontWeight: 700 }}>{normalizeCerts(data.certifications).length}개</span>}
+                </div>
+                {["기업확인서", "혁신 인증", "기술"].map(function(grp) {
+                  return (
+                    <div key={grp} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+                      <span style={{ fontSize: 10, color: "#AAA", width: 52, flexShrink: 0 }}>{grp}</span>
+                      {CERT_OPTIONS.filter(function(o) { return o.group === grp; }).map(function(o) {
+                        var list = Array.isArray(data.certifications) ? data.certifications : [];
+                        var on = list.indexOf(o.key) >= 0;
+                        return (
+                          <button key={o.key} type="button"
+                            onClick={function() { setData(function(p) { var cur = Array.isArray(p.certifications) ? p.certifications : []; var next = cur.indexOf(o.key) >= 0 ? cur.filter(function(k) { return k !== o.key; }) : cur.concat([o.key]); return Object.assign({}, p, { certifications: normalizeCerts(next) }); }); }}
+                            style={{ fontSize: 11, padding: "4px 10px", borderRadius: 99, cursor: "pointer", fontWeight: on ? 700 : 500,
+                              border: "1px solid " + (on ? "#4338CA" : "#E8E5E0"), background: on ? "#EEF2FF" : "#fff", color: on ? "#4338CA" : "#666" }}>
+                            {on ? "✓ " : ""}{o.key}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>연락처</div>
@@ -16552,7 +16720,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                   <input type="text" inputMode="numeric" value={(data.credit_score_kcb || "") + (data.credit_score_nice ? " / " + data.credit_score_nice : "")} placeholder="KCB / NICE" onChange={function(e) { var raw = e.target.value.replace(/[^0-9]/g, ""); var kcb = raw.slice(0, 3); var nice = raw.slice(3, 6); setData(function(p) { return Object.assign({}, p, { credit_score_kcb: kcb, credit_score_nice: nice }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none", minWidth: 0, boxSizing: "border-box" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>설립연월</div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>설립연월 {(function() { var r = bizAgeMonths(data.founded_year, data.founded_month); return r ? <span style={{ fontSize: 10, fontWeight: 700, color: "#4338CA", marginLeft: 4 }}>업력 {formatBizAge(r)}</span> : null; })()}</div>
                   <input type="text" inputMode="numeric" value={(function() { if (!data.founded_year && !data.founded_month) return ""; var y = data.founded_year || ""; var m = data.founded_month; if (!m && m !== 0) return y; return y + "-" + String(m); })()} placeholder="YYYY-MM (예: 2018-08)" onChange={function(e) { var raw = e.target.value.replace(/[^0-9]/g, ""); var year = raw.slice(0, 4); var monthRaw = raw.slice(4, 6); var monthNum; if (monthRaw.length === 0) { monthNum = ""; } else { monthNum = parseInt(monthRaw); if (monthNum > 12) monthNum = 12; } setData(function(p) { return Object.assign({}, p, { founded_year: year, founded_month: monthNum }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none", minWidth: 0, boxSizing: "border-box" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
@@ -16669,6 +16837,14 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                     <div key={key} style={{ flex: 1, textAlign: "center", background: "#fff", borderRadius: 7, padding: "10px 8px" }}>
                       <div style={{ fontSize: 11, color: "#AAA", marginBottom: 4 }}>{label}</div>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#4338CA", marginBottom: 4 }}>{formatRevenue(data[key])}</div>
+                      {(function() {
+                        // 📈 전년 대비 증가율 (2026-10-08) — 상반기 칸은 반년치라 비교하지 않는다
+                        var prevKey = { revenue_2024: "revenue_2023", revenue_2025: "revenue_2024" }[key];
+                        if (!prevKey) return null;
+                        var g = revenueGrowthPct(data[prevKey], data[key]);
+                        if (g === null) return null;
+                        return <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 4, color: g > 0 ? "#DC2626" : g < 0 ? "#2563EB" : "#888" }}>{g > 0 ? "▲ " : g < 0 ? "▼ " : ""}{Math.abs(g)}% <span style={{ color: "#AAA", fontWeight: 400 }}>전년비</span></div>;
+                      })()}
                       <input
                         type="text"
                         inputMode="numeric"
