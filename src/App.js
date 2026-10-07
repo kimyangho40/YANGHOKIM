@@ -1459,6 +1459,99 @@ function normalizeCerts(arr) {
 }
 // ⛳ 기업입력칸 끝
 
+// ⛳ 상담체크 시작 — 이 구간은 scripts/test-consult-check.mjs 가 (⛳ 기업입력칸 구간과 함께) 소스째 떼어내 실행한다.
+//    ⚠️ 마커 문구를 바꾸면 테스트가 통째로 죽는다. 기업입력칸 함수 외에는 아무것도 참조하지 말 것.
+//
+// 🗣 상담 체크 (2026-10-08) — 입력값끼리 어긋나는 곳·비어서 판정이 막히는 곳을 **대표님께 물을 문장**으로 바꾼다.
+//    4칸: ask(대표님께 바로 여쭤볼 것: 입력 모순) · blocked(비어서 판정 막힘) · verify(상황별 확인 질문) · caution(주의).
+//    ⚠️ 승인 가능성 판정이 아니다. 기관 심사 규칙을 지어내지 말 것 — 법정 기준이 확실한 것만 문장에 쓴다
+//       (창업기업 = 업력 7년 이내 · 소상공인 = 상시근로자 5인 미만, 광업·제조·건설·운수 10인 미만 · 청년 = 만 39세 이하).
+//    ⚠️ 저장하지 않는다 — 화면을 열 때마다 company 값으로 다시 계산한다(입력을 고치면 바로 사라진다).
+const CONSULT_CATS = [
+  { id: "ask", label: "대표님께 바로 여쭤볼 것", icon: "🗣", color: "#B45309", bg: "#FFFBEB", border: "#FDE68A" },
+  { id: "blocked", label: "비어 있어 판정이 막힌 칸", icon: "🚧", color: "#B91C1C", bg: "#FEF2F2", border: "#FECACA" },
+  { id: "verify", label: "확인할 질문", icon: "❓", color: "#1D4ED8", bg: "#EFF6FF", border: "#BFDBFE" },
+  { id: "caution", label: "참고할 주의사항", icon: "⚠️", color: "#6B7280", bg: "#F9FAFB", border: "#E5E7EB" },
+];
+function consultIsBlank(v) { return v === null || v === undefined || v === ""; }
+function buildConsultChecks(c, now) {
+  c = c || {};
+  var out = [];
+  var add = function(cat, id, text, why) { out.push({ cat: cat, id: id, text: text, why: why || "" }); };
+  var certs = normalizeCerts(c.certifications);
+  var has = function(k) { return certs.indexOf(k) >= 0; };
+  var emp = consultIsBlank(c.employee_count) ? null : Number(c.employee_count);
+  var age = ageFromBirth(c.representative_birth, now);
+  var biz = bizAgeMonths(c.founded_year, c.founded_month, now);
+  var ind = String(c.industry || "");
+  var bigLimit = /제조|건설|운수|운송|광업/.test(ind);
+  var smallLimit = bigLimit ? 10 : 5;
+
+  // ── ask: 입력 모순
+  if ((has("벤처기업확인") || has("이노비즈")) && !has("특허 보유") && !has("기업부설연구소·전담부서")) {
+    add("ask", "tech-cert-no-basis", "벤처·이노비즈 인증이 체크돼 있는데 특허·연구소는 없습니다. 대표님, 기술 근거(특허 출원 중·기술 인력·개발 실적 등)가 따로 있으실까요?",
+      "기술 관련 인증이 있으면 기관이 기술 근거를 다시 묻습니다.");
+  }
+  if (emp === 0) {
+    add("ask", "emp-zero", "상시근로자를 0명으로 넣으셨습니다. 대표님, 지금 혼자 하고 계신 게 맞으실까요? 4대보험 가입 직원이 있으면 그 인원으로 넣어야 기관 기준이 달라집니다.",
+      "상시근로자 수는 소상공인·소기업 판정과 고용 가점에 같이 쓰입니다.");
+  }
+  if (has("여성기업확인서") && c.representative_gender === "남") {
+    add("ask", "women-cert-male", "여성기업확인서가 체크돼 있는데 대표자 성별이 '남'입니다. 공동대표나 지분 구조가 따로 있을까요?",
+      "둘 중 하나는 잘못 입력됐을 가능성이 큽니다.");
+  }
+  if (has("창업기업확인서") && biz && biz.months >= 84) {
+    add("ask", "startup-cert-old", "창업기업확인서가 체크돼 있는데 업력이 " + formatBizAge(biz) + "입니다. 창업기업은 업력 7년 이내가 대상이라, 확인서 발급일·유효기간을 한번 보셔야 합니다.",
+      "만료된 확인서로 신청하면 반려됩니다.");
+  }
+  if (has("소기업·소상공인확인서") && emp !== null && emp >= smallLimit) {
+    add("ask", "small-cert-over", "소기업·소상공인확인서가 있는데 상시근로자가 " + emp + "명입니다. 소상공인 기준(" + (bigLimit ? "광업·제조·건설·운수 10인 미만" : "5인 미만") + ")을 넘었다면 확인서가 지금 기준과 안 맞을 수 있습니다. 직원이 언제 늘었는지 여쭤보세요.",
+      "소상공인 전용 자금은 신청 시점 기준으로 다시 판정합니다.");
+  }
+  if (c.business_type === "개인사업자" && /\(주\)|㈜|주식회사|\(유\)|유한회사|법인/.test(String(c.name || ""))) {
+    add("ask", "type-mismatch", "업체명은 법인 형태인데 사업자 유형이 '개인사업자'로 되어 있습니다. 대표님, 개인과 법인 사업자를 둘 다 갖고 계신가요?",
+      "개인·법인에 따라 인증서·서류·기관이 달라집니다.");
+  }
+
+  // ── blocked: 비어서 판정이 막힘
+  if (consultIsBlank(c.founded_year)) add("blocked", "no-founded", "설립연월이 없어 업력 판정(창업기업 7년 · 업력별 자금 분기)을 못 합니다.");
+  if (consultIsBlank(c.revenue_2025) && consultIsBlank(c.revenue_2024)) add("blocked", "no-revenue", "최근 2년 매출이 없어 한도 가이드를 계산할 수 없습니다.");
+  if (consultIsBlank(c.credit_score_kcb) && consultIsBlank(c.credit_score_nice)) add("blocked", "no-credit", "신용점수(KCB·NICE)가 없어 기관 적합도를 볼 수 없습니다.");
+  if (emp === null) add("blocked", "no-emp", "상시근로자 수가 없어 소상공인·소기업 판정을 못 합니다.");
+  if (consultIsBlank(c.representative_birth)) add("blocked", "no-birth", "대표자 생년월일이 없어 청년(만 39세 이하) 여부를 판정할 수 없습니다.");
+  if (consultIsBlank(ind)) add("blocked", "no-industry", "업종이 없어 우대·제외 업종을 판정할 수 없습니다.");
+  if (consultIsBlank(c.has_closed_business)) add("blocked", "no-closed", "과거 폐업 이력이 '모름'이라 재도전·창업기업 판정을 못 합니다. 있음/없음을 여쭤보세요.");
+  if (consultIsBlank(c.biz_reg_count)) add("blocked", "no-bizcount", "사업자등록증 개수가 없어 창업기업 확인 가능 여부를 볼 수 없습니다.");
+
+  // ── verify: 상황별 확인 질문
+  var cnt = consultIsBlank(c.biz_reg_count) ? null : Number(c.biz_reg_count);
+  if (cnt !== null && cnt >= 2) {
+    add("verify", "multi-biz", "사업자가 " + cnt + "개입니다. 다른 사업자의 업종·개업일·매출을 여쭤보세요.",
+      "어느 사업장이 가장 늦게 열렸는지, 나머지가 폐업했는지에 따라 창업기업 확인·재도전 자격이 달라집니다.");
+  }
+  if (c.has_closed_business === true) {
+    add("verify", "closed-detail", "폐업한 사업장의 업종·폐업일, 그리고 폐업 전에 매출이 있었는지 여쭤보세요.",
+      "재도전 관련 자금 판단에 필요합니다.");
+  }
+  var g = revenueGrowthPct(c.revenue_2024, c.revenue_2025);
+  if (g !== null && g <= -15) {
+    add("verify", "revenue-drop", "2025년 매출이 전년보다 " + Math.abs(g) + "% 줄었습니다. 왜 줄었는지 여쭤보세요.",
+      "매출 감소는 심사에서 반드시 묻는 항목이라 대표님 답을 미리 정리해 두는 게 좋습니다.");
+  }
+  if (age !== null && age <= YOUTH_MAX_AGE) {
+    add("verify", "youth", "만 " + age + "세 청년 대표입니다. 사업자가 대표님 본인 명의인지, 실제로 직접 운영하시는지 확인하세요.",
+      "청년전용 자금은 대표자 본인 요건을 봅니다.");
+  }
+
+  // ── caution
+  var k = Number(c.credit_score_kcb), n = Number(c.credit_score_nice);
+  if (k > 0 && n > 0 && Math.abs(k - n) >= 100) {
+    add("caution", "credit-gap", "KCB(" + k + ")와 NICE(" + n + ") 점수 차이가 " + Math.abs(k - n) + "점입니다. 둘 중 하나가 오래된 값일 수 있어 최근 조회 결과로 다시 확인하세요.");
+  }
+  return out;
+}
+// ⛳ 상담체크 끝
+
 // ⛳ 기관현황-이월 시작 — 이 구간은 scripts/test-agency-carry.mjs 가 소스째 떼어내 실행한다.
 //    ⚠️ 마커 문구를 바꾸면 테스트가 통째로 죽는다. 무엇도 참조하지 말 것(순수해야 떼어낼 수 있다).
 //
@@ -16530,6 +16623,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
           {[
             { id: "info", label: "기본정보" },
             { id: "bizinfo", label: "기업정보", badge: (Array.isArray(data.loans) ? data.loans.length : 0) + (Array.isArray(data.company_info) ? data.company_info.length : 0) },
+            { id: "consult", label: "🗣 상담 체크", badge: buildConsultChecks(data).filter(function(x) { return x.cat === "ask"; }).length },
             { id: "docs", label: "서류현황" },
             { id: "history", label: "이슈·액션", badge: commLogs.length },
             { id: "timeline", label: "🕒 타임라인" },
@@ -16926,6 +17020,37 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
             </>
           )}
 
+          {/* 🗣 상담 체크 (2026-10-08) — 저장하지 않는 계산 화면. 기본정보를 고치면 즉시 다시 계산된다(⛳ 상담체크) */}
+          {tab === "consult" && (function() {
+            var checks = buildConsultChecks(data);
+            return (
+              <div>
+                <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 12, fontSize: 12, color: "#555", lineHeight: 1.6 }}>
+                  <b>승인 가능성 순위가 아닙니다.</b> 입력값이 서로 어긋나거나 비어 있는 곳을 상담 때 물어볼 문장으로 바꾼 것입니다.
+                  <span style={{ color: "#888" }}> · 기본정보 탭에서 값을 고치면 이 목록이 바로 바뀝니다(저장 전에도).</span>
+                </div>
+                {CONSULT_CATS.map(function(cat) {
+                  var items = checks.filter(function(x) { return x.cat === cat.id; });
+                  return (
+                    <div key={cat.id} style={{ background: cat.bg, border: "1px solid " + cat.border, borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: cat.color, marginBottom: items.length ? 8 : 0 }}>
+                        {cat.icon} {cat.label} <span style={{ fontSize: 11, fontWeight: 600, color: "#888" }}>{items.length}건</span>
+                      </div>
+                      {items.length === 0 && <div style={{ fontSize: 12, color: "#AAA", marginTop: 4 }}>해당 없음</div>}
+                      {items.map(function(it) {
+                        return (
+                          <div key={it.id} style={{ background: "#fff", borderRadius: 7, padding: "9px 11px", marginBottom: 6, border: "1px solid " + cat.border }}>
+                            <div style={{ fontSize: 13, color: "#1A1917", lineHeight: 1.55 }}>{it.text}</div>
+                            {it.why && <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>왜: {it.why}</div>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
           {tab === "bizinfo" && (
             <div>
               {/* 💹 소진공·중진공 재무비율 자동 계산 (부채총계/자본총계/영업이익/이자비용 기반, 실시간) */}
