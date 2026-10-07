@@ -18,7 +18,7 @@ const a = src.match(/\/\/ ⛳ 기업입력칸 시작[\s\S]*?⛳ 기업입력칸 
 const b = src.match(/\/\/ ⛳ 상담체크 시작[\s\S]*?⛳ 상담체크 끝/);
 if (!a || !b) { console.error("❌ 마커를 못 찾았다."); process.exit(1); }
 // eslint-disable-next-line no-new-func
-const F = new Function(a[0] + "\n" + b[0] + "\n return { buildConsultChecks, CONSULT_CATS, limitGuide, firstCallSteps };")();
+const F = new Function(a[0] + "\n" + b[0] + "\n return { buildConsultChecks, CONSULT_CATS, limitGuide, firstCallSteps, growthIndustryCode };")();
 const NOW = new Date("2026-10-08T01:00:00Z");
 const ids = (c) => F.buildConsultChecks(c, NOW).map((x) => x.cat + ":" + x.id);
 const has = (c, id) => ids(c).some((s) => s.endsWith(":" + id));
@@ -86,6 +86,23 @@ ok("말하기 단계 4개는 항상 talk", ["open", "auth", "smart", "close"].ev
 ok("문장에 undefined/NaN 없음", F.firstCallSteps({ region: "서울_강남" }, NOW).every((x) => !/undefined|NaN/.test((x.script || "") + x.detail)));
 ok("탭이 있다", /id: "firstcall", label: "📞 1차 콜"/.test(src) && src.includes('tab === "firstcall" &&'));
 
+console.log("\n■ 성장 경로 업종 매핑");
+const gc = F.growthIndustryCode;
+ok("식품제조업 → mfg(음식점 아님)", gc("식품제조업") === "mfg");
+ok("한식 음식점업 → food", gc("한식 음식점업") === "food");
+ok("소프트웨어 개발 → it", gc("소프트웨어 개발") === "it");
+ok("전자상거래 소매업 → retail", gc("전자상거래 소매업") === "retail");
+ok("미용업 → service", gc("미용업") === "service");
+ok("빈값·모르는 업종 → null", gc("") === null && gc(null) === null && gc("기타") === null);
+ok("코드 어휘가 GrowthRoadmap INDUSTRY_ORDER 와 같다", (() => {
+  const gr = fs.readFileSync("src/pages/GrowthRoadmap.jsx", "utf8").match(/INDUSTRY_ORDER = (\[[^\]]*\])/);
+  // eslint-disable-next-line no-new-func
+  const order = new Function("return " + gr[1])();
+  const codes = (b[0].match(/\["(\w+)", \//g) || []).map((s) => s.slice(2, -4));
+  return codes.length === 7 && codes.every((c) => order.includes(c));
+})());
+ok("성장 경로 탭이 있다", /id: "growth", label: "🧭 성장 경로"/.test(src) && src.includes('<GrowthRoadmap supabase={supabase} industry={code} embedded />'));
+
 console.log("\n■ 정적 검사");
 ok("탭 배열에 consult 가 있다", /id: "consult", label: "🗣 상담 체크"/.test(src));
 ok("본문 분기 tab === \"consult\" 가 있다", src.includes('tab === "consult" &&'));
@@ -106,6 +123,10 @@ if (backup && fs.existsSync(backup)) {
   console.log(`\n■ 실데이터 (살아있는 기업 ${rows.length}곳, 읽기 전용)`);
   ok("예외 0건", crash === 0, String(crash));
   console.log("  칸별 해당 기업 수:", JSON.stringify(per));
+  const gd = {}; const miss = {};
+  rows.forEach((r) => { const c = F.growthIndustryCode(r.industry) || "(못 고름)"; gd[c] = (gd[c] || 0) + 1; if (c === "(못 고름)" && r.industry) miss[r.industry] = (miss[r.industry] || 0) + 1; });
+  console.log("  성장경로 업종 매핑:", JSON.stringify(gd));
+  console.log("  못 고른 업종(상위):", JSON.stringify(Object.entries(miss).sort((x, y) => y[1] - x[1]).slice(0, 10)));
   Object.entries(dist).sort((x, y) => y[1] - x[1]).forEach(([k, v]) => console.log(`    ${k}: ${v}`));
 }
 

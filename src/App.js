@@ -1607,6 +1607,23 @@ function firstCallSteps(c, now) {
     detail: "한도는 '가이드'로만 말하고 승인을 약속하지 않습니다. 인증이 끝난 뒤 10~15분 안에 마무리하는 게 목표." });
   return s;
 }
+// 🧭 업종 텍스트 → 성장 로드맵 업종 코드 (2026-10-08). growth_paths.industry 와 같은 어휘
+//    (food/service/retail/build/edu/mfg/it). 못 고르면 null — 억지로 매핑하지 않는다.
+//    ⚠️ '제조'가 들어가면 식품이어도 mfg 가 먼저다(식품제조업은 음식점이 아니다).
+const GROWTH_INDUSTRY_RULES = [
+  ["mfg", /제조|공장|가공|생산/],
+  ["food", /음식|요식|외식|접객|카페|식당|베이커리|제과|주점|치킨|한식|분식/],
+  ["build", /건설|인테리어|시공|토목|설비|전기공사/],
+  ["edu", /교육|학원|교습|강의/],
+  ["it", /소프트웨어|정보통신|IT|플랫폼|앱|SW|솔루션|개발/i],
+  ["retail", /도소매|도매|소매|유통|판매|쇼핑몰|무역|커머스/],
+  ["service", /서비스|미용|뷰티|광고|디자인|컨설팅|숙박|운수|운송/],
+];
+function growthIndustryCode(text) {
+  var t = String(text || "");
+  for (var i = 0; i < GROWTH_INDUSTRY_RULES.length; i++) if (GROWTH_INDUSTRY_RULES[i][1].test(t)) return GROWTH_INDUSTRY_RULES[i][0];
+  return null;
+}
 // ⛳ 상담체크 끝
 
 // ⛳ 기관현황-이월 시작 — 이 구간은 scripts/test-agency-carry.mjs 가 소스째 떼어내 실행한다.
@@ -16690,6 +16707,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
             { id: "bizinfo", label: "기업정보", badge: (Array.isArray(data.loans) ? data.loans.length : 0) + (Array.isArray(data.company_info) ? data.company_info.length : 0) },
             { id: "consult", label: "🗣 상담 체크", badge: buildConsultChecks(data).filter(function(x) { return x.cat === "ask"; }).length },
             { id: "firstcall", label: "📞 1차 콜", badge: firstCallSteps(data).filter(function(x) { return x.status === "todo"; }).length },
+            { id: "growth", label: "🧭 성장 경로" },
             { id: "docs", label: "서류현황" },
             { id: "history", label: "이슈·액션", badge: commLogs.length },
             { id: "timeline", label: "🕒 타임라인" },
@@ -17086,6 +17104,22 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
             </>
           )}
 
+          {/* 🧭 성장 경로 (2026-10-08) — 기존 GrowthRoadmap 을 embedded 로 재사용. 업종 코드는 growthIndustryCode 로 고른다 */}
+          {tab === "growth" && (function() {
+            var code = growthIndustryCode(data.industry);
+            if (!code) return (
+              <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "14px", fontSize: 13, color: "#666", lineHeight: 1.6 }}>
+                업종 「{data.industry || "비어 있음"}」으로는 성장 로드맵 업종을 고를 수 없습니다.<br />
+                기본정보 탭에서 업종을 채우거나, 사이드바 <b>성장 로드맵</b> 메뉴에서 직접 골라 보세요.
+              </div>
+            );
+            return (
+              <div>
+                <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>업종 「{data.industry}」 기준으로 골랐습니다 · 경로마다 ⚠ 미검증 배지가 있으면 공고 원문 대조 전입니다</div>
+                <GrowthRoadmap supabase={supabase} industry={code} embedded />
+              </div>
+            );
+          })()}
           {/* 📞 1차 콜 체크리스트 (2026-10-08) — 저장하지 않는 계산 화면(⛳ 상담체크 firstCallSteps) */}
           {tab === "firstcall" && (function() {
             var steps = firstCallSteps(data);
