@@ -1550,6 +1550,24 @@ function buildConsultChecks(c, now) {
   }
   return out;
 }
+// 💵 한도 가이드 (2026-10-08) — ⚠️ **공식 기준이 아니다.** 정책자금 강의(임준경, 2026)에서 강사가 말한 경험치다.
+//    화면에 반드시 "강의 경험치 · 참고용 · 공고 확인 필수"를 같이 띄운다. 결과를 승인 한도처럼 말하지 말 것.
+//    revenue = 최근 1년 매출(원) · loanTotal = 기대출 합계(원). 음수는 0 으로 자른다.
+const LIMIT_GUIDE_RULES = [
+  { id: "sojin", agency: "소진공 직접대출", pct: 60, note: "강의: 매출×60% − 기대출. 최근엔 1억 초과는 잘 안 나온다고 함." },
+  { id: "jaedan", agency: "지역신용보증재단", pct: 40, note: "강의: 매출×40% − 기대출(강사 체감 적중 80%). 연매출 5억 미만이 적합 구간." },
+  { id: "rechallenge", agency: "재도전특별자금", pct: 60, half: true, note: "강의: (매출×60% − 기대출)×50%. 2026년엔 2~3천만원이 사실상 상한이라고 함." },
+];
+function limitGuide(revenue, loanTotal) {
+  var r = Number(revenue), l = Number(loanTotal) || 0;
+  if (!isFinite(r) || r <= 0) return [];
+  return LIMIT_GUIDE_RULES.map(function(g) {
+    var gross = Math.round(r * g.pct / 100);
+    var net = Math.max(0, gross - l);
+    if (g.half) net = Math.round(net / 2);
+    return { id: g.id, agency: g.agency, pct: g.pct, gross: gross, net: net, note: g.note };
+  });
+}
 // ⛳ 상담체크 끝
 
 // ⛳ 기관현황-이월 시작 — 이 구간은 scripts/test-agency-carry.mjs 가 소스째 떼어내 실행한다.
@@ -17029,6 +17047,51 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                   <b>승인 가능성 순위가 아닙니다.</b> 입력값이 서로 어긋나거나 비어 있는 곳을 상담 때 물어볼 문장으로 바꾼 것입니다.
                   <span style={{ color: "#888" }}> · 기본정보 탭에서 값을 고치면 이 목록이 바로 바뀝니다(저장 전에도).</span>
                 </div>
+                {/* 🏛 컨택 가능한 기관 — 기존 recommendAgencies 규칙 그대로(새 판정 아님) */}
+                {(function() {
+                  var recs = recommendAgencies(data);
+                  return (
+                    <div style={{ background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: "#6D28D9", marginBottom: 8 }}>🏛 컨택 가능한 기관 <span style={{ fontSize: 11, fontWeight: 600, color: "#888" }}>조건이 맞는 컨택 대상 · 승인 순위 아님</span></div>
+                      {recs.length === 0 ? <div style={{ fontSize: 12, color: "#AAA" }}>규칙에 맞는 기관 없음 — 사업자 유형·신용점수·업종·지역을 채우면 나옵니다</div> : (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {recs.map(function(rc) { return <span key={rc.agency} style={{ fontSize: 12, background: "#fff", border: "1px solid #DDD6FE", borderRadius: 99, padding: "4px 10px", color: "#4C1D95" }}><b>{rc.agency}</b> <span style={{ color: "#888" }}>· {rc.reason}</span></span>; })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+                {/* 💵 한도 가이드 — ⚠️ 강의 경험치. 공식 기준 아님(⛳ 상담체크 LIMIT_GUIDE_RULES) */}
+                {(function() {
+                  var rev = Number(data.revenue_2025) > 0 ? Number(data.revenue_2025) : Number(data.revenue_2024);
+                  var revYear = Number(data.revenue_2025) > 0 ? "2025" : "2024";
+                  var loan = totalLoanAmount(data);
+                  var rows = limitGuide(rev, loan);
+                  return (
+                    <div style={{ background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: "#C2410C", marginBottom: 4 }}>💵 한도 가이드</div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6, padding: "5px 8px", marginBottom: 8 }}>
+                        ⚠ 공식 기준이 아닙니다 — 정책자금 강의의 강사 경험치입니다. 고객에게 한도로 말하지 말고, 반드시 공고·기관에 확인하세요.
+                      </div>
+                      {rows.length === 0 ? <div style={{ fontSize: 12, color: "#AAA" }}>2024·2025 매출이 없어 계산할 수 없습니다</div> : (
+                        <>
+                          <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>기준: {revYear}년 매출 {wonToKor(rev)} · 기대출 합계 {wonToKor(loan)}</div>
+                          {rows.map(function(g) {
+                            return (
+                              <div key={g.id} style={{ background: "#fff", borderRadius: 7, padding: "8px 11px", marginBottom: 6, border: "1px solid #FED7AA" }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                                  <b style={{ fontSize: 13 }}>{g.agency}</b>
+                                  <span style={{ fontSize: 13, fontWeight: 800, color: "#C2410C" }}>약 {wonToKor(g.net)} <span style={{ fontSize: 10, color: "#AAA", fontWeight: 400 }}>(매출×{g.pct}% = {wonToKor(g.gross)})</span></span>
+                                </div>
+                                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>{g.note}</div>
+                              </div>
+                            );
+                          })}
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
                 {CONSULT_CATS.map(function(cat) {
                   var items = checks.filter(function(x) { return x.cat === cat.id; });
                   return (
@@ -17048,6 +17111,24 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                     </div>
                   );
                 })}
+                {/* 🔴 약점 · 대응 논리 — 기존 detectWeaknesses 그대로(기업정보 탭 배지와 같은 내용) */}
+                {(function() {
+                  var ws = detectWeaknesses(data);
+                  if (!ws.length) return null;
+                  return (
+                    <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: "#B91C1C", marginBottom: 8 }}>🔴 약점 · 대응 논리 <span style={{ fontSize: 11, fontWeight: 600, color: "#888" }}>{ws.length}건 · 눌러서 펼치기</span></div>
+                      {ws.map(function(w, wi) {
+                        return (
+                          <details key={wi} style={{ background: "#fff", borderRadius: 7, padding: "8px 11px", marginBottom: 6, border: "1px solid #FECACA" }}>
+                            <summary style={{ fontSize: 13, fontWeight: 700, cursor: "pointer", color: w.level === "danger" ? "#B91C1C" : "#B45309" }}>{w.level === "danger" ? "🔴 " : "🟡 "}{w.label}</summary>
+                            <div style={{ fontSize: 12, color: "#444", whiteSpace: "pre-wrap", marginTop: 6, lineHeight: 1.6 }}>{w.logic}</div>
+                          </details>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
             );
           })()}

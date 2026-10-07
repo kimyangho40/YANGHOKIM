@@ -18,7 +18,7 @@ const a = src.match(/\/\/ ⛳ 기업입력칸 시작[\s\S]*?⛳ 기업입력칸 
 const b = src.match(/\/\/ ⛳ 상담체크 시작[\s\S]*?⛳ 상담체크 끝/);
 if (!a || !b) { console.error("❌ 마커를 못 찾았다."); process.exit(1); }
 // eslint-disable-next-line no-new-func
-const F = new Function(a[0] + "\n" + b[0] + "\n return { buildConsultChecks, CONSULT_CATS };")();
+const F = new Function(a[0] + "\n" + b[0] + "\n return { buildConsultChecks, CONSULT_CATS, limitGuide };")();
 const NOW = new Date("2026-10-08T01:00:00Z");
 const ids = (c) => F.buildConsultChecks(c, NOW).map((x) => x.cat + ":" + x.id);
 const has = (c, id) => ids(c).some((s) => s.endsWith(":" + id));
@@ -62,6 +62,16 @@ ok("만 37세 → 청년 질문 / 51세 → 없음", has({ ...FULL, representati
 ok("KCB-NICE 120점 차 → 주의", has({ ...FULL, credit_score_kcb: 700, credit_score_nice: 820 }, "credit-gap"));
 ok("문장에 undefined/NaN 없음", F.buildConsultChecks({ ...EMPTY, employee_count: 0, certifications: ["벤처기업확인", "창업기업확인서"], founded_year: "2010" }, NOW)
   .every((x) => !/undefined|NaN/.test(x.text + x.why)));
+
+console.log("\n■ 한도 가이드(강의 경험치)");
+const lg = F.limitGuide(300000000, 50000000);
+const by = Object.fromEntries(lg.map((x) => [x.id, x]));
+ok("매출 3억·기대출 5천 → 소진공 1.3억", by.sojin && by.sojin.net === 130000000, JSON.stringify(by.sojin));
+ok("재단 40% → 7천", by.jaedan && by.jaedan.net === 70000000);
+ok("재도전 (1.8억−5천)×50% = 6,500만", by.rechallenge && by.rechallenge.net === 65000000);
+ok("기대출이 더 크면 0(음수 금지)", F.limitGuide(100000000, 900000000).every((x) => x.net === 0));
+ok("매출 없음 → []", F.limitGuide(0, 0).length === 0 && F.limitGuide(null, 0).length === 0);
+ok("화면에 '공식 기준이 아닙니다' 경고 문구", src.includes("공식 기준이 아닙니다 — 정책자금 강의의 강사 경험치입니다"));
 
 console.log("\n■ 정적 검사");
 ok("탭 배열에 consult 가 있다", /id: "consult", label: "🗣 상담 체크"/.test(src));
