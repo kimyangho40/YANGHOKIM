@@ -467,6 +467,33 @@ API 로 352건 전부 받을 수 있다. `work_notes`(2026-08-05) · `chat_messa
 (화면엔 `✅ 완료 (시각 기록 없음)`). 별도 조회 검증: 52행 중 계획 17건만 변경 · 그 외 0건 · done 27→44 · 재계산 시 남은 보정 0건.
 실측: 요청 52건 중 기업에 걸리는 것 **6건/6개 기업**(company_id 5 · @태그 1) — 광성화학·바른푸드·어장관리·칸린·123F&B·에이원커뮤니케이션코리아.
 
+## 🧾 기업 입력칸 보강 (2026-10-08, **기존 테이블에 컬럼 5개 추가 · 새 테이블 0개**)
+
+기업상세 기본정보 탭에 대표자 생년월일(→만 나이·청년 배지)·성별·사업자등록증 개수·과거 폐업 이력(있음/없음/모름)·
+보유 인증 10종 체크, 설립연월 옆 **업력**, 2024·2025 매출 아래 **전년비 증감률**을 넣었다.
+SQL: `기업입력칸_보강_컬럼추가.sql` / `_rollback` / `_검증` · 테스트 `scripts/test-company-input-fields.mjs`
+목적: 다음 작업(기관 추천 4칸·입력 모순 질문·기업마당 공고 매칭)의 판정 재료. 지금까지는 `company_info` 자유 텍스트라 기계가 못 읽었다.
+
+- 컬럼: `representative_birth`(date) · `representative_gender`(text, 남/여 check) · `biz_reg_count`(smallint 0~20) ·
+  `has_closed_business`(boolean, **NULL=모름** — 기본값 일부러 없음) · `certifications`(jsonb 배열, 기본 `[]`).
+- **나이·업력·증가율은 저장하지 않는다**(시간이 지나면 바뀌는 값). `⛳ 기업입력칸` 마커 사이 순수 함수
+  `ageFromBirth`·`bizAgeMonths`·`formatBizAge`·`revenueGrowthPct`·`normalizeCerts` 가 매번 계산한다. 기준일은 KST.
+- 인증 어휘는 `CERT_OPTIONS` 한 곳. ⚠️ **key 문구를 바꾸면 저장된 값이 조용히 체크 해제된 것처럼 보인다.**
+- ⚠️ **새 칸은 `allFields` 에 넣지 않았다.** 거기는 "빈값이면 DB 기존값 유지"라 한번 넣은 값을 지울 수가 없다.
+  대신 별도 루프: 값이 있으면 저장 · **지우면 null 로 저장**(prevData 에 값이 있었을 때만) · 손대지 않은 칸은 전송 안 함.
+- 🐞 **같이 고친 버그 — 사회적경제기업 체크박스가 저장되지 않았다.** 화면엔 있었는데 `saveCompany` 저장 목록에 없었다
+  (2026-10-08 실측: `social_enterprise=true` 기업 0곳). `innovation_field` 와 같은 규칙(boolean 일 때만 전송)으로 넣었다.
+- ⚠️ 발견만 하고 안 고친 것: 판정 코드(`judge*`)가 읽는 **`companies.export_usd` 컬럼이 DB 에 없다**(입력칸도 없다)
+  → 수출 판정은 항상 "수출 없음"으로 돈다. 수출 실적 입력칸을 만들 때 컬럼부터 추가할 것.
+- 신규등록 모달에는 넣지 않았다(등록 후 기업상세에서 채운다). 모바일 영향 0(`CompanyModal` 데스크톱 전용).
+
+검증: `_검증.sql` **7/7 pass**(별도 실행 — 2-2) · 기존 행 새 칸 값 0 · RLS on · anon 컬럼 권한 0 ·
+`test-company-input-fields` **39/39** · `test-gujo-reject` 16/16 · `test-amount-unit` 42/42 · `test-revenue-input` 14/14 ·
+`test-debtor-change` 77/77 · `audit-select-columns` **0곳** · `CI=true npx react-scripts build` 통과.
+백업: 실행 전 `companies` 전체(1,076행·65컬럼) JSON 덤프를 저장소 밖에 보관.
+⚠️ **화면 클릭 확인은 사람이 해야 한다**(2026-08-17 사고): 생년월일 넣고 저장→다시 열어 만 나이 확인 · 인증 체크→저장→유지 ·
+폐업 이력 '있음'→'모름'으로 바꿔 저장→비워지는지 · 사회적경제기업 체크→저장→유지.
+
 ## 1. 수정 전 — 공용 로직 영향 범위 먼저 확인
 - 바꾸려는 함수/변수/상태(state)를 **어디서 쓰는지 grep으로 전부 찾고**, 이 변경이
   요청한 기능 외 다른 기능에도 영향을 주는지 먼저 판단한다.
