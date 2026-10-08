@@ -17357,6 +17357,12 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                       {rows.length === 0 ? <div style={{ fontSize: 12, color: "#AAA" }}>2024·2025 매출이 없어 계산할 수 없습니다</div> : (
                         <>
                           <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>기준: {revYear}년 매출 {wonToKor(rev)} · 기대출 합계 {wonToKor(loan)}</div>
+                          {/* 기대출이 비어 있으면 0원으로 빼서 한도가 부풀려진다(2026-10-09 운영 화면 확인: 명인설렁탕) */}
+                          {!(Array.isArray(data.loans) && data.loans.length) && (
+                            <div style={{ fontSize: 11, fontWeight: 700, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "5px 8px", marginBottom: 6 }}>
+                              ⚠ 기업정보 탭의 기대출이 비어 있어 0원으로 계산했습니다 — 실제 한도는 이보다 작습니다. 기대출부터 채우세요.
+                            </div>
+                          )}
                           {rows.map(function(g) {
                             return (
                               <div key={g.id} style={{ background: "#fff", borderRadius: 7, padding: "8px 11px", marginBottom: 6, border: "1px solid #FED7AA" }}>
