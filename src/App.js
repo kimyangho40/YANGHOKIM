@@ -1392,6 +1392,358 @@ const REAPPLY_EXEMPT_GROUPS = ["구조혁신&사업전환"];
 function isReapplyExempt(g) { return REAPPLY_EXEMPT_GROUPS.indexOf(g) >= 0; }
 // ⛳ 재신청-제외 끝
 
+// ⛳ 기업입력칸 시작 — 이 구간은 scripts/test-company-input-fields.mjs 가 소스째 떼어내 실행한다.
+//    ⚠️ 마커 문구를 바꾸면 테스트가 통째로 죽는다. supabase·React 를 참조하지 말 것(순수해야 떼어낼 수 있다).
+//
+// 🧾 기업 입력칸 보강 (2026-10-08) — SQL: 기업입력칸_보강_컬럼추가.sql (+ _rollback / _검증)
+//    대표자 생년월일→만 나이 · 설립연월→업력 · 매출 증가율 · 보유 인증 체크.
+//    나이·업력·증가율은 **저장하지 않고 매번 계산**한다(시간이 지나면 저절로 바뀌는 값이라).
+//    날짜 기준은 KST 오늘. 테스트를 위해 now 를 인자로 받는다(안 주면 지금).
+//
+// 보유 인증 어휘 — certifications(jsonb 배열)에는 **이 key 만** 저장한다(normalizeCerts 가 걸러낸다).
+//    ⚠️ key 문구를 바꾸면 이미 저장된 값이 조용히 체크 해제된 것처럼 보인다. 바꾸려면 데이터부터 옮길 것.
+const CERT_OPTIONS = [
+  { key: "중소기업확인서", group: "기업확인서" },
+  { key: "소기업·소상공인확인서", group: "기업확인서" },
+  { key: "창업기업확인서", group: "기업확인서" },
+  { key: "여성기업확인서", group: "기업확인서" },
+  { key: "장애인기업확인서", group: "기업확인서" },
+  { key: "벤처기업확인", group: "혁신 인증" },
+  { key: "이노비즈", group: "혁신 인증" },
+  { key: "메인비즈", group: "혁신 인증" },
+  { key: "기업부설연구소·전담부서", group: "기술" },
+  { key: "특허 보유", group: "기술" },
+];
+const YOUTH_MAX_AGE = 39; // 청년 = 만 39세 이하 (중진공 청년전용창업자금 기준)
+function kstTodayParts(now) {
+  var t = new Date((now ? now.getTime() : Date.now()) + 9 * 3600 * 1000);
+  return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate() };
+}
+// "1989-03-17" → 만 나이. 형식이 틀리거나 미래 날짜면 null.
+function ageFromBirth(birth, now) {
+  var m = String(birth || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  var by = +m[1], bm = +m[2], bd = +m[3];
+  var t = kstTodayParts(now);
+  var age = t.y - by - ((t.m < bm || (t.m === bm && t.d < bd)) ? 1 : 0);
+  return age >= 0 && age < 130 ? age : null;
+}
+// 설립연월 → 업력 개월수. 월이 비면 1월로 보고 approx=true. 연도가 없거나 미래면 null.
+function bizAgeMonths(year, month, now) {
+  var y = parseInt(year, 10);
+  if (!y || y < 1900) return null;
+  var mo = parseInt(month, 10);
+  var approx = !(mo >= 1 && mo <= 12);
+  if (approx) mo = 1;
+  var t = kstTodayParts(now);
+  var months = (t.y - y) * 12 + (t.m - mo);
+  return months >= 0 ? { months: months, approx: approx } : null;
+}
+function formatBizAge(r) {
+  if (!r) return "";
+  var y = Math.floor(r.months / 12), mo = r.months % 12;
+  var s = (y > 0 ? y + "년 " : "") + mo + "개월";
+  return (r.approx ? "약 " : "") + s.trim();
+}
+// 전년 대비 증가율(%) — 소수 1자리. 전년이 없거나 0 이하면 null(나눌 수 없다).
+function revenueGrowthPct(prev, cur) {
+  var p = Number(prev), c = Number(cur);
+  if (prev === null || prev === undefined || prev === "" || cur === null || cur === undefined || cur === "") return null;
+  if (!isFinite(p) || !isFinite(c) || p <= 0) return null;
+  return Math.round(((c - p) / p) * 1000) / 10;
+}
+// 저장 직전 정리 — 모르는 값 제거 · 중복 제거 · CERT_OPTIONS 순서로 정렬.
+function normalizeCerts(arr) {
+  if (!Array.isArray(arr)) return [];
+  return CERT_OPTIONS.map(function(o) { return o.key; }).filter(function(k) { return arr.indexOf(k) >= 0; });
+}
+// ⛳ 기업입력칸 끝
+
+// ⛳ 상담체크 시작 — 이 구간은 scripts/test-consult-check.mjs 가 (⛳ 기업입력칸 구간과 함께) 소스째 떼어내 실행한다.
+//    ⚠️ 마커 문구를 바꾸면 테스트가 통째로 죽는다. 기업입력칸 함수 외에는 아무것도 참조하지 말 것.
+//
+// 🗣 상담 체크 (2026-10-08) — 입력값끼리 어긋나는 곳·비어서 판정이 막히는 곳을 **대표님께 물을 문장**으로 바꾼다.
+//    4칸: ask(대표님께 바로 여쭤볼 것: 입력 모순) · blocked(비어서 판정 막힘) · verify(상황별 확인 질문) · caution(주의).
+//    ⚠️ 승인 가능성 판정이 아니다. 기관 심사 규칙을 지어내지 말 것 — 법정 기준이 확실한 것만 문장에 쓴다
+//       (창업기업 = 업력 7년 이내 · 소상공인 = 상시근로자 5인 미만, 광업·제조·건설·운수 10인 미만 · 청년 = 만 39세 이하).
+//    ⚠️ 저장하지 않는다 — 화면을 열 때마다 company 값으로 다시 계산한다(입력을 고치면 바로 사라진다).
+const CONSULT_CATS = [
+  { id: "ask", label: "대표님께 바로 여쭤볼 것", icon: "🗣", color: "#B45309", bg: "#FFFBEB", border: "#FDE68A" },
+  { id: "blocked", label: "비어 있어 판정이 막힌 칸", icon: "🚧", color: "#B91C1C", bg: "#FEF2F2", border: "#FECACA" },
+  { id: "verify", label: "확인할 질문", icon: "❓", color: "#1D4ED8", bg: "#EFF6FF", border: "#BFDBFE" },
+  { id: "caution", label: "참고할 주의사항", icon: "⚠️", color: "#6B7280", bg: "#F9FAFB", border: "#E5E7EB" },
+];
+function consultIsBlank(v) { return v === null || v === undefined || v === ""; }
+function buildConsultChecks(c, now) {
+  c = c || {};
+  var out = [];
+  var add = function(cat, id, text, why) { out.push({ cat: cat, id: id, text: text, why: why || "" }); };
+  var certs = normalizeCerts(c.certifications);
+  var has = function(k) { return certs.indexOf(k) >= 0; };
+  var emp = consultIsBlank(c.employee_count) ? null : Number(c.employee_count);
+  var age = ageFromBirth(c.representative_birth, now);
+  var biz = bizAgeMonths(c.founded_year, c.founded_month, now);
+  var ind = String(c.industry || "");
+  var bigLimit = /제조|건설|운수|운송|광업/.test(ind);
+  var smallLimit = bigLimit ? 10 : 5;
+
+  // ── ask: 입력 모순
+  if ((has("벤처기업확인") || has("이노비즈")) && !has("특허 보유") && !has("기업부설연구소·전담부서")) {
+    add("ask", "tech-cert-no-basis", "벤처·이노비즈 인증이 체크돼 있는데 특허·연구소는 없습니다. 대표님, 기술 근거(특허 출원 중·기술 인력·개발 실적 등)가 따로 있으실까요?",
+      "기술 관련 인증이 있으면 기관이 기술 근거를 다시 묻습니다.");
+  }
+  if (emp === 0) {
+    add("ask", "emp-zero", "상시근로자를 0명으로 넣으셨습니다. 대표님, 지금 혼자 하고 계신 게 맞으실까요? 4대보험 가입 직원이 있으면 그 인원으로 넣어야 기관 기준이 달라집니다.",
+      "상시근로자 수는 소상공인·소기업 판정과 고용 가점에 같이 쓰입니다.");
+  }
+  if (has("여성기업확인서") && c.representative_gender === "남") {
+    add("ask", "women-cert-male", "여성기업확인서가 체크돼 있는데 대표자 성별이 '남'입니다. 공동대표나 지분 구조가 따로 있을까요?",
+      "둘 중 하나는 잘못 입력됐을 가능성이 큽니다.");
+  }
+  if (has("창업기업확인서") && biz && biz.months >= 84) {
+    add("ask", "startup-cert-old", "창업기업확인서가 체크돼 있는데 업력이 " + formatBizAge(biz) + "입니다. 창업기업은 업력 7년 이내가 대상이라, 확인서 발급일·유효기간을 한번 보셔야 합니다.",
+      "만료된 확인서로 신청하면 반려됩니다.");
+  }
+  if (has("소기업·소상공인확인서") && emp !== null && emp >= smallLimit) {
+    add("ask", "small-cert-over", "소기업·소상공인확인서가 있는데 상시근로자가 " + emp + "명입니다. 소상공인 기준(" + (bigLimit ? "광업·제조·건설·운수 10인 미만" : "5인 미만") + ")을 넘었다면 확인서가 지금 기준과 안 맞을 수 있습니다. 직원이 언제 늘었는지 여쭤보세요.",
+      "소상공인 전용 자금은 신청 시점 기준으로 다시 판정합니다.");
+  }
+  if (c.business_type === "개인사업자" && /\(주\)|㈜|주식회사|\(유\)|유한회사|법인/.test(String(c.name || ""))) {
+    add("ask", "type-mismatch", "업체명은 법인 형태인데 사업자 유형이 '개인사업자'로 되어 있습니다. 대표님, 개인과 법인 사업자를 둘 다 갖고 계신가요?",
+      "개인·법인에 따라 인증서·서류·기관이 달라집니다.");
+  }
+
+  // ── blocked: 비어서 판정이 막힘
+  if (consultIsBlank(c.founded_year)) add("blocked", "no-founded", "설립연월이 없어 업력 판정(창업기업 7년 · 업력별 자금 분기)을 못 합니다.");
+  if (consultIsBlank(c.revenue_2025) && consultIsBlank(c.revenue_2024)) add("blocked", "no-revenue", "최근 2년 매출이 없어 한도 가이드를 계산할 수 없습니다.");
+  if (consultIsBlank(c.credit_score_kcb) && consultIsBlank(c.credit_score_nice)) add("blocked", "no-credit", "신용점수(KCB·NICE)가 없어 기관 적합도를 볼 수 없습니다.");
+  if (emp === null) add("blocked", "no-emp", "상시근로자 수가 없어 소상공인·소기업 판정을 못 합니다.");
+  if (consultIsBlank(c.representative_birth)) add("blocked", "no-birth", "대표자 생년월일이 없어 청년(만 39세 이하) 여부를 판정할 수 없습니다.");
+  if (consultIsBlank(ind)) add("blocked", "no-industry", "업종이 없어 우대·제외 업종을 판정할 수 없습니다.");
+  if (consultIsBlank(c.has_closed_business)) add("blocked", "no-closed", "과거 폐업 이력이 '모름'이라 재도전·창업기업 판정을 못 합니다. 있음/없음을 여쭤보세요.");
+  if (consultIsBlank(c.biz_reg_count)) add("blocked", "no-bizcount", "사업자등록증 개수가 없어 창업기업 확인 가능 여부를 볼 수 없습니다.");
+
+  // ── verify: 상황별 확인 질문
+  var cnt = consultIsBlank(c.biz_reg_count) ? null : Number(c.biz_reg_count);
+  if (cnt !== null && cnt >= 2) {
+    add("verify", "multi-biz", "사업자가 " + cnt + "개입니다. 다른 사업자의 업종·개업일·매출을 여쭤보세요.",
+      "어느 사업장이 가장 늦게 열렸는지, 나머지가 폐업했는지에 따라 창업기업 확인·재도전 자격이 달라집니다.");
+  }
+  if (c.has_closed_business === true) {
+    add("verify", "closed-detail", "폐업한 사업장의 업종·폐업일, 그리고 폐업 전에 매출이 있었는지 여쭤보세요.",
+      "재도전 관련 자금 판단에 필요합니다.");
+  }
+  var g = revenueGrowthPct(c.revenue_2024, c.revenue_2025);
+  if (g !== null && g <= -15) {
+    add("verify", "revenue-drop", "2025년 매출이 전년보다 " + Math.abs(g) + "% 줄었습니다. 왜 줄었는지 여쭤보세요.",
+      "매출 감소는 심사에서 반드시 묻는 항목이라 대표님 답을 미리 정리해 두는 게 좋습니다.");
+  }
+  if (age !== null && age <= YOUTH_MAX_AGE) {
+    add("verify", "youth", "만 " + age + "세 청년 대표입니다. 사업자가 대표님 본인 명의인지, 실제로 직접 운영하시는지 확인하세요.",
+      "청년전용 자금은 대표자 본인 요건을 봅니다.");
+  }
+
+  // ── caution
+  var k = Number(c.credit_score_kcb), n = Number(c.credit_score_nice);
+  if (k > 0 && n > 0 && Math.abs(k - n) >= 100) {
+    add("caution", "credit-gap", "KCB(" + k + ")와 NICE(" + n + ") 점수 차이가 " + Math.abs(k - n) + "점입니다. 둘 중 하나가 오래된 값일 수 있어 최근 조회 결과로 다시 확인하세요.");
+  }
+  return out;
+}
+// 💵 한도 가이드 (2026-10-08) — ⚠️ **공식 기준이 아니다.** 정책자금 강의(임준경, 2026)에서 강사가 말한 경험치다.
+//    화면에 반드시 "강의 경험치 · 참고용 · 공고 확인 필수"를 같이 띄운다. 결과를 승인 한도처럼 말하지 말 것.
+//    revenue = 최근 1년 매출(원) · loanTotal = 기대출 합계(원). 음수는 0 으로 자른다.
+const LIMIT_GUIDE_RULES = [
+  { id: "sojin", agency: "소진공 직접대출", pct: 60, note: "강의: 매출×60% − 기대출. 최근엔 1억 초과는 잘 안 나온다고 함." },
+  { id: "jaedan", agency: "지역신용보증재단", pct: 40, note: "강의: 매출×40% − 기대출(강사 체감 적중 80%). 연매출 5억 미만이 적합 구간." },
+  { id: "rechallenge", agency: "재도전특별자금", pct: 60, half: true, note: "강의: (매출×60% − 기대출)×50%. 2026년엔 2~3천만원이 사실상 상한이라고 함." },
+];
+function limitGuide(revenue, loanTotal) {
+  var r = Number(revenue), l = Number(loanTotal) || 0;
+  if (!isFinite(r) || r <= 0) return [];
+  return LIMIT_GUIDE_RULES.map(function(g) {
+    var gross = Math.round(r * g.pct / 100);
+    var net = Math.max(0, gross - l);
+    if (g.half) net = Math.round(net / 2);
+    return { id: g.id, agency: g.agency, pct: g.pct, gross: gross, net: net, note: g.note };
+  });
+}
+// 📞 1차 콜 체크리스트 (2026-10-08) — 정책자금 강의의 1차 상담 순서를 그대로 옮긴 것.
+//    status: "done"(기본정보에 이미 있음) · "todo"(물어봐야 함) · "warn"(주의할 결과) · "talk"(말하기 단계, 자동 판정 없음)
+//    ⚠️ 저장하지 않는다 — 기본정보·서류현황 값으로 매번 계산한다. 체크 상태를 따로 두면 기본정보와 어긋난다.
+function firstCallSteps(c, now) {
+  c = c || {};
+  var recv = String(c.received_docs || "").split(",").map(function(s) { return s.trim(); });
+  var hasDoc = function(name) { return recv.indexOf(name) >= 0; };
+  var biz = bizAgeMonths(c.founded_year, c.founded_month, now);
+  var cnt = consultIsBlank(c.biz_reg_count) ? null : Number(c.biz_reg_count);
+  var credit = !consultIsBlank(c.credit_score_kcb) || !consultIsBlank(c.credit_score_nice);
+  var loans = Array.isArray(c.loans) ? c.loans.length : 0;
+  var s = [];
+  s.push({ id: "open", title: "첫 질문은 매출 구조부터", status: "talk",
+    script: "\"" + (c.region ? String(c.region).split(/[_\s]/)[0] + "에서 " : "") + "어떻게 매출을 내고 계세요?\" — 신용점수보다 먼저 묻습니다. 대표님이 '내 얘기를 듣는구나' 느끼게.",
+    detail: "이어서: \"정확한 한도를 보려면 신용정보와 매출 두 가지 확인이 필요합니다.\"" });
+  s.push({ id: "auth", title: "인증 요청 전에 이유부터 설명", status: "talk",
+    script: "\"대표님 대출 현황을 정확히 보려고 조회하는 거고, 개인정보라 인증을 보내드립니다. 인증 화면에 '타인에게 알려주지 말라'는 경고가 뜨는데 정상입니다.\"",
+    detail: "설명 없이 인증부터 보내면 금융사기로 오해받습니다." });
+  s.push({ id: "bizcount", title: "① 사업자가 1개인지 여러 개인지", status: cnt === null ? "todo" : (cnt >= 2 ? "warn" : "done"),
+    detail: cnt === null ? "기본정보 '사업자등록증 개수'가 비어 있습니다." : (cnt >= 2 ? cnt + "개 — 다른 사업자의 개업·폐업 시점을 확인하세요." : "1개") });
+  s.push({ id: "vat", title: "② 사업자등록증명보다 부가세 과세표준증명을 먼저", status: hasDoc("최근 3년치 부가세 증명원 (23년~25년)") ? "done" : "todo",
+    detail: "폐업·신규 이력과 연도별 매출이 한 번에 보입니다. (서류현황 '최근 3년치 부가세 증명원')" });
+  s.push({ id: "age3", title: "③ 업력 3년 이상인지", status: !biz ? "todo" : (biz.months >= 36 ? "done" : "warn"),
+    detail: !biz ? "설립연월이 비어 있습니다." : "업력 " + formatBizAge(biz) + (biz.months >= 36 ? "" : " — 3년 미만") });
+  s.push({ id: "closed", title: "④ 폐업 이력 · 폐업 전 매출", status: consultIsBlank(c.has_closed_business) ? "todo" : (c.has_closed_business ? "warn" : "done"),
+    detail: consultIsBlank(c.has_closed_business) ? "기본정보 '과거 폐업 이력'이 모름입니다." : (c.has_closed_business ? "폐업 이력 있음 — 폐업 전에 매출이 있었는지, 폐업일이 언제인지 여쭤보세요." : "폐업 이력 없음") });
+  s.push({ id: "rechallenge", title: "⑤ 재도전특별자금 해당 여부", status: c.has_closed_business === true ? "warn" : (consultIsBlank(c.has_closed_business) ? "todo" : "done"),
+    detail: c.has_closed_business === true ? "폐업 후 재창업이면 검토 대상. 지금 사업장이 가장 늦게 열렸고 나머지가 모두 폐업했는지 확인." : "폐업 이력이 없으면 해당 없음." });
+  s.push({ id: "smart", title: "⑥ 스마트기술 사용 여부", status: "talk",
+    detail: "키오스크·POS 연동·스마트 장비 등 사용 이력을 여쭤보세요(자동 판정 칸 없음)." });
+  s.push({ id: "credit", title: "신용점수 확인", status: credit ? "done" : "todo",
+    detail: credit ? "KCB " + (c.credit_score_kcb || "-") + " / NICE " + (c.credit_score_nice || "-") : "신용점수가 비어 있습니다." });
+  s.push({ id: "loans", title: "기대출 조회 → 이력부터 브리핑", status: loans > 0 ? "done" : "todo",
+    script: "\"○○은행에서 ○년 ○월에 ○○만원 받으셨네요\" — 이력을 먼저 맞추고 나서 솔루션을 말합니다.",
+    detail: loans > 0 ? "기대출 " + loans + "건 입력됨" : "기업정보 탭 기대출이 비어 있습니다. 솔루션을 먼저 말했다가 모르던 이력이 나오면 신뢰가 깨집니다." });
+  s.push({ id: "close", title: "솔루션 제시 → 계약", status: "talk",
+    detail: "한도는 '가이드'로만 말하고 승인을 약속하지 않습니다. 인증이 끝난 뒤 10~15분 안에 마무리하는 게 목표." });
+  return s;
+}
+// 🧭 업종 텍스트 → 성장 로드맵 업종 코드 (2026-10-08). growth_paths.industry 와 같은 어휘
+//    (food/service/retail/build/edu/mfg/it). 못 고르면 null — 억지로 매핑하지 않는다.
+//    ⚠️ '제조'가 들어가면 식품이어도 mfg 가 먼저다(식품제조업은 음식점이 아니다).
+const GROWTH_INDUSTRY_RULES = [
+  ["mfg", /제조|공장|가공|생산/],
+  ["food", /음식|요식|외식|접객|카페|식당|베이커리|제과|주점|치킨|한식|분식/],
+  ["build", /건설|인테리어|시공|토목|설비|전기공사/],
+  ["edu", /교육|학원|교습|강의/],
+  ["it", /소프트웨어|정보통신|IT|플랫폼|앱|SW|솔루션|개발/i],
+  ["retail", /도소매|도매|소매|유통|판매|쇼핑몰|무역|커머스/],
+  ["service", /서비스|미용|뷰티|광고|디자인|컨설팅|숙박|운수|운송/],
+];
+function growthIndustryCode(text) {
+  var t = String(text || "");
+  for (var i = 0; i < GROWTH_INDUSTRY_RULES.length; i++) if (GROWTH_INDUSTRY_RULES[i][1].test(t)) return GROWTH_INDUSTRY_RULES[i][0];
+  return null;
+}
+// ⛳ 상담체크 끝
+
+// ⛳ 공고매칭 시작 — scripts/test-notice-match.mjs 가 (⛳ 기업입력칸 구간과 함께) 소스째 떼어내 실행한다.
+//    ⚠️ 마커 문구를 바꾸면 테스트가 통째로 죽는다. 기업입력칸 함수 외에는 참조하지 말 것.
+//
+// 📢 기업마당 공고 매칭 (2026-10-08) — bizinfo_notices.req(저장소 밖 도구가 정규화해 넣은 요건)와 기업 값을 비교한다.
+//    탈락: 지역 밖 · 업종 제한 불일치 · 업력/매출/직원 범위 밖 · 공고명이 특정 업종 대상인데 기업 업종과 무관 · 마감 지남
+//    통과했지만 기업 값이 비어 단정 못 한 조건은 checks(확인할 것)로 남긴다(탈락시키지 않는다).
+//    ⚠️ 요건은 AI 가 공고문을 읽어 뽑은 값이라 틀릴 수 있다 — 화면에 원문 링크를 항상 같이 띄운다.
+const NOTICE_SIDO = ["서울", "경기", "인천", "부산", "대구", "대전", "광주", "울산", "세종", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주"];
+const NOTICE_SIDO_FULL = { "서울특별시": "서울", "서울시": "서울", "경기도": "경기", "인천광역시": "인천", "인천시": "인천", "부산광역시": "부산", "부산시": "부산",
+  "대구광역시": "대구", "대구시": "대구", "대전광역시": "대전", "대전시": "대전", "광주광역시": "광주", "울산광역시": "울산", "울산시": "울산", "세종특별자치시": "세종", "세종시": "세종",
+  "강원도": "강원", "강원특별자치도": "강원", "충청북도": "충북", "충청남도": "충남", "전라북도": "전북", "전북특별자치도": "전북", "전라남도": "전남",
+  "경상북도": "경북", "경상남도": "경남", "제주도": "제주", "제주특별자치도": "제주" };
+// 기업 지역 "서울_강남" "경기 안산시" "경상남도 김해시" → { sido, sigungu }
+function noticeCompanyRegion(text) {
+  var parts = String(text || "").replace(/[()]/g, " ").split(/[_\s,/]+/).filter(Boolean);
+  if (!parts.length) return { sido: "", sigungu: "" };
+  var first = parts[0];
+  var sido = NOTICE_SIDO_FULL[first] || (NOTICE_SIDO.indexOf(first.slice(0, 2)) >= 0 ? first.slice(0, 2) : "");
+  return { sido: sido, sigungu: sido && parts[1] ? parts[1] : "" };
+}
+// 업종 텍스트 → 요건 추출에 쓴 업종 분류(제조·도소매·음식점…). 매칭 도구 기업.py INDUSTRY_RULES 와 같은 규칙.
+const NOTICE_INDUSTRY_RULES = [
+  ["음식점", /음식|요식|외식|카페|식당|베이커리|치킨|주점|접객/], ["숙박", /숙박|호텔|펜션|모텔/], ["제조", /제조|공장|생산|가공/],
+  ["IT", /소프트웨어|IT|정보통신|플랫폼|앱|개발|솔루션|SW/i], ["건설", /건설|인테리어|시공|토목|설비|전기공사/],
+  ["도소매", /도소매|도매|소매|유통|판매|쇼핑몰|무역|수출입|통신판매|온라인/], ["운수", /운수|운송|물류|택배|화물/],
+  ["농림어업", /농업|축산|어업|임업|농산|수산/], ["교육", /교육|학원|강의/], ["서비스", /서비스|미용|뷰티|광고|디자인|컨설팅|임대|부동산|의료|병원|헬스|스포츠/],
+];
+function noticeIndustryCats(text) {
+  var t = String(text || ""), out = [];
+  NOTICE_INDUSTRY_RULES.forEach(function(r) { if (r[1].test(t)) out.push(r[0]); });
+  return out.length ? out : (t.trim() ? ["기타"] : []);
+}
+const NOTICE_TYPE_SCORE = { "무상지원금": 50, "융자": 45, "보증": 40, "이차보전": 40, "바우처": 25, "판로·수출": 15, "인력지원": 15, "교육·컨설팅": 10, "인증·지정": 5, "기타": 5 };
+const NOTICE_SPECIAL = ["장애인기업", "사회적경제기업", "여성기업", "농어업인"];
+const NOTICE_GENERAL = ["소상공인", "중소기업", "창업기업", "청년", "기타"];
+function noticeRangeText(lo, hi, unit) {
+  return (lo != null ? lo + unit + " 이상" : "") + (lo != null && hi != null ? " " : "") + (hi != null ? hi + unit + " 이하" : "");
+}
+// 한 기업 × 공고 하나 → null(탈락) 또는 { score, why[], checks[] }
+function judgeNotice(c, n, now) {
+  var r = (n && n.req) || {};
+  var why = [], checks = [];
+  var today = kstTodayParts(now);
+  var todayStr = today.y + "-" + String(today.m).padStart(2, "0") + "-" + String(today.d).padStart(2, "0");
+  if (n.deadline && String(n.deadline) < todayStr) return null;
+  var reg = noticeCompanyRegion(c.region);
+  var regions = r.regions || [];
+  var local = regions.length && regions.indexOf("전국") < 0;
+  if (local) {
+    if (!reg.sido) checks.push("소재지가 " + regions.join("·") + "인지");
+    else if (regions.indexOf(reg.sido) < 0) return null;
+    else why.push(reg.sido + " 소재 대상");
+  }
+  var sgg = r.sigungu || [];
+  if (sgg.length) {
+    if (!reg.sigungu) checks.push("소재지가 " + sgg.join("·") + "인지");
+    else if (!sgg.some(function(s) { return s.indexOf(reg.sigungu) === 0 || reg.sigungu.indexOf(s.replace(/(시|군|구)$/, "")) === 0; })) return null;
+    else why.push(sgg.join("·") + " 대상 사업");
+  }
+  var ind = String(c.industry || "");
+  var needs = r.niche_need || [];
+  for (var i = 0; i < needs.length; i++) { if (!new RegExp(needs[i]).test(ind)) return null; }
+  var cats = noticeIndustryCats(ind);
+  var out = r.ind_out || [], inc = r.ind_in || [];
+  if (cats.some(function(x) { return out.indexOf(x) >= 0; })) return null;
+  if (inc.length) {
+    if (!cats.length) checks.push("업종(" + inc.join("/") + ")");
+    else if (!cats.some(function(x) { return inc.indexOf(x) >= 0; })) return null;
+    else why.push(cats.filter(function(x) { return inc.indexOf(x) >= 0; }).join("/") + " 업종 한정 사업");
+  }
+  var biz = bizAgeMonths(c.founded_year, c.founded_month, now);
+  var rev = Number(c.revenue_2025) > 0 ? Number(c.revenue_2025) / 1e8 : (Number(c.revenue_2024) > 0 ? Number(c.revenue_2024) / 1e8 : null);
+  var emp = (c.employee_count === null || c.employee_count === undefined || c.employee_count === "") ? null : Number(c.employee_count);
+  var ranges = [["업력", biz ? biz.months / 12 : null, r.age_min, r.age_max, "년"], ["매출", rev, r.rev_min, r.rev_max, "억"], ["직원", emp, r.emp_min, r.emp_max, "명"]];
+  for (var k = 0; k < ranges.length; k++) {
+    var label = ranges[k][0], v = ranges[k][1], lo = ranges[k][2], hi = ranges[k][3], unit = ranges[k][4];
+    if (lo == null && hi == null) continue;
+    if (v === null) { checks.push(label + " " + noticeRangeText(lo, hi, unit)); continue; }
+    if ((lo != null && v < lo) || (hi != null && v > hi)) return null;
+    why.push(label + " " + noticeRangeText(lo, hi, unit) + " 충족");
+  }
+  var targets = r.targets || [];
+  var certs = normalizeCerts(c.certifications);
+  var special = targets.filter(function(t) { return NOTICE_SPECIAL.indexOf(t) >= 0; });
+  if (special.length && !targets.some(function(t) { return NOTICE_GENERAL.indexOf(t) >= 0; })) {
+    if (special.indexOf("여성기업") >= 0 && (certs.indexOf("여성기업확인서") >= 0 || c.representative_gender === "여")) why.push("여성기업 대상");
+    else if (special.indexOf("장애인기업") >= 0 && certs.indexOf("장애인기업확인서") >= 0) why.push("장애인기업 대상");
+    else if (special.indexOf("사회적경제기업") >= 0 && c.social_enterprise === true) why.push("사회적경제기업 대상");
+    else checks.push(special.join("·") + " 해당 여부");
+  }
+  var age = ageFromBirth(c.representative_birth, now);
+  if (targets.indexOf("청년") >= 0 && targets.length === 1) {
+    if (age === null) checks.push("대표 만 39세 이하(청년)인지");
+    else if (age > YOUTH_MAX_AGE) return null;
+    else why.push("청년 대표(만 " + age + "세)");
+  }
+  (r.extra || []).forEach(function(s) { if (checks.length < 6) checks.push(s); });
+  var types = r.types && r.types.length ? r.types : ["기타"];
+  var score = Math.max.apply(null, types.map(function(t) { return NOTICE_TYPE_SCORE[t] || 5; }));
+  if (sgg.length) score += 10;
+  if (local) score += 15;
+  if (inc.length) score += 5;
+  if (targets.indexOf("소상공인") >= 0 && emp !== null && emp < (/제조|건설|운수|운송|광업/.test(ind) ? 10 : 5)) { score += 10; why.push("소상공인 대상"); }
+  if (/폐업|재기|희망리턴|재창업/.test(n.title || "") && c.has_closed_business !== true) { score -= 20; checks.push("폐업·재기 상황일 때만 해당"); }
+  score -= 6 * checks.length;
+  return { score: score, why: why, checks: checks };
+}
+function matchNotices(c, notices, now, limit) {
+  var out = [];
+  (notices || []).forEach(function(n) {
+    var j = judgeNotice(c || {}, n, now);
+    if (j) out.push(Object.assign({ notice: n }, j));
+  });
+  out.sort(function(a, b) { return b.score - a.score || String(a.notice.deadline || "9999").localeCompare(String(b.notice.deadline || "9999")); });
+  return { total: out.length, top: out.slice(0, limit || 10) };
+}
+// ⛳ 공고매칭 끝
+
 // ⛳ 기관현황-이월 시작 — 이 구간은 scripts/test-agency-carry.mjs 가 소스째 떼어내 실행한다.
 //    ⚠️ 마커 문구를 바꾸면 테스트가 통째로 죽는다. 무엇도 참조하지 말 것(순수해야 떼어낼 수 있다).
 //
@@ -8283,6 +8635,22 @@ function CRMApp({ profile, session }) {
     if (typeof rest.innovation_field === "boolean") {
       updateObj.innovation_field = rest.innovation_field;
     }
+    // 사회적경제기업 체크박스 — 화면엔 있었는데 저장 목록에 빠져 있어 **체크해도 저장이 안 됐다**(2026-10-08 발견).
+    // innovation_field 와 같은 규칙: boolean 으로 명시됐을 때만 보낸다(false 도 의미가 있다).
+    if (typeof rest.social_enterprise === "boolean") {
+      updateObj.social_enterprise = rest.social_enterprise;
+    }
+    // 🧾 기업입력칸 보강(2026-10-08) — 값을 넣으면 저장, **지우면 null 로 저장**(모름으로 되돌리기).
+    //    손대지 않은 칸(값도 없고 원래도 없던 칸)은 아예 안 보낸다 → 컬럼 생성 전에도 기존 저장이 안 깨진다.
+    //    allFields 에 안 넣은 이유: 거기는 "빈값이면 DB 기존값 유지"라 한번 넣은 값을 지울 수가 없다.
+    ["representative_birth", "representative_gender", "biz_reg_count", "has_closed_business"].forEach(function(k) {
+      var v = rest[k];
+      var prev = prevData ? prevData[k] : undefined;
+      var empty = v === "" || v === null || v === undefined;
+      if (!empty) updateObj[k] = (k === "biz_reg_count") ? numCol(v) : v;
+      else if (prev !== null && prev !== undefined && prev !== "") updateObj[k] = null;
+    });
+    if (Array.isArray(rest.certifications)) updateObj.certifications = normalizeCerts(rest.certifications);
     // 규모/기관 배지 수동 보정(biz_match_override, JSONB)도 사용자가 손댔을 때만 저장.
     // 손대지 않은 기업은 DB값이 null/undefined라 여기 안 걸림 → 컬럼 미생성 시에도 일반 저장이 안 깨진다.
     // 보정을 전부 해제하면 빈 객체 {} 가 오는데, 이때는 null로 기록해 자동판정으로 되돌린다.
@@ -10681,6 +11049,14 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
     { key: "tpl_received", label: "접수 완료", text: "대표님, 신청 접수 완료되었습니다. 결과 나오는 대로 바로 안내드리겠습니다." },
     { key: "tpl_schedule", label: "일정 안내", text: "안녕하세요 대표님, 다음 진행 일정 안내드립니다. 확인 후 연락 부탁드립니다." },
     { key: "tpl_supplement", label: "부결/보완", text: "대표님, 보완 요청이 있어 안내드립니다. 통화 가능하신 시간 알려주세요." },
+    // 📨 계약 후 단계별 안내 (2026-10-08) — 정책자금 강의의 '계약 후 반박 제거' 흐름을 문장으로 옮긴 것.
+    //    [ ] 칸은 보내기 전에 채운다. ⚠️ 승인·한도·기간을 약속하는 표현은 넣지 않는다.
+    { key: "tpl_room", label: "계약 후 단톡방", text: "대표님, 계약 감사드립니다. 이 방에는 영업·행정 담당이 함께 있어 진행 상황을 바로바로 공유드립니다. 서류·인증서 요청은 모두 이 방으로만 드리니, 다른 곳에서 오는 요청은 응하지 마세요." },
+    { key: "tpl_cooperation", label: "협조문", text: "대표님, 이번에는 [자금명]으로 진행합니다. 기관마다 필요한 서류가 달라서 아래 순서로 부탁드립니다.\n1) [서류1]\n2) [서류2]\n3) [서류3]\n준비되는 대로 이 방에 올려 주세요." },
+    { key: "tpl_cert", label: "인증서 안내", text: "대표님, 서류 발급을 위해 [개인/사업자] 공동인증서가 필요합니다. 인증서는 서류 발급에만 쓰고, 기관 신청은 대표님이 직접 하실 수 있게 옆에서 도와드립니다." },
+    { key: "tpl_sojin_wait", label: "접수 후 진행 순서", text: "대표님, 접수 완료되었습니다. 보통 기초 조회 → 서류 검토 → 실사 순서로 진행됩니다. 중간에 '추가자료 요청'이 오는 건 탈락이 아니라 보완 요청이니, 연락 오면 바로 공유 부탁드립니다." },
+    { key: "tpl_inspection", label: "실사 전 안내", text: "대표님, [날짜] 실사 전에 아래 내용을 막힘없이 말씀하실 수 있게 메모해 두세요.\n· 월평균 매출\n· 판관비(임대료·인건비 등)\n· 직원 수\n· 대표님이 직접 운영하시는지\n궁금한 점은 오늘 중 편하게 연락 주세요." },
+    { key: "tpl_jaedan_photo", label: "재단 사진 요청", text: "대표님, 재단 신청 진행 중입니다. 매장 내부 사진 2장, 외부(간판 보이게) 사진 2장을 직접 찍어서 이 방에 올려 주세요." },
   ];
   const thisMonth = new Date().getMonth() + 1;
   const thisYear = 2026;
@@ -15366,6 +15742,16 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
   const [prevTab, setPrevTab] = useState(initialTab || "info");
   var goTab = function(id) { setPrevTab(tab); setTab(id); };
   const [data, setData] = useState({ ...company });
+  // 📢 기업마당 공고(2026-10-08) — 「지원사업」 탭을 처음 열 때 한 번만 불러온다(null=아직 안 불러옴, "error"=실패).
+  //    ⚠️ bizinfo_notices 엔 created_at·id 가 없다 → orderBy 를 반드시 준다(2026-09-28 정산권한 사고와 같은 함정).
+  const [bizNotices, setBizNotices] = useState(null);
+  useEffect(function() {
+    if (tab !== "notices" || bizNotices !== null) return;
+    fetchAllRows("bizinfo_notices", "pblanc_id,title,url,agency,category,deadline,deadline_text,req",
+      { orderBy: "pblanc_id", tieBreak: null, label: "기업마당 공고" }).then(function(r) {
+      setBizNotices(r.error || !r.data ? "error" : r.data);
+    });
+  }, [tab, bizNotices]);
   // 서류현황 탭에서 액션 줄(수령완료·재요청·요청취소)이 펼쳐진 서류명. 한 번에 하나만 연다.
   const [openDocAction, setOpenDocAction] = useState(null);
   // 📤 요청함 다중선택 — 체크한 서류명 배열. 실행 대상은 항상 (요청함 목록 ∩ 이 배열)이라
@@ -16447,6 +16833,10 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
           {[
             { id: "info", label: "기본정보" },
             { id: "bizinfo", label: "기업정보", badge: (Array.isArray(data.loans) ? data.loans.length : 0) + (Array.isArray(data.company_info) ? data.company_info.length : 0) },
+            { id: "consult", label: "🗣 상담 체크", badge: buildConsultChecks(data).filter(function(x) { return x.cat === "ask"; }).length },
+            { id: "firstcall", label: "📞 1차 콜", badge: firstCallSteps(data).filter(function(x) { return x.status === "todo"; }).length },
+            { id: "growth", label: "🧭 성장 경로" },
+            { id: "notices", label: "📢 지원사업" },
             { id: "docs", label: "서류현황" },
             { id: "history", label: "이슈·액션", badge: commLogs.length },
             { id: "timeline", label: "🕒 타임라인" },
@@ -16538,6 +16928,91 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                 <span style={{ fontSize: 13, fontWeight: data.social_enterprise ? 700 : 500, color: data.social_enterprise ? "#6D28D9" : "#555" }}>사회적경제기업</span>
                 <span style={{ fontSize: 11, color: "#888" }}>— 협동조합·사회적기업·마을기업 등 (중진공 예외 반영)</span>
               </label>
+              {/* 🧾 대표자·사업 이력 (2026-10-08) — 나이·업력은 저장하지 않고 매번 계산한다(⛳ 기업입력칸) */}
+              <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "12px 13px", marginBottom: 10 }}>
+                <div style={{ fontSize: 12, color: "#888", fontWeight: 600, marginBottom: 8 }}>🧾 대표자 · 사업 이력</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <div style={{ background: "#fff", borderRadius: 7, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>대표자 생년월일</div>
+                    <input type="date" value={data.representative_birth || ""}
+                      onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { representative_birth: v || null }); }); }}
+                      style={{ width: "100%", fontSize: 13, fontWeight: 600, border: "none", outline: "none", background: "transparent", boxSizing: "border-box" }} />
+                    {(function() {
+                      var age = ageFromBirth(data.representative_birth);
+                      if (age === null) return null;
+                      var youth = age <= YOUTH_MAX_AGE;
+                      return (
+                        <div style={{ display: "flex", gap: 5, alignItems: "center", marginTop: 4 }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#4338CA" }}>만 {age}세</span>
+                          {youth && <span style={{ fontSize: 10, fontWeight: 700, background: "#ECFDF5", color: "#047857", border: "1px solid #A7F3D0", borderRadius: 99, padding: "1px 7px" }}>청년(만 {YOUTH_MAX_AGE}세 이하)</span>}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  <div style={{ background: "#fff", borderRadius: 7, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>대표자 성별 <span style={{ color: "#AAA", fontSize: 10 }}>(다시 누르면 해제)</span></div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {["남", "여"].map(function(g) {
+                        var sel = data.representative_gender === g;
+                        return (
+                          <button key={g} type="button" onClick={function() { setData(function(p) { return Object.assign({}, p, { representative_gender: p.representative_gender === g ? null : g }); }); }}
+                            style={{ flex: 1, padding: "5px 8px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                              background: sel ? (g === "여" ? "#BE185D" : "#1D4ED8") : "#fff", color: sel ? "#fff" : "#666",
+                              border: sel ? "none" : "1px solid #E8E5E0" }}>{g}</button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div style={{ background: "#fff", borderRadius: 7, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 4 }}>현재 사업자등록증 개수 <span style={{ color: "#AAA", fontSize: 10 }}>(개인+법인)</span></div>
+                    <input type="text" inputMode="numeric" value={data.biz_reg_count == null ? "" : data.biz_reg_count} placeholder="예: 1"
+                      onChange={function(e) { var d = e.target.value.replace(/[^0-9]/g, "").slice(0, 2); setData(function(p) { return Object.assign({}, p, { biz_reg_count: d === "" ? null : Math.min(parseInt(d, 10), 20) }); }); }}
+                      style={{ width: "100%", fontSize: 13, fontWeight: 600, border: "none", outline: "none", background: "transparent", boxSizing: "border-box" }} />
+                    {Number(data.biz_reg_count) >= 2 && <div style={{ fontSize: 10, color: "#B45309", marginTop: 3, fontWeight: 600 }}>2개 이상 — 창업기업 확인·재도전 자격을 따로 확인</div>}
+                  </div>
+                  <div style={{ background: "#fff", borderRadius: 7, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>과거 폐업 이력</div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {[["있음", true], ["없음", false], ["모름", null]].map(function(o) {
+                        var cur = data.has_closed_business === undefined ? null : data.has_closed_business;
+                        var sel = cur === o[1];
+                        return (
+                          <button key={o[0]} type="button" onClick={function() { setData(function(p) { return Object.assign({}, p, { has_closed_business: o[1] }); }); }}
+                            style={{ flex: 1, padding: "5px 6px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                              background: sel ? (o[1] === true ? "#B45309" : o[1] === false ? "#0F6E56" : "#6B7280") : "#fff", color: sel ? "#fff" : "#666",
+                              border: sel ? "none" : "1px solid #E8E5E0" }}>{o[0]}</button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {/* 🏅 보유 인증 (2026-10-08) — certifications 에는 CERT_OPTIONS key 만 저장된다(normalizeCerts) */}
+              <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "12px 13px", marginBottom: 10 }}>
+                <div style={{ fontSize: 12, color: "#888", fontWeight: 600, marginBottom: 8 }}>
+                  🏅 보유 인증 <span style={{ color: "#AAA", fontSize: 10, fontWeight: 400 }}>(누르면 체크 · 다시 누르면 해제)</span>
+                  {Array.isArray(data.certifications) && data.certifications.length > 0 && <span style={{ marginLeft: 6, fontSize: 11, color: "#4338CA", fontWeight: 700 }}>{normalizeCerts(data.certifications).length}개</span>}
+                </div>
+                {["기업확인서", "혁신 인증", "기술"].map(function(grp) {
+                  return (
+                    <div key={grp} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+                      <span style={{ fontSize: 10, color: "#AAA", width: 52, flexShrink: 0 }}>{grp}</span>
+                      {CERT_OPTIONS.filter(function(o) { return o.group === grp; }).map(function(o) {
+                        var list = Array.isArray(data.certifications) ? data.certifications : [];
+                        var on = list.indexOf(o.key) >= 0;
+                        return (
+                          <button key={o.key} type="button"
+                            onClick={function() { setData(function(p) { var cur = Array.isArray(p.certifications) ? p.certifications : []; var next = cur.indexOf(o.key) >= 0 ? cur.filter(function(k) { return k !== o.key; }) : cur.concat([o.key]); return Object.assign({}, p, { certifications: normalizeCerts(next) }); }); }}
+                            style={{ fontSize: 11, padding: "4px 10px", borderRadius: 99, cursor: "pointer", fontWeight: on ? 700 : 500,
+                              border: "1px solid " + (on ? "#4338CA" : "#E8E5E0"), background: on ? "#EEF2FF" : "#fff", color: on ? "#4338CA" : "#666" }}>
+                            {on ? "✓ " : ""}{o.key}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>연락처</div>
@@ -16552,7 +17027,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                   <input type="text" inputMode="numeric" value={(data.credit_score_kcb || "") + (data.credit_score_nice ? " / " + data.credit_score_nice : "")} placeholder="KCB / NICE" onChange={function(e) { var raw = e.target.value.replace(/[^0-9]/g, ""); var kcb = raw.slice(0, 3); var nice = raw.slice(3, 6); setData(function(p) { return Object.assign({}, p, { credit_score_kcb: kcb, credit_score_nice: nice }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none", minWidth: 0, boxSizing: "border-box" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>설립연월</div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>설립연월 {(function() { var r = bizAgeMonths(data.founded_year, data.founded_month); return r ? <span style={{ fontSize: 10, fontWeight: 700, color: "#4338CA", marginLeft: 4 }}>업력 {formatBizAge(r)}</span> : null; })()}</div>
                   <input type="text" inputMode="numeric" value={(function() { if (!data.founded_year && !data.founded_month) return ""; var y = data.founded_year || ""; var m = data.founded_month; if (!m && m !== 0) return y; return y + "-" + String(m); })()} placeholder="YYYY-MM (예: 2018-08)" onChange={function(e) { var raw = e.target.value.replace(/[^0-9]/g, ""); var year = raw.slice(0, 4); var monthRaw = raw.slice(4, 6); var monthNum; if (monthRaw.length === 0) { monthNum = ""; } else { monthNum = parseInt(monthRaw); if (monthNum > 12) monthNum = 12; } setData(function(p) { return Object.assign({}, p, { founded_year: year, founded_month: monthNum }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none", minWidth: 0, boxSizing: "border-box" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
@@ -16669,6 +17144,14 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                     <div key={key} style={{ flex: 1, textAlign: "center", background: "#fff", borderRadius: 7, padding: "10px 8px" }}>
                       <div style={{ fontSize: 11, color: "#AAA", marginBottom: 4 }}>{label}</div>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#4338CA", marginBottom: 4 }}>{formatRevenue(data[key])}</div>
+                      {(function() {
+                        // 📈 전년 대비 증가율 (2026-10-08) — 상반기 칸은 반년치라 비교하지 않는다
+                        var prevKey = { revenue_2024: "revenue_2023", revenue_2025: "revenue_2024" }[key];
+                        if (!prevKey) return null;
+                        var g = revenueGrowthPct(data[prevKey], data[key]);
+                        if (g === null) return null;
+                        return <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 4, color: g > 0 ? "#DC2626" : g < 0 ? "#2563EB" : "#888" }}>{g > 0 ? "▲ " : g < 0 ? "▼ " : ""}{Math.abs(g)}% <span style={{ color: "#AAA", fontWeight: 400 }}>전년비</span></div>;
+                      })()}
                       <input
                         type="text"
                         inputMode="numeric"
@@ -16750,6 +17233,186 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
             </>
           )}
 
+          {/* 📢 지원사업 (2026-10-08) — 기업마당 공고 × 이 기업 값 매칭(⛳ 공고매칭). 저장하지 않는 계산 화면 */}
+          {tab === "notices" && (function() {
+            if (bizNotices === null) return <div style={{ fontSize: 13, color: "#888", padding: 14 }}>기업마당 공고를 불러오는 중…</div>;
+            if (bizNotices === "error") return <div style={{ fontSize: 13, color: "#B91C1C", padding: 14 }}>📛 공고를 불러오지 못했습니다. 잠시 뒤 탭을 다시 열어 주세요.</div>;
+            var res = matchNotices(data, bizNotices, undefined, 12);
+            return (
+              <div>
+                <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 12, fontSize: 12, color: "#555", lineHeight: 1.6 }}>
+                  기업마당 공고 <b>{bizNotices.length}건</b> 중 이 기업 조건을 통과한 <b>{res.total}건</b> · 상위 {res.top.length}건 표시
+                  <span style={{ color: "#888" }}> · 신청 자격은 공고문을 AI 로 읽어 뽑은 값이라 틀릴 수 있습니다. 반드시 원문을 확인하세요.</span>
+                  <div style={{ color: "#888", marginTop: 3 }}>기본정보(지역·업종·설립연월·매출·직원 수·생년월일·인증)를 채울수록 정확해집니다.</div>
+                </div>
+                {res.top.length === 0 && <div style={{ fontSize: 13, color: "#AAA", padding: 10 }}>조건을 통과한 공고가 없습니다</div>}
+                {res.top.map(function(m, i) {
+                  var n = m.notice, r = n.req || {};
+                  var types = (r.types || []).slice(0, 2).join("·");
+                  return (
+                    <div key={n.pblanc_id} style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 9, padding: "11px 13px", marginBottom: 8 }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#1A1917" }}>{i + 1}. {n.title}</span>
+                        <a href={n.url} target="_blank" rel="noreferrer" onClick={function(e) { e.stopPropagation(); }} style={{ fontSize: 12, color: "#1F5FBF", whiteSpace: "nowrap" }}>원문 보기 ↗</a>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, fontSize: 11 }}>
+                        {types && <span style={{ background: "#EEF2FF", color: "#4338CA", borderRadius: 99, padding: "2px 8px", fontWeight: 700 }}>{types}</span>}
+                        {r.amount_manwon && r.amount_manwon <= 200000 ? <span style={{ background: "#F0FDF4", color: "#15803D", borderRadius: 99, padding: "2px 8px", fontWeight: 700 }}>최대 {Number(r.amount_manwon).toLocaleString()}만원</span> : null}
+                        {r.rate && <span style={{ background: "#F7F6F3", color: "#555", borderRadius: 99, padding: "2px 8px" }}>{r.rate}</span>}
+                        <span style={{ background: "#F7F6F3", color: "#555", borderRadius: 99, padding: "2px 8px" }}>마감 {n.deadline || n.deadline_text || "공고 확인"}</span>
+                        {n.agency && <span style={{ color: "#888", padding: "2px 2px" }}>{n.agency}</span>}
+                      </div>
+                      {(r.content || r.summary) && <div style={{ fontSize: 12, color: "#444", marginTop: 6 }}>{r.content || r.summary}</div>}
+                      {m.why.length > 0 && <div style={{ fontSize: 11.5, color: "#15803D", marginTop: 5 }}>✓ {m.why.join(" · ")}</div>}
+                      {m.checks.length > 0 && <div style={{ fontSize: 11.5, color: "#B45309", marginTop: 3 }}>확인할 것: {m.checks.join(" · ")}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+          {/* 🧭 성장 경로 (2026-10-08) — 기존 GrowthRoadmap 을 embedded 로 재사용. 업종 코드는 growthIndustryCode 로 고른다 */}
+          {tab === "growth" && (function() {
+            var code = growthIndustryCode(data.industry);
+            if (!code) return (
+              <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "14px", fontSize: 13, color: "#666", lineHeight: 1.6 }}>
+                업종 「{data.industry || "비어 있음"}」으로는 성장 로드맵 업종을 고를 수 없습니다.<br />
+                기본정보 탭에서 업종을 채우거나, 사이드바 <b>성장 로드맵</b> 메뉴에서 직접 골라 보세요.
+              </div>
+            );
+            return (
+              <div>
+                <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>업종 「{data.industry}」 기준으로 골랐습니다 · 경로마다 ⚠ 미검증 배지가 있으면 공고 원문 대조 전입니다</div>
+                <GrowthRoadmap supabase={supabase} industry={code} embedded />
+              </div>
+            );
+          })()}
+          {/* 📞 1차 콜 체크리스트 (2026-10-08) — 저장하지 않는 계산 화면(⛳ 상담체크 firstCallSteps) */}
+          {tab === "firstcall" && (function() {
+            var steps = firstCallSteps(data);
+            var ST = {
+              done: { icon: "✅", color: "#15803D", bg: "#F0FDF4", border: "#BBF7D0" },
+              todo: { icon: "☐", color: "#B91C1C", bg: "#FEF2F2", border: "#FECACA" },
+              warn: { icon: "⚠️", color: "#B45309", bg: "#FFFBEB", border: "#FDE68A" },
+              talk: { icon: "💬", color: "#1D4ED8", bg: "#EFF6FF", border: "#BFDBFE" },
+            };
+            var todo = steps.filter(function(s) { return s.status === "todo"; }).length;
+            return (
+              <div>
+                <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 12, fontSize: 12, color: "#555", lineHeight: 1.6 }}>
+                  1차 상담을 이 순서대로 진행합니다. <b style={{ color: todo ? "#B91C1C" : "#15803D" }}>{todo ? "물어볼 것 " + todo + "개" : "필요한 정보가 다 있습니다"}</b>
+                  <span style={{ color: "#888" }}> · ✅·⚠️·☐ 는 기본정보·서류현황 값으로 자동 표시 · 💬 는 말하기 단계</span>
+                </div>
+                {steps.map(function(s, i) {
+                  var st = ST[s.status];
+                  return (
+                    <div key={s.id} style={{ background: st.bg, border: "1px solid " + st.border, borderRadius: 9, padding: "10px 13px", marginBottom: 8 }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                        <span style={{ fontSize: 13 }}>{st.icon}</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#1A1917" }}>{i + 1}. {s.title}</span>
+                      </div>
+                      {s.script && <div style={{ fontSize: 12.5, color: "#1D4ED8", marginTop: 6, background: "#fff", borderRadius: 6, padding: "7px 9px", lineHeight: 1.55 }}>{s.script}</div>}
+                      {s.detail && <div style={{ fontSize: 12, color: st.color, marginTop: 5, lineHeight: 1.5 }}>{s.detail}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+          {/* 🗣 상담 체크 (2026-10-08) — 저장하지 않는 계산 화면. 기본정보를 고치면 즉시 다시 계산된다(⛳ 상담체크) */}
+          {tab === "consult" && (function() {
+            var checks = buildConsultChecks(data);
+            return (
+              <div>
+                <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px", marginBottom: 12, fontSize: 12, color: "#555", lineHeight: 1.6 }}>
+                  <b>승인 가능성 순위가 아닙니다.</b> 입력값이 서로 어긋나거나 비어 있는 곳을 상담 때 물어볼 문장으로 바꾼 것입니다.
+                  <span style={{ color: "#888" }}> · 기본정보 탭에서 값을 고치면 이 목록이 바로 바뀝니다(저장 전에도).</span>
+                </div>
+                {/* 🏛 컨택 가능한 기관 — 기존 recommendAgencies 규칙 그대로(새 판정 아님) */}
+                {(function() {
+                  var recs = recommendAgencies(data);
+                  return (
+                    <div style={{ background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: "#6D28D9", marginBottom: 8 }}>🏛 컨택 가능한 기관 <span style={{ fontSize: 11, fontWeight: 600, color: "#888" }}>조건이 맞는 컨택 대상 · 승인 순위 아님</span></div>
+                      {recs.length === 0 ? <div style={{ fontSize: 12, color: "#AAA" }}>규칙에 맞는 기관 없음 — 사업자 유형·신용점수·업종·지역을 채우면 나옵니다</div> : (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {recs.map(function(rc) { return <span key={rc.agency} style={{ fontSize: 12, background: "#fff", border: "1px solid #DDD6FE", borderRadius: 99, padding: "4px 10px", color: "#4C1D95" }}><b>{rc.agency}</b> <span style={{ color: "#888" }}>· {rc.reason}</span></span>; })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+                {/* 💵 한도 가이드 — ⚠️ 강의 경험치. 공식 기준 아님(⛳ 상담체크 LIMIT_GUIDE_RULES) */}
+                {(function() {
+                  var rev = Number(data.revenue_2025) > 0 ? Number(data.revenue_2025) : Number(data.revenue_2024);
+                  var revYear = Number(data.revenue_2025) > 0 ? "2025" : "2024";
+                  var loan = totalLoanAmount(data);
+                  var rows = limitGuide(rev, loan);
+                  return (
+                    <div style={{ background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: "#C2410C", marginBottom: 4 }}>💵 한도 가이드</div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6, padding: "5px 8px", marginBottom: 8 }}>
+                        ⚠ 공식 기준이 아닙니다 — 정책자금 강의의 강사 경험치입니다. 고객에게 한도로 말하지 말고, 반드시 공고·기관에 확인하세요.
+                      </div>
+                      {rows.length === 0 ? <div style={{ fontSize: 12, color: "#AAA" }}>2024·2025 매출이 없어 계산할 수 없습니다</div> : (
+                        <>
+                          <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>기준: {revYear}년 매출 {wonToKor(rev)} · 기대출 합계 {wonToKor(loan)}</div>
+                          {rows.map(function(g) {
+                            return (
+                              <div key={g.id} style={{ background: "#fff", borderRadius: 7, padding: "8px 11px", marginBottom: 6, border: "1px solid #FED7AA" }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                                  <b style={{ fontSize: 13 }}>{g.agency}</b>
+                                  <span style={{ fontSize: 13, fontWeight: 800, color: "#C2410C" }}>약 {wonToKor(g.net)} <span style={{ fontSize: 10, color: "#AAA", fontWeight: 400 }}>(매출×{g.pct}% = {wonToKor(g.gross)})</span></span>
+                                </div>
+                                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>{g.note}</div>
+                              </div>
+                            );
+                          })}
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
+                {CONSULT_CATS.map(function(cat) {
+                  var items = checks.filter(function(x) { return x.cat === cat.id; });
+                  return (
+                    <div key={cat.id} style={{ background: cat.bg, border: "1px solid " + cat.border, borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: cat.color, marginBottom: items.length ? 8 : 0 }}>
+                        {cat.icon} {cat.label} <span style={{ fontSize: 11, fontWeight: 600, color: "#888" }}>{items.length}건</span>
+                      </div>
+                      {items.length === 0 && <div style={{ fontSize: 12, color: "#AAA", marginTop: 4 }}>해당 없음</div>}
+                      {items.map(function(it) {
+                        return (
+                          <div key={it.id} style={{ background: "#fff", borderRadius: 7, padding: "9px 11px", marginBottom: 6, border: "1px solid " + cat.border }}>
+                            <div style={{ fontSize: 13, color: "#1A1917", lineHeight: 1.55 }}>{it.text}</div>
+                            {it.why && <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>왜: {it.why}</div>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+                {/* 🔴 약점 · 대응 논리 — 기존 detectWeaknesses 그대로(기업정보 탭 배지와 같은 내용) */}
+                {(function() {
+                  var ws = detectWeaknesses(data);
+                  if (!ws.length) return null;
+                  return (
+                    <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: "#B91C1C", marginBottom: 8 }}>🔴 약점 · 대응 논리 <span style={{ fontSize: 11, fontWeight: 600, color: "#888" }}>{ws.length}건 · 눌러서 펼치기</span></div>
+                      {ws.map(function(w, wi) {
+                        return (
+                          <details key={wi} style={{ background: "#fff", borderRadius: 7, padding: "8px 11px", marginBottom: 6, border: "1px solid #FECACA" }}>
+                            <summary style={{ fontSize: 13, fontWeight: 700, cursor: "pointer", color: w.level === "danger" ? "#B91C1C" : "#B45309" }}>{w.level === "danger" ? "🔴 " : "🟡 "}{w.label}</summary>
+                            <div style={{ fontSize: 12, color: "#444", whiteSpace: "pre-wrap", marginTop: 6, lineHeight: 1.6 }}>{w.logic}</div>
+                          </details>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
+            );
+          })()}
           {tab === "bizinfo" && (
             <div>
               {/* 💹 소진공·중진공 재무비율 자동 계산 (부채총계/자본총계/영업이익/이자비용 기반, 실시간) */}
