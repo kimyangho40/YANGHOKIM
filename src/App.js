@@ -16828,8 +16828,8 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
           )}
         </div>
 
-        {/* 탭 */}
-        <div style={{ display: "flex", borderBottom: "1px solid #E8E5E0", background: "#FAFAF8", overflowX: "auto" }}>
+        {/* 탭 — 12개라 한 줄이면 오른쪽 탭이 가려진다 → 줄바꿈(가로 스크롤 대신) */}
+        <div style={{ display: "flex", flexWrap: "wrap", borderBottom: "1px solid #E8E5E0", background: "#FAFAF8" }}>
           {[
             { id: "info", label: "기본정보" },
             { id: "bizinfo", label: "기업정보", badge: (Array.isArray(data.loans) ? data.loans.length : 0) + (Array.isArray(data.company_info) ? data.company_info.length : 0) },
