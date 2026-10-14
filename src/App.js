@@ -8845,8 +8845,10 @@ function CRMApp({ profile, session }) {
       // 전체 리로드(fetchAll) 시 목록이 재정렬되며 스크롤이 맨 위로 튀므로, 해당 회사만 로컬 갱신
       // 실제 DB에 저장한 값(updateObj)으로 갱신해야 화면과 DB가 일치함
       setCompanies(function(prev) { return prev.map(function(c) { return c.id === rest.id ? Object.assign({}, c, updateObj) : c; }); });
+      // 🪟 기업상세 팝업이 「저장 안 한 내용」 기준선을 옮길 때 성공 여부를 본다(2026-10-15). 다른 호출부는 반환값을 안 쓴다.
+      return true;
     }
-    else showToast("저장 실패: " + error.message, "error");
+    else { showToast("저장 실패: " + error.message, "error"); return false; }
   };
 
   // (2026-08-08) toggleDoc 제거 — documents 테이블은 더 이상 서류현황의 소스가 아니다.
@@ -15742,6 +15744,12 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
   const [prevTab, setPrevTab] = useState(initialTab || "info");
   var goTab = function(id) { setPrevTab(tab); setTab(id); };
   const [data, setData] = useState({ ...company });
+  // 🪟 중앙 팝업(2026-10-15) — 최대화 여부 + 「저장 안 한 내용」 판정 기준선.
+  //    기준선 = 마지막으로 DB 에 들어간 값. 저장 성공·즉시저장(계약상태·졸업후보·서류감지) 때 같이 옮긴다.
+  //    이걸 안 옮기면 저장했는데도 닫을 때 "저장 안 한 내용" 확인창이 뜬다.
+  const [maximized, setMaximized] = useState(false);
+  const [baseline, setBaseline] = useState(company);
+  var markSaved = function(patch) { setBaseline(function(p) { return Object.assign({}, p, patch); }); };
   // 📢 기업마당 공고(2026-10-08) — 「지원사업」 탭을 처음 열 때 한 번만 불러온다(null=아직 안 불러옴, "error"=실패).
   //    ⚠️ bizinfo_notices 엔 created_at·id 가 없다 → orderBy 를 반드시 준다(2026-09-28 정산권한 사고와 같은 함정).
   const [bizNotices, setBizNotices] = useState(null);
@@ -15825,6 +15833,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
       return;                                              // 실패 시 화면 값을 바꾸지 않는다(저장된 것처럼 보이면 안 됨)
     }
     setData(function(p) { return Object.assign({}, p, payload); });
+    markSaved(payload);
     if (onPatchCompany) onPatchCompany(data.id, payload);
     // 💰📌 계약금입금완료로 켰을 때만 — 정산 자동 반영 + 파이프라인 카드 전진(필수서류 및 인증서요청).
     //    해제(다시 눌러 '미정')는 되돌리지 않는다: 이미 넘어간 정산 값을 지우면 사람이 고친 걸 덮게 된다.
@@ -16059,7 +16068,11 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
   //    이름 편집분 + 이전 값 전달)이 따로 있었다. 같은 saveCompany 를 부르면서 넘기는 값이 달라
   //    탭 안 버튼으로 저장하면 ①고친 업체명이 안 들어가고 ②단계 변경일(stage_updated_at)이 갱신되지 않고
   //    ③부결 전환 시 사례집 초안이 안 만들어졌다. 이제 모든 저장이 이 함수를 지난다.
-  var saveAll = function() { onSave(Object.assign({}, data, { name: nameInput || data.name }), company); };
+  var saveAll = async function() {
+    var saved = Object.assign({}, data, { name: nameInput || data.name });
+    var ok = await onSave(saved, company);
+    if (ok === true) setBaseline(saved);                   // 실패면 기준선 그대로 → 닫을 때 확인창이 뜬다
+  };
 
   var attachInput = function() {
     return (
@@ -16684,12 +16697,44 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
     });
   }, [agencyCases]);
 
+  // 🪟 저장 안 한 내용 = 기준선(마지막 저장값)과 다른 칸이 있거나, 고친 업체명·쓰다 만 소통내역이 있을 때.
+  //    값 비교는 JSON 문자열로 한다(배열·객체 칸 — loans·company_info·biz_match_override 등).
+  var isDirty = function() {
+    if ((nameInput || "") !== (baseline.name || "")) return true;
+    if ((commInput || "").trim()) return true;
+    var keys = Object.keys(Object.assign({}, data, baseline));
+    for (var i = 0; i < keys.length; i++) {
+      var a = data[keys[i]], b = baseline[keys[i]];
+      if (a === b) continue;
+      if ((a === null || a === undefined || a === "") && (b === null || b === undefined || b === "")) continue;
+      if (JSON.stringify(a) !== JSON.stringify(b)) return true;
+    }
+    return false;
+  };
+  var requestClose = function() {
+    if (isDirty() && !window.confirm("저장하지 않은 내용이 있습니다.\n저장하지 않고 닫을까요?")) return;
+    onClose();
+  };
+  // ESC = 닫기(확인창 포함). 안쪽 작은 팝업(재무·기업현황표 미리보기, 소통내역 휴지통, 요약 붙여넣기)이
+  // 떠 있으면 그 팝업 몫이라 여기선 무시한다 — 바깥 상세창까지 한 번에 닫히지 않게.
+  var innerPopupOpen = !!(finPreview || xlsxPreview || showCommTrash || showSummaryDist);
+  var closeRef = useRef(requestClose);
+  closeRef.current = requestClose;
+  useEffect(function() {
+    if (innerPopupOpen) return;
+    var onKey = function(e) { if (e.key === "Escape") { e.preventDefault(); closeRef.current(); } };
+    window.addEventListener("keydown", onKey);
+    return function() { window.removeEventListener("keydown", onKey); };
+  }, [innerPopupOpen]);
+
+  // 🪟 2026-10-15: 오른쪽 사이드 패널(폭 460) → 화면 중앙 팝업. 바깥 클릭으로는 안 닫힌다(실수로 입력 날림 방지).
+  //    크기: 1200×650, 화면보다 크면 가로 90%·세로 85%까지. 최대화 = 95%. 본문만 스크롤.
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "flex-end" }}
-      onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <div style={{ width: 460, height: "100vh", background: "#fff", overflowY: "auto", boxShadow: "-8px 0 40px rgba(0,0,0,0.15)", display: "flex", flexDirection: "column" }}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div role="dialog" aria-modal="true" aria-label={(data.name || "업체") + " 상세"}
+        style={{ width: maximized ? "95vw" : "min(1200px, 90vw)", height: maximized ? "95vh" : "min(650px, 85vh)", background: "#fff", borderRadius: 14, overflow: "hidden", boxShadow: "0 24px 70px rgba(0,0,0,0.25)", display: "flex", flexDirection: "column" }}>
         {/* 헤더 */}
-        <div style={{ padding: "22px 24px 16px", borderBottom: "1px solid #E8E5E0", background: sc.bg || "#F7F6F3" }}>
+        <div style={{ flexShrink: 0, padding: "16px 24px 12px", borderBottom: "1px solid #E8E5E0", background: sc.bg || "#F7F6F3" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
             <div>
               <div style={{ display: "flex", gap: 7, marginBottom: 6, flexWrap: "wrap" }}>
@@ -16735,7 +16780,11 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                 style={{ display: "flex", alignItems: "center", gap: 4, background: kakaoCopied ? "#DCFCE7" : "#fff", color: kakaoCopied ? "#15803D" : "#4338CA", border: "1px solid " + (kakaoCopied ? "#86EFAC" : "#C7D2FE"), borderRadius: 7, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
                 {kakaoCopied ? "✅ 복사됨" : "📋 상태 복사"}
               </button>
-              <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#888" }}><Icon name="x" size={20} color="#888" /></button>
+              <button onClick={function() { setMaximized(function(m) { return !m; }); }} title={maximized ? "원래 크기로" : "최대화 (화면 95%)"} aria-label={maximized ? "원래 크기로" : "최대화"}
+                style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 7, cursor: "pointer", width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, color: "#555", padding: 0 }}>
+                {maximized ? "🗗" : "🗖"}
+              </button>
+              <button onClick={requestClose} title="닫기 (ESC)" aria-label="닫기" style={{ background: "none", border: "none", cursor: "pointer", color: "#888" }}><Icon name="x" size={20} color="#888" /></button>
             </div>
           </div>
           {/* 단계 변경 */}
@@ -16750,86 +16799,8 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
           </div>
         </div>
 
-        {/* 🔎 한눈 요약 (통합뷰) — 대표/기관/단계/정산 + 최근활동 */}
-        <div style={{ padding: "12px 24px", borderBottom: "1px solid #E8E5E0", background: "#F7F6F3", display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {[
-              { label: "대표", value: data.representative || "-" },
-              { label: "기관", value: groupedAgency.length > 0 ? (groupedAgency.length === 1 ? groupedAgency[0].key : (groupedAgency[0].key + " 외 " + (groupedAgency.length - 1))) : (data.agency || "-") },
-              { label: "단계", value: data.stage || "-" },
-              { label: "정산", value: settlements.length > 0 ? (settlements.length + "건") : "-" },
-            ].map(function(it) {
-              return (
-                <div key={it.label} title={typeof it.value === "string" ? it.value : ""}
-                  style={{ display: "flex", alignItems: "center", gap: 5, background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, padding: "5px 10px", fontSize: 12, maxWidth: 200 }}>
-                  <span style={{ color: "#999", fontWeight: 600, flexShrink: 0 }}>{it.label}</span>
-                  <span style={{ color: "#1A1917", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.value}</span>
-                </div>
-              );
-            })}
-          </div>
-          {/* 규모/기관 판정 배지 (목록과 동일 로직 · 마우스오버 근거) */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span style={{ color: "#999", fontWeight: 600, fontSize: 12, flexShrink: 0 }}>규모/기관</span>
-            <BizScaleBadges company={data} editable
-              onChange={function(next) { setData(function(p) { return Object.assign({}, p, { biz_match_override: next }); }); }}
-              onHideGraduation={async function() {
-                var r = await supabase.from("companies").update({ graduation_override: { hidden: true } }).eq("id", data.id);
-                if (r.error) { alert("저장 실패: " + r.error.message); return; }
-                setData(function(p) { return Object.assign({}, p, { graduation_override: { hidden: true } }); });
-              }} />
-            {isGraduationHidden(data) && (
-              <button onClick={async function() {
-                var r = await supabase.from("companies").update({ graduation_override: null }).eq("id", data.id);
-                if (r.error) { alert("복구 실패: " + r.error.message); return; }
-                setData(function(p) { return Object.assign({}, p, { graduation_override: null }); });
-              }} title="숨긴 🎓졸업후보 배지를 다시 표시"
-                style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 99, cursor: "pointer", background: "#ECFEFF", color: "#0E7490", border: "1px solid #A5F3FC" }}>
-                ↩ 졸업후보 다시 표시
-              </button>
-            )}
-          </div>
-          {/* 🎓 졸업후보 상세 — 매출/인력 축별 충족 현황 */}
-          {(function() {
-            var g = judgeGraduationCandidate(data);
-            if (!g) return null;
-            return (
-              <div style={{ background: "#ECFEFF", border: "1px solid #A5F3FC", borderRadius: 10, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, color: "#0E7490" }}>
-                  🎓 졸업후보 상세
-                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 99, background: g.both ? "#0E7490" : "#CFFAFE", color: g.both ? "#fff" : "#0E7490" }}>{g.axesLabel}</span>
-                  <span style={{ fontSize: 10, color: "#67809A", fontWeight: 400 }}>참고·확정 아님</span>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#334155" }}>
-                  <span style={{ width: 34, color: "#0E7490", fontWeight: 700, flexShrink: 0 }}>매출</span>
-                  <span>평균 <b>{(g.avg / 1e8).toFixed(1)}억</b> = 규모기준 {g.capEok}억의 <b>{g.revenuePct}%</b></span>
-                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 99, background: g.revenueQualifies ? "#DCFCE7" : "#F1F5F9", color: g.revenueQualifies ? "#15803D" : "#94A3B8" }}>{g.revenueQualifies ? "해당(130%초과)" : "미해당"}</span>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#334155" }}>
-                  <span style={{ width: 34, color: "#0E7490", fontWeight: 700, flexShrink: 0 }}>인력</span>
-                  {g.hasEmp ? (
-                    <span>상시근로자 <b>{g.emp}명</b> / 소상공인 기준 {g.limit}명 {g.empQualifies ? "" : "(여유 " + g.empRoom + "명)"}</span>
-                  ) : (
-                    <span style={{ color: "#94A3B8" }}>근로자수 미입력 (기준 {g.limit}명)</span>
-                  )}
-                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 99, background: g.empQualifies ? "#DCFCE7" : "#F1F5F9", color: g.empQualifies ? "#15803D" : "#94A3B8" }}>{g.empQualifies ? "해당(근접)" : "미해당"}</span>
-                </div>
-                <div style={{ fontSize: 10, color: "#64748B", borderTop: "1px solid #CFFAFE", paddingTop: 5 }}>
-                  업종매칭: {g.capKey || "-"} · 매출축은 규모기준 130% 초과, 인력축은 소상공인 상한 1명 이내 근접 시 해당
-                </div>
-              </div>
-            );
-          })()}
-          {(data.next_action || data.issue) && (
-            <div style={{ fontSize: 12, color: "#555", display: "flex", gap: 6, alignItems: "flex-start" }}>
-              <span style={{ color: "#999", fontWeight: 600, flexShrink: 0 }}>최근활동</span>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{data.next_action || data.issue}</span>
-            </div>
-          )}
-        </div>
-
         {/* 탭 — 12개라 한 줄이면 오른쪽 탭이 가려진다 → 줄바꿈(가로 스크롤 대신) */}
-        <div style={{ display: "flex", flexWrap: "wrap", borderBottom: "1px solid #E8E5E0", background: "#FAFAF8" }}>
+        <div style={{ flexShrink: 0, display: "flex", flexWrap: "wrap", borderBottom: "1px solid #E8E5E0", background: "#FAFAF8", padding: "0 12px" }}>
           {[
             { id: "info", label: "기본정보" },
             { id: "bizinfo", label: "기업정보", badge: (Array.isArray(data.loans) ? data.loans.length : 0) + (Array.isArray(data.company_info) ? data.company_info.length : 0) },
@@ -16852,9 +16823,89 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
           ))}
         </div>
 
-        <div style={{ flex: 1, padding: "20px 24px", overflowY: "auto" }}>
+        <div style={{ flex: 1, minHeight: 0, padding: "20px 24px", overflowY: "auto" }}>
           {tab === "info" && (
             <>
+              {/* 🔎 한눈 요약 (통합뷰) — 대표/기관/단계/정산 + 최근활동. 2026-10-15 팝업 전환 때 헤더 아래 → 기본정보 탭 맨 위로 옮김(고정 영역이 길어 본문이 좁아지던 것) */}
+              <div style={{ padding: "12px 14px", border: "1px solid #E8E5E0", borderRadius: 10, background: "#F7F6F3", display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {[
+                    { label: "대표", value: data.representative || "-" },
+                    { label: "기관", value: groupedAgency.length > 0 ? (groupedAgency.length === 1 ? groupedAgency[0].key : (groupedAgency[0].key + " 외 " + (groupedAgency.length - 1))) : (data.agency || "-") },
+                    { label: "단계", value: data.stage || "-" },
+                    { label: "정산", value: settlements.length > 0 ? (settlements.length + "건") : "-" },
+                  ].map(function(it) {
+                    return (
+                      <div key={it.label} title={typeof it.value === "string" ? it.value : ""}
+                        style={{ display: "flex", alignItems: "center", gap: 5, background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, padding: "5px 10px", fontSize: 12, maxWidth: 200 }}>
+                        <span style={{ color: "#999", fontWeight: 600, flexShrink: 0 }}>{it.label}</span>
+                        <span style={{ color: "#1A1917", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.value}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                {/* 규모/기관 판정 배지 (목록과 동일 로직 · 마우스오버 근거) */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ color: "#999", fontWeight: 600, fontSize: 12, flexShrink: 0 }}>규모/기관</span>
+                  <BizScaleBadges company={data} editable
+                    onChange={function(next) { setData(function(p) { return Object.assign({}, p, { biz_match_override: next }); }); }}
+                    onHideGraduation={async function() {
+                      var r = await supabase.from("companies").update({ graduation_override: { hidden: true } }).eq("id", data.id);
+                      if (r.error) { alert("저장 실패: " + r.error.message); return; }
+                      setData(function(p) { return Object.assign({}, p, { graduation_override: { hidden: true } }); });
+                      markSaved({ graduation_override: { hidden: true } });
+                    }} />
+                  {isGraduationHidden(data) && (
+                    <button onClick={async function() {
+                      var r = await supabase.from("companies").update({ graduation_override: null }).eq("id", data.id);
+                      if (r.error) { alert("복구 실패: " + r.error.message); return; }
+                      setData(function(p) { return Object.assign({}, p, { graduation_override: null }); });
+                      markSaved({ graduation_override: null });
+                    }} title="숨긴 🎓졸업후보 배지를 다시 표시"
+                      style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 99, cursor: "pointer", background: "#ECFEFF", color: "#0E7490", border: "1px solid #A5F3FC" }}>
+                      ↩ 졸업후보 다시 표시
+                    </button>
+                  )}
+                </div>
+                {/* 🎓 졸업후보 상세 — 매출/인력 축별 충족 현황 */}
+                {(function() {
+                  var g = judgeGraduationCandidate(data);
+                  if (!g) return null;
+                  return (
+                    <div style={{ background: "#ECFEFF", border: "1px solid #A5F3FC", borderRadius: 10, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, color: "#0E7490" }}>
+                        🎓 졸업후보 상세
+                        <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 99, background: g.both ? "#0E7490" : "#CFFAFE", color: g.both ? "#fff" : "#0E7490" }}>{g.axesLabel}</span>
+                        <span style={{ fontSize: 10, color: "#67809A", fontWeight: 400 }}>참고·확정 아님</span>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#334155" }}>
+                        <span style={{ width: 34, color: "#0E7490", fontWeight: 700, flexShrink: 0 }}>매출</span>
+                        <span>평균 <b>{(g.avg / 1e8).toFixed(1)}억</b> = 규모기준 {g.capEok}억의 <b>{g.revenuePct}%</b></span>
+                        <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 99, background: g.revenueQualifies ? "#DCFCE7" : "#F1F5F9", color: g.revenueQualifies ? "#15803D" : "#94A3B8" }}>{g.revenueQualifies ? "해당(130%초과)" : "미해당"}</span>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#334155" }}>
+                        <span style={{ width: 34, color: "#0E7490", fontWeight: 700, flexShrink: 0 }}>인력</span>
+                        {g.hasEmp ? (
+                          <span>상시근로자 <b>{g.emp}명</b> / 소상공인 기준 {g.limit}명 {g.empQualifies ? "" : "(여유 " + g.empRoom + "명)"}</span>
+                        ) : (
+                          <span style={{ color: "#94A3B8" }}>근로자수 미입력 (기준 {g.limit}명)</span>
+                        )}
+                        <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 99, background: g.empQualifies ? "#DCFCE7" : "#F1F5F9", color: g.empQualifies ? "#15803D" : "#94A3B8" }}>{g.empQualifies ? "해당(근접)" : "미해당"}</span>
+                      </div>
+                      <div style={{ fontSize: 10, color: "#64748B", borderTop: "1px solid #CFFAFE", paddingTop: 5 }}>
+                        업종매칭: {g.capKey || "-"} · 매출축은 규모기준 130% 초과, 인력축은 소상공인 상한 1명 이내 근접 시 해당
+                      </div>
+                    </div>
+                  );
+                })()}
+                {(data.next_action || data.issue) && (
+                  <div style={{ fontSize: 12, color: "#555", display: "flex", gap: 6, alignItems: "flex-start" }}>
+                    <span style={{ color: "#999", fontWeight: 600, flexShrink: 0 }}>최근활동</span>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{data.next_action || data.issue}</span>
+                  </div>
+                )}
+              </div>
+
               <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
                 <label title="기업현황표·시트지(엑셀) 또는 여신정보·금융거래확인서(PDF·이미지)를 첨부하면 종류를 알아서 판별해 자동 입력합니다"
                   style={{ display: "flex", alignItems: "center", gap: 4, background: "#FEF3C7", color: "#B45309", border: "none", borderRadius: 7, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
@@ -17852,6 +17903,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                     <DriveDocScanPanel company={data} docStatus={docStatus} onApply={applyDocs}
                       onScanned={function(scan) {
                         setData(function(p) { return Object.assign({}, p, { doc_scan: scan }); });
+                        markSaved({ doc_scan: scan });
                         // 감지 결과는 이미 DB에 썼다(일반 저장 경로를 안 타므로) → 목록 쪽 companies 에도 맞춰준다.
                         // 이게 없으면 창을 닫았다 열었을 때 결과가 사라진 것처럼 보인다(다시 fetch 하기 전까지).
                         if (onPatchCompany) onPatchCompany(data.id, { doc_scan: scan });
@@ -18826,7 +18878,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
         />
 
         {/* 저장 버튼 — 창 전체에서 이거 하나 (예전 "기업정보 저장" · "DB에 저장" 통합) */}
-        <div style={{ padding: "14px 24px", borderTop: "1px solid #E8E5E0", display: "flex", gap: 8 }}>
+        <div style={{ flexShrink: 0, padding: "12px 24px", borderTop: "1px solid #E8E5E0", background: "#fff", display: "flex", gap: 8 }}>
           <button onClick={saveAll} title="이 창에서 고친 내용을 모두 저장합니다(기본정보·기업정보·기대출 내역)"
             style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
             <Icon name="save" size={15} color="#F7F6F3" /> 저장
@@ -18963,7 +19015,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
             style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, background: "#4338CA", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
             <Icon name="building" size={15} color="#fff" /> 기관별현황에 등록
           </button>
-          <button onClick={onClose}
+          <button onClick={requestClose}
             style={{ padding: "12px 18px", background: "#fff", color: "#888", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>
             닫기
           </button>
@@ -25104,6 +25156,10 @@ const MONTHS_LIST = [1,2,3,4,5,6,7,8,9,10,11,12];
 // ── 캘린더 (구글 캘린더 연동 + 팔로업 알림) ───────────────────────────────────
 const GOOGLE_CLIENT_ID = "675906307078-pl29fdq2uuqj2011qn4arjc6u1uvkbq3.apps.googleusercontent.com";
 const FOLLOWUP_STAGES = ["기관신청완료/방문완료", "실태조사완료/약정완료", "심사중/실태조사대기"];
+// 🕒 근무표 확인 상태 = calendar_events.color 값(구글 색 번호). 확인됨=세이지(초록) · 확인 전=바나나(노랑)
+const WT_DONE = "2";
+const WT_PENDING = "5";
+const WT_KINDS = ["추가근무", "휴일근무", "조기출근", "외근", "기타"];
 
 function CalendarView({ companies, onSelectCompany, profile }) {
   const today = new Date();
@@ -25120,6 +25176,11 @@ function CalendarView({ companies, onSelectCompany, profile }) {
   const [customEvents, setCustomEvents] = useState([]);
   const [showAddEvent, setShowAddEvent] = useState(false);
   const [newEvent, setNewEvent] = useState({ title: "", date: "", time: "", memo: "", sheet: "yangho", color: "9" });
+  // 🕒 근무표(2026-10-15) — 추가근무 같은 근무 기록을 같이 보고 「확인」 체크하는 시트.
+  //    저장은 기존 calendar_events 그대로(sheet = "worktable") → 새 테이블·새 컬럼 0개.
+  //    확인 여부 = color 칸: "2"(초록) 확인됨 / "5"(노랑) 확인 전. 색 바꾸는 기존 저장 경로(updateEventColor)를 그대로 쓴다.
+  //    구글 캘린더로는 보내지 않는다(김양호·이사님 구글 일정에 섞이면 안 됨).
+  const [wtForm, setWtForm] = useState({ worker: "이만나미", kind: "추가근무", start: "", end: "" });
   const [gToken, setGToken] = useState(""); // 양호님 토큰
   const [directorToken, setDirectorToken] = useState(""); // 이사님 토큰
   // 구글 캘린더 공식 색상 11가지 (colorId 1~11)
@@ -25153,6 +25214,22 @@ function CalendarView({ companies, onSelectCompany, profile }) {
   }, []);
 
   var saveEvent = async function() {
+    if (newEvent.sheet === "worktable") {
+      if (!wtForm.worker || !newEvent.date) { alert("근무자와 날짜를 입력해주세요."); return; }
+      var range = wtForm.start ? (wtForm.start + (wtForm.end ? "~" + wtForm.end : "")) : "";
+      var wr = await supabase.from("calendar_events").insert({
+        title: wtForm.worker + " · " + (wtForm.kind || "근무") + (range ? " " + range : ""),
+        date: newEvent.date, time: wtForm.start || null,
+        memo: newEvent.memo || null, sheet: "worktable",
+        color: WT_PENDING, created_by: profile?.name || "",
+      }).select().single();
+      if (wr.error || !wr.data) { alert("저장 실패: " + (wr.error ? wr.error.message : "")); return; }
+      setCustomEvents(function(prev) { return [wr.data].concat(prev); });
+      setWtForm(function(p) { return Object.assign({}, p, { start: "", end: "" }); });
+      setNewEvent({ title: "", date: "", time: "", memo: "", sheet: calSheet, color: "9" });
+      setShowAddEvent(false);
+      return;
+    }
     if (!newEvent.title || !newEvent.date) { alert("제목과 날짜를 입력해주세요."); return; }
     // 구글 등록은 공용 함수로 — 채팅·업무노트의 🗓️ 버튼과 같은 코드를 쓴다(호출부만 여럿, API 호출은 한 곳).
     var gres2 = await createGoogleCalendarEvent({
@@ -25373,10 +25450,15 @@ function CalendarView({ companies, onSelectCompany, profile }) {
   const selectedDateStr = selectedDate
     ? `${year}-${String(month+1).padStart(2,"0")}-${String(selectedDate).padStart(2,"0")}`
     : null;
-  const selectedCrmEvents = selectedDateStr ? (crmEventsByDate[selectedDateStr] || []) : [];
-  const selectedGoogleEvents = selectedDateStr
+  const selectedCrmEvents = selectedDateStr && calSheet !== "worktable" ? (crmEventsByDate[selectedDateStr] || []) : [];
+  const selectedGoogleEvents = selectedDateStr && calSheet !== "worktable"
     ? (calSheet === "director" ? directorEvents : googleEvents).filter(e => e.date === selectedDateStr)
     : [];
+  // 🕒 근무표 — 보고 있는 달의 근무 기록(날짜순). 표·확인 전 건수에 쓴다.
+  const monthPrefix = `${year}-${String(month+1).padStart(2,"0")}-`;
+  const wtMonth = customEvents
+    .filter(function(e) { return e.sheet === "worktable" && (e.date || "").indexOf(monthPrefix) === 0; })
+    .sort(function(a, b) { return (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")); });
 
   const cells = [];
   for (let i = 0; i < firstDay; i++) cells.push(null);
@@ -25428,6 +25510,14 @@ function CalendarView({ companies, onSelectCompany, profile }) {
               {directorConnected && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#10B981" }}></span>}
               이사님 캘린더
             </button>
+            <button onClick={() => setCalSheet("worktable")}
+              style={{ padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: calSheet === "worktable" ? 700 : 400, background: calSheet === "worktable" ? "#0F766E" : "#fff", color: calSheet === "worktable" ? "#fff" : "#666", border: calSheet === "worktable" ? "none" : "1px solid #E8E5E0", cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}>
+              🕒 근무표
+              {(function() {
+                var n = customEvents.filter(function(e) { return e.sheet === "worktable" && e.color !== WT_DONE; }).length;
+                return n > 0 ? <span title="확인 전 근무 기록" style={{ fontSize: 10, background: calSheet === "worktable" ? "#fff" : "#FEF3C7", color: "#B45309", borderRadius: 99, padding: "0 6px", fontWeight: 700 }}>{n}</span> : null;
+              })()}
+            </button>
             {/* 연결/해제 버튼 - 현재 탭 기준 */}
             {calSheet === "yangho" && !gConnected && (
               <button onClick={() => connectGoogle("yangho")}
@@ -25458,7 +25548,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
           </div>
           <button onClick={() => { setShowAddEvent(true); setNewEvent({ title: "", date: selectedDate ? `${year}-${String(month+1).padStart(2,"0")}-${String(selectedDate).padStart(2,"0")}` : "", time: "", memo: "", sheet: calSheet }); }}
             style={{ padding: "7px 14px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-            + 일정 추가
+            {calSheet === "worktable" ? "+ 근무 추가" : "+ 일정 추가"}
           </button>
         </div>
       )}
@@ -25485,14 +25575,16 @@ function CalendarView({ companies, onSelectCompany, profile }) {
               {cells.map((d, i) => {
                 if (!d) return <div key={`e-${i}`} style={{ minHeight: 80, borderBottom: "1px solid #F0EDE8", borderRight: "1px solid #F0EDE8" }} />;
                 const dateStr = `${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-                const crmEvs = crmEventsByDate[dateStr] || [];
-                const sourceEvents = calSheet === "director" ? directorEvents : googleEvents;
+                // 🕒 근무표에는 업체 연락예정·구글 일정·팔로업을 섞지 않는다(근무 기록만)
+                const isWt = calSheet === "worktable";
+                const crmEvs = isWt ? [] : (crmEventsByDate[dateStr] || []);
+                const sourceEvents = isWt ? [] : calSheet === "director" ? directorEvents : googleEvents;
                 const gEvs = sourceEvents.filter(e => e.date === dateStr);
                 const cEvs = customEvents.filter(e => e.date === dateStr && e.sheet === calSheet);
                 const isToday = dateStr === todayStr;
                 const isSelected = d === selectedDate;
                 const dow = (firstDay + d - 1) % 7;
-                const hasFollowup = companies.some(c => FOLLOWUP_STAGES.includes(c.stage) && c.next_contact === dateStr);
+                const hasFollowup = !isWt && companies.some(c => FOLLOWUP_STAGES.includes(c.stage) && c.next_contact === dateStr);
                 return (
                   <div key={d} onClick={() => setSelectedDate(d)}
                     style={{ minHeight: 100, borderBottom: "1px solid #F0EDE8", borderRight: "1px solid #F0EDE8", padding: "5px", cursor: "pointer", background: isSelected ? "#EEF2FF" : "transparent" }}
@@ -25516,7 +25608,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
                     {cEvs.map((ev, ei) => {
                       var col = getColorById(ev.color || "blue");
                       return (
-                        <div key={`c-${ei}`} style={{ fontSize: 9, background: col.bg, color: "#fff", borderRadius: 3, padding: "1px 4px", marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.title}</div>
+                        <div key={`c-${ei}`} style={{ fontSize: 9, background: col.bg, color: "#fff", borderRadius: 3, padding: "1px 4px", marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{isWt ? (ev.color === WT_DONE ? "✓ " : "● ") : ""}{ev.title}</div>
                       );
                     })}
                   </div>
@@ -25585,8 +25677,15 @@ function CalendarView({ companies, onSelectCompany, profile }) {
                         {ev.time && <div style={{ fontSize: 11, color: "#888" }}>{ev.time}</div>}
                         {ev.memo && <div style={{ fontSize: 12, color: "#555", marginTop: 4, lineHeight: 1.5 }}>{ev.memo}</div>}
                         <div style={{ fontSize: 10, color: "#AAA", marginTop: 4 }}>{ev.created_by || "-"}</div>
+                        {/* 🕒 근무표 — 색상 대신 확인 체크 */}
+                        {ev.sheet === "worktable" && (
+                          <button onClick={function() { updateEventColor(ev.id, ev.color === WT_DONE ? WT_PENDING : WT_DONE); }}
+                            style={{ marginTop: 8, padding: "5px 10px", borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer", border: "1px solid " + (ev.color === WT_DONE ? "#86EFAC" : "#FCD34D"), background: ev.color === WT_DONE ? "#DCFCE7" : "#FFFBEB", color: ev.color === WT_DONE ? "#15803D" : "#B45309" }}>
+                            {ev.color === WT_DONE ? "✓ 확인됨 (누르면 취소)" : "☐ 확인하기"}
+                          </button>
+                        )}
                         {/* 색상 변경 */}
-                        <div style={{ display: "flex", gap: 4, marginTop: 8, alignItems: "center" }}>
+                        {ev.sheet !== "worktable" && <div style={{ display: "flex", gap: 4, marginTop: 8, alignItems: "center" }}>
                           <span style={{ fontSize: 10, color: "#888" }}>색상:</span>
                           {EVENT_COLORS.map(function(c) {
                             var sel = (ev.color || "blue") === c.id;
@@ -25596,7 +25695,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
                                 style={{ width: 16, height: 16, borderRadius: "50%", background: c.bg, border: sel ? "2px solid #1A1917" : "1px solid #fff", boxShadow: "0 0 0 1px #E8E5E0", cursor: "pointer", padding: 0 }} />
                             );
                           })}
-                        </div>
+                        </div>}
                       </div>
                       <button onClick={function() { deleteEvent(ev.id); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 2 }}>
                         <Icon name="x" size={14} color="#CCC" />
@@ -25607,6 +25706,59 @@ function CalendarView({ companies, onSelectCompany, profile }) {
               })}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* 🕒 근무표 — 이번 달 근무 기록 표. 행마다 확인 체크(같이 보면서 누락 확인용) */}
+      {activeTab === "calendar" && calSheet === "worktable" && (
+        <div style={{ marginTop: 16, background: "#fff", borderRadius: 14, border: "1px solid #E8E5E0", overflow: "hidden" }}>
+          <div style={{ padding: "12px 16px", borderBottom: "1px solid #E8E5E0", background: "#F0FDFA", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13, fontWeight: 800, color: "#0F766E" }}>🕒 {month + 1}월 근무 기록 {wtMonth.length}건</span>
+            {(function() {
+              var pending = wtMonth.filter(function(e) { return e.color !== WT_DONE; }).length;
+              return pending > 0
+                ? <span style={{ fontSize: 11, fontWeight: 700, color: "#B45309", background: "#FEF3C7", borderRadius: 99, padding: "2px 8px" }}>확인 전 {pending}건</span>
+                : wtMonth.length > 0 ? <span style={{ fontSize: 11, fontWeight: 700, color: "#15803D", background: "#DCFCE7", borderRadius: 99, padding: "2px 8px" }}>전부 확인됨</span> : null;
+            })()}
+          </div>
+          {wtMonth.length === 0 ? (
+            <div style={{ padding: "28px 0", textAlign: "center", fontSize: 13, color: "#888" }}>이번 달 근무 기록이 없어요. 오른쪽 위 「+ 근무 추가」로 넣어주세요.</div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: "#FAFAF8", color: "#888", textAlign: "left" }}>
+                    {["날짜", "근무", "내용", "등록", "확인", ""].map(function(h, hi) { return <th key={hi} style={{ padding: "8px 12px", fontWeight: 600, borderBottom: "1px solid #E8E5E0", whiteSpace: "nowrap" }}>{h}</th>; })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {wtMonth.map(function(ev) {
+                    var done = ev.color === WT_DONE;
+                    var dd = new Date(ev.date + "T00:00:00");
+                    return (
+                      <tr key={ev.id} style={{ borderBottom: "1px solid #F0EDE8", background: done ? "#fff" : "#FFFBEB" }}>
+                        <td style={{ padding: "8px 12px", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{ev.date.slice(5).replace("-", "/")} ({DAY_NAMES[dd.getDay()]})</td>
+                        <td style={{ padding: "8px 12px", fontWeight: 700 }}>{ev.title}</td>
+                        <td style={{ padding: "8px 12px", color: "#555" }}>{ev.memo || "-"}</td>
+                        <td style={{ padding: "8px 12px", color: "#AAA", whiteSpace: "nowrap" }}>{ev.created_by || "-"}</td>
+                        <td style={{ padding: "8px 12px" }}>
+                          <button onClick={function() { updateEventColor(ev.id, done ? WT_PENDING : WT_DONE); }}
+                            style={{ padding: "4px 10px", borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", border: "1px solid " + (done ? "#86EFAC" : "#FCD34D"), background: done ? "#DCFCE7" : "#fff", color: done ? "#15803D" : "#B45309" }}>
+                            {done ? "✓ 확인됨" : "☐ 확인"}
+                          </button>
+                        </td>
+                        <td style={{ padding: "8px 12px", textAlign: "right" }}>
+                          <button onClick={function() { deleteEvent(ev.id); }} title="삭제" style={{ background: "none", border: "none", cursor: "pointer", padding: 2 }}>
+                            <Icon name="x" size={13} color="#CCC" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
@@ -25677,7 +25829,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
           <div style={{ background: "#fff", borderRadius: 14, padding: "22px", width: 380, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}
             onClick={e => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <div style={{ fontSize: 15, fontWeight: 800 }}>📅 일정 추가</div>
+              <div style={{ fontSize: 15, fontWeight: 800 }}>{newEvent.sheet === "worktable" ? "🕒 근무 추가" : "📅 일정 추가"}</div>
               <button onClick={() => { if (confirmDiscard((newEvent.title||"").trim() || (newEvent.memo||"").trim() || (newEvent.time||"").trim())) setShowAddEvent(false); }} style={{ background: "none", border: "none", cursor: "pointer" }}>
                 <Icon name="x" size={18} color="#888" />
               </button>
@@ -25693,8 +25845,40 @@ function CalendarView({ companies, onSelectCompany, profile }) {
                   style={{ flex: 1, padding: "8px", borderRadius: 7, fontSize: 12, fontWeight: 600, background: newEvent.sheet === "director" ? "#7C3AED" : "#fff", color: newEvent.sheet === "director" ? "#fff" : "#666", border: newEvent.sheet === "director" ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
                   이사님
                 </button>
+                <button onClick={() => setNewEvent(function(p) { return Object.assign({}, p, { sheet: "worktable" }); })}
+                  style={{ flex: 1, padding: "8px", borderRadius: 7, fontSize: 12, fontWeight: 600, background: newEvent.sheet === "worktable" ? "#0F766E" : "#fff", color: newEvent.sheet === "worktable" ? "#fff" : "#666", border: newEvent.sheet === "worktable" ? "none" : "1px solid #E8E5E0", cursor: "pointer" }}>
+                  근무표
+                </button>
               </div>
             </div>
+            {newEvent.sheet === "worktable" ? (
+              <>
+                {/* 🕒 근무표 입력 — 근무자·구분·날짜·시작~종료 (제목은 이걸로 자동 조립) */}
+                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                  <select value={wtForm.worker} onChange={function(e) { var v = e.target.value; setWtForm(function(p) { return Object.assign({}, p, { worker: v }); }); }}
+                    style={{ flex: 1, padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>
+                    {ASSIGNEES.map(function(n) { return <option key={n} value={n}>{n}</option>; })}
+                  </select>
+                  <select value={wtForm.kind} onChange={function(e) { var v = e.target.value; setWtForm(function(p) { return Object.assign({}, p, { kind: v }); }); }}
+                    style={{ flex: 1, padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, background: "#fff" }}>
+                    {WT_KINDS.map(function(k) { return <option key={k} value={k}>{k}</option>; })}
+                  </select>
+                </div>
+                <input type="date" value={newEvent.date} onChange={function(e) { var v = e.target.value; setNewEvent(function(p) { return Object.assign({}, p, { date: v }); }); }}
+                  style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", marginBottom: 8 }} />
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                  <input type="time" value={wtForm.start} aria-label="시작 시간" onChange={function(e) { var v = e.target.value; setWtForm(function(p) { return Object.assign({}, p, { start: v }); }); }}
+                    style={{ flex: 1, padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13 }} />
+                  <span style={{ color: "#888" }}>~</span>
+                  <input type="time" value={wtForm.end} aria-label="종료 시간" onChange={function(e) { var v = e.target.value; setWtForm(function(p) { return Object.assign({}, p, { end: v }); }); }}
+                    style={{ flex: 1, padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13 }} />
+                </div>
+                <textarea value={newEvent.memo} onChange={function(e) { var v = e.target.value; setNewEvent(function(p) { return Object.assign({}, p, { memo: v }); }); }}
+                  placeholder="내용 (예: 소진공 서류 마감 대응)" rows={3}
+                  style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, resize: "none", boxSizing: "border-box", outline: "none", marginBottom: 12 }} />
+              </>
+            ) : (
+              <>
             <input value={newEvent.title} onChange={function(e) { var v = e.target.value; setNewEvent(function(p) { return Object.assign({}, p, { title: v }); }); }}
               placeholder="일정 제목 *" style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none", marginBottom: 8 }} />
             <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
@@ -25706,7 +25890,9 @@ function CalendarView({ companies, onSelectCompany, profile }) {
             <textarea value={newEvent.memo} onChange={function(e) { var v = e.target.value; setNewEvent(function(p) { return Object.assign({}, p, { memo: v }); }); }}
               placeholder="메모 (선택)" rows={3}
               style={{ width: "100%", padding: "10px 12px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, resize: "none", boxSizing: "border-box", outline: "none", marginBottom: 12 }} />
-            <div style={{ marginBottom: 12 }}>
+              </>
+            )}
+            {newEvent.sheet !== "worktable" && <div style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>색상</div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {EVENT_COLORS.map(function(c) {
@@ -25718,7 +25904,7 @@ function CalendarView({ companies, onSelectCompany, profile }) {
                   );
                 })}
               </div>
-            </div>
+            </div>}
             <button onClick={saveEvent}
               style={{ width: "100%", padding: "11px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
               저장
