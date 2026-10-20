@@ -33875,14 +33875,18 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     if (!editingDraft) return;
     // 빈 항목 제거 + 신규 항목은 ID 부여
     var cleanChecklist = (editingDraft.checklist || []).filter(function(it) { return it && it.text && it.text.trim(); }).map(function(it) {
-      var o = {
+      // ⚠️ 항목을 처음부터 새로 만들면 안 된다 — 원래 필드를 깔고 덮어쓴다(2026-10-20).
+      //    예전엔 아래 6개만 남겨서, 카드를 한 번 수정 저장하면 팀 일정 항목의
+      //    is_sched·sched_kind·company_id·company_name·assignee·result·done_at·done_by 가 통째로 사라져
+      //    일정이 평범한 글줄이 됐다(밀린 미완료에서 완료한 항목의 done_by·done_at 도 같이 사라졌다).
+      var o = Object.assign({}, it, {
         id: it.id || ("ck_" + Math.random().toString(36).slice(2, 11)),
         text: it.text.trim(),
         taken_by: it.taken_by || null,
         taken_at: it.taken_at || null,
         taken_work_note_id: it.taken_work_note_id || null,
         done: !!it.done,
-      };
+      });
       // 🕘 created_at — 있으면 그대로 지킨다.
       // ⚠️ 없는 **옛 항목에는 찍지 않는다.** 찍으면 그 항목의 타임라인 시각이
       //    카드 날짜(work_date 09:00)에서 "수정한 지금"으로 통째로 옮겨간다.
