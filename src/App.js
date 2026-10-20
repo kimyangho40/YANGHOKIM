@@ -14866,7 +14866,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                         <div>
                           <div>{(co.credit_score_kcb || "-") + " / " + (co.credit_score_nice || "-")}</div>
                           <div title={cb ? "신용 조회일 " + cb.ymd : "조회일 기록 없음 — 점수를 고치면 그날 날짜가 남아요"}
-                            style={{ fontSize: 10, marginTop: 1, color: !cb ? "#BBB" : cb.stale ? "#C2410C" : "#999", fontWeight: cb && cb.stale ? 700 : 400 }}>
+                            style={{ fontSize: 10, marginTop: 1, whiteSpace: "normal", lineHeight: 1.35, color: !cb ? "#BBB" : cb.stale ? "#C2410C" : "#999", fontWeight: cb && cb.stale ? 700 : 400 }}>
                             {cb ? cb.text : "조회일 없음"}
                           </div>
                         </div>
