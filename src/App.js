@@ -29535,7 +29535,17 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
                       {(function() {
                         var matchedCo = companiesList.find(function(c) { return c.name === row.business_name; });
                         if (!matchedCo || (!matchedCo.credit_score_kcb && !matchedCo.credit_score_nice)) return <span style={{ fontSize: 12, color: "#888" }}>-</span>;
-                        return <span style={{ fontSize: 12, color: "#555", fontWeight: 600 }}>{(matchedCo.credit_score_kcb || "-") + " / " + (matchedCo.credit_score_nice || "-")}</span>;
+                        // 💳 점수 아래에 조회일 — 기업목록과 같은 표시(90일 넘으면 주황색)
+                        var cb = creditDateBadge(matchedCo.company_info, kstDate());
+                        return (
+                          <div>
+                            <span style={{ fontSize: 12, color: "#555", fontWeight: 600 }}>{(matchedCo.credit_score_kcb || "-") + " / " + (matchedCo.credit_score_nice || "-")}</span>
+                            <div title={cb ? "신용 조회일 " + cb.ymd : "조회일 기록 없음 — 기업목록에서 점수를 고치면 그날 날짜가 남아요"}
+                              style={{ fontSize: 10, marginTop: 1, whiteSpace: "normal", lineHeight: 1.35, color: !cb ? "#BBB" : cb.stale ? "#C2410C" : "#999", fontWeight: cb && cb.stale ? 700 : 400 }}>
+                              {cb ? cb.text : "조회일 없음"}
+                            </div>
+                          </div>
+                        );
                       })()}
                     </td>
                     {/* 📝 비고 — 누르면 확대 편집 팝업. 줄바꿈이 있는 메모라 한 줄 input 으로는 못 쓴다.
