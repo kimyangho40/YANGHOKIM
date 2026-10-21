@@ -33184,6 +33184,8 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
   // 🔴 밀린 미완료 구역 접기(기본 펼침) / 완료돼서 접힌 카드를 개별로 펼친 목록
   const [teamOverdueOpen, setTeamOverdueOpen] = useState(true);
   const [expandedDone, setExpandedDone] = useState({}); // { noteId: true }
+  // 📂 카드 안 항목 목록 「전체 보기」 — 평소엔 3칸 높이에서 스크롤, 펼치면 전부 보인다(화면 상태만, 저장 안 함)
+  const [clExpanded, setClExpanded] = useState({}); // { noteId: true }
   // 📆 지난 날짜 월별 그룹 펼침 상태 { "2026-08": true }. 기본은 가장 최근 달 하나만.
   const [openTeamMonths, setOpenTeamMonths] = useState({});
   const teamMonthSeeded = useRef(false);
@@ -34535,7 +34537,9 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                               ⚠️ 팀 카드가 280px 카드 그리드로 돌아왔으므로 이 안에서는 사실상 1열이다.
                                  → 행 환산 인자도 1열 기준(1열 가정 · 3행까지 노출)이어야 잘리는 위치가 맞는다.
                               상단(진행률바)·하단(가져가기/완료 버튼)은 이 div 바깥이라 스크롤과 무관하게 항상 고정 노출된다. */}
-                          <div style={itemGridStyle({ maxHeight: itemGridMaxHeight(cl.length, 1, 3), overflowY: cl.length > 3 ? "auto" : "visible", overflowX: "hidden", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", paddingRight: cl.length > 3 ? 4 : 0 })}>
+                          <div style={itemGridStyle(clExpanded[note.id]
+                            ? { overflowX: "hidden" }
+                            : { maxHeight: itemGridMaxHeight(cl.length, 1, 3), overflowY: cl.length > 3 ? "auto" : "visible", overflowX: "hidden", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", paddingRight: cl.length > 3 ? 4 : 0 })}>
                             {cl.map(function(item, ci) {
                               // 📅 일정 항목은 모양이 달라 따로 그린다(기존 항목 렌더는 손대지 않는다)
                               if (item && item.is_sched) return renderSchedItem(note, item);
@@ -34593,6 +34597,13 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
                               );
                             })}
                           </div>
+                          {/* 📂 3개 넘으면 「전체 보기」 — 높이 제한을 풀어 항목을 전부 보여준다 */}
+                          {cl.length > 3 && (
+                            <button onClick={function(e) { e.stopPropagation(); setClExpanded(function(p) { var n = Object.assign({}, p); if (n[note.id]) delete n[note.id]; else n[note.id] = true; return n; }); }}
+                              style={{ width: "100%", marginTop: 6, padding: "5px 0", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 6, fontSize: 11, fontWeight: 700, color: "#4338CA", cursor: "pointer" }}>
+                              {clExpanded[note.id] ? "▲ 접기" : "▼ 전체 보기 (" + cl.length + "개)"}
+                            </button>
+                          )}
                         </div>
                       );
                     })()}
