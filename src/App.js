@@ -2787,6 +2787,62 @@ function debtorChangeToLoans(result) {
   return out;
 }
 
+// ── 💳 신용점수 조회일 (2026-10-20) ─────────────────────────────────────────
+//  점수(KCB·NICE)를 고치면 그날 날짜를 company_info 의 「신용 조회일」 한 줄로 남긴다.
+//  새 컬럼을 만들지 않은 이유: 현황표 첨부가 이미 같은 라벨로 조회일을 넣고 있어(addInfo("신용 조회일"))
+//  그 값을 그대로 이어 쓰면 옛 기업도 날짜가 바로 보인다. 「연체 이력」·「여신정보 기준일자」와 같은 방식.
+//  ⚠️ 이 구간은 scripts/test-credit-date.mjs 가 소스째 떼어내 실행한다 — supabase·React·kstDate 를 참조하지 말 것.
+// ⛳ 신용조회일 시작
+var CREDIT_DATE_LABEL = "신용 조회일";
+var CREDIT_DATE_STALE_DAYS = 90;   // 여신정보 90일 최신화 배지와 같은 기준
+// 「2026.10.14」·「2026-10-14」·「2026년 10월 14일」·「26.10.14」 → "2026-10-14". 못 읽으면 null.
+function parseCreditDate(v) {
+  var s = String(v == null ? "" : v);
+  var m = s.match(/(\d{4})\s*[.\-\/년]\s*(\d{1,2})\s*[.\-\/월]\s*(\d{1,2})/) || s.match(/(?:^|[^\d])(\d{2})\.(\d{1,2})\.(\d{1,2})(?!\d)/);
+  if (!m) return null;
+  var y = m[1].length === 2 ? 2000 + parseInt(m[1], 10) : parseInt(m[1], 10);
+  var mo = parseInt(m[2], 10), d = parseInt(m[3], 10);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  return y + "-" + (mo < 10 ? "0" : "") + mo + "-" + (d < 10 ? "0" : "") + d;
+}
+function creditDateOf(info) {
+  var list = Array.isArray(info) ? info : [];
+  for (var i = 0; i < list.length; i++) {
+    if (list[i] && list[i].label === CREDIT_DATE_LABEL) return parseCreditDate(list[i].value);
+  }
+  return null;
+}
+function withCreditDate(info, ymd) {
+  var list = Array.isArray(info) ? info.slice() : [];
+  var idx = list.findIndex(function(it) { return it && it.label === CREDIT_DATE_LABEL; });
+  if (idx >= 0) list[idx] = Object.assign({}, list[idx], { value: ymd });
+  else list.push({ label: CREDIT_DATE_LABEL, value: ymd });
+  return list;
+}
+function creditScoreKey(c) {
+  var n = function(v) { var d = String(v == null ? "" : v).replace(/[^0-9]/g, ""); return d ? String(parseInt(d, 10)) : ""; };
+  return n(c && c.credit_score_kcb) + "/" + n(c && c.credit_score_nice);
+}
+// 점수가 실제로 바뀌었고 조회일은 이번에 따로 안 고쳤으면 → 오늘 날짜를 찍은 company_info 를 돌려준다.
+// 바꿀 게 없으면 null. (현황표 첨부처럼 문서가 조회일을 같이 넣은 경우는 그 날짜를 존중한다)
+function stampCreditDate(prev, next, today) {
+  if (!next || creditScoreKey(prev) === creditScoreKey(next)) return null;
+  if (creditScoreKey(next) === "/") return null;   // 점수를 지운 경우엔 날짜를 새로 찍지 않는다
+  if (creditDateOf(next.company_info) !== creditDateOf(prev && prev.company_info)) return null;
+  return withCreditDate(next.company_info, today);
+}
+// 화면 표시용: { ymd, days, stale, text }  — today 는 "YYYY-MM-DD"(KST)
+function creditDateBadge(info, today) {
+  var ymd = creditDateOf(info);
+  if (!ymd) return null;
+  var days = Math.round((Date.parse(today + "T00:00:00Z") - Date.parse(ymd + "T00:00:00Z")) / 86400000);
+  var md = parseInt(ymd.slice(5, 7), 10) + "/" + parseInt(ymd.slice(8, 10), 10);
+  var yy = ymd.slice(0, 4) !== today.slice(0, 4) ? ymd.slice(2, 4) + "." : "";
+  var ago = days <= 0 ? "오늘" : days + "일 전";
+  return { ymd: ymd, days: days, stale: days >= CREDIT_DATE_STALE_DAYS, text: yy + md + " · " + ago };
+}
+// ⛳ 신용조회일 끝
+
 // ── 「2. 연체채권의 채권자 변동 현황」 → 연체 이력 요약 ────────────────────────
 //  ⚠️ 연체 행은 기대출(loans)에 절대 넣지 않는다 — 연체 금액을 대출로 넣으면 부채가 두 배가 된다.
 //     (금융거래확인서 파서가 담보·연체 섹션을 통째로 버리는 것과 같은 이유다.)
@@ -8932,6 +8988,10 @@ function CRMApp({ profile, session }) {
     // 기업정보 탭 (기업현황표 자동추출분)
     if (Array.isArray(form.loans) && form.loans.length > 0) insertData.loans = form.loans;
     if (Array.isArray(form.company_info) && form.company_info.length > 0) insertData.company_info = form.company_info;
+    // 💳 등록하면서 점수를 넣었고 현황표에 조회일이 없으면 오늘을 조회일로
+    if ((insertData.credit_score_kcb || insertData.credit_score_nice) && !creditDateOf(insertData.company_info)) {
+      insertData.company_info = withCreditDate(insertData.company_info, kstDate());
+    }
     if (form.company_info_memo) insertData.company_info_memo = form.company_info_memo;
     if (form.referrer) insertData.referrer = form.referrer;
     if (form.lead_source) insertData.lead_source = form.lead_source;
@@ -14527,6 +14587,13 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
       credit_score_kcb: String(editRow.credit_score_kcb).trim() === "" ? null : (parseInt(editRow.credit_score_kcb, 10) || null),
       credit_score_nice: String(editRow.credit_score_nice).trim() === "" ? null : (parseInt(editRow.credit_score_nice, 10) || null),
     };
+    // 💳 점수가 바뀌었으면 「신용 조회일」을 오늘로. company_info 는 목록 상태가 아니라 DB 최신값에 덧붙인다
+    //    (목록 상태가 오래됐으면 그 사이 기업상세에서 고친 항목을 덮어쓰게 된다).
+    if (creditScoreKey(co) !== creditScoreKey(payload) && creditScoreKey(payload) !== "/") {
+      var cur = await supabase.from("companies").select("company_info").eq("id", co.id).maybeSingle();
+      if (cur.error) { alert("저장 실패: " + cur.error.message); return; }
+      payload.company_info = withCreditDate(cur.data && cur.data.company_info, kstDate());
+    }
     var r = await supabase.from("companies").update(payload).eq("id", co.id);
     if (r.error) { alert("저장 실패: " + r.error.message); return; }
     setCompanies(function(prev) { return prev.map(function(c) { return c.id === co.id ? Object.assign({}, c, payload) : c; }); });
@@ -14792,7 +14859,19 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                           placeholder="NICE" onKeyDown={function(e) { if (e.key === "Enter") saveRowEdit(co); if (e.key === "Escape") setEditRowId(null); }}
                           style={{ width: 40, padding: "3px 5px", border: "1px solid #4338CA", borderRadius: 4, fontSize: 11, outline: "none" }} />
                       </div>
-                    ) : ((co.credit_score_kcb || co.credit_score_nice) ? ((co.credit_score_kcb || "-") + " / " + (co.credit_score_nice || "-")) : "-")}
+                    ) : ((co.credit_score_kcb || co.credit_score_nice) ? (function() {
+                      // 💳 점수 아래에 조회일 — 90일 넘으면 주황색
+                      var cb = creditDateBadge(co.company_info, kstDate());
+                      return (
+                        <div>
+                          <div>{(co.credit_score_kcb || "-") + " / " + (co.credit_score_nice || "-")}</div>
+                          <div title={cb ? "신용 조회일 " + cb.ymd : "조회일 기록 없음 — 점수를 고치면 그날 날짜가 남아요"}
+                            style={{ fontSize: 10, marginTop: 1, whiteSpace: "normal", lineHeight: 1.35, color: !cb ? "#BBB" : cb.stale ? "#C2410C" : "#999", fontWeight: cb && cb.stale ? 700 : 400 }}>
+                            {cb ? cb.text : "조회일 없음"}
+                          </div>
+                        </div>
+                      );
+                    })() : "-")}
                   </td>
                   {/* 📝 기타 — 누르면 확대 편집 팝업(기관현황 비고와 같은 컴포넌트).
                       행 클릭은 기업 상세를 여므로 stopPropagation 은 그대로 둔다.
@@ -16070,8 +16149,14 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
   //    ③부결 전환 시 사례집 초안이 안 만들어졌다. 이제 모든 저장이 이 함수를 지난다.
   var saveAll = async function() {
     var saved = Object.assign({}, data, { name: nameInput || data.name });
+    // 💳 점수를 고쳤으면 「신용 조회일」을 오늘로 — 기준은 마지막으로 저장된 값(baseline)
+    var stamped = stampCreditDate(baseline, saved, kstDate());
+    if (stamped) saved.company_info = stamped;
     var ok = await onSave(saved, company);
-    if (ok === true) setBaseline(saved);                   // 실패면 기준선 그대로 → 닫을 때 확인창이 뜬다
+    if (ok === true) {
+      setBaseline(saved);                                  // 실패면 기준선 그대로 → 닫을 때 확인창이 뜬다
+      if (stamped) setData(function(p) { return Object.assign({}, p, { company_info: stamped }); });
+    }
   };
 
   var attachInput = function() {
@@ -17074,7 +17159,15 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                   <input type="number" value={data.employee_count || ""} placeholder="명" onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { employee_count: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>KCB / NICE</div>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>KCB / NICE {(function() {
+                    // 💳 조회일 — 점수를 고친 채 저장 전이면 "저장하면 오늘로 기록"을 먼저 보여준다
+                    var edited = creditScoreKey(data) !== creditScoreKey(baseline) && creditScoreKey(data) !== "/";
+                    if (edited) return <span style={{ fontSize: 10, fontWeight: 700, color: "#1D4ED8", marginLeft: 4 }}>저장하면 오늘 조회일로 기록</span>;
+                    var cb = creditDateBadge(data.company_info, kstDate());
+                    if (!cb) return (data.credit_score_kcb || data.credit_score_nice) ? <span style={{ fontSize: 10, color: "#BBB", marginLeft: 4 }}>조회일 없음</span> : null;
+                    return <span title={"신용 조회일 " + cb.ymd + (cb.stale ? " · " + CREDIT_DATE_STALE_DAYS + "일이 지나 다시 조회가 필요해요" : "")}
+                      style={{ fontSize: 10, fontWeight: 700, color: cb.stale ? "#C2410C" : "#4338CA", marginLeft: 4 }}>조회 {cb.text}{cb.stale ? " ⚠" : ""}</span>;
+                  })()}</div>
                   <input type="text" inputMode="numeric" value={(data.credit_score_kcb || "") + (data.credit_score_nice ? " / " + data.credit_score_nice : "")} placeholder="KCB / NICE" onChange={function(e) { var raw = e.target.value.replace(/[^0-9]/g, ""); var kcb = raw.slice(0, 3); var nice = raw.slice(3, 6); setData(function(p) { return Object.assign({}, p, { credit_score_kcb: kcb, credit_score_nice: nice }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none", minWidth: 0, boxSizing: "border-box" }} />
                 </div>
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
