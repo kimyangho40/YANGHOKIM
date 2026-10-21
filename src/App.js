@@ -21464,6 +21464,14 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
   const [carryPickDate, setCarryPickDate] = useState(""); // 고른 날짜 YYYY-MM-DD
   const [carryPickBusy, setCarryPickBusy] = useState(false);
   const carryUndoTimer = useRef(null);
+  // ✏️ 새 노트 작성 폼은 페이지 맨 위(밀린 미완료·내 개인 업무노트보다 위)에 그려진다.
+  //    날짜를 골라 아래쪽 「+ 이 날짜에 노트 추가」를 누르면 폼이 화면 밖에서 열려
+  //    "버튼이 안 먹는다"로 보였다(2026-10-16 정원 문의). 열릴 때 폼으로 스크롤한다.
+  const addFormRef = useRef(null);
+  useEffect(function() {
+    if (!showAdd || !addFormRef.current) return;
+    addFormRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [showAdd]);
   // 🗓️ 주간 정리 리마인드 모달
   const [showWeekly, setShowWeekly] = useState(false);
   const [weeklyMode, setWeeklyMode] = useState("mon"); // "mon"(지난주 정리) | "fri"(이번 주 마무리)
@@ -22837,7 +22845,7 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
 
       {/* 새 노트 작성 폼 */}
       {showAdd && (
-        <div className="wn-addform" style={{ background: "#F0FDF4", border: "2px solid #86EFAC", borderRadius: 12, padding: "18px 20px", marginBottom: 20 }}>
+        <div ref={addFormRef} className="wn-addform" style={{ scrollMarginTop: 16, background: "#F0FDF4", border: "2px solid #86EFAC", borderRadius: 12, padding: "18px 20px", marginBottom: 20 }}>
           <DraftNotice draft={newDraft} onRestore={function(t) { setNewNote(function(p) { return Object.assign({}, p, { content: t, checkItems: [] }); }); }} />
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D" }}>✏️ 새 노트 작성</div>
