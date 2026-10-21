@@ -27941,7 +27941,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
   const DEFAULT_COL_WIDTHS = {
     num: 40, business_name: 160, representative: 80, assignee: 80, amount: 70,
     product: 140, industry: 70, region: 80, contact: 130, status: 110, dup: 56, docs: 200,
-    script: 72, edu: 72, credit: 60, notes: 140, action: 170, priority: 84   // action 120→170: ↪ 이월 버튼 추가(2026-10-06)
+    script: 72, edu: 72, credit: 100, notes: 140, action: 170, priority: 84   // action 120→170: ↪ 이월 버튼 추가(2026-10-06) · credit 60→100: 점수 아래 조회일(2026-10-21)
   };
   const [colWidths, setColWidths] = useState(function() {
     try {
@@ -29539,7 +29539,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
                         var cb = creditDateBadge(matchedCo.company_info, kstDate());
                         return (
                           <div>
-                            <span style={{ fontSize: 12, color: "#555", fontWeight: 600 }}>{(matchedCo.credit_score_kcb || "-") + " / " + (matchedCo.credit_score_nice || "-")}</span>
+                            <span style={{ fontSize: 12, color: "#555", fontWeight: 600, whiteSpace: "nowrap" }}>{(matchedCo.credit_score_kcb || "-") + " / " + (matchedCo.credit_score_nice || "-")}</span>
                             <div title={cb ? "신용 조회일 " + cb.ymd : "조회일 기록 없음 — 기업목록에서 점수를 고치면 그날 날짜가 남아요"}
                               style={{ fontSize: 10, marginTop: 1, whiteSpace: "normal", lineHeight: 1.35, color: !cb ? "#BBB" : cb.stale ? "#C2410C" : "#999", fontWeight: cb && cb.stale ? 700 : 400 }}>
                               {cb ? cb.text : "조회일 없음"}
