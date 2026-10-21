@@ -1287,12 +1287,14 @@ unique index 는 `(company_id, agency_group)` 이라 `company_id` 가 null 인 �
 재측정: `node scripts/migrate-note-links.mjs` (읽기 전용) · 검증은 `scripts/test-note-links.mjs` **52/52**
 (App.js 소스를 떼어내 가짜 supabase 를 주입 — 손으로 옮겨 적지 않는다).
 
-### 🐞 같이 발견한 **별건 버그** (아직 안 고침)
-`saveEditNote` 의 `cleanChecklist` 가 항목을 **처음부터 다시 만들어** 6개 필드만 남긴다
+### ✅ 같이 발견한 별건 버그 — 2026-10-20 고침
+`saveEditNote` 의 `cleanChecklist` 가 항목을 **처음부터 다시 만들어** 6개 필드만 남겼다
 → 팀 카드를 한 번 수정 저장하면 그 안 **일정 항목의 `is_sched`·`sched_kind`·`company_id`·`company_name`·
-`assignee`·`result`·`done_at`·`done_by` 가 통째로 사라진다**(일정이 평범한 글줄이 된다).
-이 기능 이전부터 있던 버그다. 고치려면 `return { … }` → `return Object.assign({}, it, { … })` 한 줄이지만
-**팀 일정 기능 전체가 회귀 사정권**이라 별도 건으로 뒀다.
+`assignee`·`result`·`done_at`·`done_by` 가 통째로 사라졌다**(일정이 평범한 글줄이 됐다. 밀린 미완료에서 완료한 항목의 `done_by`·`done_at` 도).
+→ `Object.assign({}, it, { … })` 로 원래 필드를 깔고 덮어쓰게 했다. 6개 필드·`created_at` 규칙은 그대로다.
+- 테스트 `scripts/test-team-edit-keep.mjs` 17/17 (소스째 떼어내 실행. 옛 코드에선 10개 실패 확인).
+- 실측(2026-10-20): 팀 카드 152장·항목 503개 중 **일정 항목 0건**, 완료 항목 6건 전부 `done_by` 있음 → **실제로 지워진 데이터는 없었다.**
+- 시연서버(쓰기는 이 탭 안에서만 흉내)로 일정 만들기 → 완료·결과 → 카드 ✏️ 수정 저장 → 필드 전부 유지 확인. 옛 코드로 같은 순서 → 필드 소실 재현.
 
 ## 🧭 성장 로드맵 (2026-09-02, **새 테이블 2개 · 기존 테이블 변경 0건 · App.js 기존 코드 수정 0줄**)
 
