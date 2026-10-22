@@ -28125,11 +28125,16 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
     completed: ["완료","자금집행완료","컨설팅 최종 완료","수수료대기 및 입금요청","입금완료/사후관리"],
     returned: ["반려"],
     rejected: ["부결","진행불가","신청취소","신청못함","중단","마감 진행 불가","부결/반려"],
+    // 2026-10-22 요청: '기타(시작 전·보류)' 한 칸 → 「시작 전」 「보류」 따로 조회. (구조혁신은 "시작전" 띄어쓰기 없음)
+    notStarted: ["시작 전","시작전"],
+    hold: ["보류","예산 소진으로 컨설턴트 보류","예산 소진으로 자금 신청 보류"],
   };
-  // 위 그룹에 안 속하면 '기타'(시작 전·보류·예산소진 보류 등).
+  // 위 그룹에 안 속하면 '기타'(표에 없는 상태값). 빈 상태는 화면에서 '시작 전'으로 보이므로 시작 전으로 센다.
   // 예전엔 '기타'를 화면에 아예 안 그려서 합계가 총계와 안 맞았다 → 지금은 칸으로 보여준다.
   var groupOf = function(status) {
-    for (var k in STATUS_GROUPS) { if (STATUS_GROUPS[k].indexOf(status) >= 0) return k; }
+    var s = String(status == null ? "" : status).trim();
+    if (!s) return "notStarted";
+    for (var k in STATUS_GROUPS) { if (STATUS_GROUPS[k].indexOf(s) >= 0) return k; }
     return "other";
   };
   // 상단 보드와 '상태별 모아보기'가 항상 같은 칸 구성을 쓰도록 한 곳에서 정의한다(둘이 갈리면 안 됨).
@@ -28142,7 +28147,9 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
     { key: "completed",  label: "완료",        color: "#0F766E", bg: "#D1FAE5" },
     { key: "returned",   label: "반려",        color: "#B45309", bg: "#FEF0D9" },
     { key: "rejected",   label: "부결",        color: "#DC2626", bg: "#FEE2E2" },
-    { key: "other",      label: "기타",        color: "#6B7280", bg: "#F3F4F6" },
+    { key: "notStarted", label: "시작 전",     color: "#6B7280", bg: "#F3F4F6" },
+    { key: "hold",       label: "보류",        color: "#7C3AED", bg: "#F5F3FF" },
+    { key: "other",      label: "기타",        color: "#6B7280", bg: "#F3F4F6", hideWhenZero: true },
   ];
 
   // 검색 판정 한 곳 — 업체명 · 대표자명 · 사업자등록번호.
@@ -29114,9 +29121,9 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
       {/* 요약 카드 (클릭으로 필터링) — '총 진행' + 전 그룹. 카드 합 = 총 진행이 되도록 빠짐없이 그린다. */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(148px, 1fr))", gap: 12, marginBottom: 12 }}>
         {[{ label: "총 진행", value: summary.total, color: "#1A1917", key: "all" }].concat(
-          STATUS_VIEW_GROUPS.map(function(g) {
+          STATUS_VIEW_GROUPS.filter(function(g) { return !g.hideWhenZero || summary[g.key] > 0 || statusFilter === g.key; }).map(function(g) {
             return {
-              label: g.key === "returned" ? "반려 (기한주의)" : g.key === "other" ? "기타 (시작 전·보류)" : g.label,
+              label: g.key === "returned" ? "반려 (기한주의)" : g.label,
               value: summary[g.key] || 0,
               color: g.color,
               key: g.key,
@@ -29158,7 +29165,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
       {summary.total > 0 && (
         <div style={{ display: "flex", gap: 5, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
           <span style={{ fontSize: 11, color: "#888", marginRight: 2, fontWeight: 600 }}>상태별 모아보기:</span>
-          {STATUS_VIEW_GROUPS.map(function(g) {
+          {STATUS_VIEW_GROUPS.filter(function(g) { return !g.hideWhenZero || summary[g.key] > 0 || statusFilter === g.key; }).map(function(g) {
             var active = statusFilter === g.key;
             return <div key={g.key} onClick={function() { setStatusFilter(function(p) { return p === g.key ? "all" : g.key; }); }}
               style={{ padding: "5px 13px", borderRadius: 99, cursor: "pointer", fontSize: 12, fontWeight: 600,
