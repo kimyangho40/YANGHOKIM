@@ -23411,7 +23411,7 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
           if (!req.note_id) return;
           var n = (notes || []).find(function(x) { return x.id === req.note_id; });
           var nd = n ? (n.note_date || (n.created_at ? String(n.created_at).slice(0, 10) : null)) : null;
-          if (nd) { setViewMode("list"); setSelectedDate(nd); }
+          if (nd) { setViewMode("calendar"); setSelectedDate(nd); } // 목록 보기는 selectedDate 를 안 써서 이동이 안 됐다(2026-11-01)
         };
         var sentBadge = function(st) {
           var map = { pending: { t: "안읽음", c: "#B91C1C", b: "#FEE2E2" }, read: { t: "읽음", c: "#B45309", b: "#FEF3C7" }, done: { t: "완료", c: "#15803D", b: "#DCFCE7" } };
@@ -23586,7 +23586,11 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
                       <div onMouseDown={function(e) {
                         e.preventDefault();
                         if (nd) {
+                          // 2026-11-01: 목록 보기에서는 selectedDate 를 안 써서 눌러도 이동이 안 됐다 → 캘린더(그 날짜)로 전환
+                          setViewMode("calendar");
                           setSelectedDate(nd);
+                          // 날짜 화면이 개인노트 구역 아래에 그려져 화면 밖일 수 있다 → 그리로 스크롤
+                          setTimeout(function() { var el = document.getElementById("wn-date-view"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 80);
                           // 캘린더 모드인데 다른 직원의 노트면 필터도 맞춤
                           if (n.assignee && filterAssignee !== "전체" && n.assignee !== filterAssignee) {
                             setFilterAssignee(n.assignee);
@@ -23800,7 +23804,7 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
           </div>
         ) : (
           // ── 선택된 날짜의 노트 + 미완료 사이드 (날짜 선택 후) ──
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 16, alignItems: "flex-start" }}>
+          <div id="wn-date-view" style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 16, alignItems: "flex-start", scrollMarginTop: 16 }}>
             {/* 좌: 선택 날짜의 노트들 */}
             <div>
               {/* 날짜 헤더 + 캘린더로 돌아가기 */}
