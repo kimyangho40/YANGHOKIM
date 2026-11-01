@@ -21274,7 +21274,7 @@ function NoteCard({ note, editingId, editNote, setEditNote, saveEdit, setEditing
   }
 
   return (
-    <div className="wn-card" style={{ background: note.pinned ? "#FFFBEB" : "#fff", border: note.pinned ? "1px solid #FDE68A" : "1px solid #E8E5E0", borderRadius: 12, padding: "16px 18px", opacity: note.is_done ? 0.6 : 1, transition: "opacity 0.2s" }}>
+    <div className="wn-card" data-note-id={note.id} style={{ background: note.pinned ? "#FFFBEB" : "#fff", border: note.pinned ? "1px solid #FDE68A" : "1px solid #E8E5E0", borderRadius: 12, padding: "16px 18px", opacity: note.is_done ? 0.6 : 1, transition: "opacity 0.2s" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {note.is_todo && (
@@ -23589,8 +23589,17 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
                           // 2026-11-01: 목록 보기에서는 selectedDate 를 안 써서 눌러도 이동이 안 됐다 → 캘린더(그 날짜)로 전환
                           setViewMode("calendar");
                           setSelectedDate(nd);
-                          // 날짜 화면이 개인노트 구역 아래에 그려져 화면 밖일 수 있다 → 그리로 스크롤
-                          setTimeout(function() { var el = document.getElementById("wn-date-view"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 80);
+                          // 날짜 화면이 개인노트 구역 아래에 그려져 화면 밖일 수 있다 → 누른 노트 카드로 스크롤하고 잠깐 강조.
+                          // 하루에 직원 노트가 여러 장이면 날짜 화면만으로는 어느 노트인지 못 찾는다(2026-11-01 요청).
+                          var targetId = n.id;
+                          setTimeout(function() {
+                            var view = document.getElementById("wn-date-view");
+                            var card = view && view.querySelector('[data-note-id="' + targetId + '"]');
+                            if (!card) { if (view) view.scrollIntoView({ behavior: "smooth", block: "start" }); return; }
+                            card.scrollIntoView({ behavior: "smooth", block: "center" });
+                            card.style.boxShadow = "0 0 0 3px #4338CA";
+                            setTimeout(function() { card.style.boxShadow = ""; }, 2500);
+                          }, 120);
                           // 캘린더 모드인데 다른 직원의 노트면 필터도 맞춤
                           if (n.assignee && filterAssignee !== "전체" && n.assignee !== filterAssignee) {
                             setFilterAssignee(n.assignee);
