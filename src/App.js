@@ -3,6 +3,7 @@ import { useState, useMemo, useEffect, useLayoutEffect, useCallback, useRef, Fra
 import { createClient } from "@supabase/supabase-js";
 import AgencySites from "./pages/AgencySites";
 import GrowthRoadmap from "./pages/GrowthRoadmap";
+import CompanyMap from "./pages/CompanyMap";
 
 // ── Supabase 설정 ─────────────────────────────────────────────────────────────
 // 내보내기(목록 복사) 권한을 가진 계정 이메일 — 이 계정만 내보내기 버튼이 보임
@@ -1225,6 +1226,20 @@ function getProductColor(name) {
   if (!name) return null;
   return PRODUCT_COLORS[name] || { bg: "#F3F4F6", text: "#374151" };
 }
+
+// ⛳ 사업장주소 시작 — 시트지·현황표에서 읽은 주소를 companies.address 로 남긴다(지도 마커 원본).
+//   예전엔 region("경기_수원")만 남기고 상세 주소는 버렸다. region 판정은 그대로 두고 원문만 따로 챙긴다.
+function cleanAddrText(s) {
+  return String(s || "")
+    .replace(/^\s*[([]?\s*\d{5}\s*[)\]]?\s*/, "")   // 앞 우편번호 "(50315)"
+    .replace(/\s+/g, " ").trim().slice(0, 200);
+}
+// 시·군·구만 적힌 값("경기 수원")은 상세 주소가 아니다 — 번지·도로명 숫자가 있어야 주소로 본다.
+function looksLikeAddress(s) {
+  var t = cleanAddrText(s);
+  return t.length >= 6 && /\d/.test(t) && /(로|길|동|리|가|번지|읍|면)\s*\d|\d+\s*-\s*\d+|\d+\s*(번지|호)/.test(t);
+}
+// ⛳ 사업장주소 끝
 
 // 지역별 색상 구분
 // 경기/인천 = 노란색, 서울 = 파란색, 그 외 지방 = 녹색
@@ -4339,6 +4354,7 @@ async function parseHyeonhwangpyo(file) {
   var addr = getCell(4, 2);
   var region = parseRegion(addr);
   if (region) { updates.region = region; auto.region = true; }
+  if (addr && looksLikeAddress(addr)) { updates.address = cleanAddrText(addr); auto.address = true; }
   var industry = getCell(5, 2);
   if (industry) { updates.industry = industry; auto.industry = true; }
   var emp = getCell(5, 8);
@@ -4476,6 +4492,8 @@ function parseSheetGeneric(rows) {
         if (f.month && !updates.founded_month) { updates.founded_month = f.month; auto.founded_month = true; }
         return;
       }
+      // 주소 칸은 region 으로 줄이기 전에 원문을 상세 주소로 따로 남긴다(지도 마커용)
+      if (m.field === "region" && !updates.address && looksLikeAddress(p.value)) { updates.address = cleanAddrText(p.value); auto.address = true; }
       var val = m.clean ? m.clean(p.value) : (m.transform ? m.transform(p.value) : p.value);
       if (val && !updates[m.field]) { updates[m.field] = val; auto[m.field] = true; return; }
     }
@@ -4556,6 +4574,7 @@ function parseHyeonhwangpyoV2(rows) {
     var doName = doMap[w[0]] || w[0];
     var siGuGun = (w[1] || "").replace(/시$|군$|구$/, "");
     setF("region", doName + (siGuGun ? "_" + siGuGun : ""));
+    if (looksLikeAddress(addr)) setF("address", cleanAddrText(addr));
   }
   setF("industry", get("업태 / 종목"));
   // 상시근로자: "34명(2026.1 기준)/36명(2026.5 KODATA조회)" → 첫 번째 값 34, 원문은 메모에 보존
@@ -4845,6 +4864,7 @@ const Icon = ({ name, size = 16, color = "currentColor" }) => {
     activity:  <svg {...p}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>,
     folder:    <svg {...p}><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>,
     calendar:  <svg {...p}><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>,
+    map:       <svg {...p}><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>,
     chevronR:  <svg {...p}><polyline points="9 18 15 12 9 6"/></svg>,
     chevronL:  <svg {...p}><polyline points="15 18 9 12 15 6"/></svg>,
     link:      <svg {...p}><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>,
@@ -8709,6 +8729,14 @@ function CRMApp({ profile, session }) {
       else if (prev !== null && prev !== undefined && prev !== "") updateObj[k] = null;
     });
     if (Array.isArray(rest.certifications)) updateObj.certifications = normalizeCerts(rest.certifications);
+    // 🗺 사업장 상세 주소(2026-11-03) — 위 칸들과 같은 규칙: 값이 있으면 저장 · 지우면 null · 손대지 않았으면 전송 안 함.
+    //    좌표(geo_*)는 여기서 안 건드린다. 지도 화면이 주소·지역과 geo_query 를 비교해 다르면 다시 받는다.
+    (function() {
+      var v = cleanAddrText(rest.address);
+      var prev = prevData ? prevData.address : undefined;
+      if (v) { if (v !== prev) updateObj.address = v; }
+      else if (prev !== null && prev !== undefined && prev !== "") updateObj.address = null;
+    })();
     // 규모/기관 배지 수동 보정(biz_match_override, JSONB)도 사용자가 손댔을 때만 저장.
     // 손대지 않은 기업은 DB값이 null/undefined라 여기 안 걸림 → 컬럼 미생성 시에도 일반 저장이 안 깨진다.
     // 보정을 전부 해제하면 빈 객체 {} 가 오는데, 이때는 null로 기록해 자동판정으로 되돌린다.
@@ -8976,6 +9004,7 @@ function CRMApp({ profile, session }) {
     // 혁신성장·초격차·신산업 분야 (중진공 예외 판정용) — 체크된 경우만 전송(미체크는 DB DEFAULT false)
     if (form.innovation_field === true) insertData.innovation_field = true;
     if (form.region) insertData.region = form.region;
+    if (cleanAddrText(form.address)) insertData.address = cleanAddrText(form.address);
     if (form.revenue_2023) insertData.revenue_2023 = parseInt(form.revenue_2023) || null;
     if (form.revenue_2024) insertData.revenue_2024 = parseInt(form.revenue_2024) || null;
     if (form.revenue_2025) insertData.revenue_2025 = parseInt(form.revenue_2025) || null;
@@ -9452,6 +9481,8 @@ function CRMApp({ profile, session }) {
             { id: "worknotes",  label: "업무 노트",   icon: "edit" },
             { id: "chat",       label: "채팅",        icon: "chat" },
             { id: "list",       label: "기업 목록",   icon: "list" },
+            // 🗺 사업장 지도 — 아래 렌더 분기(`view === "company-map"`)와 한 쌍
+            { id: "company-map", label: "사업장 지도", icon: "map" },
             { id: "agency-sites", label: "기관 사이트", icon: "building" },
             // ⚠️ 이 배열과 아래 렌더 분기(`view === "growth-roadmap"`)는 한 쌍이다.
             //    한쪽만 넣으면 메뉴는 뜨는데 화면이 빈 채로 남는다.
@@ -9820,6 +9851,7 @@ function CRMApp({ profile, session }) {
                 GoTrueClient 가 두 개가 되어 토큰 갱신이 서로 싸운다.
                 짝: src/pages/GrowthRoadmap.jsx · 성장로드맵_growth_paths.sql */}
             {view === "growth-roadmap" && <GrowthRoadmap supabase={supabase} />}
+            {view === "company-map" && <CompanyMap supabase={supabase} companies={companies} setCompanies={setCompanies} onSelect={openCompany} callApiJson={callApiJson} stageColors={STAGE_COLORS} assignees={assignees} />}
             {view === "stagnant" && <StagnantView stagnant={stagnant} onSelect={setSelectedCompany} />}
             {view === "olddocs" && <OldDocsView companies={companies} setCompanies={setCompanies} onSelect={setSelectedCompany} />}
             {view === "members" && profile.role === "admin" && <MembersView profiles={profiles} onRefresh={fetchAll} showToast={showToast} />}
@@ -16090,7 +16122,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
     }
   }
 
-  const FIELD_LABELS_X = { name: "업체명", representative: "대표자", phone: "연락처", region: "지역", industry: "업종", employee_count: "직원수", credit_score_kcb: "KCB점수", credit_score_nice: "NICE점수", founded_year: "설립연도", founded_month: "설립월", revenue_2025: "2025년 매출", revenue_2024: "2024년 매출", revenue_2023: "2023년 매출", revenue_2026_h1: "2026년 상반기 매출", business_number: "사업자번호", business_type: "사업자유형", type: "유형" };
+  const FIELD_LABELS_X = { name: "업체명", representative: "대표자", phone: "연락처", region: "지역", address: "상세 주소", industry: "업종", employee_count: "직원수", credit_score_kcb: "KCB점수", credit_score_nice: "NICE점수", founded_year: "설립연도", founded_month: "설립월", revenue_2025: "2025년 매출", revenue_2024: "2024년 매출", revenue_2023: "2023년 매출", revenue_2026_h1: "2026년 상반기 매출", business_number: "사업자번호", business_type: "사업자유형", type: "유형" };
   async function handleXlsxAttach(file) {
     if (!file) return;
     try {
@@ -17236,6 +17268,13 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                 <div style={{ background: "#F7F6F3", borderRadius: 8, padding: "10px 13px" }}>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>지역</div>
                   <input type="text" value={data.region || ""} placeholder="예: 서울_강남, 경기_안산" onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { region: v }); }); }} style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+                  {/* 🗺 사업장 상세 주소 — 사업장 지도 마커의 원본. 비우면 지도는 위 지역 중심에 대략 찍는다 */}
+                  <div style={{ fontSize: 11, color: "#888", margin: "10px 0 5px", paddingTop: 8, borderTop: "1px solid #E8E5E0" }}>
+                    🗺 사업장 상세 주소 <span style={{ color: "#888", fontSize: 10 }}>(사업장 지도에 표시)</span>
+                  </div>
+                  <input type="text" value={data.address || ""} placeholder="예: 경기도 수원시 팔달구 효원로 241"
+                    onChange={function(e) { var v = e.target.value; setData(function(p) { return Object.assign({}, p, { address: v }); }); }}
+                    style={{ width: "100%", fontSize: 12, fontWeight: 600, background: "#fff", border: "1px solid #E8E5E0", borderRadius: 5, padding: "5px 7px", boxSizing: "border-box", outline: "none" }} />
                   {/* 🔐 계정·인증 정보 (지역 칸 빈 공간 활용, 세로 배치) */}
                   <div style={{ marginTop: 12, borderTop: "1px solid #E8E5E0", paddingTop: 10 }}>
                     <div style={{ fontSize: 11, color: "#888", marginBottom: 8, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>🔐 계정·인증 정보 <span style={{ color: "#888", fontSize: 10 }}>(소진공·중진공·홈택스·계좌·아이핀 등 자유)</span></div>
@@ -19433,6 +19472,11 @@ function AddModal({ onClose, onAdd, assignees, companies }) {
           <div style={Object.assign({ borderRadius: 8, padding: "10px 13px", marginBottom: 10 }, autoStyle("region"))}>
             <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>지역 {autoFilled.region && <span style={{ color: "#15803D", fontSize: 9, fontWeight: 700 }}>✓ 자동</span>}</div>
             <input value={form.region} placeholder="예: 서울_강남, 경기_안산" onChange={function(e) { setManual("region", e.target.value); }}
+              style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
+          </div>
+          <div style={Object.assign({ borderRadius: 8, padding: "10px 13px", marginBottom: 10 }, autoStyle("address"))}>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 5 }}>🗺 사업장 상세 주소 {autoFilled.address && <span style={{ color: "#15803D", fontSize: 9, fontWeight: 700 }}>✓ 자동</span>}</div>
+            <input value={form.address || ""} placeholder="예: 경기도 수원시 팔달구 효원로 241 (사업장 지도에 표시)" onChange={function(e) { setManual("address", e.target.value); }}
               style={{ width: "100%", fontSize: 13, fontWeight: 600, background: "transparent", border: "none", outline: "none" }} />
           </div>
 
