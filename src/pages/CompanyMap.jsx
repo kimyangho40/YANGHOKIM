@@ -34,6 +34,16 @@ export function needsGeocode(c) {
   return c.geo_query !== geoKeyOf(c);
 }
 
+// 지역 중심(대략) 점은 같은 시·군·구끼리 좌표가 완전히 같아 한 점에 겹친다 → 목록에서 눌러도 지도가 골목까지 확대되고
+// 팝업이 안 뜬다(2026-11-03 운영 화면에서 확인). 업체 id 로 정해지는 작은 흩뿌림(±약 1.5km)을 준다 — 새로고침해도 같은 자리.
+export function approxOffset(id) {
+  var s = String(id == null ? "" : id), h1 = 2166136261, h2 = 5381;
+  for (var i = 0; i < s.length; i++) { h1 = Math.imul(h1 ^ s.charCodeAt(i), 16777619); h2 = (h2 * 33 + s.charCodeAt(i)) | 0; }
+  var a = ((h1 >>> 0) % 1000) / 1000 * Math.PI * 2;
+  var r = 0.004 + ((h2 >>> 0) % 1000) / 1000 * 0.01;
+  return [Math.sin(a) * r, Math.cos(a) * r * 1.25];
+}
+
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, function(ch) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
@@ -147,7 +157,9 @@ export default function CompanyMap({ supabase, companies, setCompanies, onSelect
       var approx = c.geo_level !== "address";
       if (approx && !showApprox) return;
       var col = (stageColors && stageColors[c.stage] && stageColors[c.stage].text) || "#4338CA";
-      var m = L.marker([c.geo_lat, c.geo_lng], { icon: pinIcon(col, approx), title: c.name || "" });
+      var off = approx ? approxOffset(c.id) : [0, 0];
+      var pos = [c.geo_lat + off[0], c.geo_lng + off[1]];
+      var m = L.marker(pos, { icon: pinIcon(col, approx), title: c.name || "" });
       var box = document.createElement("div");
       box.style.minWidth = "200px";
       box.innerHTML =
@@ -167,7 +179,7 @@ export default function CompanyMap({ supabase, companies, setCompanies, onSelect
       m.bindPopup(box);
       cluster.addLayer(m);
       markerById.current.set(c.id, m);
-      bounds.push([c.geo_lat, c.geo_lng]);
+      bounds.push(pos);
     });
     var map = mapRef.current;
     if (map && bounds.length && (search || stage || assignee)) {
@@ -243,6 +255,12 @@ export default function CompanyMap({ supabase, companies, setCompanies, onSelect
     var m = markerById.current.get(c.id);
     var map = mapRef.current;
     if (!m || !map) { onSelect && onSelect(c); return; }
+    // 대략 위치는 시·군 단위로만 보여 준다(골목까지 확대하면 정확한 위치처럼 보인다)
+    if (c.geo_level !== "address") {
+      map.setView(m.getLatLng(), 15);
+      clusterRef.current.zoomToShowLayer(m, function() { m.openPopup(); });
+      return;
+    }
     clusterRef.current.zoomToShowLayer(m, function() { m.openPopup(); });
   }
 

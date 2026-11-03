@@ -53,12 +53,16 @@ ok(geo.cleanAddress("본사: 서울 중구 세종대로 110 (태평로1가)") ==
 // ④ 화면 판정(CompanyMap.jsx 의 geoKeyOf·needsGeocode) — JSX 를 안 거치도록 함수 본문만 떼어낸다
 const mapSrc = fs.readFileSync(path.join(root, "src/pages/CompanyMap.jsx"), "utf8");
 const g1 = mapSrc.indexOf("export function geoKeyOf"), g2 = mapSrc.indexOf("function esc(");
-const m = new Function(mapSrc.slice(g1, g2).replace(/export /g, "") + "\nreturn { geoKeyOf, needsGeocode };")();
+const m = new Function(mapSrc.slice(g1, g2).replace(/export /g, "") + "\nreturn { geoKeyOf, needsGeocode, approxOffset };")();
 const base = { address: "서울 중구 세종대로 110", region: "서울_중구" };
 ok(m.needsGeocode(base), "좌표 없으면 받는다");
 ok(!m.needsGeocode(Object.assign({}, base, { geo_lat: 37.5, geo_lng: 127, geo_query: m.geoKeyOf(base) })), "같은 주소면 다시 안 받는다");
 ok(m.needsGeocode(Object.assign({}, base, { geo_lat: 37.5, geo_lng: 127, geo_query: "옛주소|서울_중구" })), "주소가 바뀌면 다시 받는다");
 ok(!m.needsGeocode({ address: "", region: "" }), "주소·지역 둘 다 없으면 안 묻는다");
+const o1 = m.approxOffset("abc"), o2 = m.approxOffset("abd");
+ok(JSON.stringify(o1) === JSON.stringify(m.approxOffset("abc")), "흩뿌림은 같은 id 면 항상 같은 자리");
+ok(o1[0] !== o2[0] || o1[1] !== o2[1], "id 가 다르면 다른 자리");
+ok(Math.abs(o1[0]) <= 0.015 && Math.abs(o1[1]) <= 0.02, "흩뿌림 반경 ±1.5km 안", o1);
 
 console.log(`\n사업장 지도 테스트 ${pass}/${pass + fail}`);
 process.exit(fail ? 1 : 0);
