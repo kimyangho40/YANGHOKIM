@@ -34,8 +34,12 @@ ok(/insertData\.address = cleanAddrText\(form\.address\)/.test(src), "신규등�
 ok(src.includes('{ id: "company-map", label: "사업장 지도", icon: "map" }') && src.includes('view === "company-map" && <CompanyMap'), "메뉴·렌더 분기 한 쌍");
 ok(/^\s+map:\s+<svg/m.test(src), "Icon 에 map 아이콘");
 
-// ③ api/geocode.js 정리 함수
-const geo = await import(pathToFileURL(path.join(root, "api/geocode.js")).href);
+// ③ supabase/functions/geocode 정리 함수
+const edge = fs.readFileSync(path.join(root, "supabase/functions/geocode/index.ts"), "utf8");
+const e1 = edge.indexOf("// ⛳ geocode-helpers 시작"), e2 = edge.indexOf("// ⛳ geocode-helpers 끝");
+ok(e1 > 0 && e2 > e1, "edge 함수 helper 블록 존재");
+const geo = new Function(edge.slice(e1, e2) + "\nreturn { cleanAddress, cleanRegion, regionCandidates, buildTries };")();
+ok(!/[0-9a-f]{32}/.test(edge) && !/[0-9a-f]{32}/.test(fs.readFileSync(path.join(root, "src/pages/CompanyMap.jsx"), "utf8")), "키 문자열이 소스에 없음");
 ok(geo.cleanRegion("경기_수원") === "경기도 수원", "지역 _ 분리", geo.cleanRegion("경기_수원"));
 ok(geo.cleanRegion("서울시 강남구") === "서울특별시 강남구", "서울시 → 서울특별시", geo.cleanRegion("서울시 강남구"));
 ok(geo.cleanRegion("경기 수원(본사)") === "경기도 수원", "괄호 제거", geo.cleanRegion("경기 수원(본사)"));
