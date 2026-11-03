@@ -4,11 +4,11 @@
 // 좌표 규칙
 //   · 상세 주소(companies.address)가 있으면 그 주소로 → 진한 핀(geo_level='address')
 //   · 주소가 없거나 못 찾으면 지역(region, "경기_수원") 중심으로 → 연한 점(geo_level='region', 대략 위치)
-//   · 좌표는 /api/geocode 로 받아 **이 화면을 연 사람의 세션으로** companies.geo_* 에 저장한다(RLS 그대로).
+//   · 좌표는 Supabase Edge Function `geocode`(supabase/functions/geocode) 로 받아 **이 화면을 연 사람의 세션으로** companies.geo_* 에 저장한다(RLS 그대로).
 //   · geo_query 에 "주소|지역" 원문을 남긴다 → 기업상세에서 주소·지역을 고치면 값이 달라져 다음에 지도를 열 때 다시 받는다.
 //
 // ⚠️ supabase 클라이언트는 App.js 에서 받은 것만 쓴다(새로 만들면 GoTrueClient 가 둘이 된다 — GrowthRoadmap 과 같은 규칙).
-// ⚠️ 지도 타일 = OpenStreetMap(키 불필요). 주소 → 좌표 = 카카오 로컬 API(Vercel 환경변수 KAKAO_REST_API_KEY),
+// ⚠️ 지도 타일 = OpenStreetMap(키 불필요). 주소 → 좌표 = 카카오 로컬 API(키는 Supabase 함수 비밀값 KAKAO_REST_API_KEY — 저장소·브라우저에 없음),
 //    키가 없으면 서버가 OSM 으로 대신 찾는다(상세 주소 정확도가 낮다 — 화면 상단에 안내가 뜬다).
 import { useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
@@ -57,7 +57,18 @@ function pinIcon(color, approx) {
   });
 }
 
-export default function CompanyMap({ supabase, companies, setCompanies, onSelect, callApiJson, stageColors, assignees }) {
+// Edge Function 호출 — 에러 본문({error})까지 꺼내 화면에 띄운다(supabase-js 는 기본으로 상태코드만 준다).
+async function invokeGeocode(supabase, body) {
+  var r = await supabase.functions.invoke("geocode", { body: body });
+  if (r.error) {
+    var msg = r.error.message || "좌표 조회 실패";
+    try { var j = r.error.context && (await r.error.context.json()); if (j && j.error) msg = j.error; } catch (e) { /* 본문 없음 */ }
+    throw new Error(msg);
+  }
+  return r.data || {};
+}
+
+export default function CompanyMap({ supabase, companies, setCompanies, onSelect, stageColors, assignees }) {
   const mapEl = useRef(null);
   const mapRef = useRef(null);
   const clusterRef = useRef(null);
@@ -184,7 +195,7 @@ export default function CompanyMap({ supabase, companies, setCompanies, onSelect
     try {
       for (var i = 0; i < targets.length; i += batch) {
         var chunk = targets.slice(i, i + batch);
-        var res = await callApiJson("/api/geocode", {
+        var res = await invokeGeocode(supabase, {
           items: chunk.map(function(c) { return { id: c.id, address: c.address || "", region: c.region || "" }; }),
         });
         provider = res.provider || provider;

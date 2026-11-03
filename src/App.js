@@ -9851,7 +9851,7 @@ function CRMApp({ profile, session }) {
                 GoTrueClient 가 두 개가 되어 토큰 갱신이 서로 싸운다.
                 짝: src/pages/GrowthRoadmap.jsx · 성장로드맵_growth_paths.sql */}
             {view === "growth-roadmap" && <GrowthRoadmap supabase={supabase} />}
-            {view === "company-map" && <CompanyMap supabase={supabase} companies={companies} setCompanies={setCompanies} onSelect={openCompany} callApiJson={callApiJson} stageColors={STAGE_COLORS} assignees={assignees} />}
+            {view === "company-map" && <CompanyMap supabase={supabase} companies={companies} setCompanies={setCompanies} onSelect={openCompany} stageColors={STAGE_COLORS} assignees={assignees} />}
             {view === "stagnant" && <StagnantView stagnant={stagnant} onSelect={setSelectedCompany} />}
             {view === "olddocs" && <OldDocsView companies={companies} setCompanies={setCompanies} onSelect={setSelectedCompany} />}
             {view === "members" && profile.role === "admin" && <MembersView profiles={profiles} onRefresh={fetchAll} showToast={showToast} />}
