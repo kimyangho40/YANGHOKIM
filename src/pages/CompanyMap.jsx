@@ -257,8 +257,9 @@ export default function CompanyMap({ supabase, companies, setCompanies, onSelect
     if (!m || !map) { onSelect && onSelect(c); return; }
     // 대략 위치는 시·군 단위로만 보여 준다(골목까지 확대하면 정확한 위치처럼 보인다)
     if (c.geo_level !== "address") {
-      map.setView(m.getLatLng(), 15);
-      clusterRef.current.zoomToShowLayer(m, function() { m.openPopup(); });
+      // 애니메이션 없이 옮긴 뒤 묶음을 푼다 — 이동 중에 열면 마커가 아직 묶음 안에 있어 팝업이 안 뜬다
+      map.setView(m.getLatLng(), 15, { animate: false });
+      clusterRef.current.zoomToShowLayer(m, function() { setTimeout(function() { m.openPopup(); }, 50); });
       return;
     }
     clusterRef.current.zoomToShowLayer(m, function() { m.openPopup(); });
