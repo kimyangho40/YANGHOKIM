@@ -6439,14 +6439,17 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
   }, [me, refreshUnreadMap]);
 
   // 채널 진입 시 메시지 로드
+  // ⚠️ 최신 500건을 받아 화면용으로 오래된→최신 순으로 뒤집는다.
+  //    오름차순 limit(500) 이면 채널이 500건을 넘는 순간 "가장 오래된 500건"만 와서
+  //    새 메시지가 새로고침 후 사라진다(2026-11-12: 전체 채널 538건, 11/6 16:34 이후 증발).
   useEffect(function() {
     if (!channel) return;
     var alive = true;
     supabase.from("chat_messages").select("*").eq("channel", channel)
-      .order("created_at", { ascending: true }).limit(500)
+      .order("created_at", { ascending: false }).limit(500)
       .then(function(r) {
         if (!alive) return;
-        if (!r.error) { setMessages(r.data || []); markRead(r.data || []); }
+        if (!r.error) { var rows = (r.data || []).slice().reverse(); setMessages(rows); markRead(rows); }
       });
     return function() { alive = false; };
   }, [channel, markRead]);
