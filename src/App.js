@@ -7663,13 +7663,85 @@ function parseTsMs(s) {
 // 채팅 토스트가 화면에 보이는 시간(ms). "탭이 보이는 동안"만 세므로 실제 노출 시간과 같다.
 const CHAT_TOAST_MS = 30000;
 
+// ── ◫ 분할 보기 (시연판 2026-11-18) ─────────────────────────────────────────
+//   「분할 보기」를 누르면 좌우 두 칸에 CRM 을 각각(iframe, ?embed=1) 띄운다.
+//   칸 안의 CRM 은 사이드바 대신 위쪽 메뉴 줄을 쓰고, 칸 폭이 곧 그 화면의 폭이라
+//   기존 좁은 화면용 배치(@media)가 그대로 적용된다. 기존 화면 코드는 건드리지 않는다.
+//   ⚠️ 칸(embed)에서는 로그인 1회 알림(정체·서류 방치·오늘 할 일 팝업)을 돌리지 않는다 —
+//      본 화면과 두 칸이 동시에 돌면 같은 업무노트가 여러 번 만들어질 수 있다.
+var IS_EMBED = (function() { try { return new URLSearchParams(window.location.search).get("embed") === "1"; } catch (e) { return false; } })();
+var EMBED_MENUS = [
+  { id: "list", label: "기업 목록", emoji: "📋" }, { id: "agency", label: "기관별 현황", emoji: "🏛" },
+  { id: "worknotes", label: "업무 노트", emoji: "📝" }, { id: "pipeline", label: "파이프라인", emoji: "🗂" },
+  { id: "chat", label: "채팅", emoji: "💬" }, { id: "mytodo", label: "내 할일", emoji: "✅" },
+  { id: "dashboard", label: "대시보드", emoji: "📊" }, { id: "settlement", label: "정산관리", emoji: "💰" },
+  { id: "calendar", label: "캘린더", emoji: "📅" }, { id: "company-map", label: "사업장 지도", emoji: "🗺" },
+  { id: "agency-sites", label: "기관 사이트", emoji: "🔗" }, { id: "cases", label: "사례집", emoji: "📁" },
+];
+function EmbedBar({ view, setView }) {
+  return (
+    <div style={{ position: "fixed", top: 0, left: 0, right: 0, height: 44, background: "#1A1917", zIndex: 300, display: "flex", alignItems: "center", gap: 8, padding: "0 12px" }}>
+      <select value={view} onChange={function(e) { setView(e.target.value); }}
+        style={{ background: "#2E2C29", color: "#F7F6F3", border: "1px solid #3A3835", borderRadius: 8, padding: "6px 10px", fontSize: 13, fontWeight: 700, outline: "none", maxWidth: "60%" }}>
+        <option value="blank">메뉴 선택…</option>
+        {EMBED_MENUS.map(function(m) { return <option key={m.id} value={m.id}>{m.emoji} {m.label}</option>; })}
+      </select>
+      <div style={{ display: "flex", gap: 4, overflowX: "auto", flex: 1 }}>
+        {EMBED_MENUS.slice(0, 5).map(function(m) {
+          var on = view === m.id;
+          return <button key={m.id} onClick={function() { setView(m.id); }} title={m.label}
+            style={{ background: on ? "#F7F6F3" : "transparent", color: on ? "#1A1917" : "rgba(255,255,255,0.75)", border: "none", borderRadius: 6, padding: "5px 9px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>{m.label}</button>;
+        })}
+      </div>
+    </div>
+  );
+}
+function EmbedBlank({ setView }) {
+  return (
+    <div style={{ maxWidth: 520, margin: "40px auto 0", textAlign: "center" }}>
+      <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>이 칸에 띄울 화면을 고르세요</div>
+      <div style={{ fontSize: 12, color: "#888", marginBottom: 18 }}>위쪽 메뉴에서 언제든 바꿀 수 있습니다.</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 10 }}>
+        {EMBED_MENUS.map(function(m) {
+          return <button key={m.id} onClick={function() { setView(m.id); }}
+            style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, padding: "16px 10px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#1A1917" }}>
+            <div style={{ fontSize: 22, marginBottom: 6 }}>{m.emoji}</div>{m.label}</button>;
+        })}
+      </div>
+    </div>
+  );
+}
+function SplitPanes({ onClose }) {
+  var [ratio, setRatio] = useState(50);
+  var src = window.location.origin + window.location.pathname + "?embed=1";
+  return (
+    <div className="crm-split" style={{ position: "fixed", left: 220, top: 0, right: 0, bottom: 0, zIndex: 150, background: "#D9D6D0", display: "flex", flexDirection: "column" }}>
+      <div style={{ height: 34, background: "#2E2C29", display: "flex", alignItems: "center", gap: 6, padding: "0 10px", flexShrink: 0 }}>
+        <span style={{ color: "#F7F6F3", fontSize: 12, fontWeight: 700, marginRight: 6 }}>◫ 분할 보기</span>
+        {[[40, "좁게 · 넓게"], [50, "반반"], [60, "넓게 · 좁게"]].map(function(r) {
+          var on = ratio === r[0];
+          return <button key={r[0]} onClick={function() { setRatio(r[0]); }}
+            style={{ background: on ? "#F7F6F3" : "transparent", color: on ? "#1A1917" : "rgba(255,255,255,0.7)", border: "1px solid #4A4743", borderRadius: 6, padding: "3px 9px", fontSize: 11, cursor: "pointer" }}>{r[1]}</button>;
+        })}
+        <div style={{ flex: 1 }} />
+        <button onClick={onClose} style={{ background: "#7C2020", color: "#fff", border: "none", borderRadius: 6, padding: "4px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>분할 해제 ✕</button>
+      </div>
+      <div style={{ flex: 1, display: "flex", gap: 4, minHeight: 0 }}>
+        <iframe title="왼쪽 칸" src={src} style={{ width: ratio + "%", height: "100%", border: "none", background: "#F7F6F3" }} />
+        <iframe title="오른쪽 칸" src={src} style={{ flex: 1, height: "100%", border: "none", background: "#F7F6F3" }} />
+      </div>
+    </div>
+  );
+}
+
 // ── CRM 메인 앱 ───────────────────────────────────────────────────────────────
 function CRMApp({ profile, session }) {
   const [dashboardFilter, setDashboardFilter] = useState(null);
   const [view, setView] = useState(() => {
     var params = new URLSearchParams(window.location.search);
-    return params.get("view") || "dashboard";
+    return params.get("view") || (IS_EMBED ? "blank" : "dashboard");
   });
+  const [splitOn, setSplitOn] = useState(false);   // ◫ 분할 보기(본 화면에서만)
   const [agencyJumpMonth, setAgencyJumpMonth] = useState(() => {
     var params = new URLSearchParams(window.location.search);
     var m = params.get("month");
@@ -8831,6 +8903,7 @@ function CRMApp({ profile, session }) {
   const stagnCheckedRef = useRef(false);
   useEffect(() => {
     if (stagnCheckedRef.current) return;
+    if (IS_EMBED) return;
     if (!profile?.name) return;
     if (!companies.length || !pipelineCards.length || !stagnConfig.length) return;
     stagnCheckedRef.current = true;
@@ -8883,6 +8956,7 @@ function CRMApp({ profile, session }) {
   useEffect(() => {
     if (docAlertCheckedRef.current) return;
     if (OLD_DOCS_OFF) return;   // 묵은 서류 알림 끔(2026-11-19)
+    if (IS_EMBED) return;
     if (!profile?.name) return;
     if (!companies.length) return;
     docAlertCheckedRef.current = true;
@@ -9542,6 +9616,8 @@ function CRMApp({ profile, session }) {
           background: #1A1917; display: flex; align-items: center;
           justify-content: space-around; z-index: 200; border-top: 1px solid #2E2C29;
         }
+        ${IS_EMBED ? ".crm-sidebar{display:none !important} .crm-mobile-nav{display:none !important} .crm-notif-banner{display:none !important} .crm-main{margin-left:0 !important;padding:58px 14px 14px !important}" : ""}
+        @media (max-width: 768px) { .crm-split { display: none !important; } }
       `}</style>
       {/* 토스트 */}
       {toast && (
@@ -9661,7 +9737,7 @@ function CRMApp({ profile, session }) {
       )}
 
       {/* 오늘 할 일 알림 팝업 */}
-      {showTodayAlert && (function() {
+      {showTodayAlert && !IS_EMBED && (function() {
         const todayStr = kstDate();
         const todayContacts = companies.filter(c => c.next_contact === todayStr);
         const stagnantList = companies.filter(isStagnant);
@@ -9949,6 +10025,12 @@ function CRMApp({ profile, session }) {
             <span>🤖</span>
             <span style={{ flex: 1 }}>AI 상담</span>
             <span style={{ fontSize: 10, background: "#1A1917", padding: "2px 6px", borderRadius: 4, color: "#A5B4FC" }}>질문</span>
+          </div>
+          <div onClick={function() { setSplitOn(function(v) { return !v; }); }}
+            style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 8, cursor: "pointer", marginBottom: 8, background: splitOn ? "#F7F6F3" : "#2E2C29", color: splitOn ? "#1A1917" : "#DDD", fontSize: 12, fontWeight: splitOn ? 700 : 400, border: "1px solid #3A3835" }}>
+            <span>◫</span>
+            <span style={{ flex: 1 }}>{splitOn ? "분할 해제" : "분할 보기"}</span>
+            <span style={{ fontSize: 10, background: splitOn ? "#E8E5E0" : "#1A1917", padding: "2px 6px", borderRadius: 4, color: splitOn ? "#555" : "#888" }}>2칸</span>
           </div>
           {/* 자주 쓰는 메뉴 */}
           <div style={{ fontSize: 10, color: "rgba(255,255,255,0.55)", letterSpacing: "0.08em", padding: "4px 12px 6px", fontWeight: 600 }}>주요 메뉴</div>
@@ -10288,6 +10370,8 @@ function CRMApp({ profile, session }) {
         </div>
       )}
 
+      {splitOn && !IS_EMBED && <SplitPanes onClose={function() { setSplitOn(false); }} />}
+      {IS_EMBED && <EmbedBar view={view} setView={setView} />}
       {/* 메인 */}
       <div className="crm-main" style={{ marginLeft: 220, padding: "28px 32px", minHeight: "100vh" }}>
         {loading ? (
@@ -10298,6 +10382,7 @@ function CRMApp({ profile, session }) {
           </div>
         ) : (
           <>
+            {view === "blank" && <EmbedBlank setView={setView} />}
             {view === "dashboard" && <Dashboard companies={companies} profiles={profiles} stagnant={stagnant} onSelectCompany={setSelectedCompany} setView={setView} setFilterStage={setFilterStage} setFilterAssignee={setFilterAssignee} setDashboardFilter={setDashboardFilter} onAdd={() => setShowAdd(true)} canExport={session?.user?.email === EXPORT_OWNER_EMAIL} myName={profile?.name} myUid={profile?.id} stagnRows={stagnRows} />}
             {view === "agency" && <AgencyView key={agencyJumpKey} jumpToMonth={agencyJumpMonth} jumpToGroup={agencyJumpGroup} jumpToYear={agencyJumpYear} />}
             {view === "dbleads" && <DBLeadsView canExport={session?.user?.email === EXPORT_OWNER_EMAIL} />}
