@@ -6660,8 +6660,22 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
   useEffect(function() {
     if (jumpMsgId || jumpCtx) return;
     if (!nearBottomRef.current) return;
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    var toBottom = function() { if (nearBottomRef.current && !jumpCtxRef.current && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; };
+    toBottom();
+    // 말풍선 아래 「저장됨」 표시·이미지가 늦게 그려지면 높이가 늘어 맨 아래에서 밀린다 → 잠깐 뒤 다시 맞춘다
+    var t1 = setTimeout(toBottom, 400), t2 = setTimeout(toBottom, 1500);
+    return function() { clearTimeout(t1); clearTimeout(t2); };
   }, [messages, jumpMsgId, jumpCtx]);
+  // 말풍선 아래 「저장됨」 표시처럼 늦게 붙는 내용 때문에 높이가 늘어도, 맨 아래를 보고 있었다면 계속 맨 아래에 둔다.
+  useEffect(function() {
+    var el = scrollRef.current;
+    if (!el || typeof MutationObserver === "undefined") return;
+    var mo = new MutationObserver(function() {
+      if (nearBottomRef.current && !jumpCtxRef.current) el.scrollTop = el.scrollHeight;
+    });
+    mo.observe(el, { childList: true, subtree: true });
+    return function() { mo.disconnect(); };
+  }, [channel]);
 
   // @업체 자동완성 갱신
   function updateMention(val, caret) {
