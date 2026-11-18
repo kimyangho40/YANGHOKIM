@@ -2313,6 +2313,78 @@ function canSaveSettlementAssignee(assigneeRaw, myName, scope) {
   return settlementAssignees(assigneeRaw).indexOf(me) >= 0;
 }
 // ⛳ 정산-권한 끝
+
+// ── 💰 정산관리 금액 입력 (2026-11-18) ───────────────────────────────────────
+//   쉼표 없이 숫자만 쳐도, "380만원"처럼 한글로 쳐도 "3,800,000" 으로 맞춰 저장한다.
+//   금액 칸(신청금액·계약금·승인금액·수수료·입금금액)은 전부 text 컬럼이라 DB 변경은 없다.
+//   ⚠️ 뜻이 갈리는 표기는 **바꾸지 않고 원문 그대로 둔다**(null):
+//      · "5천" · "2천5백" · "1억5천" — 기관현황 신청금액에서는 "5천" = 5천만원으로 쓴다(실측 290행).
+//        여기서 5,000원으로 바꾸면 조용히 틀린 돈이 된다. '만'·'억'으로 끝까지 적힌 것만 바꾼다.
+//      · "2%" · "1억(5천 승인)" 같은 메모형
+//   ⚠️ parseLoanAmount(기대출)와 별개다 — 거긴 입력 단위가 '만원 고정'이라 규칙이 다르다. 합치지 말 것.
+//   테스트: node scripts/test-settle-amount.mjs (이 구간을 소스째 떼어내 실행 — 마커 문구를 바꾸지 말 것)
+// ⛳ 정산-금액 시작
+var SETTLE_AMOUNT_FIELDS = ["request_amount", "contract_fee", "approval_amount", "commission_fee", "received_amount"];
+// "3천5백" → 3500 · "380" → 380 · "1.5" → 1.5 · 못 읽으면 null
+function settleSmallNum(str) {
+  if (str === "") return 0;
+  var re = /(\d+(?:\.\d+)?)(천|백|십)?/g, total = 0, pos = 0, m, sawPlain = false;
+  var mult = { "천": 1000, "백": 100, "십": 10 };
+  while ((m = re.exec(str)) !== null) {
+    if (m.index !== pos || sawPlain) return null;
+    if (m[2]) total += parseFloat(m[1]) * mult[m[2]];
+    else { total += parseFloat(m[1]); sawPlain = true; }
+    pos = re.lastIndex;
+  }
+  return pos === str.length ? total : null;
+}
+// 금액 원문 → 원 단위 정수. 확실히 읽을 수 있을 때만 숫자, 아니면 null.
+function parseSettleAmount(raw) {
+  if (raw == null) return null;
+  var s = String(raw).replace(/[,\s]/g, "").replace(/원$/, "");
+  if (s === "") return null;
+  if (/^\d+$/.test(s)) { var n0 = Number(s); return n0 <= 1e13 ? n0 : null; }
+  if (!/^[\d.억만천백십]+$/.test(s)) return null;
+  if (s.indexOf("억") < 0 && s.indexOf("만") < 0) return null;         // "5천"·"2천5백" = 뜻이 갈린다
+  var eok = 0, rest = s, ei = s.indexOf("억");
+  if (ei >= 0) {
+    if (s.indexOf("억", ei + 1) >= 0 || ei === 0) return null;
+    eok = settleSmallNum(s.slice(0, ei)); rest = s.slice(ei + 1);
+    if (eok == null) return null;
+  }
+  var man = 0, tail = 0, mi = rest.indexOf("만");
+  if (mi >= 0) {
+    if (rest.indexOf("만", mi + 1) >= 0 || mi === 0) return null;
+    man = settleSmallNum(rest.slice(0, mi)); tail = settleSmallNum(rest.slice(mi + 1));
+    if (man == null || tail == null) return null;
+  } else if (rest !== "") return null;                                    // "1억5천" = 뜻이 갈린다
+  var total = eok * 1e8 + man * 1e4 + tail, rounded = Math.round(total);
+  if (Math.abs(total - rounded) > 1e-6 || rounded > 1e13) return null;    // 원 미만이 남으면 안 바꾼다
+  return rounded;
+}
+// 입력칸·저장용: 읽을 수 있으면 "3,800,000", 아니면 사람이 적은 그대로.
+function formatSettleAmount(raw) {
+  var n = parseSettleAmount(raw);
+  if (n == null) return raw == null ? raw : (typeof raw === "string" ? raw.trim() : raw);
+  return n.toLocaleString("en-US");
+}
+// 표 표시용: 숫자만 적힌 옛 값("3800000")에 쉼표만 넣는다. 한글 표기("1억")는 적힌 대로 보여 준다.
+function displaySettleAmount(raw) {
+  if (raw == null) return raw;
+  var s = String(raw).trim();
+  return /^\d+$/.test(s) ? Number(s).toLocaleString("en-US") : raw;
+}
+// 저장 payload 보정: 이번에 사람이 고친 금액 칸만 맞춘다(손대지 않은 칸의 옛 표기는 건드리지 않는다).
+function normalizeSettleAmounts(data, orig) {
+  var out = Object.assign({}, data);
+  SETTLE_AMOUNT_FIELDS.forEach(function(f) {
+    if (!(f in out) || out[f] == null || out[f] === "") return;
+    if (orig && orig[f] === out[f]) return;
+    out[f] = formatSettleAmount(out[f]);
+  });
+  return out;
+}
+// ⛳ 정산-금액 끝
 const INDUSTRY_OPTIONS = ["제조업","농업·어업","숙박업","음식점업","전자상거래업","정보통신업","도소매업","서비스업","창고업","자동차임대업"];
 
 // ── 정책자금 신규 기능: 상수 & 계산 로직 ─────────────────────────────────────────
@@ -24650,7 +24722,9 @@ function SettlementView({ profile }) {
 
   var parseAmt = function(v) {
     if (!v) return 0;
-    return typeof v === "string" ? parseInt(v.replace(/[^0-9]/g, "")) || 0 : (v || 0);
+    if (typeof v !== "string") return v || 0;
+    var n = parseSettleAmount(v);   // "380만원" → 3,800,000 (못 읽으면 아래 예전 방식)
+    return n != null ? n : (parseInt(v.replace(/[^0-9]/g, "")) || 0);
   };
 
   var formatAmt = function(v) {
@@ -24697,6 +24771,8 @@ function SettlementView({ profile }) {
       updated_at: new Date().toISOString(),
     };
     var approvalFields = { approval_amount: editData.approval_amount || null, approval_date: editData.approval_date || null };
+    var origAuto = cases.find(function(c) { return c.id === editData.id; }) || null;
+    base = normalizeSettleAmounts(base, origAuto); approvalFields = normalizeSettleAmounts(approvalFields, origAuto);
     var updates = Object.assign({}, base, approvalFields);
     var r = await supabase.from("agency_cases").update(updates).eq("id", editData.id);
     // 승인 컬럼 미생성(SQL 미실행) 시 → 승인 필드 빼고 재시도해 나머지는 정상 저장
@@ -24737,6 +24813,8 @@ function SettlementView({ profile }) {
       commission_rate: (editData.commission_rate === "" || editData.commission_rate == null)
         ? null : (parseFloat(editData.commission_rate) || 0),
     };
+    var origManual = manuals.find(function(m) { return m.id === editData.id; }) || null;
+    base = normalizeSettleAmounts(base, origManual); approvalFields = normalizeSettleAmounts(approvalFields, origManual);
     var updates = Object.assign({}, base, approvalFields);
     var r = await supabase.from("settlement_manual").update(updates).eq("id", editData.id);
     // 승인/수수료율 컬럼 미생성(SQL 미실행) 시 → 그 필드 빼고 재시도
@@ -24781,7 +24859,7 @@ function SettlementView({ profile }) {
       alert("담당자는 본인으로만 등록할 수 있습니다.\n(전체 권한이 없으면 본인 담당 건만 다룰 수 있습니다)");
       return;
     }
-    var dataToSave = Object.assign({}, newManual, {
+    var dataToSave = Object.assign({}, normalizeSettleAmounts(newManual, null), {
       contract_date: newManual.contract_date || null,
       approval_date: newManual.approval_date || null,
       fee_received_date: newManual.fee_received_date || null,
@@ -24851,11 +24929,11 @@ function SettlementView({ profile }) {
         </td>
         <td style={{ padding: "6px 8px" }}>
           {isManual
-            ? <input value={editData.request_amount || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { request_amount: e.target.value }); }); }} style={{ width: 70, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
+            ? <input value={editData.request_amount || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { request_amount: e.target.value }); }); }} onBlur={function(e) { var v = formatSettleAmount(e.target.value); setEditData(function(p) { return Object.assign({}, p, { request_amount: v }); }); }} style={{ width: 70, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
             : <span style={{ fontSize: 12, color: "#555" }}>{row.request_amount || "-"}</span>}
         </td>
         <td style={{ padding: "6px 8px" }}>
-          <input value={editData.contract_fee || ""} placeholder="계약금" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { contract_fee: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
+          <input value={editData.contract_fee || ""} placeholder="계약금" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { contract_fee: e.target.value }); }); }} onBlur={function(e) { var v = formatSettleAmount(e.target.value); setEditData(function(p) { return Object.assign({}, p, { contract_fee: v }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
         </td>
         <td style={{ padding: "6px 8px" }}>
           {/* 수수료율(%) — 수동 건에만 있는 칸(agency_cases 에는 컬럼이 없다).
@@ -24867,16 +24945,16 @@ function SettlementView({ profile }) {
             : <span style={{ fontSize: 11, color: "#AAA" }}>-</span>}
         </td>
         <td style={{ padding: "6px 8px" }}>
-          <input value={editData.approval_amount || ""} placeholder="승인금액" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { approval_amount: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #FCD34D", background: "#FFFBEB", borderRadius: 4, fontSize: 12 }} />
+          <input value={editData.approval_amount || ""} placeholder="승인금액" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { approval_amount: e.target.value }); }); }} onBlur={function(e) { var v = formatSettleAmount(e.target.value); setEditData(function(p) { return Object.assign({}, p, { approval_amount: v }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #FCD34D", background: "#FFFBEB", borderRadius: 4, fontSize: 12 }} />
         </td>
         <td style={{ padding: "6px 8px" }}>
           <input type="date" value={editData.approval_date || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { approval_date: e.target.value }); }); }} style={{ width: 130, padding: "4px 6px", border: "1px solid #FCD34D", background: "#FFFBEB", borderRadius: 4, fontSize: 12 }} />
         </td>
         <td style={{ padding: "6px 8px" }}>
-          <input value={editData.commission_fee || ""} placeholder="수수료" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { commission_fee: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
+          <input value={editData.commission_fee || ""} placeholder="수수료" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { commission_fee: e.target.value }); }); }} onBlur={function(e) { var v = formatSettleAmount(e.target.value); setEditData(function(p) { return Object.assign({}, p, { commission_fee: v }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
         </td>
         <td style={{ padding: "6px 8px" }}>
-          <input value={editData.received_amount || ""} placeholder="입금금액" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { received_amount: e.target.value }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
+          <input value={editData.received_amount || ""} placeholder="입금금액" onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { received_amount: e.target.value }); }); }} onBlur={function(e) { var v = formatSettleAmount(e.target.value); setEditData(function(p) { return Object.assign({}, p, { received_amount: v }); }); }} style={{ width: 75, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
         </td>
         <td style={{ padding: "6px 8px" }}>
           <input type="date" value={editData.contract_date || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { contract_date: e.target.value }); }); }} style={{ width: 115, padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12 }} />
@@ -24921,9 +24999,9 @@ function SettlementView({ profile }) {
           <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 99, background: "#EEF2FF", color: "#4338CA", fontWeight: 600 }}>{row.agency_group || "-"}</span>
         </td>
         <td style={{ padding: "9px 8px", fontSize: 12, color: "#555" }}>{row.assignee || "-"}</td>
-        <td style={{ padding: "9px 8px", fontSize: 12, color: "#555" }}>{row.request_amount || "-"}</td>
+        <td style={{ padding: "9px 8px", fontSize: 12, color: "#555" }}>{displaySettleAmount(row.request_amount) || "-"}</td>
         <td style={{ padding: "9px 8px" }}>
-          {row.contract_fee ? <span style={{ fontSize: 12, fontWeight: 700, color: "#333" }}>{row.contract_fee}</span> : <span style={{ fontSize: 11, color: "#888" }}>미입력</span>}
+          {row.contract_fee ? <span style={{ fontSize: 12, fontWeight: 700, color: "#333" }}>{displaySettleAmount(row.contract_fee)}</span> : <span style={{ fontSize: 11, color: "#888" }}>미입력</span>}
         </td>
         <td style={{ padding: "9px 8px" }}>
           {(row.commission_rate || row.commission_rate === 0)
@@ -24931,14 +25009,14 @@ function SettlementView({ profile }) {
             : <span style={{ fontSize: 11, color: "#888" }}>{isManual ? "미입력" : "-"}</span>}
         </td>
         <td style={{ padding: "9px 8px" }}>
-          {row.approval_amount ? <span style={{ fontSize: 12, fontWeight: 700, color: "#B45309" }}>{row.approval_amount}</span> : <span style={{ fontSize: 11, color: "#888" }}>미입력</span>}
+          {row.approval_amount ? <span style={{ fontSize: 12, fontWeight: 700, color: "#B45309" }}>{displaySettleAmount(row.approval_amount)}</span> : <span style={{ fontSize: 11, color: "#888" }}>미입력</span>}
         </td>
         <td style={{ padding: "9px 8px", fontSize: 11, color: "#888" }}>{row.approval_date || "-"}</td>
         <td style={{ padding: "9px 8px" }}>
-          {row.commission_fee ? <span style={{ fontSize: 12, fontWeight: 700, color: "#7C3AED" }}>{row.commission_fee}</span> : <span style={{ fontSize: 11, color: "#888" }}>미입력</span>}
+          {row.commission_fee ? <span style={{ fontSize: 12, fontWeight: 700, color: "#7C3AED" }}>{displaySettleAmount(row.commission_fee)}</span> : <span style={{ fontSize: 11, color: "#888" }}>미입력</span>}
         </td>
         <td style={{ padding: "9px 8px" }}>
-          {row.received_amount ? <span style={{ fontSize: 12, fontWeight: 700, color: "#047857" }}>{row.received_amount}</span> : <span style={{ fontSize: 11, color: "#888" }}>미입력</span>}
+          {row.received_amount ? <span style={{ fontSize: 12, fontWeight: 700, color: "#047857" }}>{displaySettleAmount(row.received_amount)}</span> : <span style={{ fontSize: 11, color: "#888" }}>미입력</span>}
         </td>
         <td style={{ padding: "9px 8px", fontSize: 11, color: "#888" }}>{row.contract_date || "-"}</td>
         <td style={{ padding: "9px 8px", textAlign: "center" }}>
@@ -25197,7 +25275,8 @@ function SettlementView({ profile }) {
                   return (
                     <div key={f[1]}>
                       <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>{f[0]}</label>
-                      <input value={newManual[f[1]] || ""} placeholder="예: 300만" onChange={function(e) { var k = f[1]; setNewManual(function(p) { return Object.assign({}, p, { [k]: e.target.value }); }); }}
+                      <input value={newManual[f[1]] || ""} placeholder="예: 3800000 또는 380만원" onChange={function(e) { var k = f[1]; setNewManual(function(p) { return Object.assign({}, p, { [k]: e.target.value }); }); }}
+                        onBlur={function(e) { var k = f[1]; var v = formatSettleAmount(e.target.value); setNewManual(function(p) { return Object.assign({}, p, { [k]: v }); }); }}
                         style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
                     </div>
                   );
@@ -25214,7 +25293,8 @@ function SettlementView({ profile }) {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 13 }}>
                 <div>
                   <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 5 }}>입금금액</label>
-                  <input value={newManual.received_amount || ""} placeholder="예: 300만" onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { received_amount: e.target.value }); }); }}
+                  <input value={newManual.received_amount || ""} placeholder="예: 3800000 또는 380만원" onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { received_amount: e.target.value }); }); }}
+                    onBlur={function(e) { var v = formatSettleAmount(e.target.value); setNewManual(function(p) { return Object.assign({}, p, { received_amount: v }); }); }}
                     style={{ width: "100%", padding: "10px 13px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
                 </div>
                 <div>
@@ -25226,7 +25306,8 @@ function SettlementView({ profile }) {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 13 }}>
                 <div>
                   <label style={{ fontSize: 12, fontWeight: 600, color: "#B45309", display: "block", marginBottom: 5 }}>승인금액</label>
-                  <input value={newManual.approval_amount || ""} placeholder="예: 300만" onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { approval_amount: e.target.value }); }); }}
+                  <input value={newManual.approval_amount || ""} placeholder="예: 3800000 또는 380만원" onChange={function(e) { setNewManual(function(p) { return Object.assign({}, p, { approval_amount: e.target.value }); }); }}
+                    onBlur={function(e) { var v = formatSettleAmount(e.target.value); setNewManual(function(p) { return Object.assign({}, p, { approval_amount: v }); }); }}
                     style={{ width: "100%", padding: "10px 13px", border: "1px solid #FCD34D", background: "#FFFBEB", borderRadius: 8, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
                 </div>
                 <div>
