@@ -34654,6 +34654,12 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
             {item.company_name || "(업체 미지정)"}
           </span>
         </div>
+        {/* 📌 기관현황 비고에서 온 일정이면 메모 원문을 보여 준다 — 없으면 무엇을 하라는 일정인지 알 수 없다(2026-11-19) */}
+        {item.src === "agency_memo" && item.memo && (
+          <div className="sched-memo" style={{ paddingLeft: 20, fontSize: 11, color: done ? "#999" : "#555", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+            📌 {item.memo}{item.agency_group ? <span style={{ color: "#AAA" }}> · {item.agency_group}</span> : null}
+          </div>
+        )}
         {/* 2단 — 담당자·예정 배지 */}
         {(item.assignee || (future && !done)) && (
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center", paddingLeft: 20 }}>
