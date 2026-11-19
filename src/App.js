@@ -11185,6 +11185,9 @@ function StagnationAdminWidget({ rows, onSelectCompany, setView }) {
 }
 
 // ── 대시보드 ──────────────────────────────────────────────────────────────────
+// 📊 성과 관련 위젯(담당자별 성과 · 예상 수수료 · 담당자별 KPI 달성률)은 대시보드에서 뺐다(2026-11-19 클라이언트 요청).
+//    지우지 않고 숨겼다 — false 로 바꾸면 「전체 위젯 보기」에 다시 나온다. 저장된 KPI 목표값은 그대로다.
+var DASH_PERF_OFF = true;
 function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, setFilterAssignee, setDashboardFilter, onAdd, canExport, myName, myUid, stagnRows }) {
   const [dashSimple, setDashSimple] = useState(true);   // 🧹 핵심 4가지만 보기(2026-11-19) — 나머지 위젯은 숨김, 버튼으로 전체 보기
   const isAdmin = myName === "양호";
@@ -11579,8 +11582,8 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         );
       })()}
 
-      {/* 📊 담당자별 성과 (기능6) + 💰 예상 수수료 (기능5) */}
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, marginBottom: 22 }}>
+      {/* 📊 담당자별 성과 (기능6) + 💰 예상 수수료 (기능5) — DASH_PERF_OFF 로 숨김(2026-11-19) */}
+      <div style={{ display: DASH_PERF_OFF ? "none" : "grid", gridTemplateColumns: "2fr 1fr", gap: 14, marginBottom: 22 }}>
         <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", padding: "16px 18px", overflowX: "auto" }}>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>📊 담당자별 성과</div>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 480 }}>
@@ -11921,8 +11924,8 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         );
       })()}
 
-      {/* KPI 목표 달성률 */}
-      <div style={{ background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
+      {/* KPI 목표 달성률 — DASH_PERF_OFF 로 숨김(2026-11-19) */}
+      <div style={{ display: DASH_PERF_OFF ? "none" : "block", background: "#fff", borderRadius: 12, padding: "20px 24px", border: "1px solid #E8E5E0", marginBottom: 18 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
           <div style={{ fontSize: 14, fontWeight: 600 }}>담당자별 KPI 달성률 <span style={{ fontSize: 12, color: "#888", fontWeight: 400 }}>{thisMonth}월 목표</span></div>
           <div style={{ display: "flex", gap: 6 }}>
