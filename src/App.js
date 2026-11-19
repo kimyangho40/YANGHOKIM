@@ -28745,6 +28745,19 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
   };
 
   useEffect(function() { fetchCases(); fetchCompanies(); }, []);
+  // ⌨️ ESC 로 사이드패널 닫기(2026-11-19). 입력칸에 커서가 있으면 먼저 커서만 뺀다(쓰던 글을 실수로 닫지 않게).
+  //    메모 확대 팝업(MemoEditModal)은 capture 단계에서 ESC 를 먹으므로 여기까지 오지 않는다.
+  useEffect(function() {
+    if (!selectedCase) return;
+    var onKey = function(e) {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      var ae = document.activeElement;
+      if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) { ae.blur(); return; }
+      setSelectedCase(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return function() { window.removeEventListener("keydown", onKey); };
+  }, [selectedCase]);
 
   useEffect(function() {
     if (jumpToMonth) setActiveMonth(Number(jumpToMonth));
@@ -30937,11 +30950,13 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
 
       {/* 기관별현황 사이드패널 */}
       {selectedCase && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 900 }}
-          /* 바깥 클릭으로는 닫지 않는다 — 패널 안에 입력이 있어 작성 중이던 내용이 날아간다.
+        <div style={{ position: "fixed", inset: 0, zIndex: 900, pointerEvents: "none" }}
+          /* ⚠️ 이 겉 상자는 화면 전체를 덮는다 — pointerEvents 를 끄지 않으면 패널이 열린 동안 목록의 다른 업체를 누를 수 없다(2026-11-19 수정).
+             패널 본체만 pointerEvents:auto 로 다시 켠다. 다른 행을 누르면 그 업체로 패널이 바뀐다.
+             바깥 클릭으로는 닫지 않는다 — 패널 안에 입력이 있어 작성 중이던 내용이 날아간다.
              닫기는 ✕/취소 버튼으로만. (예전 __panelMouseDownTarget 가드는 드래그만 막고
              단순 바깥 클릭은 그대로 닫혔다.) */>
-          <div style={{ position: "absolute", top: 0, right: 0, width: 460, height: "100%", background: "#fff", boxShadow: "-4px 0 30px rgba(0,0,0,0.15)", overflowY: "auto" }}
+          <div style={{ position: "absolute", top: 0, right: 0, width: 460, height: "100%", background: "#fff", boxShadow: "-4px 0 30px rgba(0,0,0,0.15)", overflowY: "auto", pointerEvents: "auto" }}
             onClick={function(e) { e.stopPropagation(); }}
             onMouseDown={function(e) { e.stopPropagation(); }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
