@@ -7709,6 +7709,50 @@ function CRMApp({ profile, session }) {
   const [showAiSearch, setShowAiSearch] = useState(false);
 
   // 전역 단축키 Ctrl+K (또는 Cmd+K)
+  // 🔁 새로고침해도 보던 메뉴가 그대로 뜨게, 메뉴를 옮길 때마다 주소의 ?view= 를 맞춘다(2026-11-19).
+  //    예전엔 주소가 안 바뀌어 사례집·업무노트 어디서 새로고침해도 대시보드로 돌아갔다.
+  //    같은 메뉴 안에서는 주소를 건드리지 않는다(기관별 현황의 month·group·year 를 지우지 않기 위해).
+  useEffect(function() {
+    try {
+      var params = new URLSearchParams(window.location.search);
+      var cur = params.get("view") || "dashboard";
+      if (cur === view) return;
+      window.history.replaceState(null, "", window.location.pathname + (view === "dashboard" ? "" : "?view=" + encodeURIComponent(view)));
+    } catch (e) { /* 주소 교체 실패는 화면에 영향 없음 */ }
+  }, [view]);
+  // ⌨️ ESC = 맨 위에 떠 있는 창 닫기 — 앱 전체 공통(2026-11-19).
+  //    창마다 ESC 처리를 따로 넣어 왔는데 빠진 창이 많았다(사례집 등). 여기서 한 번에 받는다:
+  //    화면 전체를 덮는 창(position:fixed · inset 0) 중 맨 위 것을 찾아 그 창의 ✕/닫기/취소 버튼을 대신 눌러 준다.
+  //    → 각 창의 닫기 규칙(작성 중이면 확인창 등)이 그대로 지켜진다.
+  //    ⚠️ 자기 ESC 처리가 있는 창은 건너뛴다: 기업 상세(role=dialog · preventDefault), 메모 확대·확대보기(capture 에서 먹음),
+  //       기관별 현황 사이드패널(pointerEvents:none 겉 상자). 0ms 뒤에 실행해 다른 핸들러가 먼저 처리했는지(defaultPrevented) 본다.
+  useEffect(function() {
+    var onEsc = function(e) {
+      if (e.key !== "Escape") return;
+      setTimeout(function() {
+        if (e.defaultPrevented) return;
+        var top = null, topZ = -1;
+        Array.prototype.forEach.call(document.querySelectorAll("div"), function(d) {
+          var st = d.style;
+          if (!st || st.position !== "fixed" || st.pointerEvents === "none") return;
+          var full = st.inset === "0px" || st.inset === "0" || (st.top === "0px" && st.left === "0px" && st.right === "0px" && st.bottom === "0px");
+          if (!full || !d.getClientRects().length) return;
+          var z = parseInt(st.zIndex, 10) || 0;
+          if (z >= topZ) { top = d; topZ = z; }
+        });
+        if (!top || top.querySelector('[role="dialog"]')) return;
+        var btns = Array.prototype.slice.call(top.querySelectorAll("button"));
+        var pick = null;
+        [["✕", "×", "✖", "X"], ["닫기"], ["취소"]].some(function(names) {
+          pick = btns.filter(function(b) { return !b.disabled && names.indexOf((b.innerText || "").trim()) >= 0; })[0] || null;
+          return !!pick;
+        });
+        if (pick) pick.click();
+      }, 0);
+    };
+    window.addEventListener("keydown", onEsc);
+    return function() { window.removeEventListener("keydown", onEsc); };
+  }, []);
   useEffect(function() {
     var onKey = function(e) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
@@ -32605,45 +32649,46 @@ function ApprovalCasesView({ profile }) {
           {cases.length === 0 ? "아직 등록된 사례가 없어요. 우측 상단 [사례 추가] 버튼을 눌러보세요." : "검색 결과가 없어요."}
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10 }}>
+          {/* 🗂 카드를 줄였다(2026-11-19) — 폭 360→250, 여백·글자 축소, 이슈·포인트는 2줄까지만. 전체 내용은 카드를 눌러서 본다 */}
           {filtered.map(function(c) {
             var rc = resultColor(c.result);
             return (
               <div key={c.id} onClick={function() { openEdit(c); }}
-                style={{ background: "#fff", borderRadius: 10, border: "1px solid #E8E5E0", padding: "16px 18px", cursor: "pointer", transition: "all 0.15s" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>{c.business_name}</div>
-                    <div style={{ fontSize: 11, color: "#888" }}>{c.agency_group || "-"} · {c.product || "-"}</div>
+                style={{ background: "#fff", borderRadius: 8, border: "1px solid #E8E5E0", padding: "10px 12px", cursor: "pointer", transition: "all 0.15s", minWidth: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 6, marginBottom: 6 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={c.business_name}>{c.business_name}</div>
+                    <div style={{ fontSize: 10, color: "#888", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={(c.agency_group || "-") + " · " + (c.product || "-")}>{c.agency_group || "-"} · {c.product || "-"}</div>
                   </div>
                   {c.result && (
-                    <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 99, background: rc.bg, color: rc.color, whiteSpace: "nowrap" }}>{c.result}</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 99, background: rc.bg, color: rc.color, whiteSpace: "nowrap" }}>{c.result}</span>
                   )}
                 </div>
-                <div style={{ display: "flex", gap: 14, fontSize: 11, color: "#666", marginBottom: 10, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 8, fontSize: 10, color: "#666", marginBottom: 6, flexWrap: "wrap" }}>
                   {c.industry && <span>🏭 {c.industry}</span>}
                   {c.region && <span>📍 {c.region}</span>}
                   {c.applied_amount && <span>💰 신청 {formatAmt(c.applied_amount)}</span>}
                   {c.approved_amount && <span style={{ color: "#15803D", fontWeight: 600 }}>승인 {formatAmt(c.approved_amount)}</span>}
                 </div>
                 {c.initial_issue && (
-                  <div style={{ fontSize: 12, color: "#92400E", background: "#FFF7ED", borderRadius: 6, padding: "8px 12px", marginBottom: 6, lineHeight: 1.5 }}>
+                  <div style={{ fontSize: 11, color: "#92400E", background: "#FFF7ED", borderRadius: 6, padding: "5px 8px", marginBottom: 4, lineHeight: 1.45, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
                     <strong>이슈:</strong> {c.initial_issue.length > 80 ? c.initial_issue.slice(0, 80) + "..." : c.initial_issue}
                   </div>
                 )}
                 {c.key_point && (
-                  <div style={{ fontSize: 12, color: "#15803D", background: "#DCFCE7", borderRadius: 6, padding: "8px 12px", marginBottom: 6, lineHeight: 1.5 }}>
+                  <div style={{ fontSize: 11, color: "#15803D", background: "#DCFCE7", borderRadius: 6, padding: "5px 8px", marginBottom: 4, lineHeight: 1.45, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
                     <strong>포인트:</strong> {c.key_point.length > 80 ? c.key_point.slice(0, 80) + "..." : c.key_point}
                   </div>
                 )}
                 {c.tags && c.tags.length > 0 && (
-                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 8 }}>
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
                     {c.tags.map(function(t, i) {
                       return <span key={i} style={{ fontSize: 10, color: "#666", background: "#F3F4F6", padding: "2px 8px", borderRadius: 99 }}>#{t}</span>;
                     })}
                   </div>
                 )}
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, paddingTop: 8, borderTop: "1px solid #F3F4F6" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, paddingTop: 5, borderTop: "1px solid #F3F4F6" }}>
                   <span style={{ fontSize: 10, color: "#AAA" }}>{c.created_by || "-"} · {c.created_at ? new Date(c.created_at).toLocaleDateString("ko-KR") : ""}</span>
                   <button onClick={function(e) { e.stopPropagation(); deleteCase(c.id); }} title="삭제"
                     style={{ background: "none", border: "none", cursor: "pointer", color: "#CC4444", fontSize: 12 }}>🗑</button>
