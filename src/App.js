@@ -2151,7 +2151,49 @@ function dashMemoSchedRows(notes, todayYmd) {
   open.sort(byDate); done.sort(byDate);
   return { open: open, done: done };
 }
+// 담당자 개인 업무노트에 넣는 줄 글. 📌 로 시작한다 — 체크할 때 이 표식이 있는 줄만 일정과 맞춰 본다.
+function memoTodoText(kind, companyName, memo) {
+  var one = String(memo == null ? "" : memo).replace(/\s+/g, " ").trim();
+  if (one.length > 200) one = one.slice(0, 200) + "…";
+  return "📌 " + (companyName ? "@" + companyName + " " : "") + "[" + String(kind || "일정") + "] " + one;
+}
+// 업무노트 줄 ↔ 일정 항목을 견주는 열쇠 — 날짜 꼬리표·대기사유·공백 차이를 지운다.
+function memoTodoKey(text) {
+  return String(text == null ? "" : text)
+    .replace(/\s*\{(응답대기|서류대기)(?::\d{4}-\d{2}-\d{2})?\}\s*$/, "")
+    .replace(/\[\d{4}-\d{2}-\d{2}\]|\[\d{1,2}\/\d{1,2}\]/g, "")
+    .replace(/\\n/g, " ").replace(/\s+/g, " ").trim();
+}
+// 체크한 업무노트 줄에 해당하는, 아직 완료 안 된 일정 항목 → { note, idx } (없으면 null)
+function findMemoSchedByTodo(notes, todoText) {
+  var key = memoTodoKey(todoText), hit = null;
+  if (!key || key.indexOf("📌") !== 0) return null;
+  (notes || []).forEach(function(n) {
+    if (hit || !n || n.deleted_at) return;
+    (Array.isArray(n.checklist) ? n.checklist : []).forEach(function(it, k) {
+      if (hit || !it || it.src !== "agency_memo" || it.done || !it.wn_text) return;
+      if (memoTodoKey(it.wn_text) === key) hit = { note: n, idx: k };
+    });
+  });
+  return hit;
+}
 // ⛳ 기관메모-일정 끝
+// 업무노트에서 📌 줄을 체크했을 때 부른다 → 같은 일정 항목을 완료로(대시보드 완료로 넘어간다). 체크 해제는 되돌리지 않는다.
+async function completeMemoSchedByTodo(todoText, myName) {
+  try {
+    if (memoTodoKey(todoText).indexOf("📌") !== 0) return;
+    var q = await supabase.from("team_notes").select("*")
+      .gte("work_date", ymdAddDays(kstDate(), -14)).is("deleted_at", null);
+    if (q.error) throw q.error;
+    var hit = findMemoSchedByTodo(q.data || [], todoText);
+    if (!hit) return;
+    var list = hit.note.checklist.map(function(it, k) {
+      return k === hit.idx ? Object.assign({}, it, { done: true, done_at: new Date().toISOString(), done_by: myName || "" }) : it;
+    });
+    var u = await supabase.from("team_notes").update({ checklist: list, updated_at: new Date().toISOString() }).eq("id", hit.note.id);
+    if (u.error) throw u.error;
+  } catch (e) { console.warn("[업무노트 체크→일정 완료] 실패", e); }
+}
 // 비고 메모를 저장한 뒤 부른다. 실패해도 메모 저장을 되돌리지 않는다(부가 기능).
 // 저장 규칙은 addSchedule 과 같다 — (팀 × 날짜)의 살아있는 미완료 카드에 붙이고, 없으면 그 날짜 카드를 만든다.
 async function syncMemoScheduleFromCase(caseRow, memo, prevMemo) {
@@ -2178,6 +2220,17 @@ async function syncMemoScheduleFromCase(caseRow, memo, prevMemo) {
     var team = tm === "법인팀" ? "corporate" : tm === "개인팀" ? "individual" : "all";
     var date = memoSchedDate(kind, today);
     var item = buildMemoSchedItem(caseRow, memo, kind, new Date().toISOString(), "ck_" + Math.random().toString(36).slice(2, 11));
+    // 📝 담당자의 그 날짜 개인 업무노트에도 업무 한 줄로 넣는다(남의 노트라 wn_append_todo 경유 — 직접 쓰면 같은 날 노트가 두 장 생긴다).
+    //    줄 글을 항목에 같이 적어 둔다(wn_text) — 업무노트에서 그 줄을 체크하면 이 항목이 완료로 넘어간다.
+    if (item.assignee) {
+      var todoText = memoTodoText(kind, item.company_name, memo);
+      var ar = await supabase.rpc("wn_append_todo", {
+        p_assignee: item.assignee, p_note_date: date, p_line: buildItemLine({ checked: false, text: todoText }),
+        p_company_id: null, p_title: noteAutoTitle(item.assignee, date),
+      });
+      if (ar.error) console.warn("[기관메모→업무노트] 실패", ar.error);
+      else item.wn_text = todoText;
+    }
     var d = await supabase.from("team_notes").select("*")
       .eq("team", team).eq("work_date", date).is("deleted_at", null).neq("status", "done")
       .order("created_at", { ascending: true }).limit(1);
@@ -11471,9 +11524,16 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
           <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.03em", margin: 0 }}>대시보드</h1>
           <p style={{ color: "#888", fontSize: 13, margin: "4px 0 0" }}>전체 현황을 한눈에</p>
         </div>
-        <button onClick={onAdd} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-          <Icon name="plus" size={15} color="#F7F6F3" /> 신규 업체 등록
-        </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {/* 보기 전환은 맨 위에 둔다 — 전체 위젯 보기에서는 아래쪽 버튼이 화면 중간에 묻혀 돌아오는 길을 못 찾았다(2026-11-19) */}
+          <button className="dash-view-toggle" onClick={function() { setDashSimple(function(v) { return !v; }); window.scrollTo(0, 0); }}
+            style={{ background: dashSimple ? "#fff" : "#4338CA", color: dashSimple ? "#555" : "#fff", border: "1px solid " + (dashSimple ? "#E8E5E0" : "#4338CA"), borderRadius: 8, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
+            {dashSimple ? "전체 위젯 보기" : "← 핵심 4가지만 보기"}
+          </button>
+          <button onClick={onAdd} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+            <Icon name="plus" size={15} color="#F7F6F3" /> 신규 업체 등록
+          </button>
+        </div>
       </div>
 
       {/* ① 🌅 나의 오늘 — 본인 기준(관리자는 팀 전체 토글) */}
@@ -11829,10 +11889,6 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
       </div>
       <div data-dash-keep="1" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "0 0 10px" }}>
         <div className="dash-only-simple" style={{ fontSize: 14, fontWeight: 700 }}>전체 현황</div>
-        <button onClick={function() { setDashSimple(function(v) { return !v; }); }}
-          style={{ marginLeft: "auto", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, padding: "6px 12px", fontSize: 12, color: "#555", cursor: "pointer" }}>
-          {dashSimple ? "전체 위젯 보기" : "핵심 4가지만 보기"}
-        </button>
       </div>
       <div data-dash-keep="1" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14, marginBottom: 26 }}>
         {[
@@ -20416,6 +20472,8 @@ async function logNoteChecksToActivity(note, prevContent, newContent, companies,
     markNoteCheckBase(note.id, newContent);
     var texts = newlyCheckedItemTexts(base, newContent);
     if (!texts.length) return;
+    // 📌 기관현황 메모에서 온 줄이면 일정 항목도 완료로(대시보드 완료로 넘어간다)
+    texts.forEach(function(t) { completeMemoSchedByTodo(t, myName); });
     var list = await noteLogCompanies(companies);
     var linked = note.company_id
       ? { id: note.company_id, name: ((list || []).find(function(c) { return c.id === note.company_id; }) || {}).name || "" }
@@ -23165,6 +23223,8 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
             var rawItem = newLine.trim().replace(/^- \[x\]\s*/, "");
             var itemText = decodeItemText(rawItem.replace(/\[\d{4}-\d{2}-\d{2}\]|\[\d{1,2}\/\d{1,2}\]/, "").trim());
             var logged = {};
+            // 📌 기관현황 메모에서 온 줄이면 일정 항목도 완료로(대시보드 완료로 넘어간다)
+            completeMemoSchedByTodo(itemText, profile?.name || "");
             // 1) 연결 기업 우선 기록 (company_id 기반 → 소통내역·타임라인에 표시)
             if (linkedCompany && linkedCompany.id) {
               await logToActivity(linkedCompany, "[업무노트] " + itemText + " 완료");
