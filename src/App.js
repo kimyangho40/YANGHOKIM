@@ -32649,7 +32649,7 @@ function ApprovalCasesView({ profile }) {
           {cases.length === 0 ? "아직 등록된 사례가 없어요. 우측 상단 [사례 추가] 버튼을 눌러보세요." : "검색 결과가 없어요."}
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 10, alignItems: "start" }}>
           {/* 🗂 카드를 줄였다(2026-11-19) — 폭 360→250, 여백·글자 축소, 이슈·포인트는 2줄까지만. 전체 내용은 카드를 눌러서 본다 */}
           {filtered.map(function(c) {
             var rc = resultColor(c.result);
