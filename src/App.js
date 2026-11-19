@@ -18266,34 +18266,6 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                   placeholder={"예시:\n- 신용점수 부족 (685점)\n- 매출 감소 추세\n- 5/30까지 보완서류 제출 필요"}
                   style={{ width: "100%", padding: "13px 15px", border: "1px solid #FED7AA", borderRadius: 8, fontSize: 13, lineHeight: 1.8, resize: "vertical", minHeight: 220, background: "#FFF7ED", color: "#92400E", boxSizing: "border-box", outline: "none", whiteSpace: "pre-wrap", fontFamily: "inherit" }} />
               </div>
-              {/* 📝 업무노트 @태그 자동 반영(2026-11-19) — 위 「현재 이슈」(직접 쓰는 글)는 건드리지 않고 그 아래에 따로 붙인다. 화면 계산이며 저장하지 않는다. */}
-              {(function() {
-                var tagRows = (timelineLinks || []).slice().sort(function(a, b) { return String(b.at || "").localeCompare(String(a.at || "")); });
-                var shown = tagRows.slice(0, 500);
-                return (
-                  <div className="issue-tag-auto" style={{ marginBottom: 16, border: "1px solid #C7D2FE", borderRadius: 8, background: "#F8FAFF", overflow: "hidden" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#EEF2FF", borderBottom: "1px solid #C7D2FE" }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: "#4338CA" }}>📝 업무노트 @태그 자동 반영 <span style={{ fontWeight: 400, color: "#6366F1" }}>{timelineLoading ? "불러오는 중…" : shown.length + "건" + (tagRows.length > 500 ? " (최근 500건만 표시 · 전체 " + tagRows.length + "건 보관)" : "")}</span></div>
-                      <div style={{ fontSize: 10, color: "#6366F1" }}>업무노트에 @{data.name || "업체명"} 을 쓰면 자동으로 붙습니다 · 직접 쓴 이슈는 그대로</div>
-                    </div>
-                    {shown.length === 0 ? (
-                      <div style={{ padding: "12px", fontSize: 12, color: "#AAA" }}>{timelineLoading ? "" : "아직 이 업체를 @태그한 업무노트 항목이 없습니다."}</div>
-                    ) : (
-                      <div style={{ maxHeight: 190, overflowY: "auto" }}>
-                        {shown.map(function(k) {
-                          return (
-                            <div key={k.id} style={{ display: "flex", gap: 10, padding: "7px 12px", borderBottom: "1px solid #E0E7FF", fontSize: 12, alignItems: "baseline" }}>
-                              <span style={{ color: "#6366F1", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{String(k.at || "").slice(5, 10).replace("-", "/")}</span>
-                              <span style={{ flex: 1, color: "#1A1917", lineHeight: 1.5, wordBreak: "break-word" }}>{k.item_text}</span>
-                              <span style={{ color: "#888", whiteSpace: "nowrap" }}>{k.author || ""}{k.source === "team_item" ? " · 팀 업무" : " · 개인 노트"}</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
               <div style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                   <div style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>차기 업무 / 다음 액션</div>
@@ -18384,13 +18356,21 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                 </button>
                 {/* 누적 소통 내역 표시 — 사람 기록(activity_logs) + 📩 업무요청 자동 행(work_requests, 화면 계산)
                     ⚠️ 자동 행은 DB 에 쓰지 않는다. 탭 배지 숫자(commLogs.length)도 사람 기록만 센다. */}
-                {(commLogs.length > 0 || companyReqs.length > 0) && (function() {
+                {(commLogs.length > 0 || companyReqs.length > 0 || (timelineLinks || []).length > 0) && (function() {
                   var commEntries = mergeCommEntries(commLogs, companyReqs);
+                  // 📝 업무노트 @태그 항목(2026-11-19) — 체크하지 않아도 누적 내역에 자동 행으로 섞는다(최근 500건).
+                  //    화면 계산이다 — note_company_links 를 읽을 뿐 activity_logs 에 쓰지 않는다. 배지 숫자(commLogs.length)도 그대로.
+                  var tagRows = (timelineLinks || []).slice().sort(function(a, b) { return String(b.at || "").localeCompare(String(a.at || "")); }).slice(0, 500);
+                  if (tagRows.length) {
+                    commEntries = commEntries.concat(tagRows.map(function(k) { return { kind: "tag", at: k.at || "", tag: k }; }));
+                    commEntries.sort(function(a, b) { return a.at < b.at ? 1 : a.at > b.at ? -1 : 0; });
+                  }
+                  var autoCount = companyReqs.length + tagRows.length;
                   var fmtTs = function(iso) { return iso ? new Date(iso).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "numeric", minute: "numeric" }) : "-"; };
                   return (
                   <div style={{ marginTop: 10, padding: "10px 12px", background: "#FAFAF8", borderRadius: 8, border: "1px solid #E8E5E0", maxHeight: 280, overflowY: "auto" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                      <div style={{ fontSize: 11, color: "#888", fontWeight: 600 }}>📋 누적 내역 ({commLogs.length}건{companyReqs.length > 0 ? " + 🤖 자동 " + companyReqs.length : ""})</div>
+                      <div style={{ fontSize: 11, color: "#888", fontWeight: 600 }}>📋 누적 내역 ({commLogs.length}건{autoCount > 0 ? " + 🤖 자동 " + autoCount : ""})</div>
                       <button onClick={openCommTrash} title="삭제된 소통 내역 (휴지통)" style={{ background: "none", border: "none", cursor: "pointer", color: "#888", fontSize: 11, padding: "0 4px" }}>🗑️ 휴지통</button>
                     </div>
                     {commEntries.map(function(ent, i) {
@@ -18418,6 +18398,20 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                               </div>
                               <div style={{ fontSize: 11, color: "#555", fontWeight: 600, marginBottom: 2 }}>{rq.request_from || "-"} → {rq.request_to || "-"}</div>
                               <div style={{ fontSize: 12, color: "#444", whiteSpace: "pre-wrap", lineHeight: 1.5, textDecoration: isDone ? "line-through" : "none", opacity: isDone ? 0.75 : 1 }}>{rq.content || ""}</div>
+                            </div>
+                          </div>
+                        );
+                      }
+                      if (ent.kind === "tag") {
+                        // 📝 자동 행 — 업무노트에 @업체로 적은 항목. 수정·삭제 버튼 없음(원본은 업무노트).
+                        var tg = ent.tag;
+                        return (
+                          <div key={"tag_" + tg.id} className="comm-tag-row" style={{ paddingBottom: 8, marginBottom: 8, borderBottom: rowBorder }}>
+                            <div style={{ background: "#EFF6FF", borderLeft: "3px solid #3B82F6", borderRadius: 6, padding: "6px 8px" }}>
+                              <div style={{ fontSize: 10, color: "#1D4ED8", fontWeight: 700, marginBottom: 4 }}>
+                                🤖 자동 · 📝 업무노트 <span style={{ color: "#888", fontWeight: 600 }}>· {tg.author || "-"} · {tg.source === "team_item" ? "팀 업무" : "개인 노트"} · {fmtTs(tg.at)}</span>
+                              </div>
+                              <div style={{ fontSize: 12, color: "#444", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{tg.item_text || ""}</div>
                             </div>
                           </div>
                         );
