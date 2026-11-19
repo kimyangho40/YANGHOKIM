@@ -14838,7 +14838,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                   style={{ borderBottom: "1px solid #F0EDE8", cursor: (editNameId === co.id || editRowId === co.id) ? "default" : "pointer", background: editRowId === co.id ? "#F5F7FF" : (i % 2 === 0 ? "#fff" : "#FAFAF8") }}
                   onMouseOver={e => { if (editNameId !== co.id && editRowId !== co.id) e.currentTarget.style.background = "#F0F0EC"; }}
                   onMouseOut={e => e.currentTarget.style.background = editRowId === co.id ? "#F5F7FF" : (i % 2 === 0 ? "#fff" : "#FAFAF8")}>
-                  <td className="lst-name-cell" style={{ padding: "11px 8px", fontSize: 13, fontWeight: 600, whiteSpace: "normal", wordBreak: "keep-all", overflowWrap: "anywhere", boxSizing: "border-box", position: "sticky", left: 0, background: editRowId === co.id ? "#F5F7FF" : (i % 2 === 0 ? "#fff" : "#FAFAF8"), zIndex: 1, boxShadow: "2px 0 4px -2px rgba(0,0,0,0.08)" }} onClick={e => e.stopPropagation()}>
+                  <td className="lst-name-cell" style={{ padding: "11px 8px", fontSize: 13, fontWeight: 600, whiteSpace: "normal", wordBreak: "keep-all", overflowWrap: "anywhere", boxSizing: "border-box", position: "sticky", left: 0, background: editRowId === co.id ? "#F5F7FF" : (i % 2 === 0 ? "#fff" : "#FAFAF8"), zIndex: 1, boxShadow: "2px 0 4px -2px rgba(0,0,0,0.08)" }} onClick={e => { /* 편집 중일 때만 막는다 — 예전엔 항상 막아 업체명을 눌러도 상세가 안 열렸다(2026-11-19) */ if (editRowId === co.id || editNameId === co.id) e.stopPropagation(); }}>
                     {editRowId === co.id ? (
                       <input value={editRow.name} onChange={function(e) { var v = e.target.value; setEditRow(function(p) { return Object.assign({}, p, { name: v }); }); }} autoFocus
                         placeholder="업체명" onKeyDown={function(e) { if (e.key === "Enter") saveRowEdit(co); if (e.key === "Escape") setEditRowId(null); }}
@@ -14916,7 +14916,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
                       }} />
                     )}
                   </td>
-                  <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis" }} onClick={function(e) { e.stopPropagation(); }}>
+                  <td style={{ padding: "11px 8px", fontSize: 12, color: "#555", whiteSpace: "nowrap", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis" }} onClick={function(e) { if (editRowId === co.id) e.stopPropagation(); }}>
                     {editRowId === co.id
                       ? <input value={editRow.representative} onChange={function(e) { var v = e.target.value; setEditRow(function(p) { return Object.assign({}, p, { representative: v }); }); }}
                           placeholder="대표자" style={{ width: 66, padding: "3px 6px", border: "1px solid #4338CA", borderRadius: 4, fontSize: 12, outline: "none" }} />
