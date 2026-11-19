@@ -14010,7 +14010,13 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView, companies 
   // 모든 노트에서 체크박스 항목들 추출 + 메타데이터 결합
   // 항목별 마감일이 있으면 그걸 우선, 없으면 노트의 due_date 사용
   var allItems = [];
+  // 🗓 노트 날짜가 30일 넘게 지난 업무는 내 할일에서 아예 숨긴다(2026-11-19 클라이언트 요청).
+  //    지우는 것이 아니다 — 업무노트 화면에는 그대로 있다. 기준일은 MYTODO_HIDE_AFTER_DAYS 한 곳.
+  var MYTODO_HIDE_AFTER_DAYS = 30;
+  var myTodoCutoff = ymdAddDays(kstDate(), -MYTODO_HIDE_AFTER_DAYS);
   notes.forEach(function(note) {
+    var noteDay = String(note.note_date || note.created_at || "").slice(0, 10);
+    if (noteDay && noteDay < myTodoCutoff) return;
     var items = parseCheckboxes(note.content);
     items.forEach(function(item) {
       if (item.text) { // 빈 항목 제외
@@ -22119,6 +22125,15 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
   const [showReqStatus, setShowReqStatus] = useState(false); // 📋 요청 현황 모달
   const [reqTab, setReqTab] = useState("received"); // "received" | "sent"
   const [showSent, setShowSent] = useState(false);
+  // 🔘 밀린 미완료 · 내 개인 업무노트 · 내가 보낸 요청은 오른쪽 위 버튼으로 뺐다(2026-11-19). 누른 것 하나만 펼쳐진다. "" = 전부 접힘.
+  const [wnTopPanel, setWnTopPanel] = useState("");
+  var pickWnTopPanel = function(id) {
+    setWnTopPanel(function(cur) { return cur === id ? "" : id; });
+    if (id === "overdue") setOverdueOpen(true);
+    if (id === "mine") setMyNotesOpen(true);
+    if (id === "sent") setShowSent(true);
+    setTimeout(function() { var el = document.getElementById("wn-panel-" + id); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 80);
+  };
   const [reqReplyId, setReqReplyId] = useState(null);   // 요청 현황 모달에서 답장 작성 중인 요청 id
   const [reqReplyText, setReqReplyText] = useState("");
   const reqReadRef = useRef(false);
@@ -23432,6 +23447,23 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
 
       {/* 필터 */}
       <div style={{ display: "flex", gap: 16, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
+        {/* 🔘 세 구역 버튼 — 담당자 칩과 같은 크기. 줄의 오른쪽 끝에 붙는다 */}
+        <div className="wn-top-panels" style={{ order: 99, marginLeft: "auto", display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
+          {[
+            { id: "overdue", label: "🔴 밀린 미완료", n: overdueView.length, on: "#B91C1C" },
+            { id: "mine", label: "🗂 내 개인 업무노트", n: myNotesAll.length, on: "#3730A3" },
+            { id: "sent", label: "📤 내가 보낸 요청", n: sentRequests.length, on: "#1A1917" },
+          ].map(function(bt) {
+            var active = wnTopPanel === bt.id, empty = bt.n === 0 && bt.id !== "mine";
+            return (
+              <div key={bt.id} onClick={function() { if (!empty) pickWnTopPanel(bt.id); }} title={empty ? "해당 항목이 없습니다" : (active ? "접기" : "펼쳐 보기")}
+                style={{ padding: "5px 13px", borderRadius: 99, cursor: empty ? "default" : "pointer", fontSize: 12, fontWeight: active ? 700 : 400, whiteSpace: "nowrap", opacity: empty ? 0.5 : 1,
+                  background: active ? bt.on : "#fff", color: active ? "#fff" : "#666", border: active ? "1px solid " + bt.on : "1px solid #E8E5E0" }}>
+                {bt.label} {bt.n}
+              </div>
+            );
+          })}
+        </div>
         {/* 담당자 필터 — 관리자 전원 / 공유그룹은 서로 / 일반 담당자는 본인만(탭 숨김) */}
         {(isWnAdmin || viewableNames.length > 1) && (
         <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
@@ -24039,9 +24071,9 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
         );
       })()}
 
-      {/* 📤 내가 보낸 요청 (읽음/완료 추적) */}
-      {sentRequests.length > 0 && (
-        <div style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, padding: "12px 16px", marginBottom: 16 }}>
+      {/* 📤 내가 보낸 요청 (읽음/완료 추적) — 오른쪽 위 버튼을 눌렀을 때만 보인다 */}
+      {wnTopPanel === "sent" && sentRequests.length > 0 && (
+        <div id="wn-panel-sent" style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 12, padding: "12px 16px", marginBottom: 16 }}>
           <div onClick={function() { setShowSent(!showSent); }} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
             <span style={{ fontSize: 13 }}>{showSent ? "▼" : "▶"}</span>
             <span style={{ fontSize: 13, fontWeight: 700 }}>📤 내가 보낸 요청 {sentRequests.length}건</span>
@@ -24181,8 +24213,8 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
 
       {/* ── 🔴 밀린 미완료 — 화면 맨 위 고정. 캘린더/목록 두 모드 모두에서 항상 보인다 ────────
           0건이면 구역 자체를 그리지 않는다(다 끝낸 날 빈 상자가 남지 않게). */}
-      {overdueItems.length > 0 && (
-        <div style={{ background: "#FFF7F7", border: "1px solid #FECACA", borderRadius: 10, marginBottom: 16, overflow: "hidden" }}>
+      {wnTopPanel === "overdue" && overdueItems.length > 0 && (
+        <div id="wn-panel-overdue" style={{ background: "#FFF7F7", border: "1px solid #FECACA", borderRadius: 10, marginBottom: 16, overflow: "hidden" }}>
           <div onClick={function() { setOverdueOpen(function(p) { return !p; }); }}
             style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 14px", cursor: "pointer", background: "#FEF2F2", borderBottom: overdueOpen ? "1px solid #FECACA" : "none", flexWrap: "wrap" }}>
             <span style={{ fontSize: 14 }}>🔴</span>
@@ -24226,7 +24258,7 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
       {/* ── 🗂 내 개인 업무노트 — 상시 노출 (달력을 안 눌러도 보인다) ─────────────────
           자리: 위 "밀린 미완료"(전체) 구역과 아래 달력 사이. 달력은 그대로 두고 "특정 날짜 조회용"으로 남긴다.
           ⚠️ 새 쿼리·새 테이블·새 컬럼이 하나도 없다. 이미 불러온 notes 를 걸러 기존 렌더에 넘길 뿐이다. */}
-      <div style={{ background: "#F8FAFF", border: "1.5px solid #C7D2FE", borderRadius: 10, marginBottom: 16, overflow: "hidden" }}>
+      <div id="wn-panel-mine" style={{ display: wnTopPanel === "mine" ? "block" : "none", background: "#F8FAFF", border: "1.5px solid #C7D2FE", borderRadius: 10, marginBottom: 16, overflow: "hidden" }}>
         <div onClick={function() { setMyNotesOpen(function(p) { return !p; }); }} title={myNotesOpen ? "접기" : "펼치기"}
           style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 14px", cursor: "pointer", background: "#EEF2FF", borderBottom: myNotesOpen ? "1px solid #C7D2FE" : "none", flexWrap: "wrap" }}>
           <span style={{ fontSize: 14 }}>🗂</span>
