@@ -11369,7 +11369,10 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         var weekContracts = scopedCompanies.filter(function(c) { return c.contract_date && c.contract_date > today && c.contract_date <= weekLater; });
         // 서류 요청 지연 — 판정은 overdueDocRows 한 곳에서만 한다(임계값 복붙 제거, 2026-08-10).
         // 묵은 건(2026-08-10 봉인)은 여기 안 들어온다 → '묵은 서류 정리' 화면에서 따로 처리.
-        var overdueDocs = overdueDocRows(scopedCompanies);
+        // 📮 「요청했는데 아직 못 받은 서류」는 대시보드 오늘의 할 일에서 뺐다(2026-11-19 클라이언트 요청).
+        //    요약 타일·목록·합계가 전부 이 배열을 보므로 빈 배열로 둔다. 서류현황 데이터와 「묵은 서류 정리」 메뉴는 그대로다.
+        //    되살리려면 overdueDocRows(scopedCompanies) 로 되돌리면 된다.
+        var overdueDocs = [];
         var totalCount = todayItems.length + tomorrowItems.length + overdue.length + stagnant14.length + stagnant7.length + weekContracts.length + overdueDocs.length;
         // 내 할일 위젯은 별도로 항상 표시 (work_notes 기반)
         var showCompaniesWidget = totalCount > 0;
