@@ -3910,6 +3910,71 @@ async function advanceCardsToContractPaid(companyId) {
   return { moved: movers.length };
 }
 
+// ── 🤖 파이프라인 자동화 (2026-11-19, DB 스키마 변경 0건) ────────────────────────────────────
+//  ① 새 업체를 등록하면 카드 1장을 자동으로 만든다(예전엔 기관현황에 줄이 생겨야만 카드가 생겼다)
+//  ② 서류현황이 전부 수령완료가 되면 그 업체의 카드를 「기관신청대기/방문예정」까지 앞으로 민다
+//  ③ 정산관리에서 세금계산서 발행 → 「수수료대기 및 입금요청」 / 수수료 수령 → 「입금완료/사후관리」
+//  전부 **앞으로만** 움직인다(advanceCardsToContractPaid 와 같은 규칙). 부결/반려·기타·종결·휴지통 카드는 안 건드린다.
+//  각 스위치를 false 로 바꾸면 그 자동화만 꺼진다.
+var AUTO_CARD_ON_NEW_COMPANY = true;
+var AUTO_ADVANCE_ON_DOCS_DONE = true;
+var AUTO_ADVANCE_ON_SETTLEMENT = true;
+var DOCS_DONE_ADVANCE_STAGE = "기관신청대기/방문예정";
+var INVOICE_ADVANCE_STAGE = "수수료대기 및 입금요청";
+var FEE_RECEIVED_ADVANCE_STAGE = "입금완료/사후관리";
+// ⛳ 파이프라인-자동화 시작 — scripts/test-pipeline-auto.mjs 가 이 구간을 소스째 떼어내 실행한다. supabase·React 를 참조하지 말 것.
+// 목표 단계보다 **앞에 있는** 카드만 고른다. stages 는 STAGES 배열(부결/반려·기타가 맨 뒤라 자동으로 빠진다).
+function pickCardsToAdvance(cards, targetStage, stages) {
+  var t = stages.indexOf(targetStage);
+  if (t < 0) return [];
+  return (cards || []).filter(function(c) {
+    if (!c || c.deleted_at || c.closed_at) return false;
+    var i = stages.indexOf(c.stage);
+    return i >= 0 && i < t;
+  });
+}
+// 서류가 전부 수령완료인가 — docList 의 모든 항목이 received_docs(쉼표 구분)에 있어야 한다.
+function allDocsReceived(receivedDocs, docList) {
+  var rec = String(receivedDocs == null ? "" : receivedDocs).split(",").map(function(x) { return x.trim(); }).filter(Boolean);
+  return (docList || []).length > 0 && docList.every(function(d) { return rec.indexOf(d) >= 0; });
+}
+// 정산 저장 전후를 견줘 목표 단계를 정한다. 수수료 수령이 세금계산서보다 우선. 새로 켜진 것만 본다.
+function settlementAdvanceTarget(prev, next, invoiceStage, receivedStage) {
+  var was = prev || {}, now = next || {};
+  if (now.fee_received && !was.fee_received) return receivedStage;
+  if (now.invoice_issued && !was.invoice_issued) return invoiceStage;
+  return null;
+}
+// ⛳ 파이프라인-자동화 끝
+async function advanceCardRows(rows, targetStage) {
+  var movers = pickCardsToAdvance(rows, targetStage, STAGES);
+  if (!movers.length) return { moved: 0 };
+  var nowIso = new Date().toISOString();
+  var r = await supabase.from("pipeline_cards")
+    .update({ stage: targetStage, sync_mode: "manual", needs_mapping: false, stage_changed_at: nowIso, alerted_at: null, updated_at: nowIso })
+    .in("id", movers.map(function(c) { return c.id; }));
+  if (r.error) return { moved: 0, error: r.error.message };
+  return { moved: movers.length, ids: movers.map(function(c) { return c.id; }), stage: targetStage, at: nowIso };
+}
+// 업체의 열린 카드 전부를 목표 단계까지 앞으로 민다.
+async function advanceCompanyCardsTo(companyId, targetStage) {
+  if (!companyId) return { moved: 0 };
+  var q = await supabase.from("pipeline_cards").select("id, stage, closed_at, deleted_at")
+    .eq("company_id", companyId).is("closed_at", null).is("deleted_at", null);
+  if (q.error || !q.data) return { moved: 0 };
+  return advanceCardRows(q.data, targetStage);
+}
+// 기관현황 한 건(업체×기관)에 해당하는 카드 한 장을 목표 단계까지 앞으로 민다.
+async function advanceCaseCardTo(caseRow, targetStage) {
+  if (!caseRow || !caseRow.agency_group || !(caseRow.company_id || caseRow.business_name)) return { moved: 0 };
+  var q = supabase.from("pipeline_cards").select("id, stage, closed_at, deleted_at")
+    .eq("agency_group", caseRow.agency_group).is("closed_at", null).is("deleted_at", null);
+  q = caseRow.company_id ? q.eq("company_id", caseRow.company_id) : q.eq("business_name", caseRow.business_name);
+  var r = await q;
+  if (r.error || !r.data) return { moved: 0 };
+  return advanceCardRows(r.data, targetStage);
+}
+
 // (구 매트릭스 방식 신보 한도표 제거 — 매출 기반 계산으로 대체, SinboCalc 참고)
 
 // ── 중진공 정책우선도 배점표(선택형) ─────────────────────────────────────────────
@@ -9074,6 +9139,14 @@ function CRMApp({ profile, session }) {
         if (rest.contract_status === "계약금입금완료" && prevData && prevData.contract_status !== "계약금입금완료") {
           await advanceCardsToContractPaid(rest.id);
         }
+        // 🤖 서류가 이번 저장으로 전부 수령완료가 됐으면 카드를 「기관신청대기/방문예정」까지 앞으로 민다
+        if (AUTO_ADVANCE_ON_DOCS_DONE && prevData && allDocsReceived(rest.received_docs, DOC_LIST) && !allDocsReceived(prevData.received_docs, DOC_LIST)) {
+          var docAdv = await advanceCompanyCardsTo(rest.id, DOCS_DONE_ADVANCE_STAGE);
+          if (docAdv.moved > 0) {
+            setPipelineCards(function(prev) { return prev.map(function(c) { return docAdv.ids.indexOf(c.id) >= 0 ? Object.assign({}, c, { stage: docAdv.stage, sync_mode: "manual", stage_changed_at: docAdv.at }) : c; }); });
+            if (typeof showToast === "function") showToast("📂 서류가 모두 모여 파이프라인 카드 " + docAdv.moved + "장을 「" + DOCS_DONE_ADVANCE_STAGE + "」로 옮겼어요.", "success");
+          }
+        }
       } catch (autoSettleErr) { console.warn("정산 자동반영 중 오류:", autoSettleErr); }
 
       // 🆕 stage가 "부결/반려"로 새로 바뀌면 → 사례집 자동 초안 생성
@@ -9335,6 +9408,19 @@ function CRMApp({ profile, session }) {
       var wantTeamA = co.team || form.team || teamByName(form.name);
       var newCompany = Object.assign({}, co, { team: wantTeamA });
       showToast("신규 업체가 등록됐어요! 상세 정보를 입력하세요.");
+      // 🤖 파이프라인 카드 1장 자동 생성 — 기관이 정확히 하나로 정해져 있으면 그 기관, 아니면 '기관 미지정' 카드
+      if (AUTO_CARD_ON_NEW_COMPANY) {
+        try {
+          var agId = AGENCY_GROUPS.some(function(g) { return g.id === co.agency; }) ? co.agency : null;
+          var cardIns = await supabase.from("pipeline_cards").insert({
+            company_id: co.id, business_name: co.name || "", agency_group: agId,
+            stage: STAGES.indexOf(co.stage) >= 0 ? co.stage : STAGES[0], sync_mode: "auto", needs_mapping: false,
+            stage_changed_at: new Date().toISOString(),
+          }).select().single();
+          if (!cardIns.error && cardIns.data) setPipelineCards(function(prev) { return prev.concat([cardIns.data]); });
+          else if (cardIns.error) console.warn("[새 업체 카드 자동 생성] 실패", cardIns.error.message);
+        } catch (cardErr) { console.warn("[새 업체 카드 자동 생성] 오류", cardErr); }
+      }
       setShowAdd(false);
       // 등록 후 곧바로 기업 상세 화면 자동 오픈 (두 번 일 안 하도록)
       setSelectedCompany(newCompany);
@@ -25344,6 +25430,13 @@ function SettlementView({ profile }) {
     if (!r.error) {
       setCases(function(prev) { return prev.map(function(c) { return c.id === editData.id ? Object.assign({}, c, updates) : c; }); });
       setEditingId(null); setEditData({});
+      // 🤖 세금계산서 발행 → 수수료대기 및 입금요청 / 수수료 수령 → 입금완료/사후관리 (그 업체×기관 카드 한 장, 앞으로만)
+      if (AUTO_ADVANCE_ON_SETTLEMENT && origAuto) {
+        var moneyTarget = settlementAdvanceTarget(origAuto, updates, INVOICE_ADVANCE_STAGE, FEE_RECEIVED_ADVANCE_STAGE);
+        if (moneyTarget) advanceCaseCardTo(origAuto, moneyTarget).then(function(res) {
+          if (res && res.error) console.warn("[정산→파이프라인] 실패", res.error);
+        });
+      }
     }
   };
 
