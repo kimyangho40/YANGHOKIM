@@ -14016,9 +14016,12 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView, companies 
   var myTodoCutoff = ymdAddDays(kstDate(), -MYTODO_HIDE_AFTER_DAYS);
   notes.forEach(function(note) {
     var noteDay = String(note.note_date || note.created_at || "").slice(0, 10);
-    if (noteDay && noteDay < myTodoCutoff) return;
     var items = parseCheckboxes(note.content);
     items.forEach(function(item) {
+      // 기준 날짜 = 마감일이 있으면 마감일, 없으면 노트 날짜. 그 날짜가 30일 넘게 지났으면 숨긴다.
+      //   (노트는 최근인데 마감일이 오래전에 지난 「기한 지남」 항목도 같이 걸러야 한다 — 노트 날짜만 보면 남는다)
+      var refDay = String(item.itemDueDate || note.due_date || noteDay || "").slice(0, 10);
+      if (refDay && refDay < myTodoCutoff) return;
       if (item.text) { // 빈 항목 제외
         allItems.push({
           noteId: note.id,
@@ -14060,6 +14063,9 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView, companies 
   }).map(function(c) {
     var dt = nearestActionDate(c.next_action);
     return { c: c, date: dt, days: daysUntil(dt) };
+  }).filter(function(t) {
+    // 📅 기업목록 차기 업무 마감도 같은 규칙 — 30일 넘게 지난 것은 숨긴다
+    return !(typeof t.days === "number" && t.days < -MYTODO_HIDE_AFTER_DAYS);
   }).sort(function(a, b) { return a.date - b.date; });
 
   // 노트의 업체 태그(tagged_company)는 업체명 "문자열"이라 실제 업체 레코드를 찾아서 넘겨야 한다.
