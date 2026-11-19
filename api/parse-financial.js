@@ -50,7 +50,8 @@ async function denyUnauthorized(req, res) {
   return false;
 }
 
-const MODEL = "claude-opus-5";
+// 서류 읽기 모델. 기본은 Haiku(가장 저렴). Vercel 환경변수 PARSE_MODEL 로 코드 수정 없이 바꿀 수 있다(예: claude-sonnet-5, claude-opus-5).
+const MODEL = process.env.PARSE_MODEL || "claude-haiku-5-5";
 
 // 뽑을 계정과목. 재검산에 쓰는 것까지 포함한다 —
 //   대차검산: 자산총계 = 부채총계 + 자본총계
