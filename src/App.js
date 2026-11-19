@@ -15951,6 +15951,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
   const [tab, setTab] = useState(initialTab || "info");
   const [prevTab, setPrevTab] = useState(initialTab || "info");
   var goTab = function(id) { setPrevTab(tab); setTab(id); };
+  const [etcTabOpen, setEtcTabOpen] = useState(false);   // 탭 줄 오른쪽 「기타 ▾」 드롭다운
   const [data, setData] = useState({ ...company });
   // 🪟 중앙 팝업(2026-10-15) — 최대화 여부 + 「저장 안 한 내용」 판정 기준선.
   //    기준선 = 마지막으로 DB 에 들어간 값. 저장 성공·즉시저장(계약상태·졸업후보·서류감지) 때 같이 옮긴다.
@@ -17019,13 +17020,12 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
           {[
             { id: "info", label: "기본정보" },
             { id: "bizinfo", label: "기업정보", badge: (Array.isArray(data.loans) ? data.loans.length : 0) + (Array.isArray(data.company_info) ? data.company_info.length : 0) },
-            { id: "consult", label: "🗣 상담 체크", badge: buildConsultChecks(data).filter(function(x) { return x.cat === "ask"; }).length },
-            { id: "firstcall", label: "📞 1차 콜", badge: firstCallSteps(data).filter(function(x) { return x.status === "todo"; }).length },
-            { id: "growth", label: "🧭 성장 경로" },
+            // 🗣 상담 체크 · 📞 1차 콜 탭은 뺐다(2026-11-19 클라이언트 요청). 본문 코드는 남겨 뒀다 — 되살리려면 여기 두 줄만 다시 넣으면 된다.
+            //   { id: "consult", label: "🗣 상담 체크", badge: … } · { id: "firstcall", label: "📞 1차 콜", badge: … }
+            // 🧭 성장 경로 · 🕒 타임라인은 나중에 쓸 것이라 오른쪽 「기타 ▾」 드롭다운으로 옮겼다(ETC_TABS).
             { id: "notices", label: "📢 지원사업" },
             { id: "docs", label: "서류현황" },
             { id: "history", label: "이슈·액션", badge: commLogs.length },
-            { id: "timeline", label: "🕒 타임라인" },
             { id: "agency", label: "기관진행", badge: agencyCases.length },
             { id: "settlement", label: "정산현황", badge: settlements.length },
             { id: "ai", label: "🤖 AI 상담" },
@@ -17036,6 +17036,30 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
               {t.badge > 0 && <span style={{ fontSize: 10, background: tab === t.id ? "#1A1917" : "#E8E5E0", color: tab === t.id ? "#fff" : "#888", borderRadius: 99, padding: "1px 5px", fontWeight: 700 }}>{t.badge}</span>}
             </button>
           ))}
+          {(function() {
+            var ETC_TABS = [{ id: "growth", label: "🧭 성장 경로" }, { id: "timeline", label: "🕒 타임라인" }];
+            var cur = ETC_TABS.find(function(t) { return t.id === tab; });
+            return (
+              <div className="tab-etc" style={{ marginLeft: "auto", position: "relative", flex: "0 0 auto" }}>
+                <button onClick={function() { setEtcTabOpen(function(v) { return !v; }); }}
+                  style={{ padding: "11px 14px", fontSize: 12, fontWeight: cur ? 700 : 400, color: cur ? "#1A1917" : "#888", background: "none", border: "none", borderBottom: "2px solid " + (cur ? "#1A1917" : "transparent"), cursor: "pointer", whiteSpace: "nowrap" }}>
+                  {cur ? "기타 · " + cur.label : "기타"} ▾
+                </button>
+                {etcTabOpen && (
+                  <div style={{ position: "absolute", right: 0, top: "100%", zIndex: 20, background: "#fff", border: "1px solid #E8E5E0", borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,0.12)", minWidth: 150, padding: 4 }}>
+                    {ETC_TABS.map(function(t) {
+                      return (
+                        <button key={t.id} onClick={function() { setEtcTabOpen(false); goTab(t.id); }}
+                          style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 12px", fontSize: 12, fontWeight: tab === t.id ? 700 : 400, color: "#1A1917", background: tab === t.id ? "#F7F6F3" : "#fff", border: "none", borderRadius: 6, cursor: "pointer", whiteSpace: "nowrap" }}>
+                          {t.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         <div style={{ flex: 1, minHeight: 0, padding: "20px 24px", overflowY: "auto" }}>
