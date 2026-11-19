@@ -8679,6 +8679,7 @@ function CRMApp({ profile, session }) {
   const docAlertCheckedRef = useRef(false);
   useEffect(() => {
     if (docAlertCheckedRef.current) return;
+    if (OLD_DOCS_OFF) return;   // 묵은 서류 알림 끔(2026-11-19)
     if (!profile?.name) return;
     if (!companies.length) return;
     docAlertCheckedRef.current = true;
@@ -9788,7 +9789,7 @@ function CRMApp({ profile, session }) {
               {[
                 { id: "stagnant",    label: "정체 알림",   icon: "alert", badge: stagnant.length },
                 // 묵은 서류가 남아 있을 때만 메뉴에 띄운다 — 다 정리하면 사라지는 1회성 화면
-                ...(oldDocCount > 0 ? [{ id: "olddocs", label: "묵은 서류 정리", icon: "folder", badge: oldDocCount }] : []),
+                ...(!OLD_DOCS_OFF && oldDocCount > 0 ? [{ id: "olddocs", label: "묵은 서류 정리", icon: "folder", badge: oldDocCount }] : []),
                 { id: "activitylog", label: "활동 로그",   icon: "activity" },
                 { id: "manual",      label: "자료실",      icon: "folder" },
                 { id: "settlement",  label: "정산관리",    icon: "money" },
@@ -11361,6 +11362,12 @@ function StagnationAdminWidget({ rows, onSelectCompany, setView }) {
 }
 
 // ── 대시보드 ──────────────────────────────────────────────────────────────────
+// 📮 서류 「요청함」 단계와 「묵은 서류 정리」를 뺐다(2026-11-19 클라이언트 요청) — 실제로는 드라이브에 받아 두고 일하므로 요청·방치 추적을 쓰지 않는다.
+//    · REQUESTED_DOCS_OFF: 기업 상세 서류현황이 미요청 → 수령완료 두 단계가 된다(요청함 칸 숨김). 이미 '요청함'으로 저장된 서류는 미요청 칸에 보인다.
+//    · OLD_DOCS_OFF: 왼쪽 메뉴 「묵은 서류 정리」와 7일 지난 서류 알림을 끈다.
+//    저장된 requested_docs·doc_request_dates 는 지우지 않았다 — 둘 다 false 로 바꾸면 예전 화면이 그대로 돌아온다.
+var REQUESTED_DOCS_OFF = true;
+var OLD_DOCS_OFF = true;
 // 📊 성과 관련 위젯(담당자별 성과 · 예상 수수료 · 담당자별 KPI 달성률)은 대시보드에서 뺐다(2026-11-19 클라이언트 요청).
 //    지우지 않고 숨겼다 — false 로 바꾸면 「전체 위젯 보기」에 다시 나온다. 저장된 KPI 목표값은 그대로다.
 var DASH_PERF_OFF = true;
@@ -18342,6 +18349,8 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                 var cycleDoc = function(doc) {
                   var st = docStatus(doc);
                   // 미요청 → 요청함 / 수령완료 → 미요청. (요청함은 칩을 누르면 액션 줄이 열린다)
+                  // 요청함 단계를 껐을 때(REQUESTED_DOCS_OFF): 미요청(옛 '요청함' 포함) → 수령완료 / 수령완료 → 미요청
+                  if (REQUESTED_DOCS_OFF) { applyDocAction(doc, st === "received" ? "cancel" : "received"); return; }
                   applyDocAction(doc, st === "none" ? "request" : "cancel");
                 };
                 // ── 요청함을 "끝내는" 세 가지 길 (2026-08-10 추가) ──────────────────────
@@ -18384,7 +18393,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                   if (!fs || !fs.length) return null;
                   return <span title={"드라이브에서 찾음: " + fs.map(function(f) { return f.name; }).join(", ")}> 📂</span>;
                 };
-                var noneList = DOC_LIST.filter(function(d) { return docStatus(d) === "none"; });
+                var noneList = DOC_LIST.filter(function(d) { var st = docStatus(d); return st === "none" || (REQUESTED_DOCS_OFF && st === "requested"); });
                 var reqedList = DOC_LIST.filter(function(d) { return docStatus(d) === "requested"; });
                 var recedList = DOC_LIST.filter(function(d) { return docStatus(d) === "received"; });
                 return (
@@ -18397,21 +18406,22 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
                         // 이게 없으면 창을 닫았다 열었을 때 결과가 사라진 것처럼 보인다(다시 fetch 하기 전까지).
                         if (onPatchCompany) onPatchCompany(data.id, { doc_scan: scan });
                       }} />
-                    <div style={{ fontSize: 11, color: "#888", marginBottom: 10, background: "#F7F6F3", borderRadius: 6, padding: "8px 11px" }}>💡 <b style={{ color: "#6B7280" }}>미요청</b> 서류를 누르면 <b style={{ color: "#B45309" }}>요청함</b>으로 바뀌고 요청일이 기록됩니다. <b style={{ color: "#B45309" }}>요청함</b> 서류를 누르면 <b>수령완료 · 재요청 · 요청 취소</b> 중에 고를 수 있어요. 왼쪽 <b>체크박스</b>로 여러 건을 골라 <b>한 번에 수령완료</b>할 수도 있습니다. 칩의 <b>📂</b> 는 드라이브에서 그 서류로 보이는 파일을 찾았다는 뜻입니다.</div>
+                    {!REQUESTED_DOCS_OFF && (<div style={{ fontSize: 11, color: "#888", marginBottom: 10, background: "#F7F6F3", borderRadius: 6, padding: "8px 11px" }}>💡 <b style={{ color: "#6B7280" }}>미요청</b> 서류를 누르면 <b style={{ color: "#B45309" }}>요청함</b>으로 바뀌고 요청일이 기록됩니다. <b style={{ color: "#B45309" }}>요청함</b> 서류를 누르면 <b>수령완료 · 재요청 · 요청 취소</b> 중에 고를 수 있어요. 왼쪽 <b>체크박스</b>로 여러 건을 골라 <b>한 번에 수령완료</b>할 수도 있습니다. 칩의 <b>📂</b> 는 드라이브에서 그 서류로 보이는 파일을 찾았다는 뜻입니다.</div>)}
 
                     {/* 1. 미요청 */}
                     <div style={{ background: "#F9FAFB", borderRadius: 8, padding: "12px 14px", marginBottom: 10, border: "1px solid #E5E7EB" }}>
-                      <div style={{ fontSize: 11, color: "#6B7280", marginBottom: 8, fontWeight: 700 }}>⬜ 미요청 — 아직 요청 안 한 서류 (클릭 → 요청함) · {noneList.length}개</div>
+                      <div style={{ fontSize: 11, color: "#6B7280", marginBottom: 8, fontWeight: 700 }}>{REQUESTED_DOCS_OFF ? "⬜ 아직 못 받은 서류 (클릭 → 수령완료)" : "⬜ 미요청 — 아직 요청 안 한 서류 (클릭 → 요청함)"} · {noneList.length}개</div>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                         {noneList.map(function(doc) {
                           return <button key={doc} onClick={function() { cycleDoc(doc); }} style={{ fontSize: 11, padding: "6px 11px", borderRadius: 99, border: "1px solid #D1D5DB", background: "#fff", color: "#6B7280", cursor: "pointer" }}>{doc}{scanMark(doc)}</button>;
                         })}
-                        {noneList.length === 0 && <span style={{ fontSize: 11, color: "#888" }}>모두 요청했어요</span>}
+                        {noneList.length === 0 && <span style={{ fontSize: 11, color: "#888" }}>{REQUESTED_DOCS_OFF ? "모두 받았어요" : "모두 요청했어요"}</span>}
                       </div>
                     </div>
 
                     {/* 2. 요청함(대기) — 방치 건은 칩을 누르면 액션 줄이 펼쳐진다(수령/재요청/취소) */}
                     {(function() {
+                      if (REQUESTED_DOCS_OFF) return null;   // 요청함 단계를 뺐다(2026-11-19)
                       var waitCount = reqedList.filter(function(d) { var dd = docWaitDays(reqDates[d]); return dd !== null && dd >= DOC_WAIT_WARN; }).length;
                       var owner = primaryAssignee(data);
                       // ── 다중선택 일괄 수령완료 (2026-08-24) ───────────────────────────
