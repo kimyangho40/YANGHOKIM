@@ -21019,7 +21019,9 @@ function CreditReportImport({ existingCount, existingLoans, onApply, hideButton,
         var data = await callApiJson("/api/parse-credit", body);
         var res = data.result || {};
         var kind = useHint || String(res.doc_type || "");
-        if (kind !== "credit_report" && kind !== "bank_certificate") {
+        // 아는 종류(DOC_TYPES) 3가지면 통과한다. 예전엔 여신정보·금융거래확인서 둘만 통과시켜
+        // 채권자변동정보 조회서는 종류를 골라도 계속 되묻기만 했다(2026-11-19 수정).
+        if (!DOC_TYPES[kind]) {
           // 판별 실패 — 추측하지 않고 담당자에게 묻고, 나머지 파일은 큐에 남겨둔다
           setPendingFile(file); setQueue(files.slice(fi + 1)); setDone(doneList);
           setAskType({ reason: String(res.doc_type_reason || "").trim(), name: file.name });
