@@ -9032,7 +9032,10 @@ function CRMApp({ profile, session }) {
       } catch (autoSettleErr) { console.warn("정산 자동반영 중 오류:", autoSettleErr); }
 
       // 🆕 stage가 "부결/반려"로 새로 바뀌면 → 사례집 자동 초안 생성
-      if (rest.stage === "부결/반려" && prevData && prevData.stage !== "부결/반려") {
+      // ⛔ 2026-11-19 중단(클라이언트 요청) — 사례집은 [사례 추가]로 직접 쓴 것만 남긴다.
+      //    자동 초안은 내용이 빈 카드로 쌓였고, 기관 칸에 "소진공, 신보"처럼 여러 기관이 한 덩어리로 들어가 기관 버튼까지 늘렸다.
+      //    되살리려면 아래 false 를 빼면 된다.
+      if (false && rest.stage === "부결/반려" && prevData && prevData.stage !== "부결/반려") {
         try {
           // 중복 방지: 같은 회사명 + 부결 결과 사례가 24시간 안에 있으면 스킵
           var dupCheck = await supabase.from("approval_cases")
@@ -28677,14 +28680,24 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
   };
 
   // ✋ 끌어 놓기: dragId 를 targetId 자리로 옮긴다. 저장 방식은 moveCaseOrder 와 같다(보이는 목록 전체를 1..N 으로 다시 매김).
+  // 📦 끌기 시작한 행이 선택(체크·Ctrl+클릭)돼 있으면 선택된 행 전부가 한 묶음으로 같이 움직인다(2026-11-19).
+  var dragGroupIds = function(dragId) {
+    var sel = filtered.filter(function(c) { return selectedIds.indexOf(c.id) >= 0; }).map(function(c) { return c.id; });
+    return sel.length > 1 && sel.some(function(x) { return String(x) === String(dragId); }) ? sel : [dragId];
+  };
   var moveCaseTo = async function(dragId, targetId) {
     if (!dragId || !targetId || String(dragId) === String(targetId)) return;
     var siblings = filtered.slice();
     var from = siblings.findIndex(function(c) { return String(c.id) === String(dragId); });
     var to = siblings.findIndex(function(c) { return String(c.id) === String(targetId); });
     if (from < 0 || to < 0) return;
-    var moved = siblings.splice(from, 1)[0];
-    siblings.splice(to, 0, moved);
+    var groupIds = dragGroupIds(dragId).map(String);
+    if (groupIds.indexOf(String(targetId)) >= 0) return;        // 묶음 안의 행 위에 놓으면 아무 일도 없다
+    var group = siblings.filter(function(c) { return groupIds.indexOf(String(c.id)) >= 0; });   // 보이는 순서 그대로
+    var rest = siblings.filter(function(c) { return groupIds.indexOf(String(c.id)) < 0; });
+    var at = rest.findIndex(function(c) { return String(c.id) === String(targetId); });
+    if (to > from) at += 1;                                        // 아래로 끌면 놓은 행 뒤, 위로 끌면 놓은 행 앞
+    siblings = rest.slice(0, at).concat(group, rest.slice(at));
     var orderMap = {};
     siblings.forEach(function(c, i) { orderMap[c.id] = i + 1; });
     setCases(function(prev) {
@@ -29971,11 +29984,22 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
                 var sc = STATUS_COLORS_MAP[row.status] || { bg: "#F7F6F3", text: "#888" };
                 var isSel = selectedIds.indexOf(row.id) >= 0;
                 return (
-                  <tr key={row.id} data-case-id={row.id} title={canDragOrder && !isEditing ? "길게 누른 채 끌면 순서를 옮길 수 있습니다" : undefined}
-                    style={{ borderBottom: "1px solid #F0EDE8", background: dragCaseId === row.id ? "#E0E7FF" : selectedCase && selectedCase.id === row.id ? "#F0FDF4" : isEditing ? "#FAFFF7" : isSel ? "#EEF2FF" : "transparent", cursor: dragCaseId ? "grabbing" : "pointer",
-                      opacity: dragCaseId === row.id ? 0.6 : 1, boxShadow: dragCaseId && String(dragOverId) === String(row.id) && dragCaseId !== row.id ? "inset 0 3px 0 #4338CA" : "none" }}
+                  <tr key={row.id} data-case-id={row.id} title={canDragOrder && !isEditing ? "길게 누른 채 끌면 순서를 옮길 수 있습니다 · Ctrl+클릭으로 여러 줄을 고르면 한꺼번에 옮겨집니다" : undefined}
+                    style={(function() {
+                      var inDrag = !!dragCaseId && dragGroupIds(dragCaseId).some(function(x) { return String(x) === String(row.id); });
+                      return { borderBottom: "1px solid #F0EDE8", background: inDrag ? "#E0E7FF" : selectedCase && selectedCase.id === row.id ? "#F0FDF4" : isEditing ? "#FAFFF7" : isSel ? "#EEF2FF" : "transparent", cursor: dragCaseId ? "grabbing" : "pointer",
+                        opacity: inDrag ? 0.6 : 1, boxShadow: dragCaseId && String(dragOverId) === String(row.id) && !inDrag ? "inset 0 3px 0 #4338CA" : "none" };
+                    })()}
                     onPointerDown={function(e) { onRowPointerDown(e, row.id); }}
-                    onClick={function() { if (suppressRowClickRef.current) return; if (!isEditing) setSelectedCase(row); }}>
+                    onClick={function(e) {
+                      if (suppressRowClickRef.current) return;
+                      // Ctrl(⌘)+클릭 = 여러 줄 고르기(체크박스와 같은 선택). 패널은 열지 않는다.
+                      if (e.ctrlKey || e.metaKey) {
+                        setSelectedIds(function(prev) { return prev.indexOf(row.id) >= 0 ? prev.filter(function(x) { return x !== row.id; }) : prev.concat([row.id]); });
+                        return;
+                      }
+                      if (!isEditing) setSelectedCase(row);
+                    }}>
                     {/* 📄 다중선택 — 셀 전체가 stopPropagation 이라 눌러도 상세 모달이 안 열린다 */}
                     <td style={{ padding: "10px 4px", textAlign: "center" }} onClick={function(e) { e.stopPropagation(); }}>
                       <input type="checkbox" checked={isSel} onChange={function() {}}
@@ -32330,6 +32354,10 @@ function DBLeadsView({ canExport }) {
 }
 
 // ========== 📚 사례집 (자금 승인 사례 관리) ==========
+// 사례의 기관 칸 → 낱개 기관 목록. 쉼표·슬래시·가운뎃점으로 묶인 값을 나눈다.
+function splitCaseAgencies(v) {
+  return String(v == null ? "" : v).split(/[,/·、]/).map(function(x) { return x.trim(); }).filter(Boolean);
+}
 function ApprovalCasesView({ profile }) {
   const [cases, setCases] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -32360,7 +32388,7 @@ function ApprovalCasesView({ profile }) {
   // 필터링
   var filtered = useMemo(function() {
     return cases.filter(function(c) {
-      if (filterAgency !== "전체" && c.agency_group !== filterAgency) return false;
+      if (filterAgency !== "전체" && splitCaseAgencies(c.agency_group).indexOf(filterAgency) < 0) return false;
       if (filterResult !== "전체" && c.result !== filterResult) return false;
       if (filterIndustry !== "전체" && c.industry !== filterIndustry) return false;
       if (search.trim()) {
@@ -32393,7 +32421,8 @@ function ApprovalCasesView({ profile }) {
     var list = ["전체","소상공인시장진흥공단","신용보증기금","농협신용보증기금","기술보증기금","신용보증재단","중소벤처기업진흥공단","미소재단","수출무역보험공사","구조혁신&사업전환","경정청구","기타"];
     var seen = {};
     list.forEach(function(x) { seen[x] = true; });
-    cases.forEach(function(c) { if (c.agency_group && !seen[c.agency_group]) { seen[c.agency_group] = true; list.push(c.agency_group); } });
+    // "소진공, 신보"처럼 여러 기관이 한 칸에 들어간 값은 낱개로 나눠서 본다 — 묶음 그대로 버튼을 만들지 않는다(2026-11-19).
+    cases.forEach(function(c) { splitCaseAgencies(c.agency_group).forEach(function(a) { if (!seen[a]) { seen[a] = true; list.push(a); } }); });
     return list;
   }, [cases]);
   var resultOpts = ["전체","승인","약정","완료","부결","반려","진행중","신청전"];
