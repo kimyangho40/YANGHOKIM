@@ -5740,6 +5740,8 @@ function MobileApp({ profile, session }) {
       setNotes(function(prev) { return prev.map(function(n) { return n.id === note.id ? Object.assign({}, n, { content: r.data.content, updated_at: r.data.updated_at }) : n; }); });
       // 📩 받은 업무요청 줄이면 완료/미완료를 work_requests 에 반영 (실제 저장된 본문 기준)
       syncRequestsFromNote(Object.assign({}, note, { content: r.data.content }));
+      // ✅ 방금 체크한 항목 → 그 기업 이슈·액션에 기록 (판정은 사용자 의도 base → nc)
+      logNoteChecksToActivity(note, base, nc, null, myName);
     } else {
       // 실패하면 화면도 되돌린다 — 저장 안 된 것이 저장된 것처럼 보이면 안 된다
       var latestRow = r.data;
@@ -13764,6 +13766,8 @@ function MyTodoView({ currentUser, isAdmin, onSelectCompany, setView, companies 
     } else {
       // 📩 받은 업무요청 줄이면 완료/미완료를 work_requests 에 반영
       syncRequestsFromNote(Object.assign({}, note, { content: newContent }));
+      // ✅ 방금 체크한 항목 → 그 기업 이슈·액션에 기록
+      logNoteChecksToActivity(note, note.content, newContent, null, currentUser);
     }
   }
 
@@ -20096,6 +20100,125 @@ function ActivityLogView() {
   );
 }
 
+// ── ✅ 체크 완료 → 기업 이슈·액션(activity_logs note_auto) 기록 — 어느 화면에서 체크하든 (2026-11-19) ──
+//  예전엔 업무노트 카드(onChecklistChange)에서 체크할 때만 기록이 남았다.
+//  내 할일·편집창·모바일·주간 정리·팀 업무 항목은 같은 항목을 체크해도 기록이 없었다 → 아래 공용 함수를 붙였다.
+//  규칙은 onChecklistChange 와 같다: 노트에 연결된 기업 → "[업무노트] … 완료", 항목 글에 업체명이 있으면 "✅ 완료: …".
+//  ⚠️ onChecklistChange 의 기존 기록 코드는 건드리지 않았다(거긴 자기 방식으로 계속 남긴다).
+// ⛳ 체크완료-기록 시작 — scripts/test-note-check-log.mjs 가 이 구간을 소스째 떼어내 실행한다. supabase·React 를 참조하지 말 것.
+function checkItemKey(raw) {
+  // 같은 항목인지 견주는 열쇠 — 끝의 대기사유 꼬리표({응답대기:…})는 체크와 무관하게 바뀔 수 있어 뗀다.
+  return String(raw == null ? "" : raw).replace(/\s*\{(응답대기|서류대기)(?::\d{4}-\d{2}-\d{2})?\}\s*$/, "").trim();
+}
+function checkItemDisplay(key) {
+  return String(key).replace(/\[\d{4}-\d{2}-\d{2}\]|\[\d{1,2}\/\d{1,2}\]/, "").replace(/\\n/g, "\n").trim();
+}
+// 이전 본문 → 새 본문에서 "미완료였다가 완료로 바뀐" 항목 글 목록.
+// 줄 번호가 아니라 글로 견준다 — 여러 화면이 본문을 합치거나 줄을 옮기기 때문에 줄 번호는 믿을 수 없다.
+function newlyCheckedItemTexts(prevContent, newContent) {
+  var count = function(content, checked) {
+    var m = {};
+    String(content || "").split("\n").forEach(function(l) {
+      var x = /^- \[([ xX])\]\s*(.*)$/.exec(l.trim());
+      if (!x) return;
+      if ((x[1].toLowerCase() === "x") !== checked) return;
+      var k = checkItemKey(x[2]);
+      if (k) m[k] = (m[k] || 0) + 1;
+    });
+    return m;
+  };
+  var prevUn = count(prevContent, false), prevCk = count(prevContent, true), newCk = count(newContent, true);
+  var out = [];
+  Object.keys(newCk).forEach(function(k) {
+    var n = Math.min(newCk[k] - (prevCk[k] || 0), prevUn[k] || 0);
+    var text = checkItemDisplay(k);
+    for (var i = 0; i < n; i++) if (text) out.push(text);
+  });
+  return out;
+}
+// 항목 글 하나 → 기록할 [{ company, memo }]. 같은 기업은 한 번만.
+function noteCheckLogEntries(itemText, linkedCompany, companies) {
+  var out = [], seen = {};
+  if (linkedCompany && linkedCompany.id) {
+    out.push({ company: linkedCompany, memo: "[업무노트] " + itemText + " 완료" });
+    seen[linkedCompany.id] = 1;
+  }
+  (companies || []).forEach(function(co) {
+    if (!co || !co.id || !co.name || seen[co.id]) return;
+    if (String(itemText).indexOf(co.name) < 0) return;
+    out.push({ company: co, memo: "✅ 완료: " + itemText });
+    seen[co.id] = 1;
+  });
+  return out;
+}
+// 팀 체크리스트: 이번 저장으로 done 이 false → true 가 된 항목만.
+function teamNewlyDoneItems(prevList, nextList) {
+  var prev = Array.isArray(prevList) ? prevList : [], out = [];
+  (Array.isArray(nextList) ? nextList : []).forEach(function(it, k) {
+    if (!it || !it.done) return;
+    var before = it.id ? prev.find(function(p) { return p && p.id === it.id; }) : prev[k];
+    if (before && !before.done) out.push(it);
+  });
+  return out;
+}
+// ⛳ 체크완료-기록 끝
+var _noteLogCompanies = { at: 0, list: null };
+async function noteLogCompanies(given) {
+  if (given && given.length) return given;
+  if (_noteLogCompanies.list && Date.now() - _noteLogCompanies.at < 5 * 60000) return _noteLogCompanies.list;
+  var r = await fetchAllRows("companies", "id, name", { build: function(q) { return q.is("deleted_at", null); } });
+  if (r.error || !r.data) return [];
+  _noteLogCompanies = { at: Date.now(), list: r.data };
+  return r.data;
+}
+async function insertNoteAutoLog(company, memo, myName) {
+  var payload = { company_id: company.id, case_id: company.id, case_type: "company", business_name: company.name || "",
+    assignee: myName || "", log_type: "note_auto", memo: String(memo).slice(0, 200), logged_by: myName || "" };
+  var r = await supabase.from("activity_logs").insert(payload);
+  if (r.error && /company_id/.test(r.error.message || "")) { delete payload.company_id; await supabase.from("activity_logs").insert(payload); }
+}
+// 노트별 "마지막으로 본 본문" — 편집창 자동저장 뒤 [저장]처럼 같은 체크를 두 경로가 연달아 지나갈 때 두 번 적지 않게 한다.
+var _noteCheckBase = {};
+function markNoteCheckBase(noteId, content) { if (noteId) _noteCheckBase[noteId] = { content: content || "", at: Date.now() }; }
+// 실패해도 노트 저장을 되돌리지 않는다 — 기록은 부가 기능이다.
+async function logNoteChecksToActivity(note, prevContent, newContent, companies, myName) {
+  try {
+    if (!note || !note.id) return;
+    var b = _noteCheckBase[note.id];
+    var base = (b && Date.now() - b.at < 30 * 60000) ? b.content : (prevContent || "");
+    markNoteCheckBase(note.id, newContent);
+    var texts = newlyCheckedItemTexts(base, newContent);
+    if (!texts.length) return;
+    var list = await noteLogCompanies(companies);
+    var linked = note.company_id
+      ? { id: note.company_id, name: ((list || []).find(function(c) { return c.id === note.company_id; }) || {}).name || "" }
+      : null;
+    for (var i = 0; i < texts.length; i++) {
+      var entries = noteCheckLogEntries(texts[i], linked, list);
+      for (var j = 0; j < entries.length; j++) await insertNoteAutoLog(entries[j].company, entries[j].memo, myName);
+    }
+  } catch (e) { console.warn("[체크완료 기록] 실패", e); }
+}
+async function logTeamDoneToActivity(prevList, nextList, companies, myName) {
+  try {
+    var items = teamNewlyDoneItems(prevList, nextList);
+    if (!items.length) return;
+    var list = await noteLogCompanies(companies);
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i], text = String(it.text || "").trim();
+      if (!text) continue;
+      var linked = it.company_id
+        ? { id: it.company_id, name: it.company_name || ((list || []).find(function(c) { return c.id === it.company_id; }) || {}).name || "" }
+        : null;
+      var entries = noteCheckLogEntries(text, linked, list);
+      for (var j = 0; j < entries.length; j++) {
+        var memo = entries[j].memo.replace(/^\[업무노트\] /, "[팀 업무] ") + (it.result ? " · 결과: " + it.result : "");
+        await insertNoteAutoLog(entries[j].company, memo, myName);
+      }
+    }
+  } catch (e) { console.warn("[팀 완료 기록] 실패", e); }
+}
+
 // 체크리스트 항목은 "- [ ] 텍스트" 한 줄로 저장되므로, 항목 안의 줄바꿈은
 // 저장 시 리터럴 "\n"(백슬래시+n)로 인코딩하고, 파싱/표시 시 실제 개행으로 복원한다.
 function encodeItemText(t) {
@@ -20662,7 +20785,7 @@ function MentionField(props) {
 }
 
 // ── 업무노트 수정 카드 (독립 컴포넌트 - 입력버그 방지) ─────────────────────────
-function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, companiesList, draft }) {
+function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, companiesList, draft, myName }) {
   // @업체 태그 자동완성: { type:'title'|'freeContent'|'item', idx, query }
   var [mention, setMention] = useState(null);
   // 🔗 마지막으로 타임라인 링크를 맞춰 둔 본문(saveEditorContent 에서만 쓴다).
@@ -20746,6 +20869,9 @@ function NoteEditCard({ note, editNote, setEditNote, saveEdit, onCancel, compani
               Object.assign({}, note || {}, { id: noteId, content: newContent }), companiesList);
             // 📩 편집창 체크박스로 받은 요청을 체크/해제한 경우 — 링크와 같은 조건(내용이 바뀐 때만)
             syncRequestsFromNote(Object.assign({}, note || {}, { id: noteId, content: newContent }));
+            // ✅ 편집창 체크박스로 완료한 항목 → 그 기업 이슈·액션에 기록
+            logNoteChecksToActivity(Object.assign({}, note || {}, { id: noteId, company_id: (editNote && editNote.company_id) || (note && note.company_id) || null }),
+              lastLinked, newContent, companiesList, myName || (note && note.assignee) || "");
           }
         }
         else if (r.conflict) pushSaveAlert({ id: "wnconf_" + noteId, level: "error", label: label, kind: "conflict",
@@ -22422,6 +22548,8 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
       if (!uw.savedAt) return;
       var base = notes.find(function(n) { return n.id === uw.id; });
       if (base) syncRequestsFromNote(Object.assign({}, base, { content: uw.content }));
+      // ✅ 주간 정리에서 일괄 완료한 항목 → 그 기업 이슈·액션에 기록
+      if (base) logNoteChecksToActivity(base, base.content, uw.content, companiesList, profile?.name || "");
     });
     if (weekConflicts > 0) alert("노트 " + weekConflicts + "건은 다른 곳에서 먼저 저장돼 반영하지 못했습니다.\n새로고침 후 다시 시도해주세요.");
     if (onBadgeUpdate) onBadgeUpdate();
@@ -22792,6 +22920,7 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
         Object.assign({}, prevNoteForReq || {}, { id: noteId, content: savedContent }), companiesList);
       // 📩 받은 요청 항목 완료/해제 → work_requests 반영 (실제 저장된 합본 기준 · 양방향)
       syncRequestsFromNote(Object.assign({}, prevNoteForReq || {}, { id: noteId, content: savedContent }));
+      markNoteCheckBase(noteId, savedContent);   // 아래에서 직접 기록하므로, 공용 경로가 같은 체크를 다시 적지 않게 기준만 옮긴다
       // 방금 체크 완료된 항목 → 활동로그 기록
       var prevNote = notes.find(function(n) { return n.id === noteId; });
       if (prevNote) {
@@ -22893,6 +23022,9 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
       reconcileNoteLinks("work_line",
         Object.assign({}, savedNote, { id: editNote.id, content: finalContent }), companiesList);
       syncRequestsFromNote(Object.assign({}, savedNote, { id: editNote.id, content: finalContent }));
+      // ✅ 편집창에서 체크해 저장한 항목 → 그 기업 이슈·액션에 기록 (자동저장에서 이미 적은 것은 건너뛴다)
+      logNoteChecksToActivity(Object.assign({}, savedNote, { id: editNote.id, company_id: editNote.company_id || savedNote.company_id || null }),
+        savedNote.content, finalContent, companiesList, profile?.name || "");
       setEditingId(null); setEditNote({});
       if (onBadgeUpdate) onBadgeUpdate();
     }
@@ -23051,6 +23183,7 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
             note={notes.find(function(n) { return n.id === editingId; })}
             editNote={editNote}
             setEditNote={setEditNote}
+            myName={profile?.name || ""}
             saveEdit={saveEdit}
             companiesList={companiesList}
             draft={editDraft}
@@ -33607,6 +33740,8 @@ function TeamNotesSection({ profile, onTakenToMyNote, companiesList }) {
     }
     // 🔗 타임라인 링크 재조정 — 항목 문구가 바뀌었을 수 있다(완료·삭제·결과메모 포함).
     reconcileNoteLinks("team_item", Object.assign({}, note, { checklist: nextList }), companiesList);
+    // ✅ 이번 저장으로 완료가 된 항목 → 그 기업 이슈·액션에 기록 (되돌리기·삭제·결과메모만 고친 저장은 해당 없음)
+    logTeamDoneToActivity(list, nextList, companiesList, profile?.name || "");
   };
   // 체크(다녀옴) 토글 · 결과 메모 저장 — 저장 자체는 saveTeamChecklist 한 곳으로 모았다(동작 동일).
   var patchSchedItem = async function(note, itemId, patch, failMsg) {
