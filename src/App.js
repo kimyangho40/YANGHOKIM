@@ -2077,6 +2077,126 @@ function schedKindStyle(kind) {
 function schedItemText(kind, companyName) {
   return String(kind || "일정") + (companyName ? " · " + companyName : "");
 }
+
+// ── 📌 기관현황 비고 메모 → 팀 일정 항목 → 대시보드 (2026-11-19, DB 스키마 변경 0건) ────────────
+//  기관별 현황 「비고」에 실태조사·실사·방문·약정이 들어간 메모를 저장하면 팀 일정 항목(is_sched)을 자동으로 만든다.
+//  · 대시보드는 그 항목 중 **카드 날짜가 최근 7일 안**인 것만 「진행 / 완료」로 보여 준다.
+//  · 「약정」이 들어간 메모는 카드 날짜를 3일 뒤로 잡는다 → 대시보드에는 3일 뒤부터 뜬다(팀 업무 공간엔 '예정'으로 먼저 보인다).
+//  · 완료는 업무노트 화면의 팀 업무 공간에서 그 항목을 체크하면 된다 → 대시보드에서 완료로 넘어간다.
+//  새 테이블·컬럼 없이 team_notes.checklist 항목에 src:"agency_memo" · case_id · memo 를 얹었다.
+// ⛳ 기관메모-일정 시작 — scripts/test-memo-sched.mjs 가 이 구간을 소스째 떼어내 실행한다. supabase·React 를 참조하지 말 것.
+var MEMO_SCHED_DELAY_DAYS = 3;    // 「약정」 메모가 대시보드에 뜨기까지
+var MEMO_SCHED_WINDOW_DAYS = 7;   // 대시보드에 보이는 기간
+function memoSchedKind(text) {
+  var t = String(text == null ? "" : text);
+  if (t.indexOf("약정") >= 0) return "약정";
+  if (t.indexOf("실태조사") >= 0 || t.indexOf("실사") >= 0) return "실태조사";
+  if (t.indexOf("방문") >= 0) return "기관방문";
+  return null;
+}
+function ymdAddDays(ymd, n) {
+  var d = new Date(String(ymd) + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function memoSchedDate(kind, todayYmd) {
+  return kind === "약정" ? ymdAddDays(todayYmd, MEMO_SCHED_DELAY_DAYS) : todayYmd;
+}
+function memoSchedText(kind, companyName, memo) {
+  var one = String(memo == null ? "" : memo).replace(/\s+/g, " ").trim();
+  if (one.length > 120) one = one.slice(0, 120) + "…";
+  return String(kind || "일정") + (companyName ? " · " + companyName : "") + (one ? " — " + one : "");
+}
+function buildMemoSchedItem(caseRow, memo, kind, nowIso, id) {
+  var name = String((caseRow && caseRow.business_name) || "").trim();
+  return {
+    id: id, text: memoSchedText(kind, name, memo),
+    taken_by: null, taken_at: null, taken_work_note_id: null, done: false,
+    created_at: nowIso,
+    is_sched: true, sched_kind: kind,
+    company_id: (caseRow && caseRow.company_id) || null, company_name: name,
+    assignee: String((caseRow && caseRow.assignee) || "").split(/[,/]/)[0].trim(),
+    result: "", done_at: null, done_by: null,
+    src: "agency_memo", case_id: (caseRow && caseRow.id) || null,
+    agency_group: (caseRow && caseRow.agency_group) || "",
+    memo: String(memo == null ? "" : memo).slice(0, 500),
+  };
+}
+// 같은 기관현황 건에서 만든, 아직 완료 안 된 항목 → { note, idx } (없으면 null)
+function findMemoSchedItem(notes, caseId) {
+  var hit = null;
+  (notes || []).forEach(function(n) {
+    if (hit || !n || n.deleted_at) return;
+    (Array.isArray(n.checklist) ? n.checklist : []).forEach(function(it, k) {
+      if (hit || !it || it.src !== "agency_memo" || it.case_id !== caseId || it.done) return;
+      hit = { note: n, idx: k };
+    });
+  });
+  return hit;
+}
+// 대시보드용 — 카드 날짜가 [오늘-6, 오늘] 인 메모 일정만. { open:[], done:[] } (최신 날짜 먼저)
+function dashMemoSchedRows(notes, todayYmd) {
+  var from = ymdAddDays(todayYmd, -(MEMO_SCHED_WINDOW_DAYS - 1));
+  var open = [], done = [];
+  (notes || []).forEach(function(n) {
+    if (!n || n.deleted_at) return;
+    var wd = String(n.work_date || "").slice(0, 10);
+    if (!wd || wd < from || wd > todayYmd) return;
+    (Array.isArray(n.checklist) ? n.checklist : []).forEach(function(it) {
+      if (!it || it.src !== "agency_memo") return;
+      (it.done ? done : open).push({ note_id: n.id, work_date: wd, item: it });
+    });
+  });
+  var byDate = function(a, b) { return a.work_date < b.work_date ? 1 : a.work_date > b.work_date ? -1 : 0; };
+  open.sort(byDate); done.sort(byDate);
+  return { open: open, done: done };
+}
+// ⛳ 기관메모-일정 끝
+// 비고 메모를 저장한 뒤 부른다. 실패해도 메모 저장을 되돌리지 않는다(부가 기능).
+// 저장 규칙은 addSchedule 과 같다 — (팀 × 날짜)의 살아있는 미완료 카드에 붙이고, 없으면 그 날짜 카드를 만든다.
+async function syncMemoScheduleFromCase(caseRow, memo, prevMemo) {
+  try {
+    if (!caseRow || !caseRow.id) return;
+    var kind = memoSchedKind(memo);
+    if (!kind) return;
+    if (String(memo || "").trim() === String(prevMemo || "").trim()) return;
+    var today = kstDate();
+    var q = await supabase.from("team_notes").select("*")
+      .gte("work_date", ymdAddDays(today, -MEMO_SCHED_WINDOW_DAYS)).is("deleted_at", null);
+    if (q.error) throw q.error;
+    var ex = findMemoSchedItem(q.data || [], caseRow.id);
+    if (ex) {
+      // 같은 건의 미완료 항목이 이미 있다 → 새로 만들지 않고 문구만 맞춘다(날짜는 그대로. 항목 수가 안 늘어 알림도 없다).
+      var list = ex.note.checklist.map(function(it, k) {
+        return k === ex.idx ? Object.assign({}, it, { sched_kind: kind, text: memoSchedText(kind, it.company_name, memo), memo: String(memo || "").slice(0, 500) }) : it;
+      });
+      var u0 = await supabase.from("team_notes").update({ checklist: list, updated_at: new Date().toISOString() }).eq("id", ex.note.id);
+      if (u0.error) throw u0.error;
+      return;
+    }
+    var tm = teamByName(caseRow.business_name);
+    var team = tm === "법인팀" ? "corporate" : tm === "개인팀" ? "individual" : "all";
+    var date = memoSchedDate(kind, today);
+    var item = buildMemoSchedItem(caseRow, memo, kind, new Date().toISOString(), "ck_" + Math.random().toString(36).slice(2, 11));
+    var d = await supabase.from("team_notes").select("*")
+      .eq("team", team).eq("work_date", date).is("deleted_at", null).neq("status", "done")
+      .order("created_at", { ascending: true }).limit(1);
+    if (d.error) throw d.error;
+    var dest = (d.data || [])[0] || null;
+    if (dest) {
+      markTeamNoteSelfEdit(dest.id);
+      var u = await supabase.from("team_notes")
+        .update({ checklist: (Array.isArray(dest.checklist) ? dest.checklist : []).concat([item]), updated_at: new Date().toISOString() }).eq("id", dest.id);
+      if (u.error) throw u.error;
+    } else {
+      var ins = await supabase.from("team_notes").insert({
+        team: team, title: teamNoteAutoTitle(date), work_date: date,
+        priority: "normal", status: "open", checklist: [item], is_announcement: false,
+      });
+      if (ins.error) throw ins.error;
+    }
+  } catch (e) { console.warn("[기관메모→일정] 실패", e); }
+}
 // 일정이 "언제 것인지" = 그 카드의 업무 날짜. work_date 가 없는 옛 카드는 등록일로 대체한다.
 function schedDateOf(note) {
   return String((note && note.work_date) || String((note && note.created_at) || "").slice(0, 10) || "");
@@ -11190,6 +11310,15 @@ function StagnationAdminWidget({ rows, onSelectCompany, setView }) {
 var DASH_PERF_OFF = true;
 function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, setFilterStage, setFilterAssignee, setDashboardFilter, onAdd, canExport, myName, myUid, stagnRows }) {
   const [dashSimple, setDashSimple] = useState(true);   // 🧹 핵심 4가지만 보기(2026-11-19) — 나머지 위젯은 숨김, 버튼으로 전체 보기
+  // 📌 기관현황 메모 일정(최근 7일) — team_notes 에서 읽는다. 실패하면 구역만 비운다.
+  const [memoSched, setMemoSched] = useState({ open: [], done: [] });
+  const [memoSchedShowDone, setMemoSchedShowDone] = useState(false);
+  useEffect(function() {
+    var today = kstDate();
+    supabase.from("team_notes").select("id, work_date, checklist, deleted_at")
+      .gte("work_date", ymdAddDays(today, -(MEMO_SCHED_WINDOW_DAYS - 1))).lte("work_date", today).is("deleted_at", null)
+      .then(function(r) { if (!r.error) setMemoSched(dashMemoSchedRows(r.data || [], today)); });
+  }, []);
   const isAdmin = myName === "양호";
   // "나의 오늘" · "오늘의 할 일"이 함께 쓰는 보기 범위. 기본은 본인 기준, 관리자만 팀 전체로 전환 가능.
   const [scope, setScope] = useState("mine");
@@ -11663,6 +11792,41 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
         );
       })()}
 
+      {/* 📌 기관현황 메모 일정 — 비고에 실태조사·실사·방문·약정이 들어간 메모(최근 7일). 완료는 업무노트 > 팀 업무 공간에서 체크 */}
+      <div data-dash-keep="1" className="dash-memo-sched" style={{ background: "#fff", borderRadius: 12, padding: "16px 20px", border: "1px solid #E8E5E0", marginBottom: 22 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>📌 기관현황 메모 일정 <span style={{ fontSize: 12, color: "#888", fontWeight: 400 }}>최근 7일 · 실태조사·실사·방문·약정</span></div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={function() { setMemoSchedShowDone(false); }}
+              style={{ padding: "5px 12px", fontSize: 12, fontWeight: 700, borderRadius: 99, cursor: "pointer", border: "1px solid " + (!memoSchedShowDone ? "#4338CA" : "#E8E5E0"), background: !memoSchedShowDone ? "#EEF2FF" : "#fff", color: !memoSchedShowDone ? "#4338CA" : "#888" }}>진행 {memoSched.open.length}</button>
+            <button onClick={function() { setMemoSchedShowDone(true); }}
+              style={{ padding: "5px 12px", fontSize: 12, fontWeight: 700, borderRadius: 99, cursor: "pointer", border: "1px solid " + (memoSchedShowDone ? "#15803D" : "#E8E5E0"), background: memoSchedShowDone ? "#F0FDF4" : "#fff", color: memoSchedShowDone ? "#15803D" : "#888" }}>완료 {memoSched.done.length}</button>
+          </div>
+        </div>
+        {(function() {
+          var rows = memoSchedShowDone ? memoSched.done : memoSched.open;
+          if (!rows.length) return <div style={{ fontSize: 12, color: "#AAA", padding: "6px 0" }}>{memoSchedShowDone ? "최근 7일 안에 완료한 메모 일정이 없습니다." : "최근 7일 안에 올라온 메모 일정이 없습니다."}</div>;
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 260, overflowY: "auto" }}>
+              {rows.map(function(r) {
+                var it = r.item, ks = schedKindStyle(it.sched_kind);
+                var co = it.company_id ? companies.find(function(c) { return c.id === it.company_id; }) : null;
+                return (
+                  <div key={r.note_id + ":" + it.id} onClick={function() { if (co) onSelectCompany(co); }}
+                    style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "8px 10px", border: "1px solid #F0EDE8", borderRadius: 8, background: it.done ? "#FAFAF8" : "#fff", cursor: co ? "pointer" : "default" }}>
+                    <span style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{r.work_date.slice(5).replace("-", "/")}</span>
+                    <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 99, background: ks.bg, color: ks.text, border: "1px solid " + ks.border, whiteSpace: "nowrap" }}>{it.sched_kind}</span>
+                    <span style={{ flexShrink: 0, fontSize: 12, fontWeight: 700, color: "#1A1917", whiteSpace: "nowrap" }}>{it.company_name || "-"}</span>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: "#555", lineHeight: 1.5, wordBreak: "break-word", textDecoration: it.done ? "line-through" : "none" }}>{it.memo || it.text}{it.done && it.result ? " · 결과: " + it.result : ""}</span>
+                    <span style={{ flexShrink: 0, fontSize: 11, color: "#888", whiteSpace: "nowrap" }}>{it.agency_group ? it.agency_group + " · " : ""}{it.assignee || "-"}{it.done ? " · ✅ " + (it.done_by || "") : ""}</span>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
+        <div style={{ fontSize: 10, color: "#AAA", marginTop: 8 }}>기관별 현황 비고에 적으면 자동으로 올라옵니다 · 「약정」 메모는 3일 뒤부터 · 완료는 업무노트 → 팀 업무 공간에서 체크</div>
+      </div>
       <div data-dash-keep="1" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "0 0 10px" }}>
         <div className="dash-only-simple" style={{ fontSize: 14, fontWeight: 700 }}>전체 현황</div>
         <button onClick={function() { setDashSimple(function(v) { return !v; }); }}
@@ -28753,6 +28917,11 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
     setCases(function(prev) { return prev.map(function(c) { return c.id === caseId ? Object.assign({}, c, upd) : c; }); });
     // 사이드패널이 같은 건을 열어 두고 있으면 화면도 같이 맞춘다
     setSelectedCase(function(pc) { return pc && pc.id === caseId ? Object.assign({}, pc, upd) : pc; });
+    // 📌 비고에 실태조사·실사·방문·약정이 들어가면 팀 일정 항목으로 → 대시보드 (cases 는 아직 저장 전 값이라 prev 로 쓴다)
+    if (field === "notes") {
+      var prevRow = cases.find(function(c) { return c.id === caseId; });
+      if (prevRow) syncMemoScheduleFromCase(Object.assign({}, prevRow, upd), value, prevRow.notes);
+    }
     return true;
   };
 
@@ -28817,6 +28986,10 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
       setCases(function(prev) { return prev.map(function(c) { return c.id === editData.id ? Object.assign({}, c, updates) : c; }); });
       var savedId = editData.id;
       var savedStatus = updates.status;
+      // 📌 인라인 편집으로 비고를 고친 경우도 같은 규칙
+      if (prevCase && String(prevCase.notes || "") !== String(updates.notes || "")) {
+        syncMemoScheduleFromCase(Object.assign({}, prevCase, updates, { id: savedId }), updates.notes, prevCase.notes);
+      }
       // 인라인 편집으로 상태가 바뀌면 파이프라인 조합카드 자동동기화
       if (savedStatus !== undefined && prevStatus !== savedStatus) {
         var mergedCase = Object.assign({}, prevCase || {}, updates, { id: savedId });
