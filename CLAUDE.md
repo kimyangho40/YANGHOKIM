@@ -804,6 +804,22 @@ KCB·NICE 점수를 고치면 그날 날짜를 `company_info` 의 **「신용 �
   (팀 업무와 다른 점 — 그쪽은 `MobileApp` 이 `TeamNotesSection` 을 그대로 렌더한다).
   좁은 폭에서는 `auto-fill` 이 알아서 1열이 된다.
 
+## ✅ 체크 완료 → 이슈·액션 기록을 모든 체크 경로에 (2026-11-19, **DB 변경 0건 · 새 테이블 0개**)
+
+업무노트 항목을 체크하면 그 기업 이슈·액션(`activity_logs` `note_auto`)에 남는 기록이 **업무노트 카드(`onChecklistChange`)에서만** 붙어 있었다.
+내 할일·편집창·모바일·주간 정리·팀 업무 항목은 같은 체크인데 기록이 없었다 → 공용 함수로 붙였다.
+롤백: 태그 `backup/before-note-check-log-20261119` · 머지 커밋 `git revert -m 1 <머지>`.
+
+- 판정은 `⛳ 체크완료-기록` 마커 사이 순수 함수(`newlyCheckedItemTexts`·`noteCheckLogEntries`·`teamNewlyDoneItems`) ·
+  테스트 `scripts/test-note-check-log.mjs`(소스째 떼어내 실행 — 마커 문구를 바꾸지 말 것).
+- 규칙은 기존과 같다: 노트에 연결된 기업 → `[업무노트] … 완료` / 항목 글에 업체명이 그대로 있으면 `✅ 완료: …`. 팀 항목은 `[팀 업무] …`.
+- **줄 번호가 아니라 글로 견준다**(미완료였던 같은 글이 완료가 됨). 새로 적은 완료 줄·체크 해제·문구를 고친 줄은 기록하지 않는다(놓치는 쪽이 안전).
+- 연결 지점: 개인노트 5곳(`logNoteChecksToActivity` — 모바일 `toggleItem` · `MyTodoView.toggleCheckbox` · `saveEditorContent` · `applyReviewActions` · `saveEdit`) + 팀 1곳(`saveTeamChecklist` → `logTeamDoneToActivity`). **새 체크 경로를 만들면 여기 붙일 것**(테스트가 개수를 센다).
+- ⚠️ `onChecklistChange` 의 기존 기록 코드는 **안 건드렸다.** 대신 `markNoteCheckBase` 로 기준 본문만 옮겨, 편집창 자동저장 → [저장] 처럼 두 경로가 연달아 지나갈 때 같은 체크를 두 번 적지 않게 한다(`_noteCheckBase`, 30분).
+- 기업 목록이 없는 화면(모바일·내 할일)은 `noteLogCompanies` 가 `fetchAllRows("companies","id, name")` 로 받아 5분간 들고 있는다.
+- 실패해도 노트 저장을 되돌리지 않는다(부가 기능).
+- ⚠️ 화면 클릭 확인은 사람이 해야 한다: 내 할일·편집창·모바일·주간 정리·팀 항목에서 @업체 항목 체크 → 그 기업 이슈·액션에 1건.
+
 ## 💰 정산관리 금액 입력 — 쉼표 자동 · 한글 금액 (2026-11-18, **DB 변경 0건 · 새 쿼리 0건**)
 
 정산관리 금액 5칸(신청금액·계약금·승인금액·수수료·입금금액 = `SETTLE_AMOUNT_FIELDS`)에 `3800000` 이나 `380만원` 을 치면
