@@ -28489,6 +28489,10 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
   // 탭·연도·월을 바꿀 때는 아예 비운다 — changeYear 가 필터를 비우는 것과 같은 계열이다.
   const [selectedIds, setSelectedIds] = useState([]);
   const selAnchorRef = useRef(-1);                  // Shift+클릭 범위 선택 기준(filtered 안 위치)
+  // ✋ 순서 끌기(2026-11-19) — 행을 길게(0.45초) 누른 채 끌어 놓는다. ▲▼ 버튼도 그대로 쓸 수 있다.
+  const [dragCaseId, setDragCaseId] = useState(null);
+  const [dragOverId, setDragOverId] = useState(null);
+  const suppressRowClickRef = useRef(false);        // 끌고 난 직후의 클릭으로 사이드패널이 열리지 않게
   const [bulkMode, setBulkMode] = useState(null);   // null | "copy" | "move"
   const [bulkDest, setBulkDest] = useState(null);   // { group, year, month, keepMonth, keepStatus, carryRow? }
   //  ↪ carryRow 가 있으면 행별 「이월」 — 대상은 선택 목록이 아니라 그 한 줄이다(bulkTargetRows).
@@ -28670,6 +28674,74 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
       console.warn("순서 변경 저장 실패:", e);
       fetchCases();
     }
+  };
+
+  // ✋ 끌어 놓기: dragId 를 targetId 자리로 옮긴다. 저장 방식은 moveCaseOrder 와 같다(보이는 목록 전체를 1..N 으로 다시 매김).
+  var moveCaseTo = async function(dragId, targetId) {
+    if (!dragId || !targetId || String(dragId) === String(targetId)) return;
+    var siblings = filtered.slice();
+    var from = siblings.findIndex(function(c) { return String(c.id) === String(dragId); });
+    var to = siblings.findIndex(function(c) { return String(c.id) === String(targetId); });
+    if (from < 0 || to < 0) return;
+    var moved = siblings.splice(from, 1)[0];
+    siblings.splice(to, 0, moved);
+    var orderMap = {};
+    siblings.forEach(function(c, i) { orderMap[c.id] = i + 1; });
+    setCases(function(prev) {
+      return prev.map(function(c) { return orderMap[c.id] != null ? Object.assign({}, c, { sort_order: orderMap[c.id] }) : c; });
+    });
+    try {
+      await Promise.all(siblings.map(function(c, i) {
+        return supabase.from("agency_cases").update({ sort_order: i + 1 }).eq("id", c.id);
+      }));
+    } catch (e) {
+      console.warn("순서 변경 저장 실패:", e);
+      fetchCases();
+    }
+  };
+  // 검색·담당자·상태 필터가 걸린 채 옮기면 전체 순서가 섞이므로 그때는 끌기를 막는다.
+  var canDragOrder = !(filterAssignee && filterAssignee.length) && (!statusFilter || statusFilter === "all") && !searchQ;
+  // 행을 길게 누르면 끌기 시작. 0.45초 안에 손을 떼거나 8px 넘게 움직이면 평소 클릭·글자 선택으로 둔다.
+  // 입력칸·버튼·체크박스 위에서는 시작하지 않는다.
+  var onRowPointerDown = function(e, id) {
+    if (!canDragOrder || editingId || e.button > 0) return;
+    var tg = e.target;
+    if (tg && tg.closest && tg.closest("input, textarea, select, button, a, label")) return;
+    var sx = e.clientX, sy = e.clientY, started = false, over = null;
+    var cleanup = function() {
+      clearTimeout(timer);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    var onMove = function(ev) {
+      if (!started) {
+        if (Math.abs(ev.clientX - sx) > 8 || Math.abs(ev.clientY - sy) > 8) cleanup();
+        return;
+      }
+      var el = document.elementFromPoint(ev.clientX, ev.clientY);
+      var tr = el && el.closest ? el.closest("tr[data-case-id]") : null;
+      over = tr ? tr.getAttribute("data-case-id") : null;
+      setDragOverId(over);
+    };
+    var onUp = function() {
+      cleanup();
+      if (!started) return;
+      document.body.style.userSelect = "";
+      setDragCaseId(null); setDragOverId(null);
+      suppressRowClickRef.current = true;
+      setTimeout(function() { suppressRowClickRef.current = false; }, 300);
+      if (over != null && String(over) !== String(id)) moveCaseTo(id, over);
+    };
+    var timer = setTimeout(function() {
+      started = true;
+      document.body.style.userSelect = "none";
+      try { var sel = window.getSelection && window.getSelection(); if (sel && sel.removeAllRanges) sel.removeAllRanges(); } catch (err) {}
+      setDragCaseId(id);
+    }, 450);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   };
 
   useEffect(function() { fetchCases(); fetchCompanies(); }, []);
@@ -29886,7 +29958,11 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
                 var sc = STATUS_COLORS_MAP[row.status] || { bg: "#F7F6F3", text: "#888" };
                 var isSel = selectedIds.indexOf(row.id) >= 0;
                 return (
-                  <tr key={row.id} style={{ borderBottom: "1px solid #F0EDE8", background: selectedCase && selectedCase.id === row.id ? "#F0FDF4" : isEditing ? "#FAFFF7" : isSel ? "#EEF2FF" : "transparent", cursor: "pointer" }} onClick={function() { if (!isEditing) setSelectedCase(row); }}>
+                  <tr key={row.id} data-case-id={row.id} title={canDragOrder && !isEditing ? "길게 누른 채 끌면 순서를 옮길 수 있습니다" : undefined}
+                    style={{ borderBottom: "1px solid #F0EDE8", background: dragCaseId === row.id ? "#E0E7FF" : selectedCase && selectedCase.id === row.id ? "#F0FDF4" : isEditing ? "#FAFFF7" : isSel ? "#EEF2FF" : "transparent", cursor: dragCaseId ? "grabbing" : "pointer",
+                      opacity: dragCaseId === row.id ? 0.6 : 1, boxShadow: dragCaseId && String(dragOverId) === String(row.id) && dragCaseId !== row.id ? "inset 0 3px 0 #4338CA" : "none" }}
+                    onPointerDown={function(e) { onRowPointerDown(e, row.id); }}
+                    onClick={function() { if (suppressRowClickRef.current) return; if (!isEditing) setSelectedCase(row); }}>
                     {/* 📄 다중선택 — 셀 전체가 stopPropagation 이라 눌러도 상세 모달이 안 열린다 */}
                     <td style={{ padding: "10px 4px", textAlign: "center" }} onClick={function(e) { e.stopPropagation(); }}>
                       <input type="checkbox" checked={isSel} onChange={function() {}}
