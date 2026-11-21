@@ -2146,6 +2146,20 @@ in.("부결","진행 중") → 416건 ✅          or=(status.eq."부결",result
 (`companies.fee` 가 integer 인데 수수료율 4.8 을 보냄 → 2026-08-15 numeric 으로 변경).
 `classifyWriteFail` 이 `permanent` 로 표시해 큐에 안 넣고, 옛 항목도 걷어낸다.
 
+## ⚠️ 메타 신청 → DB리스트 자동 등록 — 2026-11-21 신설
+
+메타(페이스북·인스타) 광고 양식 신청이 10분마다 `db_leads` 에 들어온다. **기업 목록(`companies`)에는 넣지 않는다** — 넣으면 실제 고객과 섞이고 파이프라인 카드가 자동으로 생긴다.
+
+- **흐름**: pg_cron `meta-leads-poll`(10분) → Edge Function `meta-leads` → 메타 Graph API → `db_leads` insert(`source='meta'`).
+- **DB**: `db_leads` 에 7칸(`source`·`meta_lead_id`(unique)·`meta_form_name`·`meta_ad_name`·`meta_answers`·`applied_at`·`first_contact_at`). 전부 NULL 허용 — 기존 행은 `source` 가 NULL(=직접 입력).
+- **화면**: `src/App.js` `// ⛳ 메타신청 시작 … 끝` 순수 함수 + `DBLeadsView`. 판정(우선 연락·검토·소규모·신청 불가)과 경과 시간은 **저장하지 않고** `meta_answers` 로 매번 계산한다.
+- **첫 연락 시각**: 메타 신청이 「미연락」에서 처음 벗어날 때만 `first_contact_at` 을 찍는다(`leadFirstContactPatch`, 저장 경로 3곳). 기존 행의 저장 payload 는 바뀌지 않는다.
+- **비밀값**: 메타 토큰·호출 비밀키는 Vault(`meta_leads_token`·`meta_leads_secret`)에만 있다. 함수는 `verify_jwt` 를 끄고 `x-meta-leads-secret` 헤더로 검사한다.
+- **중복**: 같은 신청 번호는 unique + `ignore-duplicates` 로 건너뛴다 → 수집을 몇 번 돌려도 안 불어난다.
+- **멈추기**: `select cron.unschedule('meta-leads-poll');` (`메타신청_10분수집_cron_rollback.sql`)
+- **테스트**: `node scripts/test-meta-leads.mjs` (61개, DB·메타 무접촉)
+- **메타 토큰 데이터 접근 기한 2027-02-17** — 그 전에 갱신해 Vault 값을 `vault.update_secret` 으로 바꾼다.
+
 ## 3. 완료 보고 시 — "회귀 확인 완료" 여부 명시
 매 기능 추가/수정 완료 보고에 **반드시 "회귀 확인 완료" 여부와 점검한 항목**을 같이 적는다.
 깨진 게 있으면 목록으로 보고하고 "고칠 것 vs 이번엔 보고만 할 것"을 구분한다.

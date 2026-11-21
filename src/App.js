@@ -3946,6 +3946,85 @@ function settlementAdvanceTarget(prev, next, invoiceStage, receivedStage) {
   return null;
 }
 // ⛳ 파이프라인-자동화 끝
+
+// ⛳ 메타신청 시작 — scripts/test-meta-leads.mjs 가 이 구간을 소스째 떼어내 실행한다. supabase·React 를 참조하지 말 것.
+// 메타(페이스북·인스타) 인스턴트 양식 신청이 db_leads 에 source='meta' 로 들어온다(Edge Function `meta-leads`).
+// · 판정·경과 시간은 **저장하지 않고 매번 계산한다**(기준을 바꾸면 옛 신청도 같이 바뀌어야 한다).
+// · 양식 답은 db_leads.meta_answers(jsonb) — { name, city, tax, sales, employees, years, plan, call_time, raw }.
+// · source 컬럼이 없는 DB(메타신청_db_leads_컬럼추가.sql 실행 전)에서는 isMetaLead 가 전부 false 라 화면이 그대로다.
+function isMetaLead(l) { return !!(l && l.source === "meta"); }
+function metaAnswers(l) {
+  var a = l && l.meta_answers;
+  return (a && typeof a === "object" && !Array.isArray(a)) ? a : {};
+}
+// 직원 수 답 → { parts: 답한 칸 수, over: 5인 이상인 칸 수 }. "5인 이상 / 5인 미만"(2년치) · "12명" 둘 다 읽는다.
+function metaEmployeeOver(text) {
+  var t = String(text == null ? "" : text).trim();
+  if (!t) return { parts: 0, over: 0 };
+  var parts = t.split("/").map(function(x) { return x.trim(); }).filter(Boolean);
+  var over = 0;
+  parts.forEach(function(x) {
+    if (/미만|이하|없/.test(x)) return;
+    if (/이상/.test(x)) { over++; return; }
+    var m = /(\d+)/.exec(x);
+    if (m && parseInt(m[1], 10) >= 5) over++;
+  });
+  return { parts: parts.length, over: over };
+}
+// 판정 4종 + 미확인. 기준(2026-11-20 엑셀과 같음): 체납·연체 → 신청 불가 / 매출 큰 구간 + 전 기간 5인 이상 → 우선 연락 /
+// 둘 중 하나 → 검토 / 둘 다 아님 → 소규모. 답이 하나도 없으면 미확인.
+function metaLeadGrade(l) {
+  var a = metaAnswers(l);
+  var tax = String(a.tax || "").trim(), sales = String(a.sales || "").trim();
+  var emp = metaEmployeeOver(a.employees);
+  if (!tax && !sales && emp.parts === 0) return "미확인";
+  if (/^(네|예|있)/.test(tax)) return "신청 불가";
+  var salesBig = /이상/.test(sales);
+  var empAll = emp.parts > 0 && emp.over === emp.parts;
+  if (salesBig && empAll) return "우선 연락";
+  if (salesBig || emp.over > 0) return "검토";
+  return "소규모";
+}
+var META_GRADE_COLORS = {
+  "우선 연락": { bg: "#17713A", text: "#fff" }, "검토": { bg: "#F0B429", text: "#3B2A00" },
+  "소규모": { bg: "#E8E5E0", text: "#666" }, "신청 불가": { bg: "#FEE2E2", text: "#DC2626" }, "미확인": { bg: "#F7F6F3", text: "#888" },
+};
+function metaDurLabel(mins) {
+  var m = Math.max(0, Math.floor(mins));
+  if (m < 60) return m + "분";
+  if (m < 1440) return Math.floor(m / 60) + "시간";
+  return Math.floor(m / 1440) + "일";
+}
+// 신청 시각 → "11/21 14:02" (KST 고정 — 브라우저 시간대와 무관)
+function metaAppliedLabel(iso) {
+  var t = Date.parse(iso || "");
+  if (isNaN(t)) return "";
+  var d = new Date(t + 9 * 3600 * 1000);
+  var p2 = function(n) { return (n < 10 ? "0" : "") + n; };
+  return (d.getUTCMonth() + 1) + "/" + d.getUTCDate() + " " + p2(d.getUTCHours()) + ":" + p2(d.getUTCMinutes());
+}
+// 연락 상태 — tone: now(5분 안) · warn(1시간 안) · late(1시간 넘김) · ok(연락함)
+var META_CALL_GOAL_MIN = 5;
+function metaContactState(l, nowMs) {
+  if (!isMetaLead(l)) return null;
+  var applied = Date.parse(l.applied_at || "");
+  if (isNaN(applied)) return null;
+  var first = Date.parse(l.first_contact_at || "");
+  if (!isNaN(first)) return { tone: "ok", label: metaDurLabel((first - applied) / 60000) + " 만에 연락" };
+  if ((l.status || "미연락") !== "미연락") return { tone: "ok", label: "연락함" };
+  var mins = (nowMs - applied) / 60000;
+  if (mins < META_CALL_GOAL_MIN) return { tone: "now", label: "남은 시간 " + Math.max(1, Math.ceil(META_CALL_GOAL_MIN - mins)) + "분" };
+  if (mins < 60) return { tone: "warn", label: metaDurLabel(mins) + "째 미연락" };
+  return { tone: "late", label: metaDurLabel(mins) + " 넘게 미연락" };
+}
+// 미연락 → 다른 상태로 처음 바뀌는 순간에만 first_contact_at 을 찍는다. 메타 신청이 아니면 빈 객체(기존 건은 컬럼을 건드리지 않는다).
+function leadFirstContactPatch(l, newStatus, nowIso) {
+  if (!isMetaLead(l) || l.first_contact_at) return {};
+  if ((l.status || "미연락") !== "미연락") return {};
+  if (!newStatus || newStatus === "미연락") return {};
+  return { first_contact_at: nowIso };
+}
+// ⛳ 메타신청 끝
 async function advanceCardRows(rows, targetStage) {
   var movers = pickCardsToAdvance(rows, targetStage, STAGES);
   if (!movers.length) return { moved: 0 };
@@ -31781,6 +31860,43 @@ function AssignDbView() {
   );
 }
 
+// 메타 신청 표시 2종(⛳ 메타신청 순수 함수만 쓴다 — 저장 없음)
+var META_TONE_COLORS = { now: "#1877F2", warn: "#C2410C", late: "#DC2626", ok: "#047857" };
+function MetaLeadBadges({ lead, now }) {
+  var g = metaLeadGrade(lead), gc = META_GRADE_COLORS[g] || META_GRADE_COLORS["미확인"];
+  var cs = metaContactState(lead, now);
+  var pill = { fontSize: 10, padding: "1px 6px", borderRadius: 5, fontWeight: 700, whiteSpace: "nowrap" };
+  return (
+    <>
+      <span title="메타(페이스북·인스타) 광고 양식으로 들어온 신청" style={Object.assign({}, pill, { background: "#1877F2", color: "#fff" })}>메타 신청</span>
+      <span title="양식 답으로 계산한 판정 — 옆 패널에서 답 원문을 볼 수 있습니다" style={Object.assign({}, pill, { background: gc.bg, color: gc.text })}>{g}</span>
+      <span style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap" }}>{metaAppliedLabel(lead.applied_at)}{cs ? " · " : ""}{cs && <b style={{ color: META_TONE_COLORS[cs.tone] || "#888" }}>{cs.label}</b>}</span>
+    </>
+  );
+}
+function MetaLeadInfoBox({ lead, now }) {
+  var a = metaAnswers(lead), g = metaLeadGrade(lead), gc = META_GRADE_COLORS[g] || META_GRADE_COLORS["미확인"];
+  var cs = metaContactState(lead, now);
+  var rows = [["이름", a.name], ["지역", a.city], ["상시근로자 수", a.employees], ["업력", a.years], ["국세 체납·연체", a.tax],
+    ["업종 변경·추가 계획", a.plan], ["연매출", a.sales], ["통화 가능 시간", a.call_time], ["들어온 광고", lead.meta_ad_name], ["양식", lead.meta_form_name]]
+    .filter(function(r) { return r[1] != null && String(r[1]).trim() !== ""; });
+  return (
+    <div style={{ border: "2px solid #1877F2", background: "#F3F8FF", borderRadius: 10, padding: "12px 14px", marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: "#1877F2" }}>메타 신청 정보 (자동 입력)</span>
+        <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 5, fontWeight: 700, background: gc.bg, color: gc.text }}>{g}</span>
+        <span style={{ fontSize: 11, color: "#666" }}>{metaAppliedLabel(lead.applied_at)} 신청</span>
+        {cs && <b style={{ fontSize: 11, color: META_TONE_COLORS[cs.tone] || "#888" }}>{cs.label}</b>}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 14px" }}>
+        {rows.map(function(r) {
+          return (<div key={r[0]}><div style={{ fontSize: 10, color: "#888" }}>{r[0]}</div><div style={{ fontSize: 13, fontWeight: 600, color: "#1A1917", wordBreak: "break-word" }}>{String(r[1])}</div></div>);
+        })}
+      </div>
+    </div>
+  );
+}
+
 function DBLeadsView({ canExport }) {
   const [leads, setLeads] = useState([]);
   const [companiesForDup, setCompaniesForDup] = useState([]);
@@ -31797,6 +31913,8 @@ function DBLeadsView({ canExport }) {
   const [filterWeek, setFilterWeek] = useState("전체");
   const [filterAssignee, setFilterAssignee] = useState("전체");   // 전화 담당자 (assignee)
   const [filterAssignedBy, setFilterAssignedBy] = useState("전체"); // 배정 (assigned_by)
+  const [filterSource, setFilterSource] = useState("전체");         // 유입 — 전체 / 메타 신청 / 직접 입력 (⛳ 메타신청)
+  const [metaNow, setMetaNow] = useState(Date.now());               // 메타 신청 경과 시간 표시용 시계(30초마다)
   const [editingId, setEditingId] = useState(null);
   const [editData, setEditData] = useState({});
   const [showAddLead, setShowAddLead] = useState(false);
@@ -31859,6 +31977,7 @@ function DBLeadsView({ canExport }) {
     if (!skip.week && filterWeek !== "전체") { var w = getWeek(l); if (w !== parseInt(filterWeek)) return false; }
     if (!skip.staff && !dbStaffMatch(l.assignee, filterAssignee, DB_CALL_STAFF)) return false;
     if (!skip.sales && !dbStaffMatch(l.assigned_by, filterAssignedBy, DB_SALES_STAFF)) return false;
+    if (!skip.source && filterSource !== "전체" && ((filterSource === "메타 신청") !== isMetaLead(l))) return false;
     if (!skip.search && dbSearch.trim()) {
       var s = dbSearch.trim().toLowerCase();
       if (!((l.business_name || "").toLowerCase().includes(s) || (l.contact || "").includes(s)
@@ -31866,10 +31985,13 @@ function DBLeadsView({ canExport }) {
     }
     return true;
   };
-  var filterDeps = [leads, activeMonth, filterStatus, filterWeek, filterAssignee, filterAssignedBy, dbSearch];
+  var filterDeps = [leads, activeMonth, filterStatus, filterWeek, filterAssignee, filterAssignedBy, dbSearch, filterSource];
 
   var filtered = useMemo(function() {
-    return leads.filter(function(l) { return passLead(l); });
+    var rows = leads.filter(function(l) { return passLead(l); });
+    // 「메타 신청」만 볼 때는 방금 들어온 신청이 맨 위(그 밖에는 기존 순서 그대로)
+    if (filterSource === "메타 신청") rows = rows.slice().sort(function(a, b) { return String(b.applied_at || "").localeCompare(String(a.applied_at || "")); });
+    return rows;
   }, filterDeps);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // 사람 축(전화 담당자 / 배정) 버튼 건수 — 전체·미배정·기타 + 명단
@@ -31910,6 +32032,31 @@ function DBLeadsView({ canExport }) {
     return countStaff(leads.filter(function(l) { return passLead(l, { sales: true }); }), "assigned_by", DB_SALES_STAFF);
   }, filterDeps);   // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── 메타 신청(⛳ 메타신청) — source 컬럼이 생긴 뒤에만 켜진다 ──
+  var hasMetaLeads = useMemo(function() { return leads.some(isMetaLead); }, [leads]);
+  var metaReady = leads.length > 0 && Object.prototype.hasOwnProperty.call(leads[0], "source");
+  var sourceCounts = useMemo(function() {
+    var rows = leads.filter(function(l) { return passLead(l, { source: true }); });
+    var m = rows.filter(isMetaLead).length;
+    return { "전체": rows.length, "메타 신청": m, "직접 입력": rows.length - m };
+  }, filterDeps);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(function() {
+    if (!metaReady) return;
+    // 30초마다 시계를 움직이고, 1분마다 새 메타 신청만 가져와 붙인다(화면을 새로고침하지 않아도 뜬다).
+    var tick = setInterval(function() { setMetaNow(Date.now()); }, 30000);
+    var poll = setInterval(async function() {
+      var r = await supabase.from("db_leads").select("*").eq("source", "meta").is("deleted_at", null)
+        .order("applied_at", { ascending: false }).limit(30);
+      if (r.error || !r.data) return;
+      setLeads(function(prev) {
+        var have = {}; prev.forEach(function(l) { have[l.id] = true; });
+        var fresh = r.data.filter(function(l) { return !have[l.id]; });
+        return fresh.length ? prev.concat(fresh) : prev;
+      });
+    }, 60000);
+    return function() { clearInterval(tick); clearInterval(poll); };
+  }, [metaReady]);
+
   var summary = useMemo(function() {
     var all = leads.filter(function(l) { return passLead(l, { status: true }); });
     return {
@@ -31926,6 +32073,7 @@ function DBLeadsView({ canExport }) {
   var cancelEdit = function() { setEditingId(null); setEditData({}); };
   var saveEdit = async function() {
     var updates = { business_name: editData.business_name, contact: formatPhone(editData.contact || ""), assignee: editData.assignee, assigned_by: editData.assigned_by, status: editData.status, call_1: editData.call_1, call_2: editData.call_2, call_3: editData.call_3, call_4: editData.call_4, call_5: editData.call_5, etc: editData.etc, call_1_date: editData.call_1_date || null, call_1_status: editData.call_1_status || null, call_1_memo: editData.call_1_memo || null, call_2_date: editData.call_2_date || null, call_2_status: editData.call_2_status || null, call_2_memo: editData.call_2_memo || null, call_3_date: editData.call_3_date || null, call_3_status: editData.call_3_status || null, call_3_memo: editData.call_3_memo || null, call_4_date: editData.call_4_date || null, call_4_status: editData.call_4_status || null, call_4_memo: editData.call_4_memo || null, call_5_date: editData.call_5_date || null, call_5_status: editData.call_5_status || null, call_5_memo: editData.call_5_memo || null, updated_at: new Date().toISOString() };
+    Object.assign(updates, leadFirstContactPatch(leads.find(function(l) { return l.id === editData.id; }), editData.status, new Date().toISOString()));
     var result = await supabase.from("db_leads").update(updates).eq("id", editData.id);
     if (!result.error) {
       setLeads(function(prev) { return prev.map(function(l) { return l.id === editData.id ? Object.assign({}, l, updates) : l; }); });
@@ -31981,6 +32129,7 @@ function DBLeadsView({ canExport }) {
       call_5_date: selectedLead.call_5_date || null, call_5_status: selectedLead.call_5_status || null, call_5_memo: selectedLead.call_5_memo || null,
       updated_at: new Date().toISOString(),
     };
+    Object.assign(u, leadFirstContactPatch(leads.find(function(l) { return l.id === selectedLead.id; }), selectedLead.status, u.updated_at));
     var r = await supabase.from("db_leads").update(u).eq("id", selectedLead.id);
     if (!r.error) {
       setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, u) : l; }); });
@@ -32056,6 +32205,16 @@ function DBLeadsView({ canExport }) {
         })}
       </div>
 
+      {hasMetaLeads && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12, color: "#888", marginRight: 4 }}>유입:</span>
+          {["전체", "메타 신청", "직접 입력"].map(function(k) {
+            var on = filterSource === k;
+            return (<div key={k} onClick={function() { setFilterSource(k); }} style={{ padding: "4px 12px", borderRadius: 99, cursor: "pointer", fontSize: 12, fontWeight: on ? 700 : 400, background: on ? (k === "메타 신청" ? "#1877F2" : "#1A1917") : "#fff", color: on ? "#fff" : "#666", border: on ? "none" : "1px solid #E8E5E0" }}>{k} ({sourceCounts[k] || 0})</div>);
+          })}
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: 6, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
         <span style={{ fontSize: 12, color: "#888", marginRight: 4 }}>주차별:</span>
         {["전체","1","2","3","4","5"].map(function(w) {
@@ -32123,7 +32282,7 @@ function DBLeadsView({ canExport }) {
                       <td style={{ padding: "9px 8px" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
                         {isEditing
                           ? <input value={editData.business_name || ""} onChange={function(e) { setEditData(function(p) { return Object.assign({}, p, { business_name: e.target.value }); }); }} style={{ padding: "4px 6px", border: "1px solid #E8E5E0", borderRadius: 4, fontSize: 12, width: "100%", boxSizing: "border-box" }} />
-                          : <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ fontWeight: 600 }}>{row.business_name || "-"}</span>{isLeadDup(row) && <span title="회사명 또는 번호가 다른 건과 겹침" style={{ fontSize: 10, padding: "1px 6px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", fontWeight: 700 }}>중복</span>}</span>}
+                          : <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ fontWeight: 600 }}>{row.business_name || "-"}</span>{isLeadDup(row) && <span title="회사명 또는 번호가 다른 건과 겹침" style={{ fontSize: 10, padding: "1px 6px", borderRadius: 99, background: "#FEE2E2", color: "#DC2626", fontWeight: 700 }}>중복</span>}{isMetaLead(row) && <MetaLeadBadges lead={row} now={metaNow} />}</span>}
                       </td>
                       <td style={{ padding: "9px 8px" }} onClick={function(e) { if (isEditing) e.stopPropagation(); }}>
                         {isEditing
@@ -32296,6 +32455,7 @@ function DBLeadsView({ canExport }) {
               <button onClick={function() { setSelectedLead(null); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: "#888" }}>✕</button>
             </div>
             <div style={{ padding: "20px 24px" }}>
+              {isMetaLead(selectedLead) && <MetaLeadInfoBox lead={selectedLead} now={metaNow} />}
               {/* 기본 정보 수정 */}
               <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 10, letterSpacing: "0.05em" }}>기본 정보</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
@@ -32363,10 +32523,12 @@ function DBLeadsView({ canExport }) {
                     var isActive = selectedLead.status === s;
                     return (
                       <button key={s} onClick={async function() {
-                        var r = await supabase.from("db_leads").update({ status: s, updated_at: new Date().toISOString() }).eq("id", selectedLead.id);
+                        var nowIso = new Date().toISOString();
+                        var su = Object.assign({ status: s, updated_at: nowIso }, leadFirstContactPatch(leads.find(function(l) { return l.id === selectedLead.id; }), s, nowIso));
+                        var r = await supabase.from("db_leads").update(su).eq("id", selectedLead.id);
                         if (!r.error) {
-                          setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, { status: s }) : l; }); });
-                          setSelectedLead(function(p) { return Object.assign({}, p, { status: s }); });
+                          setLeads(function(prev) { return prev.map(function(l) { return l.id === selectedLead.id ? Object.assign({}, l, su) : l; }); });
+                          setSelectedLead(function(p) { return Object.assign({}, p, su); });
                         }
                       }} style={{ padding: "5px 12px", borderRadius: 99, border: isActive ? "2px solid " + sc.text : "1px solid #E8E5E0", background: isActive ? sc.bg : "#fff", color: isActive ? sc.text : "#888", fontSize: 12, fontWeight: isActive ? 700 : 400, cursor: "pointer" }}>{s}</button>
                     );
