@@ -12,7 +12,7 @@ const cut = (file, a, b, ret) => {
   return new Function(src.slice(i, j) + "\nreturn { " + ret + " };")();
 };
 const A = cut("src/App.js", "// ⛳ 메타신청 시작", "// ⛳ 메타신청 끝",
-  "isMetaLead, metaAnswers, metaEmployeeOver, metaLeadGrade, META_GRADE_COLORS, metaDurLabel, metaAppliedLabel, metaContactState, leadFirstContactPatch, META_CALL_GOAL_MIN");
+  "isMetaLead, metaAnswers, metaEmployeeOver, metaLeadGrade, META_GRADE_COLORS, metaDurLabel, metaAppliedLabel, metaContactState, leadFirstContactPatch, META_CALL_GOAL_MIN, dbLeadYearRange");
 const F = cut("supabase/functions/meta-leads/index.ts", "// ⛳ meta-leads-helpers 시작", "// ⛳ meta-leads-helpers 끝",
   "cleanAnswer, normalizeKrPhone, fieldMap, pickAnswer, kstYearMonth, buildLeadRow");
 
@@ -119,6 +119,15 @@ const app = fs.readFileSync(path.join(here, "..", "src", "App.js"), "utf8");
 eq("leadFirstContactPatch 호출 3곳(정의 제외)", app.split("leadFirstContactPatch(").length - 2, 3);
 const fn = fs.readFileSync(path.join(here, "..", "supabase", "functions", "meta-leads", "index.ts"), "utf8");
 eq("함수 소스에 토큰 모양 없음", /EAA[A-Za-z0-9]{20,}|sbp_[A-Za-z0-9]{10,}/.test(fn), false);
+
+// ⑩ DB리스트 연도 범위 — 2026 고정을 없앤 뒤 화살표가 갈 수 있는 해
+eq("올해만 있으면 올해", A.dbLeadYearRange([{ year: 2026 }], 2026), { min: 2026, max: 2026 });
+eq("내년 1월 신청이 들어오면 내년까지", A.dbLeadYearRange([{ year: 2026 }, { year: 2027 }], 2026), { min: 2026, max: 2027 });
+eq("해가 바뀌어도 지난해로 돌아갈 수 있다", A.dbLeadYearRange([{ year: 2026 }], 2027), { min: 2026, max: 2027 });
+eq("휴지통 행은 범위에 안 넣는다", A.dbLeadYearRange([{ year: 2024, deleted_at: "x" }, { year: 2026 }], 2026), { min: 2026, max: 2026 });
+eq("이상한 해·빈 값 무시", A.dbLeadYearRange([{ year: 0 }, { year: null }, { year: 99999 }, null], 2026), { min: 2026, max: 2026 });
+eq("배열이 아니어도 올해", A.dbLeadYearRange(undefined, 2026), { min: 2026, max: 2026 });
+eq("DB리스트에 2026 고정이 남아 있지 않다", /l.year !== 2026|year: 2026, month:/.test(app), false);
 
 console.log((fail ? "❌ " : "✅ ") + pass + "/" + (pass + fail));
 process.exit(fail ? 1 : 0);

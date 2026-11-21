@@ -4024,6 +4024,17 @@ function leadFirstContactPatch(l, newStatus, nowIso) {
   if (!newStatus || newStatus === "미연락") return {};
   return { first_contact_at: nowIso };
 }
+// DB리스트 연도 범위 — 살아 있는 행의 해 + 올해. 화살표가 빈 해로 끝없이 가지 않게 한다.
+function dbLeadYearRange(leads, thisYear) {
+  var min = thisYear, max = thisYear;
+  (Array.isArray(leads) ? leads : []).forEach(function(l) {
+    var y = l && !l.deleted_at ? Number(l.year) : NaN;
+    if (!isFinite(y) || y < 2000 || y > 2100) return;
+    if (y < min) min = y;
+    if (y > max) max = y;
+  });
+  return { min: min, max: max };
+}
 // ⛳ 메타신청 끝
 async function advanceCardRows(rows, targetStage) {
   var movers = pickCardsToAdvance(rows, targetStage, STAGES);
@@ -8769,7 +8780,11 @@ function CRMApp({ profile, session }) {
       const todayStr = kstDate();
       const todayContacts = companies.filter(c => c.next_contact === todayStr);
       const stagnantList = companies.filter(isStagnant);
-      if (todayContacts.length > 0 || stagnantList.length > 0) {
+      // 하루 한 번만(2026-11-21) — 새로고침·재접속 때마다 떠서 일을 가렸다. 헤더의 📋 버튼으로는 언제든 다시 연다.
+      var seenKey = "crm_today_alert_seen", seenDay = "";
+      try { seenDay = window.localStorage.getItem(seenKey) || ""; } catch (e) { seenDay = ""; }
+      if ((todayContacts.length > 0 || stagnantList.length > 0) && seenDay !== todayStr) {
+        try { window.localStorage.setItem(seenKey, todayStr); } catch (e) { /* 저장 불가 — 매번 뜬다 */ }
         setTimeout(() => setShowTodayAlert(true), 800);
       }
     }
@@ -31909,6 +31924,8 @@ function DBLeadsView({ canExport }) {
   }, []);
   const [leadsLoading, setLeadsLoading] = useState(true);
   const [activeMonth, setActiveMonth] = useState(new Date().getMonth() + 1);
+  // 📅 연도 선택 (2026-11-21) — 예전에는 2026 이 코드에 박혀 있어 2027년 1월 건부터 화면에 안 떴다(정산·기관현황과 같은 문제).
+  const [activeYear, setActiveYear] = useState(new Date().getFullYear());
   const [filterStatus, setFilterStatus] = useState("전체");
   const [filterWeek, setFilterWeek] = useState("전체");
   const [filterAssignee, setFilterAssignee] = useState("전체");   // 전화 담당자 (assignee)
@@ -31971,7 +31988,7 @@ function DBLeadsView({ canExport }) {
   // 버튼 옆 건수를 "다른 필터가 걸린 상태"로 세려면 자기 축만 빼고 계산해야 해서 이렇게 모았다.
   var passLead = function(l, skip) {
     skip = skip || {};
-    if (l.year !== 2026 || l.deleted_at) return false;
+    if (l.year !== activeYear || l.deleted_at) return false;
     if (!skip.month && activeMonth !== "all" && l.month !== activeMonth) return false;
     if (!skip.status && filterStatus !== "전체" && l.status !== filterStatus) return false;
     if (!skip.week && filterWeek !== "전체") { var w = getWeek(l); if (w !== parseInt(filterWeek)) return false; }
@@ -31985,7 +32002,9 @@ function DBLeadsView({ canExport }) {
     }
     return true;
   };
-  var filterDeps = [leads, activeMonth, filterStatus, filterWeek, filterAssignee, filterAssignedBy, dbSearch, filterSource];
+  var filterDeps = [leads, activeYear, activeMonth, filterStatus, filterWeek, filterAssignee, filterAssignedBy, dbSearch, filterSource];
+  // 데이터가 있는 해(+올해) 범위 안에서만 화살표가 움직인다.
+  var leadYearRange = useMemo(function() { return dbLeadYearRange(leads, new Date().getFullYear()); }, [leads]);
 
   var filtered = useMemo(function() {
     var rows = leads.filter(function(l) { return passLead(l); });
@@ -32067,7 +32086,7 @@ function DBLeadsView({ canExport }) {
       rejected: all.filter(function(l) { return l.status === "거절"; }).length,
       notCalled: all.filter(function(l) { return l.status === "미연락"; }).length,
     };
-  }, [leads, activeMonth]);
+  }, [leads, activeMonth, activeYear]);
 
   var startEdit = function(row) { setEditingId(row.id); setEditData(Object.assign({}, row)); };
   var cancelEdit = function() { setEditingId(null); setEditData({}); };
@@ -32105,7 +32124,7 @@ function DBLeadsView({ canExport }) {
     if (!result.error) { setLeads(function(prev) { return prev.map(function(l) { return l.id === id ? Object.assign({}, l, { deleted_at: now }) : l; }); }); }
   };
   var openAddLead = function() {
-    setNewLead({ year: 2026, month: activeMonth === "all" ? (new Date().getMonth() + 1) : activeMonth, business_name: "", contact: "", assignee: "", assigned_by: "", status: "미연락", call_1: "", call_2: "", call_3: "", call_4: "", call_5: "", etc: "" });
+    setNewLead({ year: activeYear, month: activeMonth === "all" ? (new Date().getMonth() + 1) : activeMonth, business_name: "", contact: "", assignee: "", assigned_by: "", status: "미연락", call_1: "", call_2: "", call_3: "", call_4: "", call_5: "", etc: "" });
     setShowAddLead(true);
   };
   var normNameDup = function(s) { return (s || "").replace(/\(주\)|㈜|주식회사|\(유\)|농업회사법인|\s/g, "").toLowerCase(); };
@@ -32191,6 +32210,17 @@ function DBLeadsView({ canExport }) {
           placeholder="🔍 업체명, 연락처, 전화 담당자, 배정 검색..."
           style={{ width: "100%", padding: "10px 40px 10px 14px", border: "1px solid #E8E5E0", borderRadius: 10, fontSize: 13, boxSizing: "border-box", outline: "none", background: "#fff" }} />
         {dbSearch && <button onClick={function() { setDbSearch(""); }} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#888" }}>✕</button>}
+      </div>
+
+      {/* 연도 선택 — 정산관리와 같은 모양(좌우 화살표). 월 탭 바로 위 */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        {[-1, 1].map(function(dir) {
+          var on = dir < 0 ? activeYear > leadYearRange.min : activeYear < leadYearRange.max;
+          return (<button key={dir} disabled={!on} onClick={function() { setActiveYear(activeYear + dir); setFilterStatus("전체"); setSelectedLead(null); }}
+            title={on ? (activeYear + dir) + "년으로 이동" : "이 방향에는 DB리스트 데이터가 없습니다"}
+            style={{ order: dir < 0 ? 0 : 2, width: 28, height: 28, borderRadius: 7, border: "1px solid " + (on ? "#E8E5E0" : "#F1EFEC"), background: "#fff", color: on ? "#333" : "#D6D3CE", fontSize: 13, fontWeight: 800, lineHeight: 1, cursor: on ? "pointer" : "default", padding: 0 }}>{dir < 0 ? "‹" : "›"}</button>);
+        })}
+        <span style={{ order: 1, fontSize: 14, fontWeight: 800, color: "#1A1917", minWidth: 62, textAlign: "center" }}>{activeYear}년</span>
       </div>
 
       <div style={{ display: "flex", gap: 4, marginBottom: 18, flexWrap: "wrap" }}>
