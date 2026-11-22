@@ -7942,6 +7942,12 @@ function CRMApp({ profile, session }) {
   useEffect(function() {
     try {
       var params = new URLSearchParams(window.location.search);
+      // ◫ 분할 칸(embed)은 주소에 embed=1 을 계속 달고 있어야 한다 — 빠지면 칸을 새로고침했을 때 사이드바까지 통째로 뜬다.
+      if (IS_EMBED) {
+        if ((params.get("view") || "blank") === view) return;
+        window.history.replaceState(null, "", window.location.pathname + "?embed=1" + (view === "blank" ? "" : "&view=" + encodeURIComponent(view)));
+        return;
+      }
       var cur = params.get("view") || "dashboard";
       if (cur === view) return;
       window.history.replaceState(null, "", window.location.pathname + (view === "dashboard" ? "" : "?view=" + encodeURIComponent(view)));
