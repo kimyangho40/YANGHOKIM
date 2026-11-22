@@ -6768,6 +6768,15 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
   const [chatSearchResults, setChatSearchResults] = useState(null); // null=검색 안 함 / []=결과 없음
   const [chatSearching, setChatSearching] = useState(false);
   const [jumpMsgId, setJumpMsgId] = useState(null); // 검색 결과에서 점프한 메시지
+  // 🔎 시연판(2026-11-18, 4번): 검색한 메시지 기준 앞뒤 100개만 보는 상태. 끝나면 최근 500개로 돌아간다.
+  const [jumpCtx, setJumpCtx] = useState(false);
+  const jumpCtxRef = useRef(false);
+  jumpCtxRef.current = jumpCtx;
+  const jumpChannelRef = useRef(null);              // 이 채널은 "앞뒤 100개"를 띄운 상태라 최신 500개 로드를 건너뛴다
+  const [latestTick, setLatestTick] = useState(0);  // 올리면 최근 500개를 다시 불러온다
+  const [chatSearchOpen, setChatSearchOpen] = useState(true);
+  const nearBottomRef = useRef(true);               // 맨 아래 근처를 보고 있나 — 지난 대화를 보는 중엔 끌어내리지 않는다
+  const [newBelow, setNewBelow] = useState(false);  // 지난 대화를 보는 사이 새 메시지가 왔다
   const msgRefs = useRef({});
   const onUnreadRef = useRef(onUnreadChange); // App 재렌더로 콜백이 바뀌어도 effect 재실행 안 되게 고정
   onUnreadRef.current = onUnreadChange;
@@ -6846,6 +6855,9 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
   //    새 메시지가 새로고침 후 사라진다(2026-11-12: 전체 채널 538건, 11/6 16:34 이후 증발).
   useEffect(function() {
     if (!channel) return;
+    if (jumpChannelRef.current === channel) return;   // 검색 이동으로 앞뒤 100개를 띄운 채널 — 최신 로드로 덮지 않는다
+    jumpChannelRef.current = null;
+    setJumpCtx(false); setNewBelow(false); nearBottomRef.current = true;
     var alive = true;
     supabase.from("chat_messages").select("*").eq("channel", channel)
       .order("created_at", { ascending: false }).limit(500)
@@ -6854,7 +6866,7 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
         if (!r.error) { var rows = (r.data || []).slice().reverse(); setMessages(rows); markRead(rows); }
       });
     return function() { alive = false; };
-  }, [channel, markRead]);
+  }, [channel, markRead, latestTick]);
 
   // 실시간 구독 (ChatView 생존 동안 1개) — 모든 채널 변화를 받아 현재 채널이면 반영
   useEffect(function() {
@@ -6863,6 +6875,9 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
         var row = payload.new;
         refreshUnreadMap();
         if (row.channel === channelRef.current) {
+          // 앞뒤 100개만 보는 중이면 끝에 붙이지 않는다(중간이 빈 채 이어 붙으면 순서가 틀려 보인다) — 버튼으로 알린다
+          if (jumpCtxRef.current) { setNewBelow(true); return; }
+          if (!nearBottomRef.current && row.sender !== me) setNewBelow(true);
           setMessages(function(prev) {
             if (prev.find(function(m) { return m.id === row.id; })) return prev;
             return prev.concat(row);
@@ -6912,11 +6927,39 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
   }, [chatSearchQ]);
 
   // 검색 결과 클릭 → 그 채널로 옮기고 해당 메시지로 스크롤
+  // 시연판(2026-11-18, 4번): 그 메시지 기준 앞 100개 + 뒤 100개를 DB 에서 받아 그린다(최근 500개 밖의 옛 메시지도 간다).
+  //   검색어·결과는 지우지 않는다 — 다른 결과를 고르면 그 메시지 기준으로 다시 그린다. 검색을 지우면 최근 500개로 돌아간다.
   function jumpToMessage(m) {
-    setChatSearchQ("");
-    setChatSearchResults(null);
-    if (m.channel !== channel) setChannel(m.channel);
-    setJumpMsgId(m.id);
+    setChatSearchOpen(false);
+    jumpChannelRef.current = m.channel;
+    Promise.all([
+      supabase.from("chat_messages").select("*").eq("channel", m.channel).lt("created_at", m.created_at)
+        .order("created_at", { ascending: false }).limit(100),
+      supabase.from("chat_messages").select("*").eq("channel", m.channel).gte("created_at", m.created_at)
+        .order("created_at", { ascending: true }).limit(101),
+    ]).then(function(rs) {
+      if (rs[0].error || rs[1].error) { console.error("채팅 이동 실패:", rs[0].error || rs[1].error); jumpChannelRef.current = null; return; }
+      var rows = (rs[0].data || []).slice().reverse().concat(rs[1].data || []);
+      if (m.channel !== channelRef.current) setChannel(m.channel);
+      setMessages(rows);
+      setJumpCtx(true); setNewBelow(false);
+      setJumpMsgId(m.id);
+    });
+  }
+  // 최근 대화(최신 500개)로 돌아간다
+  function backToLatest() {
+    jumpChannelRef.current = null;
+    setJumpCtx(false); setNewBelow(false); setJumpMsgId(null);
+    nearBottomRef.current = true;
+    setLatestTick(function(n) { return n + 1; });
+  }
+  function clearChatSearch() {
+    setChatSearchQ(""); setChatSearchResults(null); setChatSearchOpen(true);
+    if (jumpCtxRef.current) backToLatest();
+  }
+  function scrollChatBottom() {
+    nearBottomRef.current = true; setNewBelow(false);
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }
 
   // 검색어 주변만 잘라 보여준다 — 긴 메시지에서 어디가 걸렸는지 바로 보이게.
@@ -6942,10 +6985,13 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
 
   // 새 메시지 시 하단으로 스크롤
   // ⚠️ 검색 점프 중에는 건너뛴다 — 안 그러면 찾아간 메시지에서 곧바로 맨 아래로 끌려간다.
+  // 시연판(2026-11-18, 4번): ① 검색으로 찾아간 화면(jumpCtx)에서는 내려가지 않는다 — 예전엔 강조가 꺼지는 2초 뒤 맨 아래로 끌려갔다.
+  //   ② 지난 대화를 올려 보는 중(맨 아래에서 떨어져 있음)에도 내려가지 않는다. 대신 「새 메시지 ↓」 버튼을 띄운다.
   useEffect(function() {
-    if (jumpMsgId) return;
+    if (jumpMsgId || jumpCtx) return;
+    if (!nearBottomRef.current) return;
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages, jumpMsgId]);
+  }, [messages, jumpMsgId, jumpCtx]);
 
   // @업체 자동완성 갱신
   function updateMention(val, caret) {
@@ -7003,10 +7049,14 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
       chatDraft.done();   // 보관분 해제는 성공 확인 후
       setInput("");
       var row = r.data;
-      setMessages(function(prev) {
-        if (prev.find(function(m) { return m.id === row.id; })) return prev;
-        return prev.concat(row);
-      });
+      if (jumpCtxRef.current) { backToLatest(); }
+      else {
+        nearBottomRef.current = true; setNewBelow(false);
+        setMessages(function(prev) {
+          if (prev.find(function(m) { return m.id === row.id; })) return prev;
+          return prev.concat(row);
+        });
+      }
     } else {
       // 실패하면 쓴 내용을 그대로 둔다(이미 입력칸에 남아 있다). 임시보관도 유지된다.
       // 에러가 없는데 행도 없으면(세션 끊김) 그것도 실패로 본다.
@@ -7137,18 +7187,19 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
             <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }}>
               <Icon name="search" size={13} color="#AAA" />
             </span>
-            <input value={chatSearchQ} onChange={function(e) { setChatSearchQ(e.target.value); }}
-              onKeyDown={function(e) { if (e.key === "Escape") { setChatSearchQ(""); setChatSearchResults(null); } }}
+            <input value={chatSearchQ} onChange={function(e) { setChatSearchQ(e.target.value); setChatSearchOpen(true); }}
+              onFocus={function() { setChatSearchOpen(true); }}
+              onKeyDown={function(e) { if (e.key === "Escape") { clearChatSearch(); } }}
               placeholder="메시지 검색 (업체명 · 대표자 · 기관 · 상품 · 작성자)"
               style={{ width: "100%", padding: "7px 28px 7px 30px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 12, boxSizing: "border-box", outline: "none", background: "#fff" }} />
             {chatSearchQ && (
-              <span onClick={function() { setChatSearchQ(""); setChatSearchResults(null); }} title="검색어 지우기 (Esc)"
+              <span onClick={clearChatSearch} title="검색 취소 — 최근 대화로 돌아갑니다 (Esc)"
                 style={{ position: "absolute", right: 9, top: "50%", transform: "translateY(-50%)", cursor: "pointer", color: "#AAA", fontSize: 15, lineHeight: 1 }}>×</span>
             )}
           </div>
 
           {/* 검색 결과 드롭다운 */}
-          {chatSearchResults !== null && (
+          {chatSearchResults !== null && chatSearchOpen && (
             <div style={{ position: "absolute", top: "100%", right: 20, width: "min(460px, 70%)", maxHeight: 380, overflowY: "auto", background: "#fff", border: "1px solid #E8E5E0", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.10)", zIndex: 30 }}>
               <div style={{ padding: "8px 12px", fontSize: 11, color: "#888", borderBottom: "1px solid #F0EDE8", display: "flex", justifyContent: "space-between" }}>
                 <span>{chatSearching ? "찾는 중…" : chatSearchResults.length + "건"}{chatSearchResults.length === 50 ? " (최근 50건만)" : ""}</span>
@@ -7174,7 +7225,24 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
             </div>
           )}
         </div>
-        <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "16px 20px", background: "#F4F2EE" }}>
+        {jumpCtx && (
+          <div className="chat-jump-bar" style={{ padding: "7px 20px", background: "#FFFBEB", borderBottom: "1px solid #FDE68A", fontSize: 12, color: "#92400E", display: "flex", alignItems: "center", gap: 10 }}>
+            <span>🔎 검색한 메시지 기준 앞뒤 100개를 보고 있습니다{chatSearchQ ? " · 검색어 「" + chatSearchQ.trim() + "」" : ""}</span>
+            {chatSearchResults !== null && !chatSearchOpen && (
+              <button onClick={function() { setChatSearchOpen(true); }} style={{ background: "#fff", border: "1px solid #FDE68A", borderRadius: 6, padding: "3px 9px", fontSize: 11, color: "#92400E", cursor: "pointer" }}>다른 결과 보기</button>
+            )}
+            <button onClick={clearChatSearch} style={{ marginLeft: "auto", background: "#fff", border: "1px solid #FDE68A", borderRadius: 6, padding: "3px 9px", fontSize: 11, color: "#92400E", cursor: "pointer" }}>최근 대화로 ↓</button>
+          </div>
+        )}
+        {!jumpCtx && newBelow && (
+          <div style={{ position: "relative", height: 0, zIndex: 20 }}>
+            <button onClick={scrollChatBottom} className="chat-new-below"
+              style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", top: 10, background: "#1A1917", color: "#fff", border: "none", borderRadius: 999, padding: "7px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer", boxShadow: "0 6px 18px rgba(0,0,0,0.22)" }}>새 메시지 ↓</button>
+          </div>
+        )}
+        <div ref={scrollRef}
+          onScroll={function(e) { var el = e.currentTarget; var near = el.scrollHeight - el.scrollTop - el.clientHeight < 120; nearBottomRef.current = near; if (near && newBelow && !jumpCtxRef.current) setNewBelow(false); }}
+          style={{ flex: 1, overflowY: "auto", padding: "16px 20px", background: "#F4F2EE" }}>
           {messages.length === 0 ? (
             <div style={{ textAlign: "center", color: "#AAA", fontSize: 13, marginTop: 40 }}>아직 메시지가 없어요. 첫 메시지를 보내보세요 👋</div>
           ) : messages.map(function(msg) {
@@ -11989,7 +12057,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
               )}
             </div>
             {/* 서류 요청 지연 상세 목록 */}
-            {overdueDocs.length > 0 && (
+            {!OLD_DOCS_OFF && overdueDocs.length > 0 && (
               <div style={{ marginTop: 14, background: "#fff", borderRadius: 10, padding: "12px 16px", border: "1px solid #FECACA" }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: "#DC2626", marginBottom: 8 }}>📮 요청했는데 아직 못 받은 서류 ({overdueDocs.length}건)</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
@@ -16844,6 +16912,7 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
       setBaseline(saved);                                  // 실패면 기준선 그대로 → 닫을 때 확인창이 뜬다
       if (stamped) setData(function(p) { return Object.assign({}, p, { company_info: stamped }); });
     }
+    return ok === true;
   };
 
   var attachInput = function() {
@@ -17484,9 +17553,20 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
     }
     return false;
   };
+  // 🚪 시연판(2026-11-18, 14번): 확인/취소 두 가지 → 「저장 후 닫기 / 저장하지 않고 닫기 / 취소」 세 가지.
+  const [closeAsk, setCloseAsk] = useState(false);
+  const [closeSaving, setCloseSaving] = useState(false);
   var requestClose = function() {
-    if (isDirty() && !window.confirm("저장하지 않은 내용이 있습니다.\n저장하지 않고 닫을까요?")) return;
+    if (closeAsk) { if (!closeSaving) setCloseAsk(false); return; }   // 선택창이 떠 있을 때 ESC = 취소
+    if (isDirty()) { setCloseAsk(true); return; }
     onClose();
+  };
+  var saveAndClose = async function() {
+    setCloseSaving(true);
+    var ok = false;
+    try { ok = await saveAll(); } finally { setCloseSaving(false); }
+    if (ok) { setCloseAsk(false); onClose(); }
+    else { setCloseAsk(false); }                                       // 저장 실패 — 창을 닫지 않고 그대로 둔다
   };
   // ESC = 닫기(확인창 포함). 안쪽 작은 팝업(재무·기업현황표 미리보기, 소통내역 휴지통, 요약 붙여넣기)이
   // 떠 있으면 그 팝업 몫이라 여기선 무시한다 — 바깥 상세창까지 한 번에 닫히지 않게.
@@ -17504,6 +17584,22 @@ function CompanyModal({ company, onClose, onSave, currentUser, onAgencyRegistere
   //    크기: 1200×650, 화면보다 크면 가로 90%·세로 85%까지. 최대화 = 95%. 본문만 스크롤.
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      {closeAsk && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div role="alertdialog" aria-modal="true" className="close-ask-box" style={{ width: "min(420px, 90vw)", background: "#fff", borderRadius: 14, padding: "22px 24px 18px", boxShadow: "0 24px 70px rgba(0,0,0,0.30)" }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#1A1917", marginBottom: 6 }}>저장하지 않은 내용이 있습니다</div>
+            <div style={{ fontSize: 13, color: "#666", lineHeight: 1.6, marginBottom: 18 }}>{(nameInput || data.name || "이 업체")} 정보에서 고친 내용이 아직 저장되지 않았습니다. 어떻게 할까요?</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <button onClick={saveAndClose} disabled={closeSaving} autoFocus
+                style={{ padding: "11px 14px", background: "#1A1917", color: "#fff", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: closeSaving ? "wait" : "pointer", opacity: closeSaving ? 0.6 : 1 }}>{closeSaving ? "저장 중…" : "저장 후 닫기"}</button>
+              <button onClick={function() { setCloseAsk(false); onClose(); }} disabled={closeSaving}
+                style={{ padding: "11px 14px", background: "#fff", color: "#B91C1C", border: "1px solid #FECACA", borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>저장하지 않고 닫기</button>
+              <button onClick={function() { setCloseAsk(false); }} disabled={closeSaving}
+                style={{ padding: "11px 14px", background: "#fff", color: "#555", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 14, cursor: "pointer" }}>취소 (계속 수정)</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div role="dialog" aria-modal="true" aria-label={(data.name || "업체") + " 상세"}
         style={{ width: maximized ? "95vw" : "min(1200px, 90vw)", height: maximized ? "95vh" : "min(650px, 85vh)", background: "#fff", borderRadius: 14, overflow: "hidden", boxShadow: "0 24px 70px rgba(0,0,0,0.25)", display: "flex", flexDirection: "column" }}>
         {/* 헤더 */}
@@ -22392,7 +22488,7 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
   const [showTrash, setShowTrash] = useState(false);
   const [trashedNotes, setTrashedNotes] = useState([]);
   // 📅 캘린더 뷰 관련 state
-  const [viewMode, setViewMode] = useState("calendar"); // "calendar" | "list"
+  const [viewMode, setViewMode] = useState("list"); // "calendar" | "list" — 시연판(2026-11-18): 기본 화면을 목록으로
   const [selectedDate, setSelectedDate] = useState(null); // YYYY-MM-DD or null (캘린더 보기 중)
   const [calendarMonth, setCalendarMonth] = useState(function() { var d = new Date(); return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0"); });
   // 🔍 노트 검색 state
@@ -23737,10 +23833,10 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
         <div className="wn-actions" style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {/* 📅/📋 토글 */}
           <div style={{ display: "flex", gap: 2, padding: 3, background: "#F7F6F3", borderRadius: 8 }}>
-            <button onClick={function() { setViewMode("calendar"); }}
-              style={{ padding: "6px 12px", fontSize: 12, fontWeight: 600, background: viewMode === "calendar" ? "#fff" : "transparent", border: "1px solid " + (viewMode === "calendar" ? "#E8E5E0" : "transparent"), borderRadius: 6, color: viewMode === "calendar" ? "#1A1917" : "#888", cursor: "pointer" }}>📅 캘린더</button>
             <button onClick={function() { setViewMode("list"); }}
               style={{ padding: "6px 12px", fontSize: 12, fontWeight: 600, background: viewMode === "list" ? "#fff" : "transparent", border: "1px solid " + (viewMode === "list" ? "#E8E5E0" : "transparent"), borderRadius: 6, color: viewMode === "list" ? "#1A1917" : "#888", cursor: "pointer" }}>📋 목록</button>
+            <button onClick={function() { setViewMode("calendar"); }}
+              style={{ padding: "6px 12px", fontSize: 12, fontWeight: 600, background: viewMode === "calendar" ? "#fff" : "transparent", border: "1px solid " + (viewMode === "calendar" ? "#E8E5E0" : "transparent"), borderRadius: 6, color: viewMode === "calendar" ? "#1A1917" : "#888", cursor: "pointer" }}>📅 캘린더</button>
           </div>
           <button onClick={function() { var nd = selectedDate || todayStr; setShowAdd(true); setNewNote({ title: noteAutoTitle(profile?.name || "", nd), content: "", is_todo: false, pinned: false, target_assignee: "", checkItems: [], due_date: "", note_date: nd }); }}
             style={{ display: "flex", alignItems: "center", gap: 6, background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
@@ -24445,8 +24541,8 @@ function WorkNotesView({ profile, onBadgeUpdate, openAction, onActionConsumed })
         if (onBadgeUpdate) onBadgeUpdate();
       }} />
 
-      {/* 🔍 노트 검색 (양식 재활용용) */}
-      <div style={{ position: "relative", marginBottom: 16, maxWidth: 600 }}>
+      {/* 🔍 노트 검색 (양식 재활용용) — 시연판: 캘린더 화면에서는 숨긴다 */}
+      <div style={{ position: "relative", marginBottom: 16, maxWidth: 600, display: viewMode === "calendar" ? "none" : "block" }}>
         <div style={{ position: "relative" }}>
           <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", fontSize: 14, color: "#888" }}>🔍</span>
           <input type="text" value={noteSearchQ}
