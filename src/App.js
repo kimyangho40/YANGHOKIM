@@ -7480,111 +7480,96 @@ function AuthScreen() {
     setLoading(false);
   };
 
+  // 왼쪽 단계 목록은 STAGES 에서 그대로 가져온다(부결/반려·기타는 순서 밖이라 뺀다) — 단계 이름이 바뀌면 같이 바뀐다.
+  const flow = STAGES.filter(function(st) { return st !== "부결/반려" && st !== "기타"; });
+  const isLogin = mode === "login";
+
   return (
-    <div style={{ height: "100vh", display: "flex", background: "#1A1917" }}>
-      {/* 왼쪽 브랜딩 */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", padding: "60px 80px", position: "relative", overflow: "hidden" }}>
-        {/* 배경 액센트 (그라데이션) */}
-        <div style={{ position: "absolute", top: -120, right: -120, width: 400, height: 400, borderRadius: "50%", background: "radial-gradient(circle, rgba(245,158,11,0.08) 0%, transparent 70%)", pointerEvents: "none" }}></div>
-        <div style={{ position: "absolute", bottom: -100, left: -100, width: 320, height: 320, borderRadius: "50%", background: "radial-gradient(circle, rgba(245,158,11,0.05) 0%, transparent 70%)", pointerEvents: "none" }}></div>
+    <div className="auth-wrap">
+      <style>{`
+        .auth-wrap { min-height: 100vh; min-height: 100dvh; display: flex; background: #fff; color: #1A1917; }
+        .auth-side { flex: 1 1 54%; background: #1A1917; color: #F7F6F3; padding: 44px 64px; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
+        .auth-brand { font-size: 15px; font-weight: 800; letter-spacing: 0.04em; }
+        .auth-brand small { display: block; margin-top: 4px; font-size: 12px; font-weight: 500; letter-spacing: 0; color: #8A857C; }
+        .auth-lead { font-size: 34px; font-weight: 800; line-height: 1.25; letter-spacing: -0.03em; margin: 0 0 30px; }
+        .auth-flow { list-style: none; margin: 0; padding: 0; border-left: 1px solid #3A3835; }
+        .auth-flow li { position: relative; padding: 7px 0 7px 22px; font-size: 14px; color: #B8B2A7; display: flex; gap: 12px; }
+        .auth-flow li::before { content: ""; position: absolute; left: -4px; top: 50%; width: 7px; height: 7px; margin-top: -4px; border-radius: 50%; background: #1A1917; border: 1px solid #6B665E; }
+        .auth-flow li:last-child { color: #F7F6F3; font-weight: 700; }
+        .auth-flow li:last-child::before { background: #F59E0B; border-color: #F59E0B; }
+        .auth-flow b { font-weight: 600; color: #6B665E; font-variant-numeric: tabular-nums; min-width: 18px; }
+        .auth-flow li:last-child b { color: #F59E0B; }
+        .auth-foot { font-size: 12.5px; line-height: 1.6; color: #8A857C; margin: 0; }
+        .auth-main { flex: 1 1 46%; display: flex; align-items: center; justify-content: center; padding: 44px 32px; min-width: 0; }
+        .auth-form { width: 100%; max-width: 360px; }
+        .auth-form h2 { font-size: 26px; font-weight: 800; letter-spacing: -0.03em; margin: 0 0 8px; }
+        .auth-sub { font-size: 14px; color: #6B665E; margin: 0 0 30px; line-height: 1.5; }
+        .auth-field { margin-bottom: 16px; }
+        .auth-field label { display: block; font-size: 13px; font-weight: 600; color: #44403A; margin-bottom: 7px; }
+        .auth-field input { width: 100%; box-sizing: border-box; padding: 13px 14px; font-size: 16px; color: #1A1917; background: #fff; border: 1px solid #D6D2CA; border-radius: 10px; outline: none; font-family: inherit; }
+        .auth-field input::placeholder { color: #B0AAA0; }
+        .auth-field input:focus { border-color: #1A1917; box-shadow: 0 0 0 3px rgba(245,158,11,0.28); }
+        .auth-btn { width: 100%; margin-top: 10px; padding: 14px; font-size: 15px; font-weight: 700; font-family: inherit; color: #F7F6F3; background: #1A1917; border: none; border-radius: 10px; cursor: pointer; }
+        .auth-btn:hover { background: #33302B; }
+        .auth-btn:focus-visible, .auth-switch button:focus-visible { outline: 3px solid rgba(245,158,11,0.6); outline-offset: 2px; }
+        .auth-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .auth-err { background: #FEF2F2; border: 1px solid #FECACA; border-radius: 10px; padding: 11px 14px; font-size: 13.5px; color: #B91C1C; margin-bottom: 18px; line-height: 1.5; }
+        .auth-switch { margin-top: 22px; font-size: 13.5px; color: #6B665E; }
+        .auth-switch button { background: none; border: none; padding: 0; margin-left: 6px; font: inherit; font-weight: 700; color: #1A1917; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+        @media (max-width: 860px) {
+          .auth-wrap { flex-direction: column; }
+          .auth-side { flex: 0 0 auto; padding: 22px 22px 20px; }
+          .auth-side .auth-mid, .auth-side .auth-foot { display: none; }
+          .auth-main { flex: 1 1 auto; align-items: flex-start; padding: 34px 22px 40px; }
+          .auth-form { max-width: 440px; margin: 0 auto; }
+        }
+      `}</style>
 
-        <div style={{ position: "relative", zIndex: 1 }}>
-          {/* 상단 라벨 */}
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
-            <div style={{ width: 28, height: 1, background: "#F59E0B" }}></div>
-            <div style={{ fontSize: 11, letterSpacing: "0.18em", color: "#F59E0B", textTransform: "uppercase", fontWeight: 600 }}>Korea Business Consulting</div>
-          </div>
-
-          {/* 메인 헤드라인 */}
-          <div style={{ fontSize: 14, color: "#888", marginBottom: 6, letterSpacing: "0.05em", fontWeight: 500 }}>대한민국 NO.1</div>
-          <h1 style={{ fontSize: 48, fontWeight: 800, color: "#F7F6F3", letterSpacing: "-0.04em", lineHeight: 1.1, margin: "0 0 28px" }}>
-            경영컨설팅 회사
-          </h1>
-
-          {/* 슬로건 */}
-          <p style={{ color: "#888", fontSize: 17, lineHeight: 1.7, maxWidth: 420, fontWeight: 400, margin: "0 0 12px" }}>
-            기업에 필요한 모든 것을 자문하고 공급하는<br />
-            <span style={{ color: "#F7F6F3", fontWeight: 600 }}>전문가로 구성된 기업</span>
-          </p>
-          <p style={{ color: "#666", fontSize: 13, lineHeight: 1.6, maxWidth: 420 }}>
-            정책자금부터 사업전환·구조혁신까지,<br />
-            귀사의 지속가능한 성장을 함께합니다.
-          </p>
-
-          {/* 서비스 카테고리 */}
-          <div style={{ marginTop: 56, display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {[
-              { label: "정책자금", icon: "💼" },
-              { label: "사업전환", icon: "🔄" },
-              { label: "구조혁신", icon: "⚡" },
-              { label: "경영진단", icon: "📊" },
-              { label: "재무자문", icon: "📈" },
-            ].map(function(s) {
-              return (
-                <div key={s.label} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 99, fontSize: 12 }}>
-                  <span style={{ fontSize: 13 }}>{s.icon}</span>
-                  <span style={{ color: "#DDD", fontWeight: 500, letterSpacing: "0.02em" }}>{s.label}</span>
-                </div>
-              );
+      {/* 왼쪽 — 이 프로그램이 다루는 일의 순서 */}
+      <div className="auth-side">
+        <div className="auth-brand">POLICY FUND CRM<small>컨설팅 관리</small></div>
+        <div className="auth-mid">
+          <h1 className="auth-lead">상담부터 입금까지,<br />한 건도 놓치지 않게.</h1>
+          <ol className="auth-flow">
+            {flow.map(function(st, i) {
+              return <li key={st}><b>{i + 1}</b><span>{st}</span></li>;
             })}
-          </div>
-
-          {/* 하단 회사 강점 */}
-          <div style={{ marginTop: 56, paddingTop: 24, borderTop: "1px solid rgba(255,255,255,0.08)", display: "flex", flexDirection: "column", gap: 14 }}>
-            {[
-              { title: "현장 중심", desc: "직접 방문 컨설팅" },
-              { title: "맞춤형 전략", desc: "1:1 케이스 분석" },
-              { title: "전문가팀", desc: "시니어 컨설턴트 보유" },
-            ].map(function(it) {
-              return (
-                <div key={it.title} style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                  <div style={{ width: 4, height: 4, borderRadius: "50%", background: "#F59E0B" }}></div>
-                  <span style={{ color: "#F59E0B", fontWeight: 600, fontSize: 13, letterSpacing: "0.02em", minWidth: 80 }}>{it.title}</span>
-                  <span style={{ color: "#888", fontSize: 12, letterSpacing: "0.03em" }}>|</span>
-                  <span style={{ color: "#888", fontSize: 13 }}>{it.desc}</span>
-                </div>
-              );
-            })}
-          </div>
+          </ol>
         </div>
+        <p className="auth-foot">직원 전용 화면입니다.<br />새 계정은 관리자가 승인한 뒤부터 쓸 수 있습니다.</p>
       </div>
 
-      {/* 오른쪽 로그인 폼 */}
-      <div style={{ width: 420, display: "flex", alignItems: "center", justifyContent: "center", padding: 40 }}>
-        <div style={{ width: "100%", background: "#fff", borderRadius: 16, padding: "40px 36px", boxShadow: "0 24px 80px rgba(0,0,0,0.4)" }}>
+      {/* 오른쪽 — 로그인·가입 */}
+      <div className="auth-main">
+        <div className="auth-form">
           {done ? (
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 40, marginBottom: 16 }}>📧</div>
-              <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>이메일을 확인해주세요</h2>
-              <p style={{ fontSize: 13, color: "#888", lineHeight: 1.6 }}>{email}로 인증 링크를 보냈어요.<br />링크 클릭 후 로그인하세요.</p>
+            <div>
+              <h2>메일을 확인해 주세요</h2>
+              <p className="auth-sub">{email} 로 인증 링크를 보냈습니다.<br />링크를 누른 뒤 다시 로그인해 주세요.</p>
             </div>
           ) : (
             <>
-              <h2 style={{ fontSize: 20, fontWeight: 800, margin: "0 0 8px", letterSpacing: "-0.03em" }}>{mode === "login" ? "로그인" : "계정 만들기"}</h2>
-              <p style={{ fontSize: 13, color: "#888", margin: "0 0 28px" }}>{mode === "login" ? "팀 CRM에 접속하세요" : "처음 사용하시나요? 계정을 만드세요"}</p>
-              {error && <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#DC2626", marginBottom: 16 }}>{error}</div>}
-              <div style={{ marginBottom: 14 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 6 }}>이메일</label>
-                <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="name@company.com"
-                  style={{ width: "100%", padding: "11px 14px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 14, boxSizing: "border-box", outline: "none" }}
+              <h2>{isLogin ? "로그인" : "계정 만들기"}</h2>
+              <p className="auth-sub">{isLogin ? "이메일과 비밀번호를 입력해 주세요." : "가입한 뒤 관리자 승인을 받으면 사용할 수 있습니다."}</p>
+              {error && <div className="auth-err" role="alert">{error}</div>}
+              <div className="auth-field">
+                <label htmlFor="auth-email">이메일</label>
+                <input id="auth-email" type="email" autoComplete="email" inputMode="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="name@company.com"
                   onKeyDown={e => e.key === "Enter" && handle()} />
               </div>
-              <div style={{ marginBottom: 24 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#555", display: "block", marginBottom: 6 }}>비밀번호</label>
-                <input type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="6자 이상"
-                  style={{ width: "100%", padding: "11px 14px", border: "1px solid #E8E5E0", borderRadius: 8, fontSize: 14, boxSizing: "border-box", outline: "none" }}
+              <div className="auth-field">
+                <label htmlFor="auth-pw">비밀번호</label>
+                <input id="auth-pw" type="password" autoComplete={isLogin ? "current-password" : "new-password"} value={pw} onChange={e => setPw(e.target.value)} placeholder={isLogin ? "" : "6자 이상"}
                   onKeyDown={e => e.key === "Enter" && handle()} />
               </div>
-              <button onClick={handle} disabled={loading}
-                style={{ width: "100%", padding: "13px", background: "#1A1917", color: "#F7F6F3", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1 }}>
-                {loading ? "처리 중..." : mode === "login" ? "로그인" : "가입하기"}
+              <button className="auth-btn" onClick={handle} disabled={loading}>
+                {loading ? "처리 중..." : isLogin ? "로그인" : "가입하기"}
               </button>
-              <div style={{ textAlign: "center", marginTop: 20, fontSize: 13, color: "#888" }}>
-                {mode === "login" ? "계정이 없으신가요? " : "이미 계정이 있으신가요? "}
-                <span onClick={() => { setMode(mode === "login" ? "signup" : "login"); setError(""); }}
-                  style={{ color: "#4338CA", cursor: "pointer", fontWeight: 600 }}>
-                  {mode === "login" ? "가입하기" : "로그인"}
-                </span>
+              <div className="auth-switch">
+                {isLogin ? "계정이 없으신가요?" : "이미 계정이 있으신가요?"}
+                <button type="button" onClick={() => { setMode(isLogin ? "signup" : "login"); setError(""); }}>
+                  {isLogin ? "가입하기" : "로그인"}
+                </button>
               </div>
             </>
           )}
