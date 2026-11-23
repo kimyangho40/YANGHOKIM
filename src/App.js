@@ -7480,26 +7480,29 @@ function AuthScreen() {
     setLoading(false);
   };
 
-  // 왼쪽 단계 목록은 STAGES 에서 그대로 가져온다(부결/반려·기타는 순서 밖이라 뺀다) — 단계 이름이 바뀌면 같이 바뀐다.
-  const flow = STAGES.filter(function(st) { return st !== "부결/반려" && st !== "기타"; });
+  // 왼쪽 그림 — 상담에서 입금까지 올라가는 곡선(단계 9개). 글 없이 그림만 둔다(직원 전용 화면).
+  const pts = [430, 418, 393, 359, 318, 270, 215, 155, 90].map(function(y, i) { return { x: 40 + 65 * i, y: y }; });
+  const curve = pts.reduce(function(d, p, i) {
+    if (i === 0) return "M" + p.x + " " + p.y;
+    var q = pts[i - 1];
+    return d + " C" + (q.x + 32) + " " + q.y + " " + (p.x - 32) + " " + p.y + " " + p.x + " " + p.y;
+  }, "");
   const isLogin = mode === "login";
 
   return (
     <div className="auth-wrap">
       <style>{`
         .auth-wrap { min-height: 100vh; min-height: 100dvh; display: flex; background: #fff; color: #1A1917; }
-        .auth-side { flex: 1 1 54%; background: #1A1917; color: #F7F6F3; padding: 44px 64px; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
+        .auth-side { flex: 1 1 54%; background: #1A1917; color: #F7F6F3; padding: 44px 64px; display: flex; flex-direction: column; min-width: 0; }
         .auth-brand { font-size: 15px; font-weight: 800; letter-spacing: 0.04em; }
         .auth-brand small { display: block; margin-top: 4px; font-size: 12px; font-weight: 500; letter-spacing: 0; color: #8A857C; }
-        .auth-lead { font-size: 34px; font-weight: 800; line-height: 1.25; letter-spacing: -0.03em; margin: 0 0 30px; }
-        .auth-flow { list-style: none; margin: 0; padding: 0; border-left: 1px solid #3A3835; }
-        .auth-flow li { position: relative; padding: 7px 0 7px 22px; font-size: 14px; color: #B8B2A7; display: flex; gap: 12px; }
-        .auth-flow li::before { content: ""; position: absolute; left: -4px; top: 50%; width: 7px; height: 7px; margin-top: -4px; border-radius: 50%; background: #1A1917; border: 1px solid #6B665E; }
-        .auth-flow li:last-child { color: #F7F6F3; font-weight: 700; }
-        .auth-flow li:last-child::before { background: #F59E0B; border-color: #F59E0B; }
-        .auth-flow b { font-weight: 600; color: #6B665E; font-variant-numeric: tabular-nums; min-width: 18px; }
-        .auth-flow li:last-child b { color: #F59E0B; }
-        .auth-foot { font-size: 12.5px; line-height: 1.6; color: #8A857C; margin: 0; }
+        .auth-art { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 24px 0; }
+        .auth-art svg { width: 100%; max-width: 640px; height: auto; max-height: 100%; overflow: visible; }
+        .auth-line { stroke-dasharray: 1; stroke-dashoffset: 1; animation: authDraw 1.5s 0.15s cubic-bezier(.6,.05,.2,1) forwards; }
+        .auth-fade { opacity: 0; animation: authIn 0.5s ease forwards; }
+        @keyframes authDraw { to { stroke-dashoffset: 0; } }
+        @keyframes authIn { to { opacity: 1; } }
+        @media (prefers-reduced-motion: reduce) { .auth-line { animation: none; stroke-dashoffset: 0; } .auth-fade { animation: none; opacity: 1; } }
         .auth-main { flex: 1 1 46%; display: flex; align-items: center; justify-content: center; padding: 44px 32px; min-width: 0; }
         .auth-form { width: 100%; max-width: 360px; }
         .auth-form h2 { font-size: 26px; font-weight: 800; letter-spacing: -0.03em; margin: 0 0 8px; }
@@ -7519,24 +7522,52 @@ function AuthScreen() {
         @media (max-width: 860px) {
           .auth-wrap { flex-direction: column; }
           .auth-side { flex: 0 0 auto; padding: 22px 22px 20px; }
-          .auth-side .auth-mid, .auth-side .auth-foot { display: none; }
+          .auth-art { padding: 6px 0 0; height: 150px; flex: 0 0 auto; }
+          .auth-art svg { max-width: 420px; height: 100%; }
           .auth-main { flex: 1 1 auto; align-items: flex-start; padding: 34px 22px 40px; }
           .auth-form { max-width: 440px; margin: 0 auto; }
         }
       `}</style>
 
-      {/* 왼쪽 — 이 프로그램이 다루는 일의 순서 */}
+      {/* 왼쪽 — 그림만(상담 → 입금) */}
       <div className="auth-side">
         <div className="auth-brand">POLICY FUND CRM<small>컨설팅 관리</small></div>
-        <div className="auth-mid">
-          <h1 className="auth-lead">상담부터 입금까지,<br />한 건도 놓치지 않게.</h1>
-          <ol className="auth-flow">
-            {flow.map(function(st, i) {
-              return <li key={st}><b>{i + 1}</b><span>{st}</span></li>;
+        <div className="auth-art" aria-hidden="true">
+          <svg viewBox="0 0 600 500" preserveAspectRatio="xMidYMid meet">
+            <defs>
+              <linearGradient id="authArea" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stopColor="#F59E0B" stopOpacity="0.34" />
+                <stop offset="1" stopColor="#F59E0B" stopOpacity="0" />
+              </linearGradient>
+              <linearGradient id="authStroke" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stopColor="#6B665E" />
+                <stop offset="0.55" stopColor="#D9B36A" />
+                <stop offset="1" stopColor="#F59E0B" />
+              </linearGradient>
+              <radialGradient id="authGlow">
+                <stop offset="0" stopColor="#F59E0B" stopOpacity="0.5" />
+                <stop offset="1" stopColor="#F59E0B" stopOpacity="0" />
+              </radialGradient>
+            </defs>
+            {/* 바닥 눈금 */}
+            {[130, 230, 330, 430].map(function(y) {
+              return <line key={y} x1="40" x2="560" y1={y} y2={y} stroke="#2E2C29" strokeWidth="1" strokeDasharray={y === 430 ? "0" : "2 7"} />;
             })}
-          </ol>
+            {/* 단계별 기둥 */}
+            {pts.map(function(p, i) {
+              return <rect key={i} className="auth-fade" style={{ animationDelay: (0.25 + i * 0.12) + "s" }} x={p.x - 13} y={p.y} width="26" height={430 - p.y} rx="4" fill="#F7F6F3" fillOpacity={0.035 + i * 0.012} />;
+            })}
+            <path className="auth-fade" style={{ animationDelay: "1.1s" }} d={curve + " L560 430 L40 430 Z"} fill="url(#authArea)" />
+            <path className="auth-line" pathLength="1" d={curve} fill="none" stroke="url(#authStroke)" strokeWidth="3" strokeLinecap="round" />
+            <circle className="auth-fade" style={{ animationDelay: "1.5s" }} cx="560" cy="90" r="46" fill="url(#authGlow)" />
+            {pts.map(function(p, i) {
+              var last = i === pts.length - 1;
+              return <circle key={i} className="auth-fade" style={{ animationDelay: (0.3 + i * 0.14) + "s" }} cx={p.x} cy={p.y} r={last ? 9 : 4.5} fill={last ? "#F59E0B" : "#1A1917"} stroke={last ? "#F59E0B" : "#A8A29A"} strokeWidth="1.5" />;
+            })}
+            <text className="auth-fade" style={{ animationDelay: "0.3s" }} x="40" y="462" fill="#8A857C" fontSize="15" fontWeight="600" textAnchor="middle">상담</text>
+            <text className="auth-fade" style={{ animationDelay: "1.5s" }} x="560" y="462" fill="#F59E0B" fontSize="15" fontWeight="700" textAnchor="middle">입금</text>
+          </svg>
         </div>
-        <p className="auth-foot">직원 전용 화면입니다.<br />새 계정은 관리자가 승인한 뒤부터 쓸 수 있습니다.</p>
       </div>
 
       {/* 오른쪽 — 로그인·가입 */}
