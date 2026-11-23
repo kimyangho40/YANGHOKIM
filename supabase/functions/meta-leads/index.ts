@@ -14,7 +14,9 @@
 //       (선택: { "backfill_hours": 168 } — 이미 돌고 있는 상태에서 지난 신청을 한 번 거슬러 가져올 때)
 // 응답: { ok, forms, fetched, inserted, skipped }
 
-const PAGE_ID = "322871297567083";
+// 신청을 받는 페이스북 페이지 — 광고 계정이 둘이라 페이지도 둘이다(2026-11-23 두 번째 추가).
+//   322871297567083 = 「주식회사 한국기업진단협회」(하유진 님 광고 계정) · 510978892095046 = 「한국기업진단협회」(포트폴리오 광고 계정)
+const PAGE_IDS = ["322871297567083", "510978892095046"];
 const GRAPH = "https://graph.facebook.com/v26.0";
 
 // ⛳ meta-leads-helpers 시작 — 순수 함수(Deno·Node 둘 다에서 돈다). scripts/test-meta-leads.mjs 가 이 구간을 떼어내 실행한다.
@@ -153,47 +155,58 @@ Deno.serve(async (req) => {
     const sinceMs = backfill ? Date.now() - backfill * 3600 * 1000 : (isNaN(lastMs) ? Date.now() - sinceHours * 3600 * 1000 : lastMs - 3600 * 1000);
     const sinceUnix = String(Math.floor(sinceMs / 1000));
 
-    // 신청을 읽으려면 페이지 토큰이 필요하다.
-    const page = await graph(PAGE_ID, { fields: "access_token" }, userToken);
-    const pageToken = page?.access_token;
-    if (!pageToken) return json(500, { error: "페이지 토큰을 받지 못했습니다(토큰에 페이지 권한이 있는지 확인)." });
-
-    const formsRes = await graph(PAGE_ID + "/leadgen_forms", { fields: "id,name,status", limit: "100" }, pageToken);
-    const forms = (formsRes?.data || []).filter((f: any) => f.status === "ACTIVE");
-
-    let fetched = 0, inserted = 0, skipped = 0;
-    for (const f of forms) {
-      let next: string | null = null;
-      let first = await graph(f.id + "/leads", {
-        fields: "id,created_time,ad_name,field_data",
-        filtering: JSON.stringify([{ field: "time_created", operator: "GREATER_THAN", value: Number(sinceUnix) }]),
-        limit: "100",
-      }, pageToken);
-      for (let pageNo = 0; pageNo < 10; pageNo++) {   // 양식당 최대 1,000건 — 폭주 방어
-        const rows = (first?.data || []).map((l: any) => buildLeadRow(l, f.name)).filter(Boolean);
-        fetched += (first?.data || []).length;
-        skipped += (first?.data || []).length - rows.length;
-        if (rows.length) {
-          // 같은 신청 번호는 DB 가 조용히 건너뛴다(unique + ignore-duplicates) → 몇 번을 돌려도 안 불어난다.
-          const ins = await fetch(url + "/rest/v1/db_leads?on_conflict=meta_lead_id", {
-            method: "POST",
-            headers: { ...rest, Prefer: "resolution=ignore-duplicates,return=representation" },
-            body: JSON.stringify(rows),
-          });
-          if (!ins.ok) return json(500, { error: "db_leads 저장 실패 " + ins.status, fetched, inserted });
-          const got = await ins.json().catch(() => []);
-          const n = Array.isArray(got) ? got.length : 0;
-          inserted += n;
-          skipped += rows.length - n;
+    // 페이지마다 따로 돈다 — 한 페이지가 막혀도(권한 회수 등) 다른 페이지 신청은 계속 들어오게.
+    let fetched = 0, inserted = 0, skipped = 0, formCount = 0;
+    const pageErrors: string[] = [];
+    for (const PAGE_ID of PAGE_IDS) {
+      let pageToken = "";
+      let forms: any[] = [];
+      try {
+        // 신청을 읽으려면 페이지 토큰이 필요하다.
+        const page = await graph(PAGE_ID, { fields: "access_token" }, userToken);
+        pageToken = page?.access_token || "";
+        if (!pageToken) throw new Error("페이지 토큰을 받지 못했습니다(토큰에 페이지 권한이 있는지 확인)");
+        const formsRes = await graph(PAGE_ID + "/leadgen_forms", { fields: "id,name,status", limit: "100" }, pageToken);
+        forms = (formsRes?.data || []).filter((f: any) => f.status === "ACTIVE");
+      } catch (e) {
+        pageErrors.push(PAGE_ID + ": " + String((e as Error)?.message || e));
+        continue;
+      }
+      formCount += forms.length;
+      for (const f of forms) {
+        let next: string | null = null;
+        let first = await graph(f.id + "/leads", {
+          fields: "id,created_time,ad_name,field_data",
+          filtering: JSON.stringify([{ field: "time_created", operator: "GREATER_THAN", value: Number(sinceUnix) }]),
+          limit: "100",
+        }, pageToken);
+        for (let pageNo = 0; pageNo < 10; pageNo++) {   // 양식당 최대 1,000건 — 폭주 방어
+          const rows = (first?.data || []).map((l: any) => buildLeadRow(l, f.name)).filter(Boolean);
+          fetched += (first?.data || []).length;
+          skipped += (first?.data || []).length - rows.length;
+          if (rows.length) {
+            // 같은 신청 번호는 DB 가 조용히 건너뛴다(unique + ignore-duplicates) → 몇 번을 돌려도 안 불어난다.
+            const ins = await fetch(url + "/rest/v1/db_leads?on_conflict=meta_lead_id", {
+              method: "POST",
+              headers: { ...rest, Prefer: "resolution=ignore-duplicates,return=representation" },
+              body: JSON.stringify(rows),
+            });
+            if (!ins.ok) return json(500, { error: "db_leads 저장 실패 " + ins.status, fetched, inserted });
+            const got = await ins.json().catch(() => []);
+            const n = Array.isArray(got) ? got.length : 0;
+            inserted += n;
+            skipped += rows.length - n;
+          }
+          next = first?.paging?.next || null;
+          if (!next) break;
+          const r = await fetch(next);
+          if (!r.ok) break;
+          first = await r.json();
         }
-        next = first?.paging?.next || null;
-        if (!next) break;
-        const r = await fetch(next);
-        if (!r.ok) break;
-        first = await r.json();
       }
     }
-    return json(200, { ok: true, forms: forms.length, fetched, inserted, skipped });
+    if (pageErrors.length === PAGE_IDS.length) return json(502, { error: pageErrors.join(" / ") });
+    return json(200, { ok: true, pages: PAGE_IDS.length - pageErrors.length, forms: formCount, fetched, inserted, skipped, page_errors: pageErrors });
   } catch (e) {
     return json(502, { error: String((e as Error)?.message || e) });
   }
