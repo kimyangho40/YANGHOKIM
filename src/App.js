@@ -8001,18 +8001,44 @@ function CRMApp({ profile, session }) {
   const quickMemoDraft = useDraft("빠른메모", "new", quickMemoText, { enabled: quickMemo, label: "빠른 메모" });
   const quickTaskDraft = useDraft("빠른업무", "new", quickTaskText, { enabled: showQuickTask, label: "빠른 업무" });
   const [menuExpanded, setMenuExpanded] = useState(false);
-  // ⭐ 메뉴 즐겨찾기 — 사람마다 따로(프로필 id 별), 이 브라우저에 저장한다. DB 는 쓰지 않는다.
+  // ⭐ 메뉴 즐겨찾기 — 계정마다 따로. 브라우저에 먼저 저장하고(바로 뜬다), DB `menu_favorites` 로 다른 PC 와 맞춘다.
+  //   DB 가 실패해도 화면은 브라우저 저장만으로 동작한다. 표: 메뉴즐겨찾기_menu_favorites.sql
   const favMenuKey = "crmFavMenus:" + (profile && profile.id ? profile.id : "x");
+  const cleanFavMenus = function(v) { return Array.isArray(v) ? v.filter(function(x) { return typeof x === "string"; }) : []; };
   const [favMenus, setFavMenus] = useState(function() {
-    try { var v = JSON.parse(window.localStorage.getItem(favMenuKey) || "[]"); return Array.isArray(v) ? v.filter(function(x) { return typeof x === "string"; }) : []; }
+    try { return cleanFavMenus(JSON.parse(window.localStorage.getItem(favMenuKey) || "[]")); }
     catch (e) { return []; }
   });
-  const toggleFavMenu = function(id) {
-    setFavMenus(function(prev) {
-      var next = prev.indexOf(id) >= 0 ? prev.filter(function(x) { return x !== id; }) : prev.concat([id]);
-      try { window.localStorage.setItem(favMenuKey, JSON.stringify(next)); } catch (e) { /* 저장 실패해도 이번 화면에서는 동작 */ }
-      return next;
+  const saveFavMenusRemote = function(list) {
+    if (!profile || !profile.id) return;
+    supabase.from("menu_favorites").upsert({ user_id: profile.id, menus: list, updated_at: new Date().toISOString() }, { onConflict: "user_id" })
+      .then(function(r) { if (r && r.error) console.warn("[즐겨찾기] 동기화 저장 실패:", r.error.message); });
+  };
+  useEffect(function() {
+    if (!profile || !profile.id) return;
+    var alive = true;
+    supabase.from("menu_favorites").select("menus").eq("user_id", profile.id).maybeSingle().then(function(r) {
+      if (!alive || !r || r.error) { if (r && r.error) console.warn("[즐겨찾기] 불러오기 실패:", r.error.message); return; }
+      if (r.data) {
+        // DB 에 저장된 것이 있으면 그것이 기준(다른 PC 에서 고른 것).
+        var list = cleanFavMenus(r.data.menus);
+        setFavMenus(list);
+        try { window.localStorage.setItem(favMenuKey, JSON.stringify(list)); } catch (e) { /* 무시 */ }
+      } else {
+        // DB 에 아직 없으면, 이 브라우저에 골라 둔 것을 올려 둔다(없으면 아무것도 안 한다).
+        var local = [];
+        try { local = cleanFavMenus(JSON.parse(window.localStorage.getItem(favMenuKey) || "[]")); } catch (e) { local = []; }
+        if (local.length) saveFavMenusRemote(local);
+      }
     });
+    return function() { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile && profile.id]);
+  const toggleFavMenu = function(id) {
+    var next = favMenus.indexOf(id) >= 0 ? favMenus.filter(function(x) { return x !== id; }) : favMenus.concat([id]);
+    setFavMenus(next);
+    try { window.localStorage.setItem(favMenuKey, JSON.stringify(next)); } catch (e) { /* 저장 실패해도 이번 화면에서는 동작 */ }
+    saveFavMenusRemote(next);
   };
   const [agencyRefreshKey, setAgencyRefreshKey] = useState(0);
   const [notifications, setNotifications] = useState([]);
