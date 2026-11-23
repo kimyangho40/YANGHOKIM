@@ -7751,6 +7751,9 @@ const CHAT_TOAST_MS = 30000;
 //   기존 좁은 화면용 배치(@media)가 그대로 적용된다. 기존 화면 코드는 건드리지 않는다.
 //   ⚠️ 칸(embed)에서는 로그인 1회 알림(정체·서류 방치·오늘 할 일 팝업)을 돌리지 않는다 —
 //      본 화면과 두 칸이 동시에 돌면 같은 업무노트가 여러 번 만들어질 수 있다.
+// 🔕 정체 알림 끔(2026-11-23, 미팅 8번 · 대표님 결정) — 경보·메뉴·팝업·자동 확인 요청만 끈다.
+//   파이프라인 카드의 "N일째" 표시와 정체 판정 함수는 그대로 둔다. 다시 켜려면 false 로.
+var STAGN_ALERTS_OFF = true;
 var IS_EMBED = (function() { try { return new URLSearchParams(window.location.search).get("embed") === "1"; } catch (e) { return false; } })();
 var EMBED_MENUS = [
   { id: "list", label: "기업 목록", emoji: "📋" }, { id: "agency", label: "기관별 현황", emoji: "🏛" },
@@ -8544,7 +8547,7 @@ function CRMApp({ profile, session }) {
   // 안 읽은 알림(채팅+요청+팀공지+답장) 총합 → 탭 제목 앞 "(N) " 표시
   useEffect(function() {
     var base = chatBaseTitleRef.current || "CRM";
-    var total = chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length + stagnAlertList.length;
+    var total = chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length + (STAGN_ALERTS_OFF ? 0 : stagnAlertList.length);
     document.title = total > 0 ? "(" + total + ") " + base : base;
   }, [chatUnread, reqAlertList, teamAlertList, sentReplyAlertList, stagnAlertList]);
 
@@ -8943,7 +8946,7 @@ function CRMApp({ profile, session }) {
       // 하루 한 번만(2026-11-21) — 새로고침·재접속 때마다 떠서 일을 가렸다. 헤더의 📋 버튼으로는 언제든 다시 연다.
       var seenKey = "crm_today_alert_seen", seenDay = "";
       try { seenDay = window.localStorage.getItem(seenKey) || ""; } catch (e) { seenDay = ""; }
-      if ((todayContacts.length > 0 || stagnantList.length > 0) && seenDay !== todayStr) {
+      if ((todayContacts.length > 0 || (!STAGN_ALERTS_OFF && stagnantList.length > 0)) && seenDay !== todayStr) {
         try { window.localStorage.setItem(seenKey, todayStr); } catch (e) { /* 저장 불가 — 매번 뜬다 */ }
         setTimeout(() => setShowTodayAlert(true), 800);
       }
@@ -8991,6 +8994,7 @@ function CRMApp({ profile, session }) {
   const stagnCheckedRef = useRef(false);
   useEffect(() => {
     if (stagnCheckedRef.current) return;
+    if (STAGN_ALERTS_OFF) return;
     if (IS_EMBED) return;
     if (!profile?.name) return;
     if (!companies.length || !pipelineCards.length || !stagnConfig.length) return;
@@ -9864,7 +9868,7 @@ function CRMApp({ profile, session }) {
                   })}
                 </div>
               )}
-              {stagnantList.length > 0 && (
+              {!STAGN_ALERTS_OFF && stagnantList.length > 0 && (
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: "#DC2626", marginBottom: 8 }}>
                     ⚠️ 정체 업체 ({stagnantList.length}건)
@@ -10093,7 +10097,7 @@ function CRMApp({ profile, session }) {
           <div style={{ fontSize: 16, fontWeight: 700, color: "#F7F6F3", letterSpacing: "-0.02em" }}>컨설팅 관리</div>
         </div>
 
-        {stagnant.length > 0 && (
+        {!STAGN_ALERTS_OFF && stagnant.length > 0 && (
           <div onClick={() => setView("stagnant")} style={{ margin: "0 12px 8px", background: "#7C2020", borderRadius: 8, padding: "8px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
             <Icon name="alert" size={13} color="#FCA5A5" />
             <span style={{ color: "#FCA5A5", fontSize: 12, fontWeight: 600 }}>정체 {stagnant.length}건 경보</span>
@@ -10149,7 +10153,7 @@ function CRMApp({ profile, session }) {
                   <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{workNotesBadge}</span>
                 ) : (id === "chat" && chatUnread > 0) ? (
                   <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{chatUnread}</span>
-                ) : (id === "list" && stagnant.filter(isStagnantHard).length > 0) ? (
+                ) : (id === "list" && !STAGN_ALERTS_OFF && stagnant.filter(isStagnantHard).length > 0) ? (
                   <span style={{ marginLeft: "auto", background: "#B45309", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>⚠</span>
                 ) : null
               } />
@@ -10160,7 +10164,7 @@ function CRMApp({ profile, session }) {
             style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", cursor: "pointer", color: "rgba(255,255,255,0.7)", fontSize: 12, marginTop: 4, marginBottom: 2 }}>
             <Icon name={menuExpanded ? "chevronL" : "chevronR"} size={12} color="rgba(255,255,255,0.7)" />
             {menuExpanded ? "접기" : "더보기"}
-            {stagnant.length > 0 && !menuExpanded && (
+            {!STAGN_ALERTS_OFF && stagnant.length > 0 && !menuExpanded && (
               <span style={{ background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 6px" }}>{stagnant.length}</span>
             )}
           </div>
@@ -10181,7 +10185,7 @@ function CRMApp({ profile, session }) {
                 );
               })}
               {[
-                { id: "stagnant",    label: "정체 알림",   icon: "alert", badge: stagnant.length },
+                ...(STAGN_ALERTS_OFF ? [] : [{ id: "stagnant",    label: "정체 알림",   icon: "alert", badge: stagnant.length }]),
                 // 묵은 서류가 남아 있을 때만 메뉴에 띄운다 — 다 정리하면 사라지는 1회성 화면
                 ...(!OLD_DOCS_OFF && oldDocCount > 0 ? [{ id: "olddocs", label: "묵은 서류 정리", icon: "folder", badge: oldDocCount }] : []),
                 { id: "activitylog", label: "활동 로그",   icon: "activity" },
@@ -10258,8 +10262,8 @@ function CRMApp({ profile, session }) {
             <button onClick={function() { setShowChatNotif(function(p) { return !p; }); }} title="안 읽은 알림"
               style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", padding: "7px 10px", background: "#2E2C29", border: "none", borderRadius: 6, color: "#888", fontSize: 14, cursor: "pointer" }}>
               💬
-              {(chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length + stagnAlertList.length) > 0 && (
-                <span style={{ position: "absolute", top: -3, right: -3, minWidth: 16, height: 16, background: "#DC2626", borderRadius: 99, fontSize: 9, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }}>{chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length + stagnAlertList.length}</span>
+              {(chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length + (STAGN_ALERTS_OFF ? 0 : stagnAlertList.length)) > 0 && (
+                <span style={{ position: "absolute", top: -3, right: -3, minWidth: 16, height: 16, background: "#DC2626", borderRadius: 99, fontSize: 9, fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }}>{chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length + (STAGN_ALERTS_OFF ? 0 : stagnAlertList.length)}</span>
               )}
             </button>
           </div>
@@ -10324,7 +10328,7 @@ function CRMApp({ profile, session }) {
             <div style={{ padding: "20px 20px 14px", borderBottom: "1px solid #E8E5E0", display: "flex", justifyContent: "space-between", alignItems: "flex-start", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 700 }}>💬 안 읽은 알림</div>
-                {(function() { var t = chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length + stagnAlertList.length; return <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{t > 0 ? t + "개의 새 알림" : "모두 읽었어요"}</div>; })()}
+                {(function() { var t = chatUnread + reqAlertList.length + teamAlertList.length + sentReplyAlertList.length + (STAGN_ALERTS_OFF ? 0 : stagnAlertList.length); return <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{t > 0 ? t + "개의 새 알림" : "모두 읽었어요"}</div>; })()}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <button onClick={function() { setChatSoundOn(function(p) { return !p; }); }} title="알림음 켜기/끄기"
@@ -10398,7 +10402,7 @@ function CRMApp({ profile, session }) {
                 );
               })}
               {/* ⏳ 정체 카드 — 기준일수 초과로 자동 생성된 확인 요청 */}
-              {stagnAlertList.map(function(s) {
+              {(STAGN_ALERTS_OFF ? [] : stagnAlertList).map(function(s) {
                 return (
                   <div key={"stagn-" + s.id} style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "12px 14px", marginBottom: 10, cursor: "pointer" }}
                     onClick={function() { dismissStagnAlert(s.id); goToWorkNotes(); }}>
@@ -10431,7 +10435,7 @@ function CRMApp({ profile, session }) {
                   </div>
                 );
               })}
-              {(chatUnreadList.length === 0 && reqAlertList.length === 0 && teamAlertList.length === 0 && sentReplyAlertList.length === 0 && stagnAlertList.length === 0) ? (
+              {(chatUnreadList.length === 0 && reqAlertList.length === 0 && teamAlertList.length === 0 && sentReplyAlertList.length === 0 && (STAGN_ALERTS_OFF ? 0 : stagnAlertList.length) === 0) ? (
                 <div style={{ padding: "40px 0", textAlign: "center", color: "#888", fontSize: 13 }}>
                   <div style={{ fontSize: 32, marginBottom: 8 }}>💬</div>
                   안 읽은 알림이 없어요
@@ -11825,7 +11829,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
     { key: "tpl_jaedan_photo", label: "재단 사진 요청", text: "대표님, 재단 신청 진행 중입니다. 매장 내부 사진 2장, 외부(간판 보이게) 사진 2장을 직접 찍어서 이 방에 올려 주세요." },
   ];
   const thisMonth = new Date().getMonth() + 1;
-  const thisYear = 2026;
+  const thisYear = new Date().getFullYear();   // 2026 고정이었음 — 해가 바뀌면 대시보드 집계가 전부 0이 된다
 
   useEffect(function() {
     // 1,734행 — 대시보드 집계 전체가 이 배열을 본다. 잘리면 모든 위젯 숫자가 조용히 틀린다.
@@ -12032,14 +12036,14 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
                   </>
                 );
               })()}
-              {stagnant14.length > 0 && (
+              {!STAGN_ALERTS_OFF && stagnant14.length > 0 && (
                 <div onClick={function() { setView("stagnant"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #DC2626" }}>
                   <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 700, marginBottom: 4 }}>🔴 심각 정체</div>
                   <div style={{ fontSize: 20, fontWeight: 700, color: "#DC2626" }}>{stagnant14.length}건</div>
                   <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>단계 기준일수 2배 초과</div>
                 </div>
               )}
-              {stagnant7.length > 0 && (
+              {!STAGN_ALERTS_OFF && stagnant7.length > 0 && (
                 <div onClick={function() { setView("stagnant"); }} style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", cursor: "pointer", borderLeft: "3px solid #B45309" }}>
                   <div style={{ fontSize: 10, color: "#B45309", fontWeight: 700, marginBottom: 4 }}>🟡 정체 주의</div>
                   <div style={{ fontSize: 20, fontWeight: 700, color: "#B45309" }}>{stagnant7.length}건</div>
@@ -12233,7 +12237,7 @@ function Dashboard({ companies, profiles, stagnant, onSelectCompany, setView, se
       {(function() {
         var longStale = companies.filter(isStagnantLong)
           .sort(function(a, b) { return stagnRatio(b) - stagnRatio(a); });
-        if (longStale.length === 0) return null;
+        if (STAGN_ALERTS_OFF || longStale.length === 0) return null;
         return (
           <div style={{ background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 12, padding: "16px 20px", marginBottom: 22 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
