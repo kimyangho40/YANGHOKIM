@@ -5696,7 +5696,7 @@ function fmtChatTime(iso) {
 }
 
 // 사이드바 메뉴 항목 - 비활성 글씨/아이콘 가시성 개선 + 호버 밝아짐
-function SideNavItem({ icon, label, active, onClick, rightSlot }) {
+function SideNavItem({ icon, label, active, onClick, rightSlot, fav, onFav }) {
   const [hover, setHover] = useState(false);
   // 활성: 가장 밝게 / 비활성: rgba(255,255,255,0.85) / 호버 시 완전 흰색
   var color = active ? "#F7F6F3" : hover ? "#FFFFFF" : "rgba(255,255,255,0.85)";
@@ -5709,6 +5709,12 @@ function SideNavItem({ icon, label, active, onClick, rightSlot }) {
       <Icon name={icon} size={15} color={color} />
       {label}
       {rightSlot}
+      {/* ⭐ 즐겨찾기 별 — 마우스를 올렸을 때만 보인다. 누르면 화면 이동 없이 고정/해제만 한다. */}
+      {onFav && hover && (
+        <span role="button" aria-label={fav ? "즐겨찾기 해제" : "즐겨찾기에 추가"} title={fav ? "즐겨찾기 해제" : "즐겨찾기에 추가"}
+          onClick={function(e) { e.stopPropagation(); onFav(); }}
+          style={{ marginLeft: rightSlot ? 6 : "auto", fontSize: 13, lineHeight: 1, color: fav ? "#F59E0B" : "rgba(255,255,255,0.45)", padding: "0 2px" }}>{fav ? "★" : "☆"}</span>
+      )}
     </div>
   );
 }
@@ -7995,6 +8001,19 @@ function CRMApp({ profile, session }) {
   const quickMemoDraft = useDraft("빠른메모", "new", quickMemoText, { enabled: quickMemo, label: "빠른 메모" });
   const quickTaskDraft = useDraft("빠른업무", "new", quickTaskText, { enabled: showQuickTask, label: "빠른 업무" });
   const [menuExpanded, setMenuExpanded] = useState(false);
+  // ⭐ 메뉴 즐겨찾기 — 사람마다 따로(프로필 id 별), 이 브라우저에 저장한다. DB 는 쓰지 않는다.
+  const favMenuKey = "crmFavMenus:" + (profile && profile.id ? profile.id : "x");
+  const [favMenus, setFavMenus] = useState(function() {
+    try { var v = JSON.parse(window.localStorage.getItem(favMenuKey) || "[]"); return Array.isArray(v) ? v.filter(function(x) { return typeof x === "string"; }) : []; }
+    catch (e) { return []; }
+  });
+  const toggleFavMenu = function(id) {
+    setFavMenus(function(prev) {
+      var next = prev.indexOf(id) >= 0 ? prev.filter(function(x) { return x !== id; }) : prev.concat([id]);
+      try { window.localStorage.setItem(favMenuKey, JSON.stringify(next)); } catch (e) { /* 저장 실패해도 이번 화면에서는 동작 */ }
+      return next;
+    });
+  };
   const [agencyRefreshKey, setAgencyRefreshKey] = useState(0);
   const [notifications, setNotifications] = useState([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
@@ -10116,83 +10135,90 @@ function CRMApp({ profile, session }) {
             <span style={{ flex: 1 }}>{splitOn ? "분할 해제" : "분할 보기"}</span>
             <span style={{ fontSize: 10, background: splitOn ? "#E8E5E0" : "#1A1917", padding: "2px 6px", borderRadius: 4, color: splitOn ? "#555" : "#888" }}>2칸</span>
           </div>
-          {/* 자주 쓰는 메뉴 */}
-          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.55)", letterSpacing: "0.08em", padding: "4px 12px 6px", fontWeight: 600 }}>주요 메뉴</div>
-          {[
-            { id: "dashboard",  label: "대시보드",   icon: "dashboard" },
-            { id: "mytodo",     label: "내 할일",     icon: "check" },
-            { id: "agency",     label: "기관별 현황", icon: "building" },
-            { id: "worknotes",  label: "업무 노트",   icon: "edit" },
-            { id: "chat",       label: "채팅",        icon: "chat" },
-            { id: "list",       label: "기업 목록",   icon: "list" },
-            // 🗺 사업장 지도 — 아래 렌더 분기(`view === "company-map"`)와 한 쌍
-            { id: "company-map", label: "사업장 지도", icon: "map" },
-            { id: "agency-sites", label: "기관 사이트", icon: "building" },
-            // ⚠️ 이 배열과 아래 렌더 분기(`view === "growth-roadmap"`)는 한 쌍이다.
-            //    한쪽만 넣으면 메뉴는 뜨는데 화면이 빈 채로 남는다.
-            //    아이콘은 Icon 이 아는 이름만 쓸 것 — 모르는 이름은 에러 없이 null 이라 아이콘만 조용히 빈칸이 된다.
-            { id: "growth-roadmap", label: "성장 로드맵", icon: "activity" },
-            { id: "pipeline",   label: "파이프라인",  icon: "pipeline" },
-            { id: "cases",      label: "사례집",      icon: "folder" },
-            { id: "signoff",    label: "결재함",      icon: "save" },
-            { id: "quicklinks", label: "바로가기",    icon: "link" },
-          ].map(({ id, label, icon }) => (
-            <SideNavItem key={id} icon={icon} label={label} active={view === id} onClick={() => setView(id)}
-              rightSlot={
-                (id === "signoff" && signOffBadge > 0) ? (
-                  <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{signOffBadge}</span>
-                ) : (id === "worknotes" && workNotesBadge > 0) ? (
-                  <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{workNotesBadge}</span>
-                ) : (id === "chat" && chatUnread > 0) ? (
-                  <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{chatUnread}</span>
-                ) : (id === "list" && !STAGN_ALERTS_OFF && stagnant.filter(isStagnantHard).length > 0) ? (
-                  <span style={{ marginLeft: "auto", background: "#B45309", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>⚠</span>
-                ) : null
-              } />
-          ))}
+          {/* ⭐ 즐겨찾기 + 메뉴 목록 — 메뉴 정의는 여기 한 곳(main·moreA·moreB). 즐겨찾기에 올린 메뉴는 아래 목록에서 빠진다.
+              ⚠️ 이 배열들과 아래 렌더 분기(`view === "..."`)는 한 쌍이다. 한쪽만 넣으면 메뉴는 뜨는데 화면이 빈 채로 남는다.
+              아이콘은 Icon 이 아는 이름만 쓸 것 — 모르는 이름은 에러 없이 null 이라 아이콘만 조용히 빈칸이 된다. */}
+          {(function() {
+            var main = [
+              { id: "dashboard",  label: "대시보드",   icon: "dashboard" },
+              { id: "mytodo",     label: "내 할일",     icon: "check" },
+              { id: "agency",     label: "기관별 현황", icon: "building" },
+              { id: "worknotes",  label: "업무 노트",   icon: "edit" },
+              { id: "chat",       label: "채팅",        icon: "chat" },
+              { id: "list",       label: "기업 목록",   icon: "list" },
+              { id: "company-map", label: "사업장 지도", icon: "map" },
+              { id: "agency-sites", label: "기관 사이트", icon: "building" },
+              { id: "growth-roadmap", label: "성장 로드맵", icon: "activity" },
+              { id: "pipeline",   label: "파이프라인",  icon: "pipeline" },
+              { id: "cases",      label: "사례집",      icon: "folder" },
+              { id: "signoff",    label: "결재함",      icon: "save" },
+              { id: "quicklinks", label: "바로가기",    icon: "link" },
+            ];
+            var moreA = [
+              { id: "leave", label: "연차/휴가", icon: "calendar" },
+              { id: "partners", label: "협업 담당자", icon: "users" },
+              { id: "dbleads", label: "DB리스트", icon: "phone" },
+              { id: "assigndb", label: "배정DB", icon: "list" },
+              { id: "calendar", label: "캘린더", icon: "calendar" },
+            ];
+            var moreB = [
+              ...(STAGN_ALERTS_OFF ? [] : [{ id: "stagnant",    label: "정체 알림",   icon: "alert", badge: stagnant.length }]),
+              // 묵은 서류가 남아 있을 때만 메뉴에 띄운다 — 다 정리하면 사라지는 1회성 화면
+              ...(!OLD_DOCS_OFF && oldDocCount > 0 ? [{ id: "olddocs", label: "묵은 서류 정리", icon: "folder", badge: oldDocCount }] : []),
+              { id: "activitylog", label: "활동 로그",   icon: "activity" },
+              { id: "manual",      label: "자료실",      icon: "folder" },
+              { id: "settlement",  label: "정산관리",    icon: "money" },
+              ...(profile.role === "admin" ? [{ id: "members", label: "팀원 관리", icon: "users" }] : []),
+              ...(session?.user?.email === EXPORT_OWNER_EMAIL ? [{ id: "backup", label: "데이터 백업", icon: "save" }] : []),
+            ];
+            var all = main.concat(moreA, moreB);
+            // 권한이 바뀌어 사라진 메뉴(팀원 관리 등)는 즐겨찾기에 남아 있어도 그리지 않는다.
+            var favs = favMenus.map(function(id) { return all.find(function(m) { return m.id === id; }); }).filter(Boolean);
+            var notFav = function(m) { return favMenus.indexOf(m.id) < 0; };
+            var redBadge = function(n) { return <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{n}</span>; };
+            var badgeOf = function(m) {
+              if (m.id === "signoff" && signOffBadge > 0) return redBadge(signOffBadge);
+              if (m.id === "worknotes" && workNotesBadge > 0) return redBadge(workNotesBadge);
+              if (m.id === "chat" && chatUnread > 0) return redBadge(chatUnread);
+              if (m.id === "list" && !STAGN_ALERTS_OFF && stagnant.filter(isStagnantHard).length > 0) return <span style={{ marginLeft: "auto", background: "#B45309", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>⚠</span>;
+              if (m.badge > 0) return redBadge(m.badge);
+              return null;
+            };
+            var item = function(m) {
+              return <SideNavItem key={m.id} icon={m.icon} label={m.label} active={view === m.id} onClick={function() { setView(m.id); }}
+                rightSlot={badgeOf(m)} fav={favMenus.indexOf(m.id) >= 0} onFav={function() { toggleFavMenu(m.id); }} />;
+            };
+            var capStyle = { fontSize: 10, color: "rgba(255,255,255,0.55)", letterSpacing: "0.08em", padding: "4px 12px 6px", fontWeight: 600 };
+            var mainRest = main.filter(notFav), moreRest = moreA.filter(notFav).concat(moreB.filter(notFav));
+            return (
+              <>
+                <div style={capStyle}>⭐ 즐겨찾기</div>
+                {favs.length > 0 ? favs.map(item) : (
+                  <div style={{ fontSize: 11, lineHeight: 1.5, color: "rgba(255,255,255,0.4)", padding: "0 12px 8px" }}>메뉴에 마우스를 올리고 ☆를 누르면 여기에 고정됩니다.</div>
+                )}
+                {mainRest.length > 0 && <div style={Object.assign({}, capStyle, { marginTop: 6 })}>주요 메뉴</div>}
+                {mainRest.map(item)}
 
-          {/* 더보기 접기 */}
-          <div onClick={() => setMenuExpanded(m => !m)}
-            style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", cursor: "pointer", color: "rgba(255,255,255,0.7)", fontSize: 12, marginTop: 4, marginBottom: 2 }}>
-            <Icon name={menuExpanded ? "chevronL" : "chevronR"} size={12} color="rgba(255,255,255,0.7)" />
-            {menuExpanded ? "접기" : "더보기"}
-            {!STAGN_ALERTS_OFF && stagnant.length > 0 && !menuExpanded && (
-              <span style={{ background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 6px" }}>{stagnant.length}</span>
-            )}
-          </div>
-
-          {menuExpanded && (
-            <>
-              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.55)", letterSpacing: "0.08em", padding: "4px 12px 6px", fontWeight: 600 }}>추가 메뉴</div>
-              {/* DB리스트 + 캘린더 위아래 */}
-              {[
-                { id: "leave", label: "연차/휴가", icon: "calendar" },
-                { id: "partners", label: "협업 담당자", icon: "users" },
-                { id: "dbleads", label: "DB리스트", icon: "phone" },
-                { id: "assigndb", label: "배정DB", icon: "list" },
-                { id: "calendar", label: "캘린더", icon: "calendar" },
-              ].map(function({ id, label, icon }) {
-                return (
-                  <SideNavItem key={id} icon={icon} label={label} active={view === id} onClick={function() { setView(id); }} />
-                );
-              })}
-              {[
-                ...(STAGN_ALERTS_OFF ? [] : [{ id: "stagnant",    label: "정체 알림",   icon: "alert", badge: stagnant.length }]),
-                // 묵은 서류가 남아 있을 때만 메뉴에 띄운다 — 다 정리하면 사라지는 1회성 화면
-                ...(!OLD_DOCS_OFF && oldDocCount > 0 ? [{ id: "olddocs", label: "묵은 서류 정리", icon: "folder", badge: oldDocCount }] : []),
-                { id: "activitylog", label: "활동 로그",   icon: "activity" },
-                { id: "manual",      label: "자료실",      icon: "folder" },
-                { id: "settlement",  label: "정산관리",    icon: "money" },
-                ...(profile.role === "admin" ? [{ id: "members", label: "팀원 관리", icon: "users" }] : []),
-                ...(session?.user?.email === EXPORT_OWNER_EMAIL ? [{ id: "backup", label: "데이터 백업", icon: "save" }] : []),
-              ].map(({ id, label, icon, badge }) => (
-                <SideNavItem key={id} icon={icon} label={label} active={view === id} onClick={() => setView(id)}
-                  rightSlot={badge > 0 ? (
-                    <span style={{ marginLeft: "auto", background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>{badge}</span>
-                  ) : null} />
-              ))}
-            </>
-          )}
+                {/* 더보기 접기 */}
+                {moreRest.length > 0 && (
+                  <div onClick={() => setMenuExpanded(m => !m)}
+                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", cursor: "pointer", color: "rgba(255,255,255,0.7)", fontSize: 12, marginTop: 4, marginBottom: 2 }}>
+                    <Icon name={menuExpanded ? "chevronL" : "chevronR"} size={12} color="rgba(255,255,255,0.7)" />
+                    {menuExpanded ? "접기" : "더보기"}
+                    {!STAGN_ALERTS_OFF && stagnant.length > 0 && !menuExpanded && (
+                      <span style={{ background: "#DC2626", color: "#fff", borderRadius: 99, fontSize: 10, fontWeight: 700, padding: "1px 6px" }}>{stagnant.length}</span>
+                    )}
+                  </div>
+                )}
+                {menuExpanded && moreRest.length > 0 && (
+                  <>
+                    <div style={capStyle}>추가 메뉴</div>
+                    {moreRest.map(item)}
+                  </>
+                )}
+              </>
+            );
+          })()}
         </nav>
 
         {/* 하단 프로필 */}
