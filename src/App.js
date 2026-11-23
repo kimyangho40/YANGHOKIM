@@ -7480,131 +7480,104 @@ function AuthScreen() {
     setLoading(false);
   };
 
-  // 왼쪽 그림 — 상담에서 입금까지 올라가는 곡선(단계 9개). 글 없이 그림만 둔다(직원 전용 화면).
-  const pts = [430, 418, 393, 359, 318, 270, 215, 155, 90].map(function(y, i) { return { x: 40 + 65 * i, y: y }; });
-  const curve = pts.reduce(function(d, p, i) {
-    if (i === 0) return "M" + p.x + " " + p.y;
-    var q = pts[i - 1];
-    return d + " C" + (q.x + 32) + " " + q.y + " " + (p.x - 32) + " " + p.y + " " + p.x + " " + p.y;
-  }, "");
   const isLogin = mode === "login";
+  // 등장 움직임은 하루에 한 번만(매번 3초를 기다리면 답답하다). 움직임 줄이기 설정이면 아예 건너뛴다.
+  const [skipIntro] = useState(function() {
+    try {
+      if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return true;
+      var today = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+      if (window.localStorage.getItem("authIntroDay") === today) return true;
+      window.localStorage.setItem("authIntroDay", today);
+    } catch (e) { /* 저장소를 못 쓰면 그냥 매번 보여 준다 */ }
+    return false;
+  });
 
   return (
-    <div className="auth-wrap">
+    <div className={"auth-w" + (skipIntro ? " auth-skip" : "")}>
       <style>{`
-        .auth-wrap { min-height: 100vh; min-height: 100dvh; display: flex; background: #fff; color: #1A1917; }
-        .auth-side { flex: 1 1 54%; background: #1A1917; color: #F7F6F3; padding: 44px 64px; display: flex; flex-direction: column; min-width: 0; }
-        .auth-brand { font-size: 15px; font-weight: 800; letter-spacing: 0.04em; }
-        .auth-brand small { display: block; margin-top: 4px; font-size: 12px; font-weight: 500; letter-spacing: 0; color: #8A857C; }
-        .auth-art { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 24px 0; }
-        .auth-art svg { width: 100%; max-width: 640px; height: auto; max-height: 100%; overflow: visible; }
-        .auth-line { stroke-dasharray: 1; stroke-dashoffset: 1; animation: authDraw 1.5s 0.15s cubic-bezier(.6,.05,.2,1) forwards; }
-        .auth-fade { opacity: 0; animation: authIn 0.5s ease forwards; }
-        @keyframes authDraw { to { stroke-dashoffset: 0; } }
-        @keyframes authIn { to { opacity: 1; } }
-        @media (prefers-reduced-motion: reduce) { .auth-line { animation: none; stroke-dashoffset: 0; } .auth-fade { animation: none; opacity: 1; } }
-        .auth-main { flex: 1 1 46%; display: flex; align-items: center; justify-content: center; padding: 44px 32px; min-width: 0; }
-        .auth-form { width: 100%; max-width: 360px; }
-        .auth-form h2 { font-size: 26px; font-weight: 800; letter-spacing: -0.03em; margin: 0 0 8px; }
-        .auth-sub { font-size: 14px; color: #6B665E; margin: 0 0 30px; line-height: 1.5; }
-        .auth-field { margin-bottom: 16px; }
-        .auth-field label { display: block; font-size: 13px; font-weight: 600; color: #44403A; margin-bottom: 7px; }
-        .auth-field input { width: 100%; box-sizing: border-box; padding: 13px 14px; font-size: 16px; color: #1A1917; background: #fff; border: 1px solid #D6D2CA; border-radius: 10px; outline: none; font-family: inherit; }
-        .auth-field input::placeholder { color: #B0AAA0; }
-        .auth-field input:focus { border-color: #1A1917; box-shadow: 0 0 0 3px rgba(245,158,11,0.28); }
-        .auth-btn { width: 100%; margin-top: 10px; padding: 14px; font-size: 15px; font-weight: 700; font-family: inherit; color: #F7F6F3; background: #1A1917; border: none; border-radius: 10px; cursor: pointer; }
-        .auth-btn:hover { background: #33302B; }
-        .auth-btn:focus-visible, .auth-switch button:focus-visible { outline: 3px solid rgba(245,158,11,0.6); outline-offset: 2px; }
-        .auth-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-        .auth-err { background: #FEF2F2; border: 1px solid #FECACA; border-radius: 10px; padding: 11px 14px; font-size: 13.5px; color: #B91C1C; margin-bottom: 18px; line-height: 1.5; }
-        .auth-switch { margin-top: 22px; font-size: 13.5px; color: #6B665E; }
-        .auth-switch button { background: none; border: none; padding: 0; margin-left: 6px; font: inherit; font-weight: 700; color: #1A1917; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
-        @media (max-width: 860px) {
-          .auth-wrap { flex-direction: column; }
-          .auth-side { flex: 0 0 auto; padding: 22px 22px 20px; }
-          .auth-art { padding: 6px 0 0; height: 150px; flex: 0 0 auto; }
-          .auth-art svg { max-width: 420px; height: 100%; }
-          .auth-main { flex: 1 1 auto; align-items: flex-start; padding: 34px 22px 40px; }
-          .auth-form { max-width: 440px; margin: 0 auto; }
+        @import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&display=swap");
+        .auth-w { min-height: 100vh; min-height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 32px 20px; position: relative; overflow: hidden; background: #09090B; color: #FAFAFA; }
+        .auth-glow, .auth-grid { position: absolute; inset: 0; opacity: 0; pointer-events: none; animation: authFade 1.2s 1.5s ease forwards; }
+        .auth-glow { background: radial-gradient(55% 45% at 50% -5%, rgba(245,158,11,.32), transparent 70%), radial-gradient(45% 40% at 100% 100%, rgba(99,102,241,.22), transparent 70%), radial-gradient(40% 35% at 0% 85%, rgba(245,158,11,.10), transparent 70%); }
+        .auth-grid { background-image: linear-gradient(rgba(255,255,255,.045) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.045) 1px, transparent 1px); background-size: 44px 44px; -webkit-mask-image: radial-gradient(60% 55% at 50% 40%, #000, transparent 75%); mask-image: radial-gradient(60% 55% at 50% 40%, #000, transparent 75%); }
+        .auth-c { width: 100%; max-width: 340px; position: relative; z-index: 2; }
+        .auth-brand { height: 64px; position: relative; margin-bottom: 22px; }
+        .auth-wm { position: absolute; left: 50%; top: 50%; margin: 0; white-space: nowrap; font-family: "Bricolage Grotesque", -apple-system, "Segoe UI", sans-serif; font-size: 170px; font-weight: 800; letter-spacing: -.05em; line-height: 1; transform: translate(-50%,-50%) translateY(118px) scale(1); animation: authDock .9s 1.5s cubic-bezier(.7,0,.15,1) forwards; }
+        .auth-wm span { display: inline-block; overflow: hidden; vertical-align: top; padding-bottom: .12em; }
+        .auth-wm span i { display: inline-block; font-style: normal; background: linear-gradient(180deg, #fff 30%, #F59E0B 130%); -webkit-background-clip: text; background-clip: text; color: transparent; transform: translateY(110%); animation: authRise .7s cubic-bezier(.2,.8,.2,1) forwards; }
+        .auth-bar { position: absolute; left: 50%; top: 50%; width: 300px; height: 2px; margin: 220px 0 0 -150px; background: linear-gradient(90deg, transparent, #F59E0B, transparent); transform: scaleX(0); animation: authBar 1.3s .55s cubic-bezier(.6,0,.2,1) forwards; }
+        .auth-it { opacity: 0; transform: translateY(14px); animation: authUp .6s cubic-bezier(.2,.8,.2,1) forwards; }
+        .auth-c h2 { font-size: 17px; font-weight: 650; letter-spacing: -.02em; text-align: center; margin: 0 0 6px; }
+        .auth-s { font-size: 13.5px; line-height: 1.6; text-align: center; margin: 0 0 22px; color: #A1A1AA; }
+        .auth-c label { display: block; font-size: 12.5px; font-weight: 500; margin: 0 0 6px; color: #D4D4D8; }
+        .auth-c input { width: 100%; height: 42px; padding: 0 12px; border-radius: 10px; font-size: 15px; font-family: inherit; outline: none; margin-bottom: 14px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.11); color: #fff; box-sizing: border-box; }
+        .auth-c input::placeholder { color: #6B6B74; }
+        .auth-c input:focus { border-color: rgba(245,158,11,.75); box-shadow: 0 0 0 3px rgba(245,158,11,.22); }
+        .auth-c input:-webkit-autofill { -webkit-text-fill-color: #fff; caret-color: #fff; box-shadow: 0 0 0 1000px #1C1C20 inset; }
+        .auth-btn { width: 100%; height: 42px; border-radius: 10px; border: none; font-size: 14.5px; font-weight: 600; font-family: inherit; margin-top: 6px; background: #FAFAFA; color: #09090B; cursor: pointer; }
+        .auth-btn:hover { background: #fff; box-shadow: 0 0 24px rgba(245,158,11,.25); }
+        .auth-btn:disabled { opacity: .6; cursor: not-allowed; }
+        .auth-btn:focus-visible, .auth-f button:focus-visible { outline: 2px solid #F59E0B; outline-offset: 2px; }
+        .auth-err { background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.35); border-radius: 10px; padding: 10px 12px; font-size: 13px; line-height: 1.5; color: #FCA5A5; margin-bottom: 14px; }
+        .auth-f { font-size: 13px; text-align: center; margin-top: 20px; color: #A1A1AA; }
+        .auth-f button { background: none; border: none; padding: 0; margin-left: 6px; font: inherit; font-weight: 600; color: #FAFAFA; cursor: pointer; }
+        @keyframes authRise { to { transform: translateY(0); } }
+        @keyframes authBar { 0% { transform: scaleX(0); opacity: 1; } 60% { transform: scaleX(1); opacity: 1; } 100% { transform: scaleX(1); opacity: 0; } }
+        @keyframes authDock { to { transform: translate(-50%,-50%) translateY(0) scale(.3); } }
+        @keyframes authDockM { to { transform: translate(-50%,-50%) translateY(0) scale(.46); } }
+        @keyframes authFade { to { opacity: 1; } }
+        @keyframes authUp { to { opacity: 1; transform: none; } }
+        .auth-skip *, .auth-skip *::before, .auth-skip *::after { animation-duration: 0s !important; animation-delay: 0s !important; }
+        @media (max-width: 600px) {
+          .auth-wm { font-size: 96px; transform: translate(-50%,-50%) translateY(128px) scale(1); animation-name: authDockM; }
+          .auth-bar { width: 200px; margin: 196px 0 0 -100px; }
+          .auth-c input { font-size: 16px; height: 46px; }
+          .auth-btn { height: 46px; }
         }
       `}</style>
-
-      {/* 왼쪽 — 그림만(상담 → 입금) */}
-      <div className="auth-side">
-        <div className="auth-brand">POLICY FUND CRM<small>컨설팅 관리</small></div>
-        <div className="auth-art" aria-hidden="true">
-          <svg viewBox="0 0 600 500" preserveAspectRatio="xMidYMid meet">
-            <defs>
-              <linearGradient id="authArea" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0" stopColor="#F59E0B" stopOpacity="0.34" />
-                <stop offset="1" stopColor="#F59E0B" stopOpacity="0" />
-              </linearGradient>
-              <linearGradient id="authStroke" x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0" stopColor="#6B665E" />
-                <stop offset="0.55" stopColor="#D9B36A" />
-                <stop offset="1" stopColor="#F59E0B" />
-              </linearGradient>
-              <radialGradient id="authGlow">
-                <stop offset="0" stopColor="#F59E0B" stopOpacity="0.5" />
-                <stop offset="1" stopColor="#F59E0B" stopOpacity="0" />
-              </radialGradient>
-            </defs>
-            {/* 바닥 눈금 */}
-            {[130, 230, 330, 430].map(function(y) {
-              return <line key={y} x1="40" x2="560" y1={y} y2={y} stroke="#2E2C29" strokeWidth="1" strokeDasharray={y === 430 ? "0" : "2 7"} />;
+      <div className="auth-glow"></div>
+      <div className="auth-grid"></div>
+      <div className="auth-c">
+        <div className="auth-brand">
+          <h1 className="auth-wm" aria-label="KEDA">
+            {"KEDA".split("").map(function(ch, i) {
+              return <span key={i} aria-hidden="true"><i style={{ animationDelay: (0.15 + i * 0.09) + "s" }}>{ch}</i></span>;
             })}
-            {/* 단계별 기둥 */}
-            {pts.map(function(p, i) {
-              return <rect key={i} className="auth-fade" style={{ animationDelay: (0.25 + i * 0.12) + "s" }} x={p.x - 13} y={p.y} width="26" height={430 - p.y} rx="4" fill="#F7F6F3" fillOpacity={0.035 + i * 0.012} />;
-            })}
-            <path className="auth-fade" style={{ animationDelay: "1.1s" }} d={curve + " L560 430 L40 430 Z"} fill="url(#authArea)" />
-            <path className="auth-line" pathLength="1" d={curve} fill="none" stroke="url(#authStroke)" strokeWidth="3" strokeLinecap="round" />
-            <circle className="auth-fade" style={{ animationDelay: "1.5s" }} cx="560" cy="90" r="46" fill="url(#authGlow)" />
-            {pts.map(function(p, i) {
-              var last = i === pts.length - 1;
-              return <circle key={i} className="auth-fade" style={{ animationDelay: (0.3 + i * 0.14) + "s" }} cx={p.x} cy={p.y} r={last ? 9 : 4.5} fill={last ? "#F59E0B" : "#1A1917"} stroke={last ? "#F59E0B" : "#A8A29A"} strokeWidth="1.5" />;
-            })}
-            <text className="auth-fade" style={{ animationDelay: "0.3s" }} x="40" y="462" fill="#8A857C" fontSize="15" fontWeight="600" textAnchor="middle">상담</text>
-            <text className="auth-fade" style={{ animationDelay: "1.5s" }} x="560" y="462" fill="#F59E0B" fontSize="15" fontWeight="700" textAnchor="middle">입금</text>
-          </svg>
+          </h1>
+          <div className="auth-bar"></div>
         </div>
-      </div>
-
-      {/* 오른쪽 — 로그인·가입 */}
-      <div className="auth-main">
-        <div className="auth-form">
-          {done ? (
-            <div>
-              <h2>메일을 확인해 주세요</h2>
-              <p className="auth-sub">{email} 로 인증 링크를 보냈습니다.<br />링크를 누른 뒤 다시 로그인해 주세요.</p>
+        {done ? (
+          <div className="auth-it" style={{ animationDelay: "2.0s" }}>
+            <h2>메일을 확인해 주세요</h2>
+            <p className="auth-s">{email} 로 인증 링크를 보냈습니다.<br />링크를 누른 뒤 다시 로그인해 주세요.</p>
+          </div>
+        ) : (
+          <>
+            {!isLogin && <p className="auth-s auth-it" style={{ animationDelay: "2.0s" }}>가입한 뒤 관리자 승인을 받으면 쓸 수 있습니다.</p>}
+            {error && <div className="auth-err" role="alert">{error}</div>}
+            <div className="auth-it" style={{ animationDelay: "2.1s" }}>
+              <label htmlFor="auth-email">이메일</label>
+              <input id="auth-email" type="email" autoComplete="email" inputMode="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="name@company.com"
+                onKeyDown={e => e.key === "Enter" && handle()} />
             </div>
-          ) : (
-            <>
-              <h2>{isLogin ? "로그인" : "계정 만들기"}</h2>
-              <p className="auth-sub">{isLogin ? "이메일과 비밀번호를 입력해 주세요." : "가입한 뒤 관리자 승인을 받으면 사용할 수 있습니다."}</p>
-              {error && <div className="auth-err" role="alert">{error}</div>}
-              <div className="auth-field">
-                <label htmlFor="auth-email">이메일</label>
-                <input id="auth-email" type="email" autoComplete="email" inputMode="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="name@company.com"
-                  onKeyDown={e => e.key === "Enter" && handle()} />
-              </div>
-              <div className="auth-field">
-                <label htmlFor="auth-pw">비밀번호</label>
-                <input id="auth-pw" type="password" autoComplete={isLogin ? "current-password" : "new-password"} value={pw} onChange={e => setPw(e.target.value)} placeholder={isLogin ? "" : "6자 이상"}
-                  onKeyDown={e => e.key === "Enter" && handle()} />
-              </div>
+            <div className="auth-it" style={{ animationDelay: "2.2s" }}>
+              <label htmlFor="auth-pw">비밀번호</label>
+              <input id="auth-pw" type="password" autoComplete={isLogin ? "current-password" : "new-password"} value={pw} onChange={e => setPw(e.target.value)} placeholder={isLogin ? "" : "6자 이상"}
+                onKeyDown={e => e.key === "Enter" && handle()} />
+            </div>
+            <div className="auth-it" style={{ animationDelay: "2.3s" }}>
               <button className="auth-btn" onClick={handle} disabled={loading}>
                 {loading ? "처리 중..." : isLogin ? "로그인" : "가입하기"}
               </button>
-              <div className="auth-switch">
-                {isLogin ? "계정이 없으신가요?" : "이미 계정이 있으신가요?"}
-                <button type="button" onClick={() => { setMode(isLogin ? "signup" : "login"); setError(""); }}>
-                  {isLogin ? "가입하기" : "로그인"}
-                </button>
-              </div>
-            </>
-          )}
-        </div>
+            </div>
+            <div className="auth-f auth-it" style={{ animationDelay: "2.4s" }}>
+              {isLogin ? "계정이 없으신가요?" : "이미 계정이 있으신가요?"}
+              <button type="button" onClick={() => { setMode(isLogin ? "signup" : "login"); setError(""); }}>
+                {isLogin ? "가입하기" : "로그인"}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
