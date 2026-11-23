@@ -10082,8 +10082,11 @@ function CRMApp({ profile, session }) {
       {/* 사이드바 */}
       <div className="crm-sidebar" style={{ position: "fixed", left: 0, top: 0, width: 220, height: "100vh", background: "#1A1917", display: "flex", flexDirection: "column", zIndex: 100 }}>
         <div style={{ padding: "24px 20px 14px" }}>
-          <div style={{ fontSize: 10, letterSpacing: "0.14em", color: "#555", textTransform: "uppercase", marginBottom: 5 }}>Policy Fund CRM</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: "#F7F6F3", letterSpacing: "-0.02em" }}>컨설팅 관리</div>
+          {/* 로그인 화면과 같은 로고(글꼴은 public/index.html 에서 불러온다) */}
+          <div style={{ display: "flex", alignItems: "baseline", gap: 7, marginBottom: 2 }}>
+            <span style={{ fontFamily: '"Bricolage Grotesque", -apple-system, "Segoe UI", sans-serif', fontSize: 30, fontWeight: 800, letterSpacing: "-0.05em", lineHeight: 1, background: "linear-gradient(180deg, #fff 30%, #F59E0B 130%)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>KEDA</span>
+            <span style={{ fontSize: 11, fontWeight: 600, color: "#8A857C", letterSpacing: "0.04em" }}>CRM</span>
+          </div>
         </div>
 
         {!STAGN_ALERTS_OFF && stagnant.length > 0 && (
