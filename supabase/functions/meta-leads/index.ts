@@ -11,6 +11,7 @@
 //   판정(우선 연락 등)은 저장하지 않는다. 화면(App.js ⛳ 메타신청)이 meta_answers 로 매번 계산한다.
 //
 // 요청: POST {}  (선택: { "since_hours": 24 } — 처음 켤 때 과거 신청을 얼마나 거슬러 가져올지. 기본 24시간, 최대 2160=90일)
+//       (선택: { "backfill_hours": 168 } — 이미 돌고 있는 상태에서 지난 신청을 한 번 거슬러 가져올 때)
 // 응답: { ok, forms, fetched, inserted, skipped }
 
 const PAGE_ID = "322871297567083";
@@ -57,7 +58,12 @@ function kstYearMonth(iso) {
 function buildLeadRow(lead, formName) {
   var m = fieldMap(lead && lead.field_data);
   var name = pickAnswer(m, ["full_name", "이름", "성함"]);
-  var phoneRaw = pickAnswer(m, ["phone_number", "전화", "연락처"]);
+  // ⚠️ 전화 칸 이름은 양식마다 phone_number 또는 phone 이다. 같이 오는 phone_number_verified(true/false)는
+  //    전화가 아니다 — 2026-11-23 이 값이 연락처로 들어간 사고. 정확한 이름 먼저, 낱말 찾기는 verified 칸을 빼고.
+  var noVerified = {};
+  Object.keys(m).forEach(function(k) { if (k.toLowerCase().indexOf("verified") < 0) noVerified[k] = m[k]; });
+  var phoneRaw = m["phone_number"] || m["phone"] || pickAnswer(noVerified, ["phone", "전화", "연락처", "휴대"]);
+  if (!/[0-9]{7,}/.test(String(phoneRaw).replace(/[^0-9]/g, ""))) phoneRaw = "";
   var company = pickAnswer(m, ["company_name", "회사", "상호", "사업자명"]);
   var contact = normalizeKrPhone(phoneRaw);
   if (!contact) return null;
@@ -142,7 +148,9 @@ Deno.serve(async (req) => {
     if (!lastRes.ok) return json(500, { error: "db_leads 조회 실패 " + lastRes.status + " — 메타신청_db_leads_컬럼추가.sql 을 먼저 실행했는지 확인하세요." });
     const lastRows = await lastRes.json();
     const lastMs = Array.isArray(lastRows) && lastRows[0]?.applied_at ? Date.parse(lastRows[0].applied_at) : NaN;
-    const sinceMs = isNaN(lastMs) ? Date.now() - sinceHours * 3600 * 1000 : lastMs - 3600 * 1000;
+    // backfill_hours: 연동을 켜기 전 신청을 한 번 거슬러 가져올 때만 쓴다(같은 신청은 meta_lead_id unique 가 막는다).
+    const backfill = Math.min(2160, Math.max(0, Number(body?.backfill_hours) || 0));
+    const sinceMs = backfill ? Date.now() - backfill * 3600 * 1000 : (isNaN(lastMs) ? Date.now() - sinceHours * 3600 * 1000 : lastMs - 3600 * 1000);
     const sinceUnix = String(Math.floor(sinceMs / 1000));
 
     // 신청을 읽으려면 페이지 토큰이 필요하다.

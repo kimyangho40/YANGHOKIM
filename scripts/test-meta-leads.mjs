@@ -129,5 +129,12 @@ eq("이상한 해·빈 값 무시", A.dbLeadYearRange([{ year: 0 }, { year: null
 eq("배열이 아니어도 올해", A.dbLeadYearRange(undefined, 2026), { min: 2026, max: 2026 });
 eq("DB리스트에 2026 고정이 남아 있지 않다", /l.year !== 2026|year: 2026, month:/.test(app), false);
 
+// ⑪ 실제 양식(2026-11-23 사고) — 전화 칸 이름이 phone 이고, phone_number_verified(true/false)가 같이 온다
+const real = [{ name: "full_name", values: ["가"] }, { name: "phone_number_verified", values: ["true"] }, { name: "phone", values: ["+821000001234"] }, { name: "company_name", values: ["가나"] }];
+eq("phone 칸의 번호를 연락처로", F.buildLeadRow({ id: "9", field_data: real }, "f").contact, "010-0000-1234");
+eq("순서가 바뀌어도 verified 를 고르지 않는다", F.buildLeadRow({ id: "9", field_data: real.slice().reverse() }, "f").contact, "010-0000-1234");
+eq("verified 만 있고 번호가 없으면 넣지 않는다", F.buildLeadRow({ id: "9", field_data: [{ name: "phone_number_verified", values: ["true"] }, { name: "full_name", values: ["가"] }] }, "f"), null);
+eq("숫자가 아닌 답은 전화가 아니다", F.buildLeadRow({ id: "9", field_data: [{ name: "연락처_수집_동의", values: ["예"] }] }, "f"), null);
+
 console.log((fail ? "❌ " : "✅ ") + pass + "/" + (pass + fail));
 process.exit(fail ? 1 : 0);
