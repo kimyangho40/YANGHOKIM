@@ -7349,8 +7349,8 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
         </div>
       </div>
 
-      {/* 메시지 영역 */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+      {/* 메시지 영역 — minHeight 0 이 없으면 좁은 폭(위아래 배치)에서 대화가 스크롤되지 않고 끝없이 늘어나 입력줄이 화면 밖으로 밀린다 */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
         <div style={{ padding: "10px 20px", borderBottom: "1px solid #E8E5E0", display: "flex", alignItems: "center", gap: 12, position: "relative" }}>
           <span style={{ fontSize: 15, fontWeight: 700, whiteSpace: "nowrap" }}>{title}</span>
 
