@@ -2146,6 +2146,22 @@ in.("부결","진행 중") → 416건 ✅          or=(status.eq."부결",result
 (`companies.fee` 가 integer 인데 수수료율 4.8 을 보냄 → 2026-08-15 numeric 으로 변경).
 `classifyWriteFail` 이 `permanent` 로 표시해 큐에 안 넣고, 옛 항목도 걷어낸다.
 
+## 📎 채팅 첨부 파일 (2026-11-25, **chat_messages 에 컬럼 1개 · 버킷 1개 · 저장소 정책 3개**)
+
+채팅에 파일을 붙여 보낸다(📎 버튼 · 끌어다 놓기 · 캡처 붙여넣기). 이미지·PDF·엑셀·한글·워드·파워포인트·txt·zip, 하나 20MB, 한 번에 5개.
+SQL: `채팅_첨부파일.sql` / `_rollback` / `_검증`(14/14) · 테스트 `scripts/test-chat-attach.mjs` 45/45
+롤백: 태그 `backup/before-chat-attach-20261125` · 머지 커밋 `git revert -m 1 <머지>` (DB 는 그대로 둬도 무해 — 화면이 없으면 아무도 안 쓴다).
+
+- 저장: `chat_messages.attachments`(jsonb 배열 `[{path,name,size,type}]`, 기본 `[]`) + 비공개 버킷 `chat-files`.
+- 🔐 **경로 첫 폴더 = 채널 이름을 16진수로 적은 것**(`chatFilePath`). 저장소 정책이 `chat_file_can_access(name)` 으로 그 폴더를 채널로 되돌려
+  **기존 `chat_can_access` 를 그대로 부른다** → 1:1 대화 파일은 그 두 사람만 연다. 명단을 또 적지 않았다.
+  ⚠️ 경로 모양을 바꾸면 App.js `⛳ 채팅-첨부` 와 SQL `chat_file_channel` 을 같이 고칠 것. 한글 파일명은 저장소 키로 못 써서 키에 넣지 않는다.
+- ⚠️ **글만 보내는 메시지의 payload 는 예전과 같다** — `attachments` 는 파일이 있을 때만 싣는다(테스트가 그 줄을 본다).
+- 트리거 `trg_chat_attachments_guard`(기존 `chat_protect_update` 는 안 건드림): 보낼 때 첨부 경로가 그 메시지 채널 폴더인지 검사 · 보낸 뒤엔 첨부를 못 바꾼다(조용히 원복).
+- 올리는 순서: 파일 업로드 → 메시지 insert. 하나라도 실패하면 올린 파일을 지운다. 메시지를 지우면(soft delete) 파일도 저장소에서 지운다.
+- 알림 본문은 `chatMessagePreview` — 파일만 보낸 메시지는 "📎 파일 N개".
+- 모바일(`/m`)에는 채팅 화면이 없어 영향 없다. 저장소는 무료 요금제 1GB — 용량을 가끔 볼 것.
+
 ## ⚠️ 메타 신청 → DB리스트 자동 등록 — 2026-11-21 신설
 
 메타(페이스북·인스타) 광고 양식 신청이 10분마다 `db_leads` 에 들어온다. **기업 목록(`companies`)에는 넣지 않는다** — 넣으면 실제 고객과 섞이고 파이프라인 카드가 자동으로 생긴다.
