@@ -7932,21 +7932,54 @@ var EMBED_MENUS = [
   { id: "calendar", label: "캘린더", emoji: "📅" }, { id: "company-map", label: "사업장 지도", emoji: "🗺" },
   { id: "agency-sites", label: "기관 사이트", emoji: "🔗" }, { id: "cases", label: "사례집", emoji: "📁" },
 ];
-function EmbedBar({ view, setView }) {
+// ⛳ 분할-계산 시작 — 순수 함수만(테스트가 이 구간을 소스째 떼어내 실행한다: scripts/test-split-view.mjs)
+var SPLIT_MSG = "crm-split";            // 본 화면 ↔ 칸(iframe) 사이 메시지 꼬리표
+var SPLIT_RATIO_KEY = "crm_split_ratio"; // 칸 폭 비율 기억(이 브라우저에만)
+var SPLIT_RATIO_MIN = 25, SPLIT_RATIO_MAX = 75;
+// 왼쪽 메뉴에만 있는 화면 이름(칸 위쪽 줄에 제목으로 쓴다). EMBED_MENUS 에 있는 것은 거기 이름을 쓴다.
+var SPLIT_EXTRA_LABELS = {
+  "growth-roadmap": "성장 로드맵", signoff: "결재함", quicklinks: "바로가기", leave: "연차/휴가", partners: "협업 담당자",
+  dbleads: "DB리스트", assigndb: "배정DB", activitylog: "활동 로그", manual: "자료실", members: "팀원 관리",
+  backup: "데이터 백업", stagnant: "정체 알림", olddocs: "묵은 서류 정리",
+};
+function splitClampRatio(n) {
+  var v = Number(n);
+  if (!isFinite(v)) return 50;
+  return Math.min(SPLIT_RATIO_MAX, Math.max(SPLIT_RATIO_MIN, Math.round(v * 10) / 10));
+}
+// 칸 주소. 왼쪽 칸은 분할을 켜기 직전에 보던 화면으로 시작한다(blank·빈 값이면 고르는 화면).
+function splitPaneSrc(base, view) {
+  return base + "?embed=1" + (view && view !== "blank" ? "&view=" + encodeURIComponent(view) : "");
+}
+function splitViewLabel(view, menus) {
+  var hit = (menus || []).filter(function(m) { return m.id === view; })[0];
+  if (hit) return hit.label;
+  return SPLIT_EXTRA_LABELS[view] || "";
+}
+// 받은 메시지가 우리 것인지 — 같은 출처에서 온, 꼬리표가 맞는 것만 받는다.
+function splitMsgOk(e, origin) {
+  return !!(e && e.origin === origin && e.data && e.data.t === SPLIT_MSG);
+}
+// ⛳ 분할-계산 끝
+
+// 칸(embed) 위쪽 줄 — 밝은 한 줄. 화면은 본 화면의 왼쪽 메뉴로 바꾸고, 여기서는 지금 화면 이름과 드롭다운만 둔다.
+function EmbedBar({ view, setView, active }) {
+  var known = EMBED_MENUS.some(function(m) { return m.id === view; });
+  var extra = !known && view !== "blank" ? splitViewLabel(view, EMBED_MENUS) || view : "";
+  var closeSplit = function() { try { window.parent.postMessage({ t: SPLIT_MSG, close: true }, window.location.origin); } catch (e) { /* 단독으로 열린 칸 */ } };
   return (
-    <div style={{ position: "fixed", top: 0, left: 0, right: 0, height: 44, background: "#1A1917", zIndex: 300, display: "flex", alignItems: "center", gap: 8, padding: "0 12px" }}>
-      <select value={view} onChange={function(e) { setView(e.target.value); }}
-        style={{ background: "#2E2C29", color: "#F7F6F3", border: "1px solid #3A3835", borderRadius: 8, padding: "6px 10px", fontSize: 13, fontWeight: 700, outline: "none", maxWidth: "60%" }}>
-        <option value="blank">메뉴 선택…</option>
-        {EMBED_MENUS.map(function(m) { return <option key={m.id} value={m.id}>{m.emoji} {m.label}</option>; })}
+    <div style={{ position: "fixed", top: 0, left: 0, right: 0, height: 40, background: "#fff", zIndex: 300, display: "flex", alignItems: "center", gap: 8, padding: "0 10px 0 12px",
+      borderBottom: "1px solid #E8E5E0", borderTop: "3px solid " + (active ? "#1A1917" : "transparent"), boxSizing: "border-box" }}>
+      <select value={view} onChange={function(e) { setView(e.target.value); }} title="이 칸에 띄울 화면"
+        style={{ background: "transparent", color: "#1A1917", border: "none", borderRadius: 6, padding: "4px 2px", fontSize: 14, fontWeight: 700, outline: "none", cursor: "pointer", maxWidth: "70%" }}>
+        <option value="blank">화면 고르기…</option>
+        {extra && <option value={view}>{extra}</option>}
+        {EMBED_MENUS.map(function(m) { return <option key={m.id} value={m.id}>{m.label}</option>; })}
       </select>
-      <div style={{ display: "flex", gap: 4, overflowX: "auto", flex: 1 }}>
-        {EMBED_MENUS.slice(0, 5).map(function(m) {
-          var on = view === m.id;
-          return <button key={m.id} onClick={function() { setView(m.id); }} title={m.label}
-            style={{ background: on ? "#F7F6F3" : "transparent", color: on ? "#1A1917" : "rgba(255,255,255,0.75)", border: "none", borderRadius: 6, padding: "5px 9px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>{m.label}</button>;
-        })}
-      </div>
+      {active && <span style={{ fontSize: 11, color: "#8A857C" }}>왼쪽 메뉴가 이 칸에 열립니다</span>}
+      <div style={{ flex: 1 }} />
+      <button onClick={closeSplit} title="분할 보기 끄기"
+        style={{ background: "none", border: "1px solid #E8E5E0", borderRadius: 6, padding: "4px 10px", fontSize: 11, color: "#666", cursor: "pointer", whiteSpace: "nowrap" }}>분할 해제</button>
     </div>
   );
 }
@@ -7954,7 +7987,7 @@ function EmbedBlank({ setView }) {
   return (
     <div style={{ maxWidth: 520, margin: "40px auto 0", textAlign: "center" }}>
       <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>이 칸에 띄울 화면을 고르세요</div>
-      <div style={{ fontSize: 12, color: "#888", marginBottom: 18 }}>위쪽 메뉴에서 언제든 바꿀 수 있습니다.</div>
+      <div style={{ fontSize: 12, color: "#888", marginBottom: 18 }}>이 칸을 한 번 누른 뒤 왼쪽 메뉴에서 골라도 됩니다.</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 10 }}>
         {EMBED_MENUS.map(function(m) {
           return <button key={m.id} onClick={function() { setView(m.id); }}
@@ -7965,25 +7998,83 @@ function EmbedBlank({ setView }) {
     </div>
   );
 }
-function SplitPanes({ onClose }) {
-  var [ratio, setRatio] = useState(50);
-  var src = window.location.origin + window.location.pathname + "?embed=1";
+// 칸 안의 긴 표 — 남은 높이를 꽉 채워 스크롤이 하나만 생기게 한다(칸 전체 스크롤 + 표 안쪽 스크롤이 겹치던 것).
+//   본 화면에서는 예전 그대로(style 그대로) 그린다.
+function EmbedFillBox({ style, children }) {
+  var ref = useRef(null);
+  var [maxH, setMaxH] = useState(null);
+  useLayoutEffect(function() {
+    if (!IS_EMBED) return;
+    var raf = 0;
+    var measure = function() {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(function() {
+        var el = ref.current; if (!el) return;
+        // 페이지가 스크롤돼 있어도 같은 값이 나오게 문서 기준 위치로 잰다.
+        var top = el.getBoundingClientRect().top + (window.scrollY || 0);
+        var h = Math.max(240, Math.floor(window.innerHeight - top - 14));
+        setMaxH(function(prev) { return prev === h ? prev : h; });
+      });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    var ro = null;
+    try { ro = new ResizeObserver(measure); ro.observe(document.body); } catch (e) { /* 옛 브라우저 */ }
+    return function() { cancelAnimationFrame(raf); window.removeEventListener("resize", measure); if (ro) ro.disconnect(); };
+  }, []);
+  return <div ref={ref} style={IS_EMBED && maxH ? Object.assign({}, style, { maxHeight: maxH }) : style}>{children}</div>;
+}
+// 본 화면 쪽 분할 틀 — 두 칸(iframe)과 가운데 끌기 경계선.
+//   sendRef.current(view) = 지금 선택된 칸에 그 화면을 띄운다(왼쪽 메뉴가 이걸 부른다).
+//   onActiveView(view) = 선택된 칸이 지금 보여 주는 화면(왼쪽 메뉴 강조 표시용).
+function SplitPanes({ onClose, initialView, sendRef, onActiveView }) {
+  var [ratio, setRatio] = useState(function() { try { return splitClampRatio(localStorage.getItem(SPLIT_RATIO_KEY) || 50); } catch (e) { return 50; } });
+  var [active, setActive] = useState(0);
+  var [dragging, setDragging] = useState(false);
+  var boxRef = useRef(null), frames = useRef([null, null]), views = useRef([initialView || "blank", "blank"]), activeRef = useRef(0);
+  var base = window.location.origin + window.location.pathname;
+  // 주소는 처음 한 번만 정한다 — 다시 계산되면 칸이 새로 고쳐진다.
+  var srcs = useRef([splitPaneSrc(base, initialView), splitPaneSrc(base, "blank")]);
+  var post = function(i, data) {
+    try { var w = frames.current[i] && frames.current[i].contentWindow; if (w) w.postMessage(Object.assign({ t: SPLIT_MSG }, data), window.location.origin); } catch (e) { /* 칸이 아직 안 떴다 */ }
+  };
+  var pick = function(i) {
+    activeRef.current = i; setActive(i);
+    post(0, { active: i === 0 }); post(1, { active: i === 1 });
+    if (onActiveView) onActiveView(views.current[i]);
+  };
+  useEffect(function() {
+    if (sendRef) sendRef.current = function(v) { views.current[activeRef.current] = v; post(activeRef.current, { view: v }); if (onActiveView) onActiveView(v); };
+    var onMsg = function(e) {
+      if (!splitMsgOk(e, window.location.origin)) return;
+      var i = frames.current[0] && e.source === frames.current[0].contentWindow ? 0 : frames.current[1] && e.source === frames.current[1].contentWindow ? 1 : -1;
+      if (i < 0) return;
+      if (e.data.close) { onClose(); return; }
+      if (typeof e.data.view === "string") views.current[i] = e.data.view;
+      if (e.data.touch || e.data.hello) { if (e.data.touch) pick(i); else post(i, { active: i === activeRef.current }); }
+      if (i === activeRef.current && onActiveView) onActiveView(views.current[i]);
+    };
+    window.addEventListener("message", onMsg);
+    if (onActiveView) onActiveView(views.current[0]);
+    return function() { window.removeEventListener("message", onMsg); if (sendRef) sendRef.current = null; };
+  }, []);
+  // 경계선 끌기 — 끄는 동안 투명 덮개를 올려 iframe 이 마우스를 가져가지 못하게 한다.
+  var onDrag = function(e) {
+    var r = boxRef.current.getBoundingClientRect();
+    setRatio(splitClampRatio(((e.clientX - r.left) / r.width) * 100));
+  };
+  var endDrag = function() { setDragging(false); try { localStorage.setItem(SPLIT_RATIO_KEY, String(ratio)); } catch (e) { /* 저장 못 해도 동작엔 영향 없음 */ } };
+  var frameStyle = { height: "100%", border: "none", background: "#F7F6F3", minWidth: 0 };
   return (
-    <div className="crm-split" style={{ position: "fixed", left: 220, top: 0, right: 0, bottom: 0, zIndex: 150, background: "#D9D6D0", display: "flex", flexDirection: "column" }}>
-      <div style={{ height: 34, background: "#2E2C29", display: "flex", alignItems: "center", gap: 6, padding: "0 10px", flexShrink: 0 }}>
-        <span style={{ color: "#F7F6F3", fontSize: 12, fontWeight: 700, marginRight: 6 }}>◫ 분할 보기</span>
-        {[[40, "좁게 · 넓게"], [50, "반반"], [60, "넓게 · 좁게"]].map(function(r) {
-          var on = ratio === r[0];
-          return <button key={r[0]} onClick={function() { setRatio(r[0]); }}
-            style={{ background: on ? "#F7F6F3" : "transparent", color: on ? "#1A1917" : "rgba(255,255,255,0.7)", border: "1px solid #4A4743", borderRadius: 6, padding: "3px 9px", fontSize: 11, cursor: "pointer" }}>{r[1]}</button>;
-        })}
-        <div style={{ flex: 1 }} />
-        <button onClick={onClose} style={{ background: "#7C2020", color: "#fff", border: "none", borderRadius: 6, padding: "4px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>분할 해제 ✕</button>
+    <div className="crm-split" ref={boxRef} style={{ position: "fixed", left: 220, top: 0, right: 0, bottom: 0, zIndex: 150, background: "#F7F6F3", display: "flex" }}>
+      <iframe title="왼쪽 칸" ref={function(el) { frames.current[0] = el; }} src={srcs.current[0]} style={Object.assign({ width: "calc(" + ratio + "% - 4px)", flexShrink: 0 }, frameStyle)} />
+      <div onMouseDown={function(e) { e.preventDefault(); setDragging(true); }} onDoubleClick={function() { setRatio(50); try { localStorage.setItem(SPLIT_RATIO_KEY, "50"); } catch (e) { /* 무시 */ } }}
+        title="끌어서 폭 조절 · 두 번 누르면 반반"
+        style={{ width: 8, flexShrink: 0, cursor: "col-resize", background: dragging ? "#D9D6D0" : "#E8E5E0", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ width: 2, height: 36, borderRadius: 2, background: "#A8A49C" }} />
       </div>
-      <div style={{ flex: 1, display: "flex", gap: 4, minHeight: 0 }}>
-        <iframe title="왼쪽 칸" src={src} style={{ width: ratio + "%", height: "100%", border: "none", background: "#F7F6F3" }} />
-        <iframe title="오른쪽 칸" src={src} style={{ flex: 1, height: "100%", border: "none", background: "#F7F6F3" }} />
-      </div>
+      <iframe title="오른쪽 칸" ref={function(el) { frames.current[1] = el; }} src={srcs.current[1]} style={Object.assign({ flex: 1 }, frameStyle)} />
+      {dragging && <div onMouseMove={onDrag} onMouseUp={endDrag} onMouseLeave={endDrag} style={{ position: "absolute", inset: 0, cursor: "col-resize", zIndex: 5 }} />}
     </div>
   );
 }
@@ -7991,11 +8082,44 @@ function SplitPanes({ onClose }) {
 // ── CRM 메인 앱 ───────────────────────────────────────────────────────────────
 function CRMApp({ profile, session }) {
   const [dashboardFilter, setDashboardFilter] = useState(null);
-  const [view, setView] = useState(() => {
+  const [view, setViewRaw] = useState(() => {
     var params = new URLSearchParams(window.location.search);
     return params.get("view") || (IS_EMBED ? "blank" : "dashboard");
   });
   const [splitOn, setSplitOn] = useState(false);   // ◫ 분할 보기(본 화면에서만)
+  // ◫ 분할 중에는 메뉴 이동(setView)을 본 화면이 아니라 "선택된 칸"으로 보낸다(2026-11-25).
+  //    예전엔 덮개 뒤의 본 화면만 바뀌어 왼쪽 메뉴를 눌러도 아무 일이 없어 보였다.
+  //    splitSendRef.current 는 분할이 켜져 있는 동안만 있다(SplitPanes 가 넣고, 꺼질 때 비운다).
+  const splitSendRef = useRef(null);
+  const [splitNavView, setSplitNavView] = useState("blank");   // 선택된 칸이 보여 주는 화면(왼쪽 메뉴 강조용)
+  const [embedActive, setEmbedActive] = useState(false);       // (칸 안에서) 내가 선택된 칸인가
+  const setView = useCallback(function(v) {
+    if (!IS_EMBED && splitSendRef.current && typeof v === "string") { splitSendRef.current(v); return; }
+    setViewRaw(v);
+  }, []);
+  const navView = splitOn && !IS_EMBED ? splitNavView : view;
+  // 칸(embed) 쪽: 본 화면이 보내는 화면 전환·선택 표시를 받고, 내 화면과 "방금 만졌다"를 알린다.
+  const paneViewRef = useRef(view);
+  paneViewRef.current = view;
+  useEffect(function() {
+    if (!IS_EMBED || window.parent === window) return;
+    var say = function(extra) { try { window.parent.postMessage(Object.assign({ t: SPLIT_MSG, view: paneViewRef.current }, extra || {}), window.location.origin); } catch (e) { /* 부모 없음 */ } };
+    var onMsg = function(e) {
+      if (!splitMsgOk(e, window.location.origin) || e.source !== window.parent) return;
+      if (typeof e.data.view === "string") setViewRaw(e.data.view);
+      if (typeof e.data.active === "boolean") setEmbedActive(e.data.active);
+    };
+    var onTouch = function() { say({ touch: true }); };
+    window.addEventListener("message", onMsg);
+    window.addEventListener("pointerdown", onTouch, true);
+    window.addEventListener("focus", onTouch);
+    say({ hello: true });
+    return function() { window.removeEventListener("message", onMsg); window.removeEventListener("pointerdown", onTouch, true); window.removeEventListener("focus", onTouch); };
+  }, []);
+  useEffect(function() {
+    if (!IS_EMBED || window.parent === window) return;
+    try { window.parent.postMessage({ t: SPLIT_MSG, view: view }, window.location.origin); } catch (e) { /* 부모 없음 */ }
+  }, [view]);
   const [agencyJumpMonth, setAgencyJumpMonth] = useState(() => {
     var params = new URLSearchParams(window.location.search);
     var m = params.get("month");
@@ -9916,7 +10040,7 @@ function CRMApp({ profile, session }) {
           background: #1A1917; display: flex; align-items: center;
           justify-content: space-around; z-index: 200; border-top: 1px solid #2E2C29;
         }
-        ${IS_EMBED ? ".crm-sidebar{display:none !important} .crm-mobile-nav{display:none !important} .crm-notif-banner{display:none !important} .crm-main{margin-left:0 !important;padding:58px 14px 14px !important}" : ""}
+        ${IS_EMBED ? ".crm-sidebar{display:none !important} .crm-mobile-nav{display:none !important} .crm-notif-banner{display:none !important} .crm-main{margin-left:0 !important;padding:54px 14px 14px !important}" : ""}
         @media (max-width: 768px) { .crm-split { display: none !important; } }
       `}</style>
       {/* 토스트 */}
@@ -10385,7 +10509,7 @@ function CRMApp({ profile, session }) {
               return null;
             };
             var item = function(m) {
-              return <SideNavItem key={m.id} icon={m.icon} label={m.label} active={view === m.id} onClick={function() { setView(m.id); }}
+              return <SideNavItem key={m.id} icon={m.icon} label={m.label} active={navView === m.id} onClick={function() { setView(m.id); }}
                 rightSlot={badgeOf(m)} fav={favMenus.indexOf(m.id) >= 0} onFav={function() { toggleFavMenu(m.id); }} />;
             };
             var capStyle = { fontSize: 10, color: "rgba(255,255,255,0.55)", letterSpacing: "0.08em", padding: "4px 12px 6px", fontWeight: 600 };
@@ -10680,8 +10804,8 @@ function CRMApp({ profile, session }) {
         </div>
       )}
 
-      {splitOn && !IS_EMBED && <SplitPanes onClose={function() { setSplitOn(false); }} />}
-      {IS_EMBED && <EmbedBar view={view} setView={setView} />}
+      {splitOn && !IS_EMBED && <SplitPanes onClose={function() { setSplitOn(false); }} initialView={view} sendRef={splitSendRef} onActiveView={setSplitNavView} />}
+      {IS_EMBED && <EmbedBar view={view} setView={setView} active={embedActive} />}
       {/* 메인 */}
       <div className="crm-main" style={{ marginLeft: 220, padding: "28px 32px", minHeight: "100vh" }}>
         {loading ? (
@@ -15688,7 +15812,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
       {/* 태블릿(768~1024px)에서 부가 컬럼 숨기고 업체명에 여유 주기 */}
       <style>{"@media (max-width:1024px){.lst-hide-tablet{display:none !important;}.lst-table{min-width:0 !important;}.lst-name-cell{width:auto !important;min-width:180px !important;max-width:none !important;}.lst-name-inner{flex-wrap:wrap !important;align-items:flex-start !important;row-gap:4px !important;}.lst-name-text{flex:0 0 100% !important;font-size:15px !important;-webkit-line-clamp:3 !important;}.lst-region-tablet{display:inline-flex !important;}}"}</style>
       <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E8E5E0", overflow: "hidden" }}>
-        <div style={{ overflowX: "auto", maxHeight: "calc(100vh - 220px)", overflowY: "auto" }}>
+        <EmbedFillBox style={{ overflowX: "auto", maxHeight: "calc(100vh - 220px)", overflowY: "auto" }}>
         <table className="lst-table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 1200, tableLayout: "fixed" }}>
           <thead>
             <tr style={{ background: "#F7F6F3", borderBottom: "1px solid #E8E5E0", position: "sticky", top: 0, zIndex: 2 }}>
@@ -15913,7 +16037,7 @@ function ListView({ filtered, companies, search, setSearch, filterStage, setFilt
             })}
           </tbody>
         </table>
-        </div>
+        </EmbedFillBox>
         {filtered.length === 0 && <div style={{ padding: "40px", textAlign: "center", color: "#888", fontSize: 13 }}>검색 결과가 없어요</div>}
       </div>
 
@@ -30601,7 +30725,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
         </div>
       ) : (
         <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #E8E5E0", overflow: "hidden" }}>
-          <div style={{ maxHeight: "calc(100vh - 280px)", overflowY: "auto" }}>
+          <EmbedFillBox style={{ maxHeight: "calc(100vh - 280px)", overflowY: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
             <thead>
               <tr style={{ background: "#F7F6F3", borderBottom: "2px solid #E8E5E0", position: "sticky", top: 0, zIndex: 2 }}>
@@ -30990,7 +31114,7 @@ function AgencyView({ jumpToMonth, jumpToGroup, jumpToYear }) {
               })}
             </tbody>
           </table>
-          </div>
+          </EmbedFillBox>
         </div>
       )}
       {showPriorityModal && priorityTarget && (
