@@ -7282,7 +7282,13 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
   var chColStyle = { padding: "10px 12px", borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginBottom: 2 };
 
   return (
-    <div style={{ height: "calc(100vh - 56px)", display: "flex", gap: 0, border: "1px solid #E8E5E0", borderRadius: 12, overflow: "hidden", background: "#fff" }}>
+    <div className="chat-wrap" style={{ height: "calc(100vh - 56px)", display: "flex", gap: 0, border: "1px solid #E8E5E0", borderRadius: 12, overflow: "hidden", background: "#fff" }}>
+      <style>{"@media (max-width:640px){.chat-wrap{flex-direction:column !important;height:calc(100vh - 100px) !important;}"
+        + ".chat-rooms{width:auto !important;border-right:none !important;border-bottom:1px solid #E8E5E0;flex-direction:row !important;overflow-x:auto !important;overflow-y:hidden !important;flex-shrink:0;}"
+        + ".chat-rooms-title,.chat-rooms-cap{display:none !important;}"
+        + ".chat-rooms-list{display:flex !important;gap:4px;padding:8px 10px !important;}"
+        + ".chat-rooms-list>div{white-space:nowrap;flex-shrink:0;margin-bottom:0 !important;padding:8px 12px !important;border:1px solid #E8E5E0;border-radius:99px !important;}"
+        + ".chat-input{font-size:16px !important;}}"}</style>
       {notePopup && (
         <ChatSaveToNotePopup msg={notePopup.msg} co={notePopup.co} profile={profile} channel={channel}
           onClose={function() { setNotePopup(null); }}
@@ -7310,10 +7316,10 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
           }} />
       )}
       {/* 채널 목록 */}
-      <div style={{ width: 220, borderRight: "1px solid #E8E5E0", background: "#FAF9F7", display: "flex", flexDirection: "column", overflowY: "auto" }}>
-        <div style={{ padding: "16px 16px 8px", fontSize: 16, fontWeight: 700 }}>💬 팀 채팅</div>
-        <div style={{ padding: "6px 10px" }}>
-          <div style={{ fontSize: 10, color: "#999", letterSpacing: "0.06em", padding: "6px 8px 4px", fontWeight: 700 }}>채널</div>
+      <div className="chat-rooms" style={{ width: 220, borderRight: "1px solid #E8E5E0", background: "#FAF9F7", display: "flex", flexDirection: "column", overflowY: "auto" }}>
+        <div className="chat-rooms-title" style={{ padding: "16px 16px 8px", fontSize: 16, fontWeight: 700 }}>💬 팀 채팅</div>
+        <div className="chat-rooms-list" style={{ padding: "6px 10px" }}>
+          <div className="chat-rooms-cap" style={{ fontSize: 10, color: "#999", letterSpacing: "0.06em", padding: "6px 8px 4px", fontWeight: 700 }}>채널</div>
           {teamChannels.map(function(c) {
             var active = channel === c.id;
             var un = unreadByChannel[c.id] || 0;
@@ -7326,7 +7332,7 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
               </div>
             );
           })}
-          <div style={{ fontSize: 10, color: "#999", letterSpacing: "0.06em", padding: "12px 8px 4px", fontWeight: 700 }}>1:1 대화 (DM)</div>
+          <div className="chat-rooms-cap" style={{ fontSize: 10, color: "#999", letterSpacing: "0.06em", padding: "12px 8px 4px", fontWeight: 700 }}>1:1 대화 (DM)</div>
           {dmMembers.map(function(n) {
             var cid = dmChannelId(me, n);
             var active = channel === cid;
@@ -7527,10 +7533,10 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
               title={"파일 첨부 — 이미지 · PDF · 엑셀 · 한글 · 워드 등, 하나에 20MB · 한 번에 " + CHAT_FILE_MAX_COUNT + "개까지 (끌어다 놓거나 캡처를 붙여넣어도 됩니다)"}
               style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 10, padding: "10px 12px", fontSize: 16, lineHeight: 1, cursor: sending ? "default" : "pointer" }}>📎</button>
             <input ref={inputRef} value={input} onChange={handleInputChange} onKeyDown={onKeyDown} onPaste={onPasteFiles}
-              placeholder="메시지 입력 (@업체 태그 가능, Enter로 전송)"
-              style={{ flex: 1, border: "1px solid #E8E5E0", borderRadius: 10, padding: "11px 14px", fontSize: 14, outline: "none" }} />
+              placeholder="메시지 입력 (@업체 태그 가능, Enter로 전송)" className="chat-input"
+              style={{ flex: 1, minWidth: 0, border: "1px solid #E8E5E0", borderRadius: 10, padding: "11px 14px", fontSize: 14, outline: "none" }} />
             <button onClick={send} disabled={sending || !(input.trim() || pendingFiles.length)}
-              style={{ background: (input.trim() || pendingFiles.length) ? "#1A1917" : "#D6D2CB", color: "#fff", border: "none", borderRadius: 10, padding: "11px 20px", fontSize: 14, fontWeight: 700, cursor: (input.trim() || pendingFiles.length) ? "pointer" : "default", whiteSpace: "nowrap" }}>
+              style={{ background: (input.trim() || pendingFiles.length) ? "#1A1917" : "#D6D2CB", color: "#fff", border: "none", borderRadius: 10, padding: "11px 20px", fontSize: 14, fontWeight: 700, flexShrink: 0, whiteSpace: "nowrap", cursor: (input.trim() || pendingFiles.length) ? "pointer" : "default", whiteSpace: "nowrap" }}>
               {sending && pendingFiles.length ? "올리는 중…" : "전송"}
             </button>
           </div>
@@ -7942,6 +7948,9 @@ var SPLIT_EXTRA_LABELS = {
   dbleads: "DB리스트", assigndb: "배정DB", activitylog: "활동 로그", manual: "자료실", members: "팀원 관리",
   backup: "데이터 백업", stagnant: "정체 알림", olddocs: "묵은 서류 정리",
 };
+var SPLIT_STACK_BELOW = 1180;            // 창 폭이 이보다 좁으면 두 칸을 위아래로 쌓는다(사이드바 220 빼면 칸 하나가 480 아래로 내려가는 지점)
+var SPLIT_HIDE_BELOW = 769;              // 이보다 좁으면(휴대폰) 분할을 쓰지 않는다
+function splitShouldStack(w) { return Number(w) < SPLIT_STACK_BELOW; }
 function splitClampRatio(n) {
   var v = Number(n);
   if (!isFinite(v)) return 50;
@@ -8027,14 +8036,19 @@ function EmbedFillBox({ style, children }) {
 // 본 화면 쪽 분할 틀 — 두 칸(iframe)과 가운데 끌기 경계선.
 //   sendRef.current(view) = 지금 선택된 칸에 그 화면을 띄운다(왼쪽 메뉴가 이걸 부른다).
 //   onActiveView(view) = 선택된 칸이 지금 보여 주는 화면(왼쪽 메뉴 강조 표시용).
+//   ⚡ 켤 때 가볍게(2026-11-25): 오른쪽 칸은 화면을 고르기 전까지 CRM 을 띄우지 않는다(고르는 화면은 여기서 직접 그린다).
+//      예전엔 켜자마자 두 칸이 각각 CRM 을 통째로 불러와 느렸다.
+//   ↕ 창이 좁으면(SPLIT_STACK_BELOW 미만) 두 칸을 위아래로 쌓는다.
 function SplitPanes({ onClose, initialView, sendRef, onActiveView, top }) {
   var [ratio, setRatio] = useState(function() { try { return splitClampRatio(localStorage.getItem(SPLIT_RATIO_KEY) || 50); } catch (e) { return 50; } });
   var [active, setActive] = useState(0);
-  var [dragging, setDragging] = useState(false);
-  var boxRef = useRef(null), frames = useRef([null, null]), views = useRef([initialView || "blank", "blank"]), activeRef = useRef(0);
+  var [dragPos, setDragPos] = useState(null);   // 끄는 동안의 임시 비율 — 놓을 때 한 번만 칸 폭을 바꾼다(끄는 내내 두 칸을 다시 배치하면 버벅인다)
+  var [rightSrc, setRightSrc] = useState(null); // 오른쪽 칸 주소 — 화면을 고르기 전에는 null
+  var [stack, setStack] = useState(function() { return splitShouldStack(window.innerWidth); });
+  var boxRef = useRef(null), frames = useRef([null, null]), views = useRef([initialView || "blank", "blank"]), activeRef = useRef(0), rightSrcRef = useRef(null);
   var base = window.location.origin + window.location.pathname;
   // 주소는 처음 한 번만 정한다 — 다시 계산되면 칸이 새로 고쳐진다.
-  var srcs = useRef([splitPaneSrc(base, initialView), splitPaneSrc(base, "blank")]);
+  var leftSrc = useRef(splitPaneSrc(base, initialView));
   var post = function(i, data) {
     try { var w = frames.current[i] && frames.current[i].contentWindow; if (w) w.postMessage(Object.assign({ t: SPLIT_MSG }, data), window.location.origin); } catch (e) { /* 칸이 아직 안 떴다 */ }
   };
@@ -8043,38 +8057,71 @@ function SplitPanes({ onClose, initialView, sendRef, onActiveView, top }) {
     post(0, { active: i === 0 }); post(1, { active: i === 1 });
     if (onActiveView) onActiveView(views.current[i]);
   };
+  var show = function(i, v) {
+    views.current[i] = v;
+    if (i === 1 && !rightSrcRef.current) { rightSrcRef.current = splitPaneSrc(base, v); setRightSrc(rightSrcRef.current); }
+    else post(i, { view: v });
+    if (i === activeRef.current && onActiveView) onActiveView(v);
+  };
   useEffect(function() {
-    if (sendRef) sendRef.current = function(v) { views.current[activeRef.current] = v; post(activeRef.current, { view: v }); if (onActiveView) onActiveView(v); };
+    if (sendRef) sendRef.current = function(v) { show(activeRef.current, v); };
     var onMsg = function(e) {
       if (!splitMsgOk(e, window.location.origin)) return;
       var i = frames.current[0] && e.source === frames.current[0].contentWindow ? 0 : frames.current[1] && e.source === frames.current[1].contentWindow ? 1 : -1;
       if (i < 0) return;
       if (e.data.close) { onClose(); return; }
       if (typeof e.data.view === "string") views.current[i] = e.data.view;
-      if (e.data.touch || e.data.hello) { if (e.data.touch) pick(i); else post(i, { active: i === activeRef.current }); }
+      if (e.data.touch) pick(i); else if (e.data.hello) post(i, { active: i === activeRef.current });
       if (i === activeRef.current && onActiveView) onActiveView(views.current[i]);
     };
+    var onResize = function() { setStack(splitShouldStack(window.innerWidth)); };
     window.addEventListener("message", onMsg);
+    window.addEventListener("resize", onResize);
     if (onActiveView) onActiveView(views.current[0]);
-    return function() { window.removeEventListener("message", onMsg); if (sendRef) sendRef.current = null; };
+    return function() { window.removeEventListener("message", onMsg); window.removeEventListener("resize", onResize); if (sendRef) sendRef.current = null; };
   }, []);
-  // 경계선 끌기 — 끄는 동안 투명 덮개를 올려 iframe 이 마우스를 가져가지 못하게 한다.
-  var onDrag = function(e) {
+  var posOf = function(e) {
     var r = boxRef.current.getBoundingClientRect();
-    setRatio(splitClampRatio(((e.clientX - r.left) / r.width) * 100));
+    return splitClampRatio(stack ? ((e.clientY - r.top) / r.height) * 100 : ((e.clientX - r.left) / r.width) * 100);
   };
-  var endDrag = function() { setDragging(false); try { localStorage.setItem(SPLIT_RATIO_KEY, String(ratio)); } catch (e) { /* 저장 못 해도 동작엔 영향 없음 */ } };
-  var frameStyle = { height: "100%", border: "none", background: "#F7F6F3", minWidth: 0 };
+  var endDrag = function() {
+    if (dragPos == null) return;
+    setRatio(dragPos); try { localStorage.setItem(SPLIT_RATIO_KEY, String(dragPos)); } catch (e) { /* 저장 못 해도 동작엔 영향 없음 */ }
+    setDragPos(null);
+  };
+  var frameStyle = { border: "none", background: "#F7F6F3", minWidth: 0, minHeight: 0, display: "block" };
+  var firstSize = "calc(" + ratio + "% - 4px)";
+  var paneBar = { height: 40, background: "#fff", display: "flex", alignItems: "center", gap: 8, padding: "0 10px 0 14px", borderBottom: "1px solid #E8E5E0", boxSizing: "border-box", flexShrink: 0 };
   return (
-    <div className="crm-split" ref={boxRef} style={{ position: "fixed", left: 220, top: top || 0, right: 0, bottom: 0, zIndex: 150, background: "#F7F6F3", display: "flex" }}>
-      <iframe title="왼쪽 칸" ref={function(el) { frames.current[0] = el; }} src={srcs.current[0]} style={Object.assign({ width: "calc(" + ratio + "% - 4px)", flexShrink: 0 }, frameStyle)} />
-      <div onMouseDown={function(e) { e.preventDefault(); setDragging(true); }} onDoubleClick={function() { setRatio(50); try { localStorage.setItem(SPLIT_RATIO_KEY, "50"); } catch (e) { /* 무시 */ } }}
-        title="끌어서 폭 조절 · 두 번 누르면 반반"
-        style={{ width: 8, flexShrink: 0, cursor: "col-resize", background: dragging ? "#D9D6D0" : "#E8E5E0", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div style={{ width: 2, height: 36, borderRadius: 2, background: "#A8A49C" }} />
+    <div className="crm-split" ref={boxRef} style={{ position: "fixed", left: 220, top: top || 0, right: 0, bottom: 0, zIndex: 150, background: "#F7F6F3", display: "flex", flexDirection: stack ? "column" : "row" }}>
+      <iframe title="첫째 칸" ref={function(el) { frames.current[0] = el; }} src={leftSrc.current}
+        style={Object.assign(stack ? { height: firstSize, width: "100%" } : { width: firstSize, height: "100%" }, { flexShrink: 0 }, frameStyle)} />
+      <div onMouseDown={function(e) { e.preventDefault(); setDragPos(ratio); }}
+        onDoubleClick={function() { setRatio(50); try { localStorage.setItem(SPLIT_RATIO_KEY, "50"); } catch (e) { /* 무시 */ } }}
+        title="끌어서 크기 조절 · 두 번 누르면 반반"
+        style={Object.assign({ flexShrink: 0, background: "#E8E5E0", display: "flex", alignItems: "center", justifyContent: "center" }, stack ? { height: 8, cursor: "row-resize" } : { width: 8, cursor: "col-resize" })}>
+        <div style={Object.assign({ borderRadius: 2, background: "#A8A49C" }, stack ? { height: 2, width: 36 } : { width: 2, height: 36 })} />
       </div>
-      <iframe title="오른쪽 칸" ref={function(el) { frames.current[1] = el; }} src={srcs.current[1]} style={Object.assign({ flex: 1 }, frameStyle)} />
-      {dragging && <div onMouseMove={onDrag} onMouseUp={endDrag} onMouseLeave={endDrag} style={{ position: "absolute", inset: 0, cursor: "col-resize", zIndex: 5 }} />}
+      {rightSrc ? (
+        <iframe title="둘째 칸" ref={function(el) { frames.current[1] = el; }} src={rightSrc} style={Object.assign({ flex: 1, width: stack ? "100%" : undefined }, frameStyle)} />
+      ) : (
+        <div onMouseDown={function() { if (activeRef.current !== 1) pick(1); }}
+          style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "auto", background: "#F7F6F3", display: "flex", flexDirection: "column" }}>
+          <div style={Object.assign({}, paneBar, { borderTop: "3px solid " + (active === 1 ? "#1A1917" : "transparent") })}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: "#1A1917" }}>화면 고르기</span>
+            {active === 1 && <span style={{ fontSize: 11, color: "#8A857C" }}>왼쪽 메뉴가 이 칸에 열립니다</span>}
+            <div style={{ flex: 1 }} />
+            <button onClick={onClose} style={{ background: "none", border: "1px solid #E8E5E0", borderRadius: 6, padding: "4px 10px", fontSize: 11, color: "#666", cursor: "pointer", whiteSpace: "nowrap" }}>분할 해제</button>
+          </div>
+          <div style={{ padding: "0 14px 14px" }}><EmbedBlank setView={function(v) { pick(1); show(1, v); }} /></div>
+        </div>
+      )}
+      {dragPos != null && (
+        <div onMouseMove={function(e) { setDragPos(posOf(e)); }} onMouseUp={endDrag} onMouseLeave={endDrag}
+          style={{ position: "absolute", inset: 0, cursor: stack ? "row-resize" : "col-resize", zIndex: 5 }}>
+          <div style={Object.assign({ position: "absolute", background: "#1A1917", opacity: 0.55 }, stack ? { left: 0, right: 0, height: 3, top: dragPos + "%" } : { top: 0, bottom: 0, width: 3, left: dragPos + "%" })} />
+        </div>
+      )}
     </div>
   );
 }
@@ -10809,7 +10856,7 @@ function CRMApp({ profile, session }) {
       {IS_EMBED && <EmbedBar view={view} setView={setView} active={embedActive} />}
       {/* 메인 */}
       <div className="crm-main" style={{ marginLeft: 220, padding: "28px 32px", minHeight: "100vh" }}>
-        {loading ? (
+        {splitOn && !IS_EMBED ? null /* ◫ 분할 중엔 덮개 뒤 본 화면을 그리지 않는다 — 안 보이는 화면까지 세 벌이 돌아 느렸다 */ : loading ? (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", flexDirection: "column", gap: 16 }}>
             <div style={{ width: 36, height: 36, border: "3px solid #E8E5E0", borderTopColor: "#1A1917", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
             <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
