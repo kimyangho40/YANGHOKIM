@@ -7,6 +7,7 @@
 // 폴백: supabase prop 을 안 주면 ../agencies.json 을 정적 import 해 동작 (즐겨찾기는 localStorage).
 
 import React, { useEffect, useMemo, useState, useCallback } from "react";
+import FundNotices from "./FundNotices";
 
 const REGION_CAT = "지자체·지역사업";
 const CATEGORIES = [
@@ -15,16 +16,19 @@ const CATEGORIES = [
   ["기업인증·IP", "🏅"], ["조달", "🖨️"], ["교육", "🎓"], [REGION_CAT, "📍"],
 ];
 const REGIONS = ["서울","경기","인천","부산","대구","광주","대전","울산","세종","강원","충북","충남","전북","전남","경북","경남","제주"];
-const QUICK = ["스마트공장","수출","R&D","인건비","특허","관광","농업","콘텐츠","바우처","청년","시설자금","재기","TIPS","LIPS","서울","경기"];
+// 첫 진입 때 고르는 카테고리. 「전체」는 버튼으로 직접 고른다(2026-11-25 요청).
+const DEFAULT_CAT = "정책자금";
 const ICON = Object.fromEntries(CATEGORIES);
 const LS_KEY = "agencySites.fav.v1";
 
-export default function AgencySites({ supabase, staticData }) {
+export default function AgencySites({ supabase, staticData, noticesData }) {
   const [rows, setRows] = useState([]);
   const [favs, setFavs] = useState(() => new Set());
   const [userId, setUserId] = useState(null);
   const [q, setQ] = useState("");
-  const [cat, setCat] = useState("전체");
+  const [cat, setCat] = useState(DEFAULT_CAT);
+  // 기관 카드 목록은 접어 둔다 — 아래 공고 영역을 바로 보게 하려는 것(펼침 상태는 저장하지 않는다).
+  const [listOpen, setListOpen] = useState(false);
   const [region, setRegion] = useState("전체");
   const [type, setType] = useState("전체");
   const [favOnly, setFavOnly] = useState(false);
@@ -82,7 +86,7 @@ export default function AgencySites({ supabase, staticData }) {
   const showPicker = cat === REGION_CAT && region === "전체" && !q && !favOnly && !pickRegion;
   const regionRows = base.filter(x => x.category === REGION_CAT);
 
-  const reset = () => { setQ(""); setCat("전체"); setRegion("전체"); setType("전체"); setFavOnly(false); setPickRegion(null); };
+  const reset = () => { setQ(""); setCat(DEFAULT_CAT); setRegion("전체"); setType("전체"); setFavOnly(false); setPickRegion(null); };
   const host = (u) => u.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
   return (
@@ -92,11 +96,9 @@ export default function AgencySites({ supabase, staticData }) {
 
       <div className={"ags-search" + (q ? " has" : "")}>
         <span className="ico">🔍</span>
-        <input value={q} onChange={e => { setQ(e.target.value); setPickRegion(null); }} placeholder="기관명 · 사업명 · 키워드 · 지역 · 지원분야로 검색   (예: 스마트공장, 수출, 서울, R&D, 인건비, 특허, 관광, 농업, 콘텐츠)" />
+        <input value={q} onChange={e => { setQ(e.target.value); setPickRegion(null); if (e.target.value) setListOpen(true); }} placeholder="기관명 · 사업명 · 키워드 · 지역 · 지원분야로 검색   (예: 스마트공장, 수출, 서울, R&D, 인건비, 특허, 관광, 농업, 콘텐츠)" />
         {q && <button className="clr" onClick={() => setQ("")}>✕</button>}
       </div>
-
-      <div className="ags-quick"><span className="lbl">추천 검색</span>{QUICK.map(k => <button key={k} onClick={() => { setQ(k); setCat("전체"); setPickRegion(null); }}>{k}</button>)}</div>
 
       <div className="ags-cats">
         {[["전체", "🗂️"], ...CATEGORIES].map(([k, ic]) => {
@@ -105,6 +107,14 @@ export default function AgencySites({ supabase, staticData }) {
         })}
       </div>
 
+      <button className={"ags-acc" + (listOpen ? " on" : "")} aria-expanded={listOpen} onClick={() => setListOpen(v => !v)}>
+        <span className="arr">{listOpen ? "▾" : "▸"}</span>
+        <span className="ttl">{cat === "전체" ? "전체" : cat} 기관 목록</span>
+        <span className="cnt">{loading ? "불러오는 중…" : <><b>{list.length}</b>곳</>}</span>
+        <span className="act">{listOpen ? "접기" : "펼치기"}</span>
+      </button>
+
+      {listOpen && <>
       <div className="ags-bar">
         <label className="f">지역 <select value={region} onChange={e => { setRegion(e.target.value); setPickRegion(null); }}><option value="전체">전체 지역</option><option value="전국">전국</option>{REGIONS.map(r => <option key={r} value={r}>{r}</option>)}</select></label>
         <label className="f">기관유형 <select value={type} onChange={e => setType(e.target.value)}><option value="전체">전체 유형</option>{types.map(t => <option key={t} value={t}>{t}</option>)}</select></label>
@@ -144,6 +154,10 @@ export default function AgencySites({ supabase, staticData }) {
           })}
         </div>
       )}
+      </>}
+
+      {/* 📢 정책자금·지원금 공고 — 위 기관 목록이 접혀 있어도 항상 보인다. 카테고리 이름·순서는 위와 같은 CATEGORIES 를 쓴다. */}
+      <FundNotices supabase={supabase} staticData={noticesData} categories={CATEGORIES} />
     </div>
   );
 }
@@ -154,8 +168,8 @@ const CSS = `
 .ags *{box-sizing:border-box}.ags button{font:inherit;color:inherit;cursor:pointer;background:none;border:0;padding:0}.ags a{color:inherit;text-decoration:none}
 .ags-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:12px}.ags-head h1{margin:0;font-size:21px;font-weight:800}.ags-head h1 small{margin-left:10px;font-size:12px;font-weight:500;color:var(--ink-3)}.ags-count{font-size:12px;color:var(--ink-3)}.ags-count b{color:var(--ink-2)}
 .ags-search{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--sh)}.ags-search input{width:100%;border:0;background:transparent;padding:14px 40px 14px 42px;font:inherit;font-size:14px;color:var(--ink);outline:none;border-radius:var(--r)}.ags-search .ico{position:absolute;left:15px;top:50%;transform:translateY(-50%);font-size:14px}.ags-search .clr{position:absolute;right:10px;top:50%;transform:translateY(-50%);width:24px;height:24px;border-radius:50%;background:var(--chip);color:var(--ink-3);font-size:13px}
-.ags-quick{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:10px 0 12px}.ags-quick .lbl{font-size:12px;color:var(--ink-3)}.ags-quick button{font-size:12px;padding:3px 9px;border:1px solid var(--line-2);border-radius:999px;background:#fff;color:var(--ink-2)}.ags-quick button:hover{border-color:var(--green);color:var(--green)}
 .ags-cats{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}.ags-cats .cat{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid var(--line-2);border-radius:999px;background:#fff;font-size:13px;font-weight:600;color:var(--ink-2)}.ags-cats .cat .n{font-size:11px;color:var(--ink-3)}.ags-cats .cat.on{background:var(--green);border-color:var(--green);color:#fff}.ags-cats .cat.on .n{color:rgba(255,255,255,.75)}
+.ags-acc{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:var(--panel)!important;border:1px solid var(--line)!important;border-radius:var(--r);padding:11px 14px!important;margin-bottom:12px;box-shadow:var(--sh)}.ags-acc .arr{font-size:13px;color:var(--ink-3);width:12px}.ags-acc .ttl{font-size:14px;font-weight:800}.ags-acc .cnt{font-size:12px;color:var(--ink-3)}.ags-acc .cnt b{color:var(--ink)}.ags-acc .act{margin-left:auto;font-size:12px;font-weight:600;color:var(--green)}.ags-acc:hover{border-color:var(--green)!important}
 .ags-bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:9px 12px;margin-bottom:14px}.ags-bar .f{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-3)}.ags-bar select{font:inherit;font-size:13px;font-weight:600;color:var(--ink);border:1px solid var(--line-2);border-radius:var(--rs);background:#fff;padding:5px 9px}.ags-bar .tog{font-size:13px;font-weight:600;color:var(--ink-2);border:1px solid var(--line-2);border-radius:var(--rs);padding:5px 10px;background:#fff}.ags-bar .tog.on{background:var(--gold-tint);border-color:#e6cf8a;color:var(--gold-ink)}.ags-bar .reset{font-size:12px;color:var(--ink-3);text-decoration:underline}.ags-bar .stat{margin-left:auto;font-size:12px;color:var(--ink-3)}.ags-bar .stat b{color:var(--ink)}
 .ags-rp{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;margin-bottom:14px;box-shadow:var(--sh)}.ags-rp h3{margin:0 0 3px;font-size:14px;font-weight:800}.ags-rp p{margin:0 0 12px;font-size:12px;color:var(--ink-3)}.ags-rp .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:8px}.ags-rp .grid button{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;border:1px solid var(--line-2);border-radius:var(--rs);background:#fff;font-size:13px;font-weight:700}.ags-rp .grid button:hover{border-color:var(--green);background:var(--green-tint)}.ags-rp .grid .n{font-size:11px;font-weight:600;color:var(--ink-3)}
 .ags-crumb{display:flex;align-items:center;gap:10px;margin:0 0 12px;font-size:13px}.ags-crumb .back{border:1px solid var(--line-2);border-radius:var(--rs);padding:4px 10px;background:#fff;font-size:12px;font-weight:600}.ags-crumb .cur{font-weight:800}.ags-crumb .sub{color:var(--ink-3);font-size:12px}

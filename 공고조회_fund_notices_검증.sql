@@ -1,0 +1,12 @@
+-- 공고조회_fund_notices.sql 검증 — 전부 pass 여야 한다. (SELECT 하나로 묶었다: run-sql.js 는 마지막 SELECT 하나만 출력한다)
+with t as (select unnest(array['fund_notices', 'fund_news_daily']) as name)
+select '01 표 2개 있음' as chk, case when (select count(*) from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind = 'r' and c.relname in (select name from t)) = 2 then 'pass' else 'FAIL' end as result
+union all select '02 RLS 켜짐', case when (select count(*) from pg_class c where c.relnamespace = 'public'::regnamespace and c.relname in (select name from t) and c.relrowsecurity) = 2 then 'pass' else 'FAIL' end
+union all select '03 정책은 표마다 1개(SELECT)', case when (select count(*) from pg_policies where schemaname = 'public' and tablename in (select name from t)) = 2 and (select count(*) from pg_policies where schemaname = 'public' and tablename in (select name from t) and cmd = 'SELECT') = 2 then 'pass' else 'FAIL' end
+union all select '04 정책 조건 is_approved()', case when (select count(*) from pg_policies where schemaname = 'public' and tablename in (select name from t) and qual ilike '%is_approved()%' and roles = '{authenticated}') = 2 then 'pass' else 'FAIL' end
+union all select '05 anon 권한 0', case when (select count(*) from information_schema.role_table_grants where table_schema = 'public' and table_name in (select name from t) and grantee = 'anon') = 0 then 'pass' else 'FAIL' end
+union all select '06 authenticated 는 SELECT 만', case when (select count(*) from information_schema.role_table_grants where table_schema = 'public' and table_name in (select name from t) and grantee = 'authenticated' and privilege_type <> 'SELECT') = 0 and (select count(*) from information_schema.role_table_grants where table_schema = 'public' and table_name in (select name from t) and grantee = 'authenticated' and privilege_type = 'SELECT') = 2 then 'pass' else 'FAIL' end
+union all select '07 fund_notices 칸 29개', case when (select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'fund_notices') = 29 then 'pass' else 'FAIL' end
+union all select '08 배열 칸 4개(text[])', case when (select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'fund_notices' and column_name in ('kinds', 'regions', 'matched', 'cats') and data_type = 'ARRAY') = 4 then 'pass' else 'FAIL' end
+union all select '09 RLS 꺼진 public 표 0', case when (select count(*) from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind = 'r' and not c.relrowsecurity) = 0 then 'pass' else 'FAIL' end
+order by 1;

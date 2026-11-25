@@ -2176,6 +2176,23 @@ SQL: `채팅_첨부파일.sql` / `_rollback` / `_검증`(14/14) · 테스트 `sc
 - **테스트**: `node scripts/test-meta-leads.mjs` (61개, DB·메타 무접촉)
 - **메타 토큰 데이터 접근 기한 2027-02-17** — 그 전에 갱신해 Vault 값을 `vault.update_secret` 으로 바꾼다.
 
+## 📢 「정부 기관 사이트」 하단 공고 조회 — 2026-11-25 신설 (**새 표 2개 · 기존 표 변경 0건**)
+
+기관 사이트 화면 아래에 정책자금·지원금 공고 목록(카드·10건씩)과 「오늘의 주요공고」 뉴스 이미지·멘트 저장이 붙는다.
+위쪽은 추천 검색을 없애고 「정책자금」을 기본 선택, 기관 목록은 접을 수 있게 했다.
+
+- **흐름**: pg_cron `fund-notices-daily`(매일 00:00 UTC = 09:00 KST) → Edge Function `fund-notices` → 기업마당 API → `fund_notices` upsert → `fund_news_daily` 1행.
+- **표**: `fund_notices`(key PK = `출처:원본번호`) · `fund_news_daily`(news_date PK, notice_keys). 앱 사용자는 **읽기만**(`is_approved()` SELECT 정책 1개, 쓰기 권한 회수). 쓰는 쪽은 함수(service_role) 하나뿐.
+- **분류는 수집할 때 굳힌다**(종류·지역·카테고리·대상 판정·「최근 공고」). 화면(`src/pages/FundNotices.jsx`)은 거르기만 한다 — 판정 기준이 두 벌로 갈라지지 않게.
+- **안내 문장(`summary`)**: 그날 뉴스 12건 중 문장이 없는 것만 Haiku 로 쓴다. 문장의 숫자가 공고 원문에 없으면 버린다(`acceptSummary`). 수집 upsert 는 `summary` 칸을 보내지 않아 써 둔 문장이 안 지워진다. AI 키가 없거나 실패해도 수집은 성공.
+- **0건 방어**: 기업마당이 빈 답을 주면 반영하지 않는다. 기업마당에서 내려간 지 60일 넘은 공고는 지운다(`last_seen`).
+- **비밀값**: Vault `fund_notices_secret`(호출 키) · `fund_notices_bizinfo_key` · `fund_notices_ai_key`. 함수는 `verify_jwt` 를 끄고 `x-fund-notices-secret` 헤더로 검사한다(meta-leads 와 같은 방식).
+- **SQL**: `공고조회_fund_notices.sql`(+`_rollback`·`_검증` 9/9) · `공고조회_금고함수.sql` · `공고조회_매일9시_cron.sql`. 멈추기: `select cron.unschedule('fund-notices-daily');`
+- **테스트**: `node scripts/test-fund-notices.mjs [기업마당 응답 JSON]` — ⛳ `fund-notices-helpers`·⛳ `공고화면-계산` 구간을 소스째 떼어낸다(마커 문구를 바꾸지 말 것).
+- 첫 수집(2026-11-25): 기업마당 1,327건 → 저장 285건 · 뉴스 12건 · 안내 문장 11건 통과 / 1건 버림.
+- ⚠️ 출처는 **기업마당 하나**다. 참고 사이트의 나머지 4곳(광주 기업지원시스템·aT·K-Startup·수출바우처)은 아직 없다 — 붙일 때 `source` 만 다르게 같은 표에 넣는다(중복은 `duplicate_of`).
+- 롤백: 태그 `backup/before-fund-notices-20261125` · 머지 커밋 `git revert -m 1 <머지>` (표·예약은 그대로 둬도 화면이 없으면 무해).
+
 ## 3. 완료 보고 시 — "회귀 확인 완료" 여부 명시
 매 기능 추가/수정 완료 보고에 **반드시 "회귀 확인 완료" 여부와 점검한 항목**을 같이 적는다.
 깨진 게 있으면 목록으로 보고하고 "고칠 것 vs 이번엔 보고만 할 것"을 구분한다.
