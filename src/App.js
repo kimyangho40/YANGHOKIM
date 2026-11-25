@@ -6748,6 +6748,97 @@ function ChatSaveToNotePopup({ msg, co, profile, channel, onClose, onSaved }) {
 }
 
 // ── 실시간 팀 채팅 ────────────────────────────────────────────────────────────
+// ⛳ 채팅-첨부 시작 — 순수 함수. scripts/test-chat-attach.mjs 가 이 구간을 소스째 떼어내 실행한다(supabase·React 를 들이지 말 것. 마커 문구를 바꾸면 테스트가 죽는다).
+// 파일은 비공개 버킷 chat-files 에 "{채널 이름을 16진수로 적은 것}/{시각}_{난수}.{확장자}" 로 올린다.
+//   · 첫 폴더가 곧 채널이다 — 저장소 열람 규칙(SQL chat_file_can_access)이 이 폴더를 채널로 되돌려 chat_can_access 로 검사한다.
+//     그래서 1:1 대화에 올린 파일은 그 두 사람만 연다. ⚠️ 경로 모양을 바꾸면 SQL 과 같이 고칠 것.
+//   · 한글 파일명은 저장소 키로 못 쓴다 → 키에는 넣지 않고, 원래 이름은 chat_messages.attachments 에 남긴다.
+const CHAT_FILE_BUCKET = "chat-files";
+const CHAT_FILE_MAX_BYTES = 20 * 1024 * 1024;
+const CHAT_FILE_MAX_COUNT = 5;
+const CHAT_FILE_EXTS = ["jpg", "jpeg", "png", "gif", "webp", "pdf", "xlsx", "xls", "csv", "hwp", "hwpx", "doc", "docx", "ppt", "pptx", "txt", "zip"];
+const CHAT_IMAGE_EXTS = ["jpg", "jpeg", "png", "gif", "webp"];
+function chatFileExt(name) {
+  var m = /\.([A-Za-z0-9]{1,8})$/.exec(String(name || ""));
+  return m ? m[1].toLowerCase() : "";
+}
+function chatChannelHex(channel) {
+  var s = unescape(encodeURIComponent(String(channel || ""))), out = "";
+  for (var i = 0; i < s.length; i++) out += ("0" + s.charCodeAt(i).toString(16)).slice(-2);
+  return out;
+}
+function chatFilePath(channel, fileName, now, rand) {
+  return chatChannelHex(channel) + "/" + String(now) + "_" + String(rand) + "." + (chatFileExt(fileName) || "bin");
+}
+function chatFileSize(bytes) {
+  var n = Number(bytes) || 0;
+  if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + "MB";
+  if (n >= 1024) return Math.round(n / 1024) + "KB";
+  return n + "B";
+}
+// 올릴 수 있는 파일인가 — 문제가 있으면 사람에게 보여줄 문장, 없으면 "".
+function chatFileCheck(file, countSoFar) {
+  var name = (file && file.name) || "";
+  if ((countSoFar || 0) >= CHAT_FILE_MAX_COUNT) return "한 번에 " + CHAT_FILE_MAX_COUNT + "개까지만 첨부할 수 있어요.";
+  if (CHAT_FILE_EXTS.indexOf(chatFileExt(name)) < 0) return "「" + name + "」 — 이 종류의 파일은 첨부할 수 없어요. (가능: 이미지 · PDF · 엑셀 · 한글 · 워드 · 파워포인트 · txt · zip)";
+  if (!(file.size > 0)) return "「" + name + "」 — 빈 파일이에요.";
+  if (file.size > CHAT_FILE_MAX_BYTES) return "「" + name + "」 — " + chatFileSize(file.size) + " 입니다. 파일 하나는 20MB 까지 첨부할 수 있어요.";
+  return "";
+}
+// 저장된 첨부 목록을 안전하게 꺼낸다(옛 메시지엔 칸이 없거나 비어 있다).
+function chatAttachmentsOf(msg) {
+  var a = msg && msg.attachments;
+  if (!Array.isArray(a)) return [];
+  return a.filter(function(x) { return x && typeof x.path === "string" && x.path; });
+}
+function isChatImage(att) { return CHAT_IMAGE_EXTS.indexOf(chatFileExt((att && (att.name || att.path)) || "")) >= 0; }
+// 알림·목록에 보여줄 한 줄 — 글이 없고 파일만 보낸 메시지는 "📎 파일 N개".
+function chatMessagePreview(msg) {
+  var t = String((msg && msg.message) || "").trim();
+  var n = chatAttachmentsOf(msg).length;
+  if (t) return n ? t + " (📎 " + n + ")" : t;
+  return n ? "📎 파일 " + n + "개" : "";
+}
+// ⛳ 채팅-첨부 끝
+
+// 채팅 첨부 한 개 — 이미지는 작게 보여 주고, 나머지는 이름·크기 칩. 누르면 1시간짜리 주소를 발급해 새 창으로 연다.
+function ChatAttachment({ att, mine }) {
+  const [thumb, setThumb] = useState("");
+  const [busy, setBusy] = useState(false);
+  const img = isChatImage(att);
+  useEffect(function() {
+    if (!img) return;
+    var alive = true;
+    supabase.storage.from(CHAT_FILE_BUCKET).createSignedUrl(att.path, SIGNED_URL_TTL)
+      .then(function(r) { if (alive && !r.error && r.data) setThumb(r.data.signedUrl); })
+      .catch(function() {});
+    return function() { alive = false; };
+  }, [att.path, img]);
+  async function open() {
+    if (busy) return;
+    setBusy(true);
+    var r = await supabase.storage.from(CHAT_FILE_BUCKET).createSignedUrl(att.path, SIGNED_URL_TTL, img ? undefined : { download: att.name || true });
+    setBusy(false);
+    if (r.error || !r.data) { alert("파일을 열지 못했습니다: " + ((r.error && r.error.message) || "주소 발급 실패")); return; }
+    window.open(r.data.signedUrl, "_blank", "noopener");
+  }
+  if (img && thumb) {
+    return <img src={thumb} alt={att.name || "첨부 이미지"} title={(att.name || "") + " · 눌러서 크게 보기"} onClick={open}
+      style={{ display: "block", maxWidth: 240, maxHeight: 200, borderRadius: 10, cursor: "zoom-in", border: "1px solid rgba(0,0,0,0.08)", background: "#fff" }} />;
+  }
+  return (
+    <div onClick={open} title="눌러서 내려받기"
+      style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 11px", borderRadius: 10, cursor: "pointer", maxWidth: 260,
+        background: mine ? "rgba(255,255,255,0.6)" : "#F4F2EE", border: "1px solid rgba(0,0,0,0.08)" }}>
+      <span style={{ fontSize: 18, lineHeight: 1 }}>{img ? "🖼️" : "📄"}</span>
+      <span style={{ minWidth: 0 }}>
+        <span style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#1A1917", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{att.name || "파일"}</span>
+        <span style={{ display: "block", fontSize: 11, color: "#888" }}>{busy ? "여는 중…" : chatFileSize(att.size)}</span>
+      </span>
+    </div>
+  );
+}
+
 function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onChannelChange }) {
   const me = profile?.name || "";
   const isAdmin = profile?.role === "admin" || me === "양호"; // 관리자는 남의 메시지도 삭제 가능
@@ -6757,6 +6848,10 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
   // 채널별로 쓰다 만 메시지를 이 기기에 보관 — 채널을 옮기거나 창을 닫아도 남는다.
   const chatDraft = useDraft("채팅", channel, input, { label: "채팅(" + channel + ")" });
   const [sending, setSending] = useState(false);
+  // 📎 보내기 전 골라 둔 파일(아직 올리지 않았다). 채널을 옮기면 비운다 — 다른 방에 잘못 보내지 않게.
+  const [pendingFiles, setPendingFiles] = useState([]);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef(null);
   const [companiesList, setCompaniesList] = useState([]);
   // 📅 업무노트로 저장 팝업 — { msg, co } / 저장 직후 안내 문구
   const [notePopup, setNotePopup] = useState(null);
@@ -6794,6 +6889,7 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
     if (onChannelRef.current) onChannelRef.current(channel);
     return function() { if (onChannelRef.current) onChannelRef.current(null); };
   }, [channel]);
+  useEffect(function() { setPendingFiles([]); setDragOver(false); }, [channel]);
 
   // 알림함/브라우저 알림 클릭으로 특정 채널 열기 요청 → 그 채널로 전환 후 소비 처리
   useEffect(function() {
@@ -7054,20 +7150,67 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
     }, 0);
   }
 
+  // 📎 파일 고르기(버튼·끌어다 놓기·붙여넣기 공통). 올리는 건 [전송] 때 한다.
+  function addFiles(fileList) {
+    var incoming = Array.prototype.slice.call(fileList || []);
+    if (!incoming.length) return;
+    var next = pendingFiles.slice(), errs = [];
+    incoming.forEach(function(f) {
+      var why = chatFileCheck(f, next.length);
+      if (why) { if (errs.indexOf(why) < 0) errs.push(why); return; }
+      next.push({ id: Date.now() + "_" + Math.random().toString(36).slice(2, 8), file: f });
+    });
+    setPendingFiles(next);
+    if (errs.length) alert(errs.join("\n"));
+  }
+  function onPasteFiles(e) {
+    var files = e.clipboardData && e.clipboardData.files;
+    if (files && files.length) { e.preventDefault(); addFiles(files); }   // 글만 붙여넣을 땐 files 가 비어 있어 그대로 지나간다
+  }
+  // 고른 파일을 올린다. 하나라도 실패하면 이미 올린 것을 지우고 던진다(반쪽 메시지를 만들지 않는다).
+  async function uploadPendingFiles() {
+    var done = [];
+    try {
+      for (var i = 0; i < pendingFiles.length; i++) {
+        var f = pendingFiles[i].file;
+        var path = chatFilePath(channel, f.name, Date.now(), Math.random().toString(36).slice(2, 10));
+        var up = await supabase.storage.from(CHAT_FILE_BUCKET).upload(path, f, { contentType: f.type || undefined, upsert: false });
+        if (up.error) throw new Error("「" + f.name + "」 " + (up.error.message || "올리기 실패"));
+        done.push({ path: path, name: f.name, size: f.size, type: f.type || "" });
+      }
+      return done;
+    } catch (e) {
+      if (done.length) { try { await supabase.storage.from(CHAT_FILE_BUCKET).remove(done.map(function(d) { return d.path; })); } catch (_) {} }
+      throw e;
+    }
+  }
+
   async function send() {
     var text = input.trim();
-    if (!text || sending || !me) return;
+    if ((!text && !pendingFiles.length) || sending || !me) return;
     setSending(true);
     setMentionMatches([]);
+    var attachments = [];
+    if (pendingFiles.length) {
+      try { attachments = await uploadPendingFiles(); }
+      catch (e) { alert("파일을 올리지 못했습니다: " + (e && e.message ? e.message : e)); setSending(false); return; }
+    }
     // ⚠️ 입력칸을 먼저 비우면 안 된다. 값이 ""가 되는 순간 useDraft가 임시보관분을 지워버려서,
     //    서버 응답을 기다리는 동안 메시지가 지역변수에만 남는다. 그때 탭이 정리되면(iOS 백그라운드)
     //    글이 어디에도 없다 — 이번에 막으려던 바로 그 상황이다.
     //    그래서 빠른메모·소통내역과 같은 순서로: 서버 저장이 성공한 뒤에만 비운다.
     var payload = { sender: me, message: text, channel: channel, read_by: [me], saved_to_activity: [] };
+    // 파일이 있을 때만 attachments 를 싣는다 — 글만 보내는 메시지의 payload 는 예전과 한 글자도 다르지 않다.
+    if (attachments.length) payload.attachments = attachments;
     var r = await supabase.from("chat_messages").insert(payload).select().single();
+    if ((r.error || !r.data) && attachments.length) {
+      // 메시지가 안 들어갔으면 올려 둔 파일을 치운다(주인 없는 파일을 남기지 않는다). 고른 파일은 그대로 둬서 다시 보낼 수 있다.
+      try { await supabase.storage.from(CHAT_FILE_BUCKET).remove(attachments.map(function(a) { return a.path; })); } catch (_) {}
+    }
     if (!r.error && r.data) {
       chatDraft.done();   // 보관분 해제는 성공 확인 후
       setInput("");
+      setPendingFiles([]);
       var row = r.data;
       if (jumpCtxRef.current) { backToLatest(); }
       else {
@@ -7118,6 +7261,9 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
     var ts = new Date().toISOString();
     var u = await supabase.from("chat_messages").update({ deleted_at: ts }).eq("id", msg.id);
     if (u.error) { alert("삭제 실패: " + u.error.message); return; }
+    // 📎 메시지를 지우면 첨부 파일도 저장소에서 지운다(용량). 실패해도 메시지 삭제는 그대로 둔다.
+    var gone = chatAttachmentsOf(msg).map(function(a) { return a.path; });
+    if (gone.length) { supabase.storage.from(CHAT_FILE_BUCKET).remove(gone).then(function(r) { if (r && r.error) console.warn("[채팅 첨부] 파일 삭제 실패:", r.error.message); }); }
     setMessages(function(prev) {
       return prev.map(function(m) { return m.id === msg.id ? Object.assign({}, m, { deleted_at: ts }) : m; });
     });
@@ -7262,7 +7408,10 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
         )}
         <div ref={scrollRef}
           onScroll={function(e) { var el = e.currentTarget; var near = el.scrollHeight - el.scrollTop - el.clientHeight < 120; nearBottomRef.current = near; if (near && newBelow && !jumpCtxRef.current) setNewBelow(false); }}
-          style={{ flex: 1, overflowY: "auto", padding: "16px 20px", background: "#F4F2EE" }}>
+          onDragOver={function(e) { if (e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], "Files") >= 0) { e.preventDefault(); if (!dragOver) setDragOver(true); } }}
+          onDragLeave={function() { if (dragOver) setDragOver(false); }}
+          onDrop={function(e) { if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) { e.preventDefault(); setDragOver(false); addFiles(e.dataTransfer.files); } }}
+          style={{ flex: 1, overflowY: "auto", padding: "16px 20px", background: dragOver ? "#FFF7D6" : "#F4F2EE", outline: dragOver ? "2px dashed #E0B12B" : "none", outlineOffset: -6 }}>
           {messages.length === 0 ? (
             <div style={{ textAlign: "center", color: "#AAA", fontSize: 13, marginTop: 40 }}>아직 메시지가 없어요. 첫 메시지를 보내보세요 👋</div>
           ) : messages.map(function(msg) {
@@ -7285,7 +7434,12 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
                     </div>
                   ) : (
                     <div style={{ background: mine ? "#FEE500" : "#fff", color: "#1A1917", padding: "9px 13px", borderRadius: 14, fontSize: 14, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", boxShadow: "0 1px 2px rgba(0,0,0,0.06)" }}>
-                      {renderMentionText(msg.message, companiesList)}
+                      {msg.message ? renderMentionText(msg.message, companiesList) : null}
+                      {chatAttachmentsOf(msg).length > 0 && (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: msg.message ? 8 : 0 }}>
+                          {chatAttachmentsOf(msg).map(function(att) { return <ChatAttachment key={att.path} att={att} mine={mine} />; })}
+                        </div>
+                      )}
                     </div>
                   )}
                   <div style={{ display: "flex", alignItems: "center", gap: 4, flexDirection: mine ? "row-reverse" : "row", whiteSpace: "nowrap" }}>
@@ -7351,13 +7505,33 @@ function ChatView({ profile, onUnreadChange, pendingChannel, onJumpConsumed, onC
             </div>
           )}
           <DraftNotice draft={chatDraft} onRestore={function(t) { setInput(t); }} compact />
+          {pendingFiles.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+              {pendingFiles.map(function(p) {
+                return (
+                  <span key={p.id} style={{ display: "inline-flex", alignItems: "center", gap: 6, maxWidth: 260, padding: "5px 8px 5px 10px", borderRadius: 999, background: "#F4F2EE", border: "1px solid #E8E5E0", fontSize: 12, color: "#1A1917" }}>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📎 {p.file.name}</span>
+                    <span style={{ color: "#999", flex: "none" }}>{chatFileSize(p.file.size)}</span>
+                    {!sending && <span onClick={function() { setPendingFiles(function(prev) { return prev.filter(function(x) { return x.id !== p.id; }); }); }}
+                      title="빼기" style={{ cursor: "pointer", color: "#999", fontWeight: 700, flex: "none" }}>✕</span>}
+                  </span>
+                );
+              })}
+            </div>
+          )}
           <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-            <input ref={inputRef} value={input} onChange={handleInputChange} onKeyDown={onKeyDown}
+            <input ref={fileInputRef} type="file" multiple style={{ display: "none" }}
+              accept={CHAT_FILE_EXTS.map(function(x) { return "." + x; }).join(",")}
+              onChange={function(e) { addFiles(e.target.files); e.target.value = ""; }} />
+            <button onClick={function() { if (fileInputRef.current) fileInputRef.current.click(); }} disabled={sending}
+              title={"파일 첨부 — 이미지 · PDF · 엑셀 · 한글 · 워드 등, 하나에 20MB · 한 번에 " + CHAT_FILE_MAX_COUNT + "개까지 (끌어다 놓거나 캡처를 붙여넣어도 됩니다)"}
+              style={{ background: "#fff", border: "1px solid #E8E5E0", borderRadius: 10, padding: "10px 12px", fontSize: 16, lineHeight: 1, cursor: sending ? "default" : "pointer" }}>📎</button>
+            <input ref={inputRef} value={input} onChange={handleInputChange} onKeyDown={onKeyDown} onPaste={onPasteFiles}
               placeholder="메시지 입력 (@업체 태그 가능, Enter로 전송)"
               style={{ flex: 1, border: "1px solid #E8E5E0", borderRadius: 10, padding: "11px 14px", fontSize: 14, outline: "none" }} />
-            <button onClick={send} disabled={sending || !input.trim()}
-              style={{ background: input.trim() ? "#1A1917" : "#D6D2CB", color: "#fff", border: "none", borderRadius: 10, padding: "11px 20px", fontSize: 14, fontWeight: 700, cursor: input.trim() ? "pointer" : "default", whiteSpace: "nowrap" }}>
-              전송
+            <button onClick={send} disabled={sending || !(input.trim() || pendingFiles.length)}
+              style={{ background: (input.trim() || pendingFiles.length) ? "#1A1917" : "#D6D2CB", color: "#fff", border: "none", borderRadius: 10, padding: "11px 20px", fontSize: 14, fontWeight: 700, cursor: (input.trim() || pendingFiles.length) ? "pointer" : "default", whiteSpace: "nowrap" }}>
+              {sending && pendingFiles.length ? "올리는 중…" : "전송"}
             </button>
           </div>
         </div>
@@ -8465,7 +8639,7 @@ function CRMApp({ profile, session }) {
       var meName = meRef.current;
       console.log("[알림진단] 🔔 new Notification() 호출 시도 — 채널=" + row.channel + " / 보낸이=" + row.sender);
       var n = new Notification(row.sender + " · " + chatChannelLabel(row.channel, meName), {
-        body: (row.message || "").slice(0, 120),
+        body: chatMessagePreview(row).slice(0, 120),
         tag: "chat-" + row.channel, // 같은 채널 알림은 최신 것으로 교체
         renotify: true,
         requireInteraction: true,   // 자동으로 안 사라짐
@@ -8527,7 +8701,7 @@ function CRMApp({ profile, session }) {
     setChatToasts(function(prev) {
       return prev.concat({
         key: "t" + chatToastSeqRef.current, id: row.id, sender: row.sender,
-        channel: row.channel, message: row.message || "",
+        channel: row.channel, message: chatMessagePreview(row),
         // 지금 화면이 안 보이면 0 — 보이기 시작할 때 아래 useEffect 가 찍는다.
         shownAt: document.visibilityState === "visible" ? Date.now() : 0,
       }).slice(-3);
