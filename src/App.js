@@ -10040,7 +10040,7 @@ function CRMApp({ profile, session }) {
           background: #1A1917; display: flex; align-items: center;
           justify-content: space-around; z-index: 200; border-top: 1px solid #2E2C29;
         }
-        ${IS_EMBED ? ".crm-sidebar{display:none !important} .crm-mobile-nav{display:none !important} .crm-notif-banner{display:none !important} .crm-main{margin-left:0 !important;padding:54px 14px 14px !important}" : ""}
+        ${IS_EMBED ? ".crm-sidebar{display:none !important} .crm-mobile-nav{display:none !important} .crm-notif-banner{display:none !important} .crm-main{margin-left:0 !important;padding:54px 14px 14px !important;box-sizing:border-box !important}" : ""}
         @media (max-width: 768px) { .crm-split { display: none !important; } }
       `}</style>
       {/* 토스트 */}
