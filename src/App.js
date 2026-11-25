@@ -8027,7 +8027,7 @@ function EmbedFillBox({ style, children }) {
 // 본 화면 쪽 분할 틀 — 두 칸(iframe)과 가운데 끌기 경계선.
 //   sendRef.current(view) = 지금 선택된 칸에 그 화면을 띄운다(왼쪽 메뉴가 이걸 부른다).
 //   onActiveView(view) = 선택된 칸이 지금 보여 주는 화면(왼쪽 메뉴 강조 표시용).
-function SplitPanes({ onClose, initialView, sendRef, onActiveView }) {
+function SplitPanes({ onClose, initialView, sendRef, onActiveView, top }) {
   var [ratio, setRatio] = useState(function() { try { return splitClampRatio(localStorage.getItem(SPLIT_RATIO_KEY) || 50); } catch (e) { return 50; } });
   var [active, setActive] = useState(0);
   var [dragging, setDragging] = useState(false);
@@ -8066,7 +8066,7 @@ function SplitPanes({ onClose, initialView, sendRef, onActiveView }) {
   var endDrag = function() { setDragging(false); try { localStorage.setItem(SPLIT_RATIO_KEY, String(ratio)); } catch (e) { /* 저장 못 해도 동작엔 영향 없음 */ } };
   var frameStyle = { height: "100%", border: "none", background: "#F7F6F3", minWidth: 0 };
   return (
-    <div className="crm-split" ref={boxRef} style={{ position: "fixed", left: 220, top: 0, right: 0, bottom: 0, zIndex: 150, background: "#F7F6F3", display: "flex" }}>
+    <div className="crm-split" ref={boxRef} style={{ position: "fixed", left: 220, top: top || 0, right: 0, bottom: 0, zIndex: 150, background: "#F7F6F3", display: "flex" }}>
       <iframe title="왼쪽 칸" ref={function(el) { frames.current[0] = el; }} src={srcs.current[0]} style={Object.assign({ width: "calc(" + ratio + "% - 4px)", flexShrink: 0 }, frameStyle)} />
       <div onMouseDown={function(e) { e.preventDefault(); setDragging(true); }} onDoubleClick={function() { setRatio(50); try { localStorage.setItem(SPLIT_RATIO_KEY, "50"); } catch (e) { /* 무시 */ } }}
         title="끌어서 폭 조절 · 두 번 누르면 반반"
@@ -10804,7 +10804,8 @@ function CRMApp({ profile, session }) {
         </div>
       )}
 
-      {splitOn && !IS_EMBED && <SplitPanes onClose={function() { setSplitOn(false); }} initialView={view} sendRef={splitSendRef} onActiveView={setSplitNavView} />}
+      {splitOn && !IS_EMBED && <SplitPanes onClose={function() { setSplitOn(false); }} initialView={view} sendRef={splitSendRef} onActiveView={setSplitNavView}
+        top={(notifPerm === "denied" || notifPerm === "default") && !notifBannerDismissed ? 45 : 0} />}
       {IS_EMBED && <EmbedBar view={view} setView={setView} active={embedActive} />}
       {/* 메인 */}
       <div className="crm-main" style={{ marginLeft: 220, padding: "28px 32px", minHeight: "100vh" }}>
